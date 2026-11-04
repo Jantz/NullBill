@@ -6,7 +6,13 @@ cd "$(git rev-parse --show-toplevel)"
 
 ruff check .
 ruff format --check .
-shellcheck hooks/* tools/check tools/denylist-scan tools/install-hooks
+shellcheck hooks/* tools/check tools/check-firewall tools/denylist-scan tools/install-hooks
 python3 -m pytest -q
 gitleaks dir --no-banner --redact -c .gitleaks.toml .
 gitleaks git --no-banner --redact -c .gitleaks.toml .
+
+if docker info >/dev/null 2>&1; then
+  tools/check-firewall
+else
+  echo "SKIP: pve-firewall parser check needs docker"
+fi

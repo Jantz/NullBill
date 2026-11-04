@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Render the firewall for every fixture class and parse it with the stock
+# pve-firewall parser in a container. Needs docker.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+out=$(mktemp -d)
+trap 'rm -rf "$out"' EXIT
+
+# Sandboxes that intercept TLS pass their CA in through EXTRA_CA_FILE.
+mkdir "$out/context"
+cp tools/pve-firewall/Dockerfile tools/pve-firewall/check.pl "$out/context/"
+cat "${EXTRA_CA_FILE:-/dev/null}" > "$out/context/extra-ca.crt"
+docker build -q -t nullbill-pve-firewall "$out/context" >/dev/null
+python3 - "$out" <<'PY'
+import sys
+from pathlib import Path
+
+sys.path.insert(0, "tests")
+from conftest import CLASSES, fixture_config, write_raw  # noqa: E402
+
+from nullbill.artifacts import render_all, write_build
+from nullbill.model import build_model
+from nullbill.plan import build_plan
+from nullbill.probe import parse
+
+out = Path(sys.argv[1])
+for cls in CLASSES:
+    model = build_model(fixture_config(cls))
+    facts = parse(write_raw(out / "raw" / cls, cls))
+    write_build(render_all(build_plan(model, facts), model), out / cls)
+PY
+for cls in small mid large; do
+  echo "$cls:"
+  docker run --rm -v "$out/$cls/firewall:/fw:ro" nullbill-pve-firewall /fw
+done

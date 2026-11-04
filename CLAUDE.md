@@ -6,8 +6,8 @@ Guidance for Claude sessions working in this repository.
 
 NullBill turns a spare x86 machine running Proxmox VE into a self-hosted dev
 server from one declarative config. `nullbill` runs on a controller the owner
-names and reaches the host over SSH; it never runs on the host. Only `probe`
-and `plan` exist so far (milestone 1).
+names and reaches the host over SSH; it never runs on the host. Only `probe`,
+`plan` and `apply --dry-run` exist so far.
 
 ## Layout
 
@@ -18,7 +18,8 @@ and `plan` exist so far (milestone 1).
 - `tests/fixtures/<class>.yaml`: synthetic probe output for small, mid, large.
 - `tests/golden/<class>.plan.yaml`: expected plans. Regenerate with `UPDATE_GOLDEN=1 python3 -m pytest` and review the diff.
 - `hooks/`, `tools/denylist-scan`: privacy hooks. `tools/install-hooks` enables them.
-- `tools/check`: every check CI runs. Run it before pushing; GitHub Actions may not run.
+- `src/nullbill/firewall.py`: pve-firewall files; `tools/check-firewall` parses them with the stock parser in a container.
+- `tools/check`: every check CI runs. Run it before pushing. In a TLS-intercepting sandbox set `EXTRA_CA_FILE` to the proxy CA bundle.
 
 ## Privacy rules (public repo)
 

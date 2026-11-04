@@ -5,9 +5,9 @@ server for agentic workflows: coding agents, Linux and Windows CI, model
 serving and services, from one declarative config. Running it never requires
 a recurring payment; anything paid is opt-in and listed by the plan.
 
-Status: milestone 1. `nullbill probe` and `nullbill plan` work against
-synthetic fixtures; neither has run on real hardware yet. Nothing applies
-changes to a host.
+Status: milestone 2 in progress. `nullbill probe`, `nullbill plan` and
+`nullbill apply --dry-run` work against synthetic fixtures; none has run on
+real hardware yet. Nothing applies changes to a host.
 
 ## Use
 
@@ -18,6 +18,7 @@ pip install -e .
 export NULLBILL_HOME=~/nullbill-home   # private, backed up, outside this repo
 nullbill probe                          # read-only commands over SSH
 nullbill plan                           # writes $NULLBILL_HOME/plan.yaml
+nullbill apply --dry-run                # renders host files into $NULLBILL_HOME/build
 ```
 
 `$NULLBILL_HOME/config.yaml` names the host and what to plan for:
@@ -45,7 +46,7 @@ Every value in `src/nullbill/data/catalog.yaml` can be pinned the same way.
 
 ```sh
 tools/install-hooks          # gitleaks and the deny-list on commit and push
-tools/check                  # lint, tests, secret scan
+tools/check                  # lint, tests, secret scan, pve-firewall parser (needs docker)
 ```
 
 Licensed under Apache-2.0.
