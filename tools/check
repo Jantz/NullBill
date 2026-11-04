@@ -6,7 +6,7 @@ cd "$(git rev-parse --show-toplevel)"
 
 ruff check .
 ruff format --check .
-shellcheck hooks/* tools/check tools/check-firewall tools/check-guests tools/guest-check/check.sh tools/denylist-scan tools/install-hooks
+shellcheck hooks/* tools/check tools/check-firewall tools/check-guests tools/check-host tools/guest-check/check.sh tools/host-check/check.sh tools/denylist-scan tools/install-hooks
 python3 -m pytest -q
 gitleaks dir --no-banner --redact -c .gitleaks.toml .
 gitleaks git --no-banner --redact -c .gitleaks.toml .
@@ -14,6 +14,7 @@ gitleaks git --no-banner --redact -c .gitleaks.toml .
 if docker info >/dev/null 2>&1; then
   tools/check-firewall
   tools/check-guests
+  tools/check-host
 else
-  echo "SKIP: pve-firewall, nftables, dnsmasq and squid checks need docker"
+  echo "SKIP: pve-firewall, nftables, dnsmasq, squid and host baseline checks need docker"
 fi
