@@ -5,12 +5,14 @@ server for agentic workflows: coding agents, Linux and Windows CI, model
 serving and services, from one declarative config. Running it never requires
 a recurring payment; anything paid is opt-in and listed by the plan.
 
-Status: milestone 2 is rendered and container-checked; `docs/milestones/m2.md`
-lists what still needs a host. `nullbill probe`, `nullbill plan` and
-`nullbill apply --dry-run` work against synthetic fixtures, and `nullbill
-verify` reports SKIP until there is a host to probe. The dry run
-renders the pve-firewall, router, egress-proxy, tailnet policy and OpenTofu
-files. None has run on real hardware, and nothing applies changes to a host.
+Status: milestones 2 and 3 are rendered and container-checked;
+`docs/milestones/m2.md` and `m3.md` list what still needs a host.
+`nullbill probe`, `nullbill plan` and `nullbill apply --dry-run` work
+against synthetic fixtures, and `nullbill verify` reports SKIP until there
+is a host to probe. The dry run renders the pve-firewall, router,
+egress-proxy, tailnet policy and OpenTofu files; `ansible/` holds the host
+baseline and the step-ca, Postgres, monitoring and PBS roles. None has run
+on real hardware, and nothing applies changes to a host.
 
 ## Use
 
