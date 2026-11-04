@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Before anything leaves the machine: noreply identities, gitleaks over the
+# pushed commits, and the deny-list over their content and metadata.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+remote="$1"
+zero=0000000000000000000000000000000000000000
+
+if ! command -v gitleaks >/dev/null; then
+  echo "pre-push: gitleaks is not installed; refusing to push" >&2
+  exit 1
+fi
+
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  [[ "$local_sha" == "$zero" ]] && continue # branch deletion
+  if [[ "$remote_sha" == "$zero" ]]; then
+    range_args=("$local_sha" --not "--remotes=$remote")
+    log_opts="$local_sha --not --remotes=$remote"
+  else
+    range_args=("$remote_sha..$local_sha")
+    log_opts="$remote_sha..$local_sha"
+  fi
+
+  commits=$(git rev-list "${range_args[@]}")
+  [[ -z "$commits" ]] && continue
+
+  for c in $commits; do
+    for email in $(git show -s --format='%ae %ce' "$c"); do
+      if [[ "$email" != *noreply* ]]; then
+        echo "pre-push: commit $c uses a non-noreply identity" >&2
+        exit 1
+      fi
+    done
+  done
+
+  gitleaks git --log-opts="$log_opts" --redact --no-banner -c .gitleaks.toml
+
+  for c in $commits; do
+    git show --no-color --format='%an%n%ae%n%cn%n%ce%n%B' "$c"
+  done | tools/denylist-scan
+done

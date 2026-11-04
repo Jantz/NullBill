@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Fail if stdin contains any entry of $NULLBILL_HOME/denylist.txt.
+# The list holds owner identifiers gitleaks cannot know (names, hostnames,
+# serials). It lives outside the repo. A missing or empty list fails, so the
+# check cannot pass by accident.
+set -euo pipefail
+
+if [[ -z "${NULLBILL_HOME:-}" ]]; then
+  echo "denylist-scan: NULLBILL_HOME is not set" >&2
+  exit 1
+fi
+list="$NULLBILL_HOME/denylist.txt"
+if [[ ! -r "$list" ]]; then
+  echo "denylist-scan: $list is missing or unreadable" >&2
+  exit 1
+fi
+
+patterns=$(mktemp)
+trap 'rm -f "$patterns"' EXIT
+# One fixed string per line; '#' starts a comment line.
+grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$list" | sed 's/[[:space:]]*$//' > "$patterns" || true
+if [[ ! -s "$patterns" ]]; then
+  echo "denylist-scan: $list has no entries" >&2
+  exit 1
+fi
+
+# Report input line numbers only, so the identifiers are not echoed into logs.
+if hits=$(grep -n -F -i -f "$patterns" | cut -d: -f1 | paste -sd, -); then
+  echo "denylist-scan: input lines $hits match an entry in $list" >&2
+  exit 1
+fi
