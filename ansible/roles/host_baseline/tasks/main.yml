@@ -43,6 +43,7 @@
   register: host_baseline_enterprise
 
 - name: Delete each enterprise repository file
+  register: host_baseline_removed
   ansible.builtin.file:
     path: "{{ item.path }}"
     state: absent
@@ -51,6 +52,7 @@
     label: "{{ item.path }}"
 
 - name: PVE no-subscription repository
+  register: host_baseline_repo
   ansible.builtin.copy:
     dest: /etc/apt/sources.list.d/pve-no-subscription.sources
     mode: "0644"
@@ -61,6 +63,12 @@
       Suites: {{ ansible_distribution_release }}
       Components: pve-no-subscription
       Signed-By: {{ host_baseline_pve_keyring[ansible_distribution_release] }}
+
+# A cache younger than an hour can still predate the source change.
+- name: Refresh the package lists after changing sources
+  ansible.builtin.apt:
+    update_cache: true
+  when: host_baseline_repo.changed or host_baseline_removed.changed
 
 - name: Install auditd and unattended-upgrades
   ansible.builtin.apt:
