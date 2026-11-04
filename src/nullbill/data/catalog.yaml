@@ -68,6 +68,7 @@ services:
     ports:
       - {port: 53, proto: udp, from: ["zone:*"]}
       - {port: 53, proto: tcp, from: ["zone:*"]}
+      - {port: 22, proto: tcp, from: ["role:owner"]}
   egress-proxy:
     id: 10
     kind: lxc
@@ -128,8 +129,8 @@ services:
     workload: core
     floor: {cores: 1, memory_mib: 1024, disk_gib: 32}
     ports:
-      - {port: 443, proto: tcp, from: ["role:default", "zone:build", "zone:windows"]}
-      - {port: 22, proto: tcp, from: ["role:default"]}
+      - {port: 443, proto: tcp, from: ["role:owner", "role:default", "zone:build", "zone:windows"]}
+      - {port: 22, proto: tcp, from: ["role:owner", "role:default"]}
   runner-dispatcher:
     id: 18
     kind: lxc
@@ -152,6 +153,8 @@ services:
     workload: agents
     description: Credential-free workspace for coding agents.
     floor: {cores: 1, memory_mib: 1024, disk_gib: 32}
+    ports:
+      - {port: 22, proto: tcp, from: ["role:default", "role:owner"]}
   inference:
     id: 20
     kind: lxc
@@ -218,5 +221,11 @@ proxy:
     - .update.microsoft.com
     - .delivery.mp.microsoft.com
 
-# People are listed in config.yaml; the catalog ships none.
+# Limits of Tailscale's free Personal plan, from https://tailscale.com/pricing
+# (2026-11-04). plan fails when people and roles would exceed them.
+tailnet:
+  free_limits: {users: 6, groups: 3, tagged_devices: 50}
+
+# People are listed in config.yaml with their Tailscale login; the catalog
+# ships none.
 people: {}

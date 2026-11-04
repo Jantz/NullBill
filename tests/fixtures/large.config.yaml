@@ -1,5 +1,5 @@
 intent:
   workloads: [agents, linux-ci, windows-ci, windows-dev, inference]
 people:
-  owner-a: {role: owner}
-  dev-b: {role: default}
+  owner-a: {role: owner, login: owner-a@example.internal}
+  dev-b: {role: default, login: dev-b@example.internal}

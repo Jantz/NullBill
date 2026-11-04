@@ -31,11 +31,17 @@ class _Rules:
                 # The host admits the VPN through the management ipset.
                 dest, label = flow.dest_cidrs[0], "the PVE host"
             else:
-                self.inbound[flow.dest].append(f"IN ACCEPT -source +{flow.source_set} {match} # {flow.ref}")
+                self._add(self.inbound[flow.dest], f"IN ACCEPT -source +{flow.source_set} {match}", flow.ref)
                 dest, label = f"+{svc_set(flow.dest)}", flow.dest
             for src in flow.sources:
                 if src not in (flow.dest, "router"):
-                    self.outbound[src].append(f"OUT ACCEPT -dest {dest} {match} # to {label}")
+                    self._add(self.outbound[src], f"OUT ACCEPT -dest {dest} {match}", f"to {label}")
+
+    @staticmethod
+    def _add(rules: list[str], rule: str, comment: str) -> None:
+        # Roles all arrive from the vpn address, so two roles can yield one rule.
+        if not any(r.startswith(rule + " #") for r in rules):
+            rules.append(f"{rule} # {comment}")
 
 
 def _ipset(name: str, entries: list[str]) -> str:

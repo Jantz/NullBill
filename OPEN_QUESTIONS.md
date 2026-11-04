@@ -38,6 +38,12 @@ answered items move to the decisions list at the bottom.
   the router's uplink is zone 0. Router interfaces are named `nb-<zone>`.
 - DNS: dnsmasq on the router, one instance for direct zones that forwards
   upstream and one for the other zones that answers internal names only.
+- Tailnet access: the owner reaches the PVE host (8006, 22), router SSH,
+  Forgejo, the workspace, Grafana, the model gateway and Windows RDP; the
+  default role reaches Forgejo (443, 22) and workspace SSH. Each grant
+  follows a service port, and the policy carries tests that Tailscale runs
+  on every push, so a policy that lets a default user reach the host is
+  rejected.
 - Inference engine: llama.cpp for one GPU, vLLM for several; pinnable.
 - Plan output: YAML with a comment above each decision.
 

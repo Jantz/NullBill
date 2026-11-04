@@ -240,6 +240,7 @@ backups:
 flows:
   - zone:* -> router udp/53
   - zone:* -> router tcp/53
+  - role:owner -> router tcp/22
   - zone:mgmt -> egress-proxy tcp/3128
   - zone:build -> egress-proxy tcp/3128
   - zone:inference -> egress-proxy tcp/3128
@@ -248,16 +249,25 @@ flows:
   - service:forgejo -> postgres tcp/5432
   - role:owner -> monitoring tcp/3000
   - zone:* -> monitoring tcp/3100
+  - role:owner -> forgejo tcp/443
   - role:default -> forgejo tcp/443
   - zone:build -> forgejo tcp/443
   - zone:windows -> forgejo tcp/443
+  - role:owner -> forgejo tcp/22
   - role:default -> forgejo tcp/22
+  - role:default -> workspace tcp/22
+  - role:owner -> workspace tcp/22
   - zone:build -> model-gateway tcp/4000
   - role:owner -> model-gateway tcp/4000
   - role:owner -> windows-dev tcp/3389
 people:
   owner-a: owner
   dev-b: default
+# Tailscale Personal: free for personal, non-commercial use. One group per role; the vpn guest is the tagged device.
+tailnet:
+  users: 2 of 6
+  groups: 2 of 3
+  tagged_devices: 1 of 50
 owner_supplies:
   - Windows ISO
   - Windows licence

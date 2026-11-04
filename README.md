@@ -29,8 +29,9 @@ target:
   ssh: root@pve.example.internal
 intent:
   workloads: [agents, linux-ci, windows-ci, windows-dev, inference]
-people:
-  dev-b: {role: default}
+people:                                  # Tailscale logins; one owner is required
+  owner-a: {role: owner, login: owner-a@example.internal}
+  dev-b: {role: default, login: dev-b@example.internal}
 overrides:
   linux-runner: {count: 2}
 disks:

@@ -169,7 +169,7 @@ def test_inference_without_gpu_fails(facts):
 
 def test_unknown_workload_and_dangling_refs_fail(facts):
     assert errors_of(facts("small"), {"intent": {"workloads": ["mining"]}})[0].startswith("intent.workloads: unknown workload")
-    config = {"roles": {"default": {"reach": ["service:nope"]}}, "people": {"dev-b": {"role": "ghost"}}}
+    config = {"roles": {"default": {"reach": ["service:nope"]}}, "people": {"dev-b": {"role": "ghost", "login": "dev-b@example.internal"}}}
     assert sorted(errors_of(facts("small"), config)) == [
         "people.dev-b.role: role 'ghost' does not exist",
         "roles.default.reach: service:nope does not exist",

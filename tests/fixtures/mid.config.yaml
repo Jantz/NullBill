@@ -1,2 +1,4 @@
 intent:
   workloads: [agents, linux-ci, windows-ci, windows-dev, inference]
+people:
+  owner-a: {role: owner, login: owner-a@example.internal}

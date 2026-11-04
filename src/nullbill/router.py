@@ -41,8 +41,7 @@ def _set(cidrs) -> str:
 def _nftables(plan: dict, model: dict) -> str:
     zones = plan["zones"]
     pool_zones = sorted({g["zone"] for g in plan["guests"].values() if g["kind"] == "vm-pool"})
-    zone_ifaces = ", ".join(f'"{_iface(z)}"' for z in zones)
-    vpn_ip = plan["guests"]["vpn"]["ip"]
+    flows = resolve_flows(plan, model)
     lines = [
         HEADER,
         "flush ruleset\n\n",
@@ -50,19 +49,20 @@ def _nftables(plan: dict, model: dict) -> str:
         f"    set private {{\n        type ipv4_addr\n        flags interval\n        elements = {_set(PRIVATE)}\n    }}\n\n",
         "    chain input {\n        type filter hook input priority filter; policy drop;\n",
         "        ct state established,related accept\n        ct state invalid drop\n        iif lo accept\n",
-        f"        iifname {{ {zone_ifaces} }} meta l4proto {{ tcp, udp }} th dport 53 accept\n",
     ]
     if pool_zones:
         pools = ", ".join(f'"{_iface(z)}"' for z in pool_zones)
-        lines.append(f"        iifname {{ {pools} }} udp dport 67 accept\n")
+        lines.append(f"        iifname {{ {pools} }} udp dport 67 accept # DHCP for pool clones\n")
+    for flow in flows:
+        if flow.dest == "router":
+            lines.append(f"        ip saddr {_set(flow.source_cidrs)} {flow.proto} dport {flow.port} accept # {flow.ref}\n")
     lines += [
-        f"        ip saddr {vpn_ip} tcp dport 22 accept # owner SSH through the VPN\n",
         "    }\n\n",
         "    chain forward {\n        type filter hook forward priority filter; policy drop;\n",
         "        ct state established,related accept\n        ct state invalid drop\n",
     ]
     seen = set()
-    for flow in resolve_flows(plan, model):
+    for flow in flows:
         if flow.dest == "router":
             continue
         rule = f"ip saddr {_set(flow.source_cidrs)} ip daddr {_set(flow.dest_cidrs)} {flow.proto} dport {flow.port} accept"

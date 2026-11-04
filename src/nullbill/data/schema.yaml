@@ -52,9 +52,11 @@ $defs:
   person:
     type: object
     additionalProperties: false
-    required: [role]
+    required: [role, login]
     properties:
       role: {$ref: "#/$defs/name"}
+      # The person's Tailscale login, e.g. dev-b@example.internal.
+      login: {type: string, pattern: "^[^@\\s]+@[^@\\s]+$"}
 
   service:
     type: object
@@ -131,6 +133,17 @@ $defs:
           min_gpus: {type: integer, minimum: 1}
           max_gpus: {type: integer, minimum: 1}
           engine: {enum: [llama.cpp, vllm]}
+    tailnet:
+      type: object
+      additionalProperties: false
+      properties:
+        free_limits:
+          type: object
+          additionalProperties: false
+          properties:
+            users: {type: integer, minimum: 1}
+            groups: {type: integer, minimum: 1}
+            tagged_devices: {type: integer, minimum: 1}
     proxy:
       type: object
       additionalProperties: false
@@ -190,7 +203,7 @@ $defs:
 
   model:
     type: object
-    required: [network, host, zones, roles, services, people, engines, proxy]
+    required: [network, host, zones, roles, services, people, engines, proxy, tailnet]
     properties:
       network: {$ref: "#/$defs/common/network", required: [base, domain, vmid_base]}
       host:

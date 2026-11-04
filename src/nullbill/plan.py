@@ -9,6 +9,7 @@ from typing import Any
 
 from nullbill.errors import NullBillError
 from nullbill.render import Note
+from nullbill.tailnet import check_tailnet
 
 SIZE_KEYS = ("cores", "memory_mib", "disk_gib")
 
@@ -341,6 +342,8 @@ def build_plan(model: dict, facts: dict) -> dict:
         "flows": Note(_flows(model, planned, set(zones)), "Allowed flows; everything else is denied."),
         "people": {name: p["role"] for name, p in model["people"].items()},
     }
+    plan["tailnet"] = check_tailnet(plan, model, errors)
+    errors.raise_if_any()
     if any(svc["zone"] == "windows" for svc in planned.values()):
         plan["owner_supplies"] = ["Windows ISO", "Windows licence"]
     return plan

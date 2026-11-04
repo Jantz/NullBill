@@ -64,11 +64,13 @@ policy_out: DROP
 [RULES]
 OUT ACCEPT -dest +nb-svc-router -p udp -dport 53 # to router
 OUT ACCEPT -dest +nb-svc-router -p tcp -dport 53 # to router
+OUT ACCEPT -dest +nb-svc-router -p tcp -dport 22 # to router
 OUT ACCEPT -dest +nb-svc-step-ca -p tcp -dport 443 # to step-ca
 OUT ACCEPT -dest +nb-svc-monitoring -p tcp -dport 3000 # to monitoring
 OUT ACCEPT -dest +nb-svc-monitoring -p tcp -dport 3100 # to monitoring
 OUT ACCEPT -dest +nb-svc-forgejo -p tcp -dport 443 # to forgejo
 OUT ACCEPT -dest +nb-svc-forgejo -p tcp -dport 22 # to forgejo
+OUT ACCEPT -dest +nb-svc-workspace -p tcp -dport 22 # to workspace
 OUT ACCEPT -dest +nb-svc-model-gateway -p tcp -dport 4000 # to model-gateway
 OUT ACCEPT -dest +nb-svc-windows-dev -p tcp -dport 3389 # to windows-dev
 OUT ACCEPT -dest 10.42.1.254 -p tcp -dport 8006 # to the PVE host
@@ -175,10 +177,10 @@ policy_out: DROP
 10.42.2.17
 
 [RULES]
-IN ACCEPT -source +nb-svc-vpn -p tcp -dport 443 # role:default
+IN ACCEPT -source +nb-svc-vpn -p tcp -dport 443 # role:owner
 IN ACCEPT -source +nb-zone-build -p tcp -dport 443 # zone:build
 IN ACCEPT -source +nb-zone-windows -p tcp -dport 443 # zone:windows
-IN ACCEPT -source +nb-svc-vpn -p tcp -dport 22 # role:default
+IN ACCEPT -source +nb-svc-vpn -p tcp -dport 22 # role:owner
 OUT ACCEPT -dest +nb-svc-router -p udp -dport 53 # to router
 OUT ACCEPT -dest +nb-svc-router -p tcp -dport 53 # to router
 OUT ACCEPT -dest +nb-svc-step-ca -p tcp -dport 443 # to step-ca
@@ -216,6 +218,7 @@ policy_out: DROP
 10.42.3.19
 
 [RULES]
+IN ACCEPT -source +nb-svc-vpn -p tcp -dport 22 # role:default
 OUT ACCEPT -dest +nb-svc-router -p udp -dport 53 # to router
 OUT ACCEPT -dest +nb-svc-router -p tcp -dport 53 # to router
 OUT ACCEPT -dest +nb-svc-egress-proxy -p tcp -dport 3128 # to egress-proxy
@@ -571,9 +574,10 @@ table inet nullbill {
         ct state established,related accept
         ct state invalid drop
         iif lo accept
-        iifname { "nb-mgmt", "nb-services", "nb-build", "nb-inference", "nb-windows", "nb-access" } meta l4proto { tcp, udp } th dport 53 accept
-        iifname { "nb-build", "nb-windows" } udp dport 67 accept
-        ip saddr 10.42.6.11 tcp dport 22 accept # owner SSH through the VPN
+        iifname { "nb-build", "nb-windows" } udp dport 67 accept # DHCP for pool clones
+        ip saddr { 10.42.0.0/16 } udp dport 53 accept # zone:*
+        ip saddr { 10.42.0.0/16 } tcp dport 53 accept # zone:*
+        ip saddr { 10.42.6.11 } tcp dport 22 accept # role:owner
     }
 
     chain forward {
@@ -588,10 +592,11 @@ table inet nullbill {
         ip saddr { 10.42.2.17 } ip daddr { 10.42.2.13 } tcp dport 5432 accept # service:forgejo to postgres
         ip saddr { 10.42.6.11 } ip daddr { 10.42.1.14 } tcp dport 3000 accept # role:owner to monitoring
         ip saddr { 10.42.0.0/16 } ip daddr { 10.42.1.14 } tcp dport 3100 accept # zone:* to monitoring
-        ip saddr { 10.42.6.11 } ip daddr { 10.42.2.17 } tcp dport 443 accept # role:default to forgejo
+        ip saddr { 10.42.6.11 } ip daddr { 10.42.2.17 } tcp dport 443 accept # role:owner to forgejo
         ip saddr { 10.42.3.0/24 } ip daddr { 10.42.2.17 } tcp dport 443 accept # zone:build to forgejo
         ip saddr { 10.42.5.0/24 } ip daddr { 10.42.2.17 } tcp dport 443 accept # zone:windows to forgejo
-        ip saddr { 10.42.6.11 } ip daddr { 10.42.2.17 } tcp dport 22 accept # role:default to forgejo
+        ip saddr { 10.42.6.11 } ip daddr { 10.42.2.17 } tcp dport 22 accept # role:owner to forgejo
+        ip saddr { 10.42.6.11 } ip daddr { 10.42.3.19 } tcp dport 22 accept # role:default to workspace
         ip saddr { 10.42.3.0/24 } ip daddr { 10.42.4.21 } tcp dport 4000 accept # zone:build to model-gateway
         ip saddr { 10.42.6.11 } ip daddr { 10.42.4.21 } tcp dport 4000 accept # role:owner to model-gateway
         ip saddr { 10.42.6.11 } ip daddr { 10.42.5.22 } tcp dport 3389 accept # role:owner to windows-dev
@@ -729,3 +734,149 @@ Restart=on-failure
 
 [Install]
 WantedBy=multi-user.target
+===== tailnet/policy.json
+{
+  "groups": {
+    "group:nb-owner": [
+      "owner-a@example.internal"
+    ]
+  },
+  "tagOwners": {
+    "tag:nb-vpn": [
+      "group:nb-owner"
+    ]
+  },
+  "autoApprovers": {
+    "routes": {
+      "10.42.0.0/16": [
+        "tag:nb-vpn"
+      ]
+    }
+  },
+  "grants": [
+    {
+      "src": [
+        "group:nb-owner"
+      ],
+      "dst": [
+        "10.42.1.1",
+        "10.42.2.1",
+        "10.42.3.1",
+        "10.42.4.1",
+        "10.42.5.1",
+        "10.42.6.1"
+      ],
+      "ip": [
+        "tcp:22"
+      ]
+    },
+    {
+      "src": [
+        "group:nb-owner"
+      ],
+      "dst": [
+        "10.42.1.14"
+      ],
+      "ip": [
+        "tcp:3000"
+      ]
+    },
+    {
+      "src": [
+        "group:nb-owner"
+      ],
+      "dst": [
+        "10.42.2.17"
+      ],
+      "ip": [
+        "tcp:443",
+        "tcp:22"
+      ]
+    },
+    {
+      "src": [
+        "group:nb-default"
+      ],
+      "dst": [
+        "10.42.2.17"
+      ],
+      "ip": [
+        "tcp:443",
+        "tcp:22"
+      ]
+    },
+    {
+      "src": [
+        "group:nb-default"
+      ],
+      "dst": [
+        "10.42.3.19"
+      ],
+      "ip": [
+        "tcp:22"
+      ]
+    },
+    {
+      "src": [
+        "group:nb-owner"
+      ],
+      "dst": [
+        "10.42.3.19"
+      ],
+      "ip": [
+        "tcp:22"
+      ]
+    },
+    {
+      "src": [
+        "group:nb-owner"
+      ],
+      "dst": [
+        "10.42.4.21"
+      ],
+      "ip": [
+        "tcp:4000"
+      ]
+    },
+    {
+      "src": [
+        "group:nb-owner"
+      ],
+      "dst": [
+        "10.42.5.22"
+      ],
+      "ip": [
+        "tcp:3389"
+      ]
+    },
+    {
+      "src": [
+        "group:nb-owner"
+      ],
+      "dst": [
+        "10.42.1.254"
+      ],
+      "ip": [
+        "tcp:8006",
+        "tcp:22"
+      ]
+    }
+  ],
+  "tests": [
+    {
+      "src": "owner-a@example.internal",
+      "proto": "tcp",
+      "accept": [
+        "10.42.1.14:3000",
+        "10.42.1.1:22",
+        "10.42.1.254:22",
+        "10.42.1.254:8006",
+        "10.42.2.17:22",
+        "10.42.2.17:443",
+        "10.42.3.19:22",
+        "10.42.4.21:4000",
+        "10.42.5.22:3389"
+      ]
+    }
+  ]
+}
