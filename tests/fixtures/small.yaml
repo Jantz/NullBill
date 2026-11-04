@@ -1,0 +1,59 @@
+# Synthetic probe output for the small class: 4 threads, 16 GiB, one SSD,
+# integrated graphics only. Keys are probe command names.
+pveversion:
+  out: "pve-manager/8.2.4/synthetic (running kernel: 6.8.12-1-pve)\n"
+lscpu:
+  out: |
+    {"lscpu": [
+      {"field": "Architecture:", "data": "x86_64"},
+      {"field": "CPU(s):", "data": "4"},
+      {"field": "Vendor ID:", "data": "GenuineIntel", "children": [
+        {"field": "Model name:", "data": "Synthetic 4-thread CPU"},
+        {"field": "Thread(s) per core:", "data": "1"},
+        {"field": "Core(s) per socket:", "data": "4"},
+        {"field": "Socket(s):", "data": "1"}
+      ]}
+    ]}
+meminfo:
+  out: |
+    MemTotal:       16229000 kB
+    MemFree:        15000000 kB
+lsblk:
+  out: |
+    {"blockdevices": [
+      {"name": "sda", "size": 512110190592, "type": "disk", "rota": false, "fstype": null, "pttype": "gpt", "mountpoints": [null],
+       "children": [
+        {"name": "sda1", "size": 1031168, "type": "part", "rota": false, "fstype": null, "pttype": "gpt", "mountpoints": [null]},
+        {"name": "sda2", "size": 1073741824, "type": "part", "rota": false, "fstype": "vfat", "pttype": "gpt", "mountpoints": ["/boot/efi"]},
+        {"name": "sda3", "size": 511035000000, "type": "part", "rota": false, "fstype": "LVM2_member", "pttype": "gpt", "mountpoints": [null],
+         "children": [
+          {"name": "pve-root", "size": 103079215104, "type": "lvm", "rota": false, "fstype": "ext4", "pttype": null, "mountpoints": ["/"]},
+          {"name": "pve-data", "size": 375809638400, "type": "lvm", "rota": false, "fstype": null, "pttype": null, "mountpoints": [null]}
+        ]}
+      ]}
+    ]}
+disk-by-id:
+  out: |
+    ata-SYNTHETIC_SSD_0001 ../../sda
+    ata-SYNTHETIC_SSD_0001-part1 ../../sda1
+    ata-SYNTHETIC_SSD_0001-part2 ../../sda2
+    ata-SYNTHETIC_SSD_0001-part3 ../../sda3
+storage:
+  out: |
+    [{"storage": "local", "type": "dir", "content": "iso,vztmpl,backup", "active": 1, "enabled": 1,
+      "total": 103079215104, "used": 8589934592, "avail": 94489280512},
+     {"storage": "local-lvm", "type": "lvmthin", "content": "images,rootdir", "active": 1, "enabled": 1,
+      "total": 375809638400, "used": 0, "avail": 375809638400}]
+lspci:
+  out: |
+    0000:00:00.0 Host bridge [0600]: Intel Corporation Synthetic Host Bridge [8086:0001]
+    0000:00:02.0 VGA compatible controller [0300]: Intel Corporation Synthetic Integrated Graphics [8086:0002] (rev 04)
+    0000:00:1f.6 Ethernet controller [0200]: Intel Corporation Synthetic Ethernet [8086:0003]
+iommu:
+  out: |
+    /sys/kernel/iommu_groups/0/devices/0000:00:00.0
+    /sys/kernel/iommu_groups/1/devices/0000:00:02.0
+    /sys/kernel/iommu_groups/2/devices/0000:00:1f.6
+nvidia-smi:
+  rc: 127
+  err: "sh: 1: nvidia-smi: not found\n"

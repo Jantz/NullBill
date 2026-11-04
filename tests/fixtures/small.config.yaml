@@ -1,0 +1,2 @@
+intent:
+  workloads: [agents, linux-ci]

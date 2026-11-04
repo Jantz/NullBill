@@ -1,0 +1,6 @@
+# Versions the checks were last run with.
+PyYAML==6.0.3
+jsonschema==4.26.0
+pytest==9.1.1
+ruff==0.16.9
+shellcheck-py==0.10.0.1

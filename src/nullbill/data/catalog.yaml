@@ -1,0 +1,167 @@
+# Platform defaults. config.yaml in $NULLBILL_HOME merges over this file by
+# name, so any value here can be pinned there.
+#
+# Sizes below are starting floors chosen for this project, not measurements.
+# They must fit the small class (4 threads, 16 GiB, no GPU) together with the
+# host reserve; tests/test_plan.py enforces that.
+
+network:
+  # Each zone takes the /24 at its index inside this /16.
+  base: 10.42.0.0/16
+
+host:
+  reserve:
+    cores: 1
+    memory_mib: 4096
+
+zones:
+  mgmt:
+    index: 1
+    description: Owner-only management guests.
+  services:
+    index: 2
+    description: Shared platform services.
+  build:
+    index: 3
+    description: CI clones and the credential-free workspace.
+    egress: proxy
+  inference:
+    index: 4
+    description: Model serving and the model gateway.
+    egress: proxy
+  windows:
+    index: 5
+    description: Windows runner clones and the RDP dev VM.
+    egress: proxy
+  access:
+    index: 6
+    description: VPN entry. The only way into the other zones.
+
+roles:
+  owner:
+    description: Reaches every zone, including mgmt.
+    reach: ["zone:*"]
+  default:
+    description: Git/CI and the credential-free workspace only.
+    reach: ["service:forgejo", "service:workspace"]
+
+# workload: core services are always planned. Others are planned only when
+# intent.workloads lists their workload.
+services:
+  router:
+    kind: vm
+    zone: mgmt
+    workload: core
+    attach: all-zones
+    floor: {cores: 1, memory_mib: 512, disk_gib: 4}
+  egress-proxy:
+    kind: lxc
+    zone: services
+    workload: core
+    floor: {cores: 1, memory_mib: 512, disk_gib: 4}
+    ports:
+      - {port: 3128, proto: tcp, from: ["zone:build", "zone:inference", "zone:windows"]}
+  vpn:
+    kind: lxc
+    zone: access
+    workload: core
+    floor: {cores: 1, memory_mib: 256, disk_gib: 2}
+  step-ca:
+    kind: lxc
+    zone: mgmt
+    workload: core
+    floor: {cores: 1, memory_mib: 256, disk_gib: 2}
+    ports:
+      - {port: 443, proto: tcp, from: ["zone:*"]}
+  postgres:
+    kind: lxc
+    zone: services
+    workload: core
+    floor: {cores: 1, memory_mib: 1024, disk_gib: 16}
+    ports:
+      - {port: 5432, proto: tcp, from: ["service:forgejo"]}
+  monitoring:
+    kind: lxc
+    zone: mgmt
+    workload: core
+    description: Prometheus, Grafana and Loki.
+    floor: {cores: 1, memory_mib: 1536, disk_gib: 32}
+    ports:
+      - {port: 3000, proto: tcp, from: ["role:owner"]}
+      - {port: 3100, proto: tcp, from: ["zone:*"]}
+  pbs:
+    kind: vm
+    zone: mgmt
+    workload: core
+    floor: {cores: 1, memory_mib: 2048, disk_gib: 8}
+  operator:
+    kind: lxc
+    zone: mgmt
+    workload: core
+    description: Holds the agent CLI and token. Owner only.
+    floor: {cores: 1, memory_mib: 512, disk_gib: 8}
+  forgejo:
+    kind: lxc
+    zone: services
+    workload: core
+    floor: {cores: 1, memory_mib: 1024, disk_gib: 32}
+    ports:
+      - {port: 443, proto: tcp, from: ["role:default", "zone:build", "zone:windows"]}
+      - {port: 22, proto: tcp, from: ["role:default"]}
+  runner-dispatcher:
+    kind: lxc
+    zone: services
+    workload: linux-ci
+    description: Clones a golden VM per job. Lives outside build.
+    floor: {cores: 1, memory_mib: 256, disk_gib: 4}
+  linux-runner:
+    kind: vm-pool
+    zone: build
+    workload: linux-ci
+    description: One golden-VM clone per CI job.
+    floor: {cores: 2, memory_mib: 2048, disk_gib: 32}
+    grow: 2
+  workspace:
+    kind: lxc
+    zone: build
+    workload: agents
+    description: Credential-free workspace for coding agents.
+    floor: {cores: 1, memory_mib: 1024, disk_gib: 32}
+  inference:
+    kind: lxc
+    zone: inference
+    workload: inference
+    gpu: true
+    floor: {cores: 2, memory_mib: 8192, disk_gib: 64}
+  model-gateway:
+    kind: lxc
+    zone: inference
+    workload: inference
+    description: LiteLLM.
+    floor: {cores: 1, memory_mib: 512, disk_gib: 4}
+    ports:
+      - {port: 4000, proto: tcp, from: ["zone:build", "role:owner"]}
+  windows-runner:
+    kind: vm-pool
+    zone: windows
+    workload: windows-ci
+    floor: {cores: 2, memory_mib: 4096, disk_gib: 64}
+    grow: 1
+  windows-dev:
+    kind: vm
+    zone: windows
+    workload: windows-dev
+    description: RDP dev VM.
+    floor: {cores: 2, memory_mib: 4096, disk_gib: 96}
+    ports:
+      - {port: 3389, proto: tcp, from: ["role:owner"]}
+
+# Inference engine by the number of host-shared GPUs given to inference.
+# llama.cpp serves quantised models on one GPU with CPU offload; vLLM's
+# tensor parallelism is what multi-GPU hosts need. Pin with inference.engine.
+engines:
+  - {min_gpus: 1, max_gpus: 1, engine: llama.cpp}
+  - {min_gpus: 2, engine: vllm}
+
+# People are listed in config.yaml; the catalog ships none.
+people: {}

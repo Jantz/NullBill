@@ -1,0 +1,57 @@
+# Synthetic probe output for the mid class: 16 threads, 64 GiB, NVMe system
+# disk, a blank HDD, one NVIDIA GPU with readable VRAM.
+pveversion:
+  out: "pve-manager/8.2.4/synthetic (running kernel: 6.8.12-1-pve)\n"
+lscpu:
+  out: |
+    {"lscpu": [
+      {"field": "Architecture:", "data": "x86_64"},
+      {"field": "CPU(s):", "data": "16"},
+      {"field": "Vendor ID:", "data": "AuthenticAMD", "children": [
+        {"field": "Model name:", "data": "Synthetic 16-thread CPU"},
+        {"field": "Thread(s) per core:", "data": "2"},
+        {"field": "Core(s) per socket:", "data": "8"},
+        {"field": "Socket(s):", "data": "1"}
+      ]}
+    ]}
+meminfo:
+  out: |
+    MemTotal:       65800000 kB
+lsblk:
+  out: |
+    {"blockdevices": [
+      {"name": "nvme0n1", "size": 1000204886016, "type": "disk", "rota": false, "fstype": null, "pttype": "gpt", "mountpoints": [null],
+       "children": [
+        {"name": "nvme0n1p2", "size": 1073741824, "type": "part", "rota": false, "fstype": "vfat", "pttype": "gpt", "mountpoints": ["/boot/efi"]},
+        {"name": "nvme0n1p3", "size": 999000000000, "type": "part", "rota": false, "fstype": "LVM2_member", "pttype": "gpt", "mountpoints": [null],
+         "children": [
+          {"name": "pve-root", "size": 103079215104, "type": "lvm", "rota": false, "fstype": "ext4", "pttype": null, "mountpoints": ["/"]},
+          {"name": "pve-data", "size": 858993459200, "type": "lvm", "rota": false, "fstype": null, "pttype": null, "mountpoints": [null]}
+        ]}
+      ]},
+      {"name": "sda", "size": 2000398934016, "type": "disk", "rota": true, "fstype": null, "pttype": null, "mountpoints": [null]}
+    ]}
+disk-by-id:
+  out: |
+    nvme-SYNTHETIC_NVME_0001 ../../nvme0n1
+    nvme-SYNTHETIC_NVME_0001-part2 ../../nvme0n1p2
+    nvme-SYNTHETIC_NVME_0001-part3 ../../nvme0n1p3
+    ata-SYNTHETIC_HDD_0002 ../../sda
+storage:
+  out: |
+    [{"storage": "local", "type": "dir", "content": "iso,vztmpl,backup", "active": 1, "enabled": 1,
+      "total": 103079215104, "used": 8589934592, "avail": 94489280512},
+     {"storage": "local-lvm", "type": "lvmthin", "content": "images,rootdir", "active": 1, "enabled": 1,
+      "total": 858993459200, "used": 0, "avail": 858993459200}]
+lspci:
+  out: |
+    0000:00:00.0 Host bridge [0600]: Advanced Micro Devices, Inc. [AMD] Synthetic Root Complex [1022:0001]
+    0000:01:00.0 VGA compatible controller [0300]: NVIDIA Corporation Synthetic GPU 24G [10de:0001] (rev a1)
+    0000:01:00.1 Audio device [0403]: NVIDIA Corporation Synthetic GPU Audio [10de:0002] (rev a1)
+iommu:
+  out: |
+    /sys/kernel/iommu_groups/0/devices/0000:00:00.0
+    /sys/kernel/iommu_groups/14/devices/0000:01:00.0
+    /sys/kernel/iommu_groups/14/devices/0000:01:00.1
+nvidia-smi:
+  out: "00000000:01:00.0, Synthetic GPU 24G, 24564\n"
