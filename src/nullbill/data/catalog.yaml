@@ -75,7 +75,7 @@ services:
     workload: core
     floor: {cores: 1, memory_mib: 512, disk_gib: 4}
     ports:
-      - {port: 3128, proto: tcp, from: ["zone:build", "zone:inference", "zone:windows"]}
+      - {port: 3128, proto: tcp, from: ["zone:mgmt", "zone:build", "zone:inference", "zone:windows"]}
   vpn:
     id: 11
     kind: lxc
@@ -191,6 +191,32 @@ services:
 engines:
   - {min_gpus: 1, max_gpus: 1, engine: llama.cpp}
   - {min_gpus: 2, engine: vllm}
+
+# Domains egress-proxy forwards to, for zones with egress: proxy. A leading
+# dot also matches subdomains. Only HTTPS CONNECT and plain HTTP to these
+# names pass; addresses typed as IPs and private ranges never do. A list in
+# config.yaml replaces this one, so copy it there before adding to it.
+proxy:
+  allow:
+    - .debian.org           # deb.debian.org, security.debian.org
+    - .proxmox.com          # download.proxmox.com for PBS
+    - .ubuntu.com
+    - .pypi.org
+    - files.pythonhosted.org
+    - registry.npmjs.org
+    - .crates.io
+    - proxy.golang.org
+    - sum.golang.org
+    - .github.com
+    - .githubusercontent.com
+    - .docker.io
+    - production.cloudflare.docker.com
+    - ghcr.io
+    - .huggingface.co
+    - .hf.co
+    - .windowsupdate.com
+    - .update.microsoft.com
+    - .delivery.mp.microsoft.com
 
 # People are listed in config.yaml; the catalog ships none.
 people: {}

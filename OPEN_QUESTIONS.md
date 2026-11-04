@@ -18,12 +18,7 @@ answered items move to the decisions list at the bottom.
 5. **Tailscale Personal.** Its free plan is for personal, non-commercial use.
    Is this server personal and non-commercial? Recommendation: confirm, or I
    draft an ADR for Headscale instead.
-6. **CI.** GitHub documents standard runners as free for public repositories,
-   so this repo's checks may not draw on your exhausted minutes.
-   Recommendation: keep `.github/workflows/check.yml` and see whether it runs
-   on the first PR; `tools/check` runs the same checks locally either way.
-   Cloudflare runners only if it does not.
-7. **Guest floors.** The sizes in `catalog.yaml` are starting values I chose,
+6. **Guest floors.** The sizes in `catalog.yaml` are starting values I chose,
    not measurements. Recommendation: accept them for M1; replace them with
    measured values once a test target exists.
 
@@ -35,6 +30,14 @@ answered items move to the decisions list at the bottom.
   `.254` on mgmt. VMIDs are `2000 + id`. DNS domain `nullbill.internal`.
 - Zone egress: services and access go out directly (never into private
   ranges); mgmt, build, inference and windows only through the proxy.
+- Proxy allow-list: Debian, Proxmox, Ubuntu, PyPI, npm, crates.io, Go,
+  GitHub, Docker Hub, GHCR, Hugging Face and Windows Update, in
+  `catalog.yaml` under `proxy.allow`. mgmt guests use the proxy too, so they
+  can install updates.
+- Generated MACs: `02:4e:42:00:<zone index>:<host>`, locally administered;
+  the router's uplink is zone 0. Router interfaces are named `nb-<zone>`.
+- DNS: dnsmasq on the router, one instance for direct zones that forwards
+  upstream and one for the other zones that answers internal names only.
 - Inference engine: llama.cpp for one GPU, vLLM for several; pinnable.
 - Plan output: YAML with a comment above each decision.
 
@@ -42,3 +45,6 @@ answered items move to the decisions list at the bottom.
 
 - Licence: Apache-2.0 (owner, 2026-11-04).
 - Commits: owner's GitHub noreply author, no Claude attribution (owner, 2026-11-04).
+- CI: GitHub's standard runners, free for this public repo; they ran the
+  first PRs, so Cloudflare runners are not needed (2026-11-04).
+- Merges: fast-forward, so GitHub adds no merge commits (owner, 2026-11-04).

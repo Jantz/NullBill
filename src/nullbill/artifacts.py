@@ -4,10 +4,15 @@ import shutil
 from pathlib import Path
 
 from nullbill.firewall import render_firewall
+from nullbill.proxy import render_proxy
+from nullbill.router import render_router
+
+# build/<part>/ holds what apply places on that machine, at its path there.
+PARTS = {"firewall": render_firewall, "router": render_router, "egress-proxy": render_proxy}
 
 
 def render_all(plan: dict, model: dict) -> dict[str, str]:
-    files = {f"firewall/{name}": text for name, text in render_firewall(plan, model).items()}
+    files = {f"{part}/{name}": text for part, render in PARTS.items() for name, text in render(plan, model).items()}
     return dict(sorted(files.items()))
 
 

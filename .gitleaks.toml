@@ -5,8 +5,10 @@ useDefault = true
 
 [[rules]]
 id = "mac-address"
-description = "MAC address (use none; fixtures carry no MACs)"
+description = "MAC address other than NullBill's generated 02:4e:42 range"
 regex = '''(?i)\b[0-9a-f]{2}(?::[0-9a-f]{2}){5}\b'''
+[rules.allowlist]
+regexes = ['''(?i)^02:4e:42:''']
 
 [[rules]]
 id = "public-ipv4"

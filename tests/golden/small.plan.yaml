@@ -167,6 +167,7 @@ backups:
 flows:
   - zone:* -> router udp/53
   - zone:* -> router tcp/53
+  - zone:mgmt -> egress-proxy tcp/3128
   - zone:build -> egress-proxy tcp/3128
   - zone:* -> step-ca tcp/443
   - service:forgejo -> postgres tcp/5432

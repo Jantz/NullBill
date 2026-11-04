@@ -32,7 +32,7 @@ def test_golden(cls, facts):
 
 def test_every_guest_defaults_to_deny(facts):
     files = rendered(facts, "mid")
-    guest_files = [f for f in files if f.split("/")[-1][0].isdigit()]
+    guest_files = [f for f in files if f.startswith("firewall/") and f.split("/")[-1][0].isdigit()]
     assert len(guest_files) == 16
     for path in guest_files:
         if path == "firewall/2001.fw":  # router

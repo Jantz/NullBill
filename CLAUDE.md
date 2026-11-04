@@ -18,7 +18,10 @@ names and reaches the host over SSH; it never runs on the host. Only `probe`,
 - `tests/fixtures/<class>.yaml`: synthetic probe output for small, mid, large.
 - `tests/golden/<class>.plan.yaml`: expected plans. Regenerate with `UPDATE_GOLDEN=1 python3 -m pytest` and review the diff.
 - `hooks/`, `tools/denylist-scan`: privacy hooks. `tools/install-hooks` enables them.
+- `src/nullbill/flows.py`: the one flow list both firewall layers are generated from.
 - `src/nullbill/firewall.py`: pve-firewall files; `tools/check-firewall` parses them with the stock parser in a container.
+- `src/nullbill/router.py`, `src/nullbill/proxy.py`: router (nftables, dnsmasq, interfaces) and Squid files; `tools/check-guests` checks them with Debian 12's nft, dnsmasq, ifupdown and squid.
+- `src/nullbill/artifacts.py`: `apply --dry-run` output, one `build/<machine>/` per target.
 - `tools/check`: every check CI runs. Run it before pushing. In a TLS-intercepting sandbox set `EXTRA_CA_FILE` to the proxy CA bundle.
 
 ## Privacy rules (public repo)

@@ -6,7 +6,8 @@ serving and services, from one declarative config. Running it never requires
 a recurring payment; anything paid is opt-in and listed by the plan.
 
 Status: milestone 2 in progress. `nullbill probe`, `nullbill plan` and
-`nullbill apply --dry-run` work against synthetic fixtures; none has run on
+`nullbill apply --dry-run` work against synthetic fixtures. The dry run
+renders the pve-firewall, router and egress-proxy files; none has run on
 real hardware yet. Nothing applies changes to a host.
 
 ## Use
@@ -46,7 +47,7 @@ Every value in `src/nullbill/data/catalog.yaml` can be pinned the same way.
 
 ```sh
 tools/install-hooks          # gitleaks and the deny-list on commit and push
-tools/check                  # lint, tests, secret scan, pve-firewall parser (needs docker)
+tools/check                  # lint, tests, secret scan, config parsers (need docker)
 ```
 
 Licensed under Apache-2.0.

@@ -226,6 +226,7 @@ backups:
 flows:
   - zone:* -> router udp/53
   - zone:* -> router tcp/53
+  - zone:mgmt -> egress-proxy tcp/3128
   - zone:build -> egress-proxy tcp/3128
   - zone:inference -> egress-proxy tcp/3128
   - zone:windows -> egress-proxy tcp/3128

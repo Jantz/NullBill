@@ -131,6 +131,16 @@ $defs:
           min_gpus: {type: integer, minimum: 1}
           max_gpus: {type: integer, minimum: 1}
           engine: {enum: [llama.cpp, vllm]}
+    proxy:
+      type: object
+      additionalProperties: false
+      properties:
+        allow: {type: array, uniqueItems: true, items: {$ref: "#/$defs/domain_pattern"}}
+
+  domain_pattern:
+    # A host name; a leading dot also matches its subdomains.
+    type: string
+    pattern: "^\\.?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
 
   config:
     type: object
@@ -157,6 +167,7 @@ $defs:
       roles: {$ref: "#/$defs/common/roles"}
       services: {$ref: "#/$defs/common/services"}
       people: {$ref: "#/$defs/common/people"}
+      proxy: {$ref: "#/$defs/common/proxy"}
       gpus:
         # Keyed by PCI address as the probe reports it.
         type: object
@@ -179,7 +190,7 @@ $defs:
 
   model:
     type: object
-    required: [network, host, zones, roles, services, people, engines]
+    required: [network, host, zones, roles, services, people, engines, proxy]
     properties:
       network: {$ref: "#/$defs/common/network", required: [base, domain, vmid_base]}
       host:
@@ -206,3 +217,7 @@ $defs:
                 floor: {required: [cores, memory_mib, disk_gib]}
       people: {$ref: "#/$defs/common/people"}
       engines: {$ref: "#/$defs/common/engines"}
+      proxy:
+        allOf:
+          - {$ref: "#/$defs/common/proxy"}
+          - required: [allow]
