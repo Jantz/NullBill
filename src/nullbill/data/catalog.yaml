@@ -6,8 +6,14 @@
 # host reserve; tests/test_plan.py enforces that.
 
 network:
-  # Each zone takes the /24 at its index inside this /16.
+  # Each zone takes the /24 at its index inside this /16. In every zone the
+  # router is .1, a service is .<its id>, pool clones draw from .128/26 and
+  # the PVE host is .254 on mgmt.
   base: 10.42.0.0/16
+  # Names resolve as <service>.<domain>; .internal is reserved for private use.
+  domain: nullbill.internal
+  # A guest's VMID is vmid_base + its service id.
+  vmid_base: 2000
 
 host:
   reserve:
@@ -18,9 +24,11 @@ zones:
   mgmt:
     index: 1
     description: Owner-only management guests.
+    egress: proxy
   services:
     index: 2
     description: Shared platform services.
+    egress: direct
   build:
     index: 3
     description: CI clones and the credential-free workspace.
@@ -36,6 +44,7 @@ zones:
   access:
     index: 6
     description: VPN entry. The only way into the other zones.
+    egress: direct
 
 roles:
   owner:
@@ -45,16 +54,22 @@ roles:
     description: Git/CI and the credential-free workspace only.
     reach: ["service:forgejo", "service:workspace"]
 
+# id: unique per service; sets the VMID and the host part of the address.
 # workload: core services are always planned. Others are planned only when
 # intent.workloads lists their workload.
 services:
   router:
+    id: 1
     kind: vm
     zone: mgmt
     workload: core
     attach: all-zones
     floor: {cores: 1, memory_mib: 512, disk_gib: 4}
+    ports:
+      - {port: 53, proto: udp, from: ["zone:*"]}
+      - {port: 53, proto: tcp, from: ["zone:*"]}
   egress-proxy:
+    id: 10
     kind: lxc
     zone: services
     workload: core
@@ -62,11 +77,13 @@ services:
     ports:
       - {port: 3128, proto: tcp, from: ["zone:build", "zone:inference", "zone:windows"]}
   vpn:
+    id: 11
     kind: lxc
     zone: access
     workload: core
     floor: {cores: 1, memory_mib: 256, disk_gib: 2}
   step-ca:
+    id: 12
     kind: lxc
     zone: mgmt
     workload: core
@@ -74,6 +91,7 @@ services:
     ports:
       - {port: 443, proto: tcp, from: ["zone:*"]}
   postgres:
+    id: 13
     kind: lxc
     zone: services
     workload: core
@@ -81,6 +99,7 @@ services:
     ports:
       - {port: 5432, proto: tcp, from: ["service:forgejo"]}
   monitoring:
+    id: 14
     kind: lxc
     zone: mgmt
     workload: core
@@ -90,17 +109,20 @@ services:
       - {port: 3000, proto: tcp, from: ["role:owner"]}
       - {port: 3100, proto: tcp, from: ["zone:*"]}
   pbs:
+    id: 15
     kind: vm
     zone: mgmt
     workload: core
     floor: {cores: 1, memory_mib: 2048, disk_gib: 8}
   operator:
+    id: 16
     kind: lxc
     zone: mgmt
     workload: core
     description: Holds the agent CLI and token. Owner only.
     floor: {cores: 1, memory_mib: 512, disk_gib: 8}
   forgejo:
+    id: 17
     kind: lxc
     zone: services
     workload: core
@@ -109,12 +131,14 @@ services:
       - {port: 443, proto: tcp, from: ["role:default", "zone:build", "zone:windows"]}
       - {port: 22, proto: tcp, from: ["role:default"]}
   runner-dispatcher:
+    id: 18
     kind: lxc
     zone: services
     workload: linux-ci
     description: Clones a golden VM per job. Lives outside build.
     floor: {cores: 1, memory_mib: 256, disk_gib: 4}
   linux-runner:
+    id: 30
     kind: vm-pool
     zone: build
     workload: linux-ci
@@ -122,18 +146,21 @@ services:
     floor: {cores: 2, memory_mib: 2048, disk_gib: 32}
     grow: 2
   workspace:
+    id: 19
     kind: lxc
     zone: build
     workload: agents
     description: Credential-free workspace for coding agents.
     floor: {cores: 1, memory_mib: 1024, disk_gib: 32}
   inference:
+    id: 20
     kind: lxc
     zone: inference
     workload: inference
     gpu: true
     floor: {cores: 2, memory_mib: 8192, disk_gib: 64}
   model-gateway:
+    id: 21
     kind: lxc
     zone: inference
     workload: inference
@@ -142,12 +169,14 @@ services:
     ports:
       - {port: 4000, proto: tcp, from: ["zone:build", "role:owner"]}
   windows-runner:
+    id: 31
     kind: vm-pool
     zone: windows
     workload: windows-ci
     floor: {cores: 2, memory_mib: 4096, disk_gib: 64}
     grow: 1
   windows-dev:
+    id: 22
     kind: vm
     zone: windows
     workload: windows-dev

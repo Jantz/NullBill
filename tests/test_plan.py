@@ -54,6 +54,7 @@ def test_yaml_alone_adds_zone_and_service(facts):
     config["zones"] = {"lab": {"index": 20, "description": "Synthetic test zone."}}
     config["services"] = {
         "echo": {
+            "id": 50,
             "kind": "lxc",
             "zone": "lab",
             "workload": "core",
@@ -63,8 +64,16 @@ def test_yaml_alone_adds_zone_and_service(facts):
     }
     after = plan_for(facts("small"), config)
     assert "lab" not in before["zones"].value
-    assert after["zones"].value["lab"] == {"bridge": "vmbr120", "subnet": "10.42.20.0/24", "egress": "none"}
-    assert after["guests"]["echo"] == {"kind": "lxc", "zone": "lab", "cores": 1, "memory_mib": 128, "disk_gib": 1}
+    assert after["zones"].value["lab"] == {"bridge": "vmbr120", "subnet": "10.42.20.0/24", "gateway": "10.42.20.1", "egress": "none"}
+    assert after["guests"]["echo"] == {
+        "kind": "lxc",
+        "zone": "lab",
+        "cores": 1,
+        "memory_mib": 128,
+        "disk_gib": 1,
+        "vmid": 2050,
+        "ip": "10.42.20.50",
+    }
     assert "zone:build -> echo tcp/7" in after["flows"].value
 
 
@@ -165,6 +174,21 @@ def test_unknown_workload_and_dangling_refs_fail(facts):
         "people.dev-b.role: role 'ghost' does not exist",
         "roles.default.reach: service:nope does not exist",
     ]
+
+
+def test_duplicate_service_id_fails(facts):
+    config = {
+        "services": {
+            "echo": {
+                "id": 13,
+                "kind": "lxc",
+                "zone": "services",
+                "workload": "core",
+                "floor": {"cores": 1, "memory_mib": 128, "disk_gib": 1},
+            }
+        }
+    }
+    assert errors_of(facts("small"), config) == ["services.echo.id: 13 already used by service postgres"]
 
 
 def test_duplicate_zone_index_fails(facts):

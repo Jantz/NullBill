@@ -51,6 +51,11 @@ def _check_refs(model: dict, errors: _Errors) -> None:
     for name, person in model["people"].items():
         if person["role"] not in model["roles"]:
             errors.append(f"people.{name}.role: role {person['role']!r} does not exist")
+    ids: dict[int, str] = {}
+    for name, svc in model["services"].items():
+        if svc["id"] in ids:
+            errors.append(f"services.{name}.id: {svc['id']} already used by service {ids[svc['id']]}")
+        ids[svc["id"]] = name
     seen: dict[int, str] = {}
     for name, zone in model["zones"].items():
         if zone["index"] in seen:
@@ -254,6 +259,36 @@ def _flows(model: dict, planned: dict, zones: set[str]) -> list[str]:
     return flows
 
 
+POOL_RANGE = "128/26"
+HOST_ID = 254
+
+
+def _host(zone: dict, host: int | str) -> str:
+    """Address `host` (an id, or a 'start/prefix' range) inside a zone subnet."""
+    net = ipaddress.ip_network(zone["subnet"])
+    if isinstance(host, str):
+        start, prefix = host.split("/")
+        return str(ipaddress.ip_network((int(net.network_address) + int(start), int(prefix))))
+    return str(net.network_address + host)
+
+
+def _zones(model: dict, planned: dict) -> dict:
+    base = ipaddress.ip_network(model["network"]["base"])
+    names = [z for z in model["zones"] if z in ("access", "mgmt") or any(s["zone"] == z for s in planned.values())]
+    zones = {}
+    for name in names:
+        index = model["zones"][name]["index"]
+        subnet = ipaddress.ip_network((int(base.network_address) + (index << 8), 24))
+        zones[name] = {
+            "bridge": f"vmbr{100 + index}",
+            "subnet": str(subnet),
+            "gateway": str(subnet.network_address + 1),
+            "egress": model["zones"][name].get("egress", "none"),
+        }
+    zones["mgmt"]["host_ip"] = str(ipaddress.ip_network(zones["mgmt"]["subnet"]).network_address + HOST_ID)
+    return zones
+
+
 def build_plan(model: dict, facts: dict) -> dict:
     errors = _Errors()
     _check_refs(model, errors)
@@ -268,21 +303,22 @@ def build_plan(model: dict, facts: dict) -> dict:
     disk_section, pbs = _disks(model, facts, errors)
     errors.raise_if_any()
 
-    base = ipaddress.ip_network(model["network"]["base"])
-    zone_names = [z for z in model["zones"] if z == "access" or any(s["zone"] == z for s in planned.values())]
-    zones = {}
-    for name in zone_names:
-        index = model["zones"][name]["index"]
-        subnet = ipaddress.ip_network((int(base.network_address) + (index << 8), 24))
-        zones[name] = {"bridge": f"vmbr{100 + index}", "subnet": str(subnet), "egress": model["zones"][name].get("egress", "none")}
-
+    zones = _zones(model, planned)
     guests = {}
+    vmid_base = model["network"]["vmid_base"]
     for name, svc in planned.items():
         entry = {"kind": svc["kind"], "zone": svc["zone"], **sizes[name]}
-        if name in counts:
+        if svc["kind"] == "vm-pool":
             entry["count"] = counts[name]
+            entry["template_vmid"] = vmid_base + svc["id"]
+            entry["clone_range"] = Note(_host(zones[svc["zone"]], POOL_RANGE), "Clones take DHCP leases from this range.")
+        else:
+            entry["vmid"] = vmid_base + svc["id"]
+            entry["ip"] = _host(zones[svc["zone"]], svc["id"])
         if svc.get("attach") == "all-zones":
             entry["attach"] = "all-zones"
+            entry["ips"] = Note({z: _host(zones[z], svc["id"]) for z in zones}, "One leg in every planned zone.")
+            del entry["ip"]
         guests[name] = entry
 
     n_gpus = len([g for g in facts["gpus"] if not g["integrated"]])
@@ -291,6 +327,7 @@ def build_plan(model: dict, facts: dict) -> dict:
         "class": Note(host_class, "Follows the discrete GPU count: none, one, several."),
         "host": {"threads": facts["cpu"]["threads"], **capacity["memory"]},
         "disk": capacity["disk"],
+        "domain": model["network"]["domain"],
         "zones": Note(zones, "Uplink-less bridges; the router guest routes between them."),
         "guests": guests,
         "gpus": gpu_section or Note({}, "No discrete GPU."),

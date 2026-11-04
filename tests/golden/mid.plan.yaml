@@ -15,32 +15,40 @@ disk:
   # Includes one golden template per pool.
   needed_gib: 788
   free_gib: 800
+domain: nullbill.internal
 # Uplink-less bridges; the router guest routes between them.
 zones:
   mgmt:
     bridge: vmbr101
     subnet: 10.42.1.0/24
-    egress: none
+    gateway: 10.42.1.1
+    egress: proxy
+    host_ip: 10.42.1.254
   services:
     bridge: vmbr102
     subnet: 10.42.2.0/24
-    egress: none
+    gateway: 10.42.2.1
+    egress: direct
   build:
     bridge: vmbr103
     subnet: 10.42.3.0/24
+    gateway: 10.42.3.1
     egress: proxy
   inference:
     bridge: vmbr104
     subnet: 10.42.4.0/24
+    gateway: 10.42.4.1
     egress: proxy
   windows:
     bridge: vmbr105
     subnet: 10.42.5.0/24
+    gateway: 10.42.5.1
     egress: proxy
   access:
     bridge: vmbr106
     subnet: 10.42.6.0/24
-    egress: none
+    gateway: 10.42.6.1
+    egress: direct
 guests:
   router:
     kind: vm
@@ -48,61 +56,88 @@ guests:
     cores: 1
     memory_mib: 512
     disk_gib: 4
+    vmid: 2001
     attach: all-zones
+    # One leg in every planned zone.
+    ips:
+      mgmt: 10.42.1.1
+      services: 10.42.2.1
+      build: 10.42.3.1
+      inference: 10.42.4.1
+      windows: 10.42.5.1
+      access: 10.42.6.1
   egress-proxy:
     kind: lxc
     zone: services
     cores: 1
     memory_mib: 512
     disk_gib: 4
+    vmid: 2010
+    ip: 10.42.2.10
   vpn:
     kind: lxc
     zone: access
     cores: 1
     memory_mib: 256
     disk_gib: 2
+    vmid: 2011
+    ip: 10.42.6.11
   step-ca:
     kind: lxc
     zone: mgmt
     cores: 1
     memory_mib: 256
     disk_gib: 2
+    vmid: 2012
+    ip: 10.42.1.12
   postgres:
     kind: lxc
     zone: services
     cores: 1
     memory_mib: 1024
     disk_gib: 16
+    vmid: 2013
+    ip: 10.42.2.13
   monitoring:
     kind: lxc
     zone: mgmt
     cores: 1
     memory_mib: 1536
     disk_gib: 32
+    vmid: 2014
+    ip: 10.42.1.14
   pbs:
     kind: vm
     zone: mgmt
     cores: 1
     memory_mib: 2048
     disk_gib: 8
+    vmid: 2015
+    ip: 10.42.1.15
   operator:
     kind: lxc
     zone: mgmt
     cores: 1
     memory_mib: 512
     disk_gib: 8
+    vmid: 2016
+    ip: 10.42.1.16
   forgejo:
     kind: lxc
     zone: services
     cores: 1
     memory_mib: 1024
     disk_gib: 32
+    vmid: 2017
+    ip: 10.42.2.17
   runner-dispatcher:
     kind: lxc
     zone: services
     cores: 1
     memory_mib: 256
     disk_gib: 4
+    vmid: 2018
+    ip: 10.42.2.18
   linux-runner:
     kind: vm-pool
     zone: build
@@ -111,24 +146,33 @@ guests:
     disk_gib: 32
     # Clones, limited by disk.
     count: 6
+    template_vmid: 2030
+    # Clones take DHCP leases from this range.
+    clone_range: 10.42.3.128/26
   workspace:
     kind: lxc
     zone: build
     cores: 1
     memory_mib: 1024
     disk_gib: 32
+    vmid: 2019
+    ip: 10.42.3.19
   inference:
     kind: lxc
     zone: inference
     cores: 2
     memory_mib: 8192
     disk_gib: 64
+    vmid: 2020
+    ip: 10.42.4.20
   model-gateway:
     kind: lxc
     zone: inference
     cores: 1
     memory_mib: 512
     disk_gib: 4
+    vmid: 2021
+    ip: 10.42.4.21
   windows-runner:
     kind: vm-pool
     zone: windows
@@ -137,12 +181,17 @@ guests:
     disk_gib: 64
     # Clones, limited by memory.
     count: 3
+    template_vmid: 2031
+    # Clones take DHCP leases from this range.
+    clone_range: 10.42.5.128/26
   windows-dev:
     kind: vm
     zone: windows
     cores: 2
     memory_mib: 4096
     disk_gib: 96
+    vmid: 2022
+    ip: 10.42.5.22
 gpus:
   # Owned by the host and shared; consumers list their VRAM budget in MiB.
   '0000:01:00.0':
@@ -175,6 +224,8 @@ backups:
   status: ok
 # Allowed flows; everything else is denied.
 flows:
+  - zone:* -> router udp/53
+  - zone:* -> router tcp/53
   - zone:build -> egress-proxy tcp/3128
   - zone:inference -> egress-proxy tcp/3128
   - zone:windows -> egress-proxy tcp/3128

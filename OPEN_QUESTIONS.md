@@ -31,6 +31,10 @@ answered items move to the decisions list at the bottom.
 
 - Zone subnets: `10.42.<index>.0/24`, pinnable through `network.base`.
 - Zone bridges: `vmbr<100 + index>`.
+- Addresses: router `.1`, service `.<id>`, pool clones `.128/26`, PVE host
+  `.254` on mgmt. VMIDs are `2000 + id`. DNS domain `nullbill.internal`.
+- Zone egress: services and access go out directly (never into private
+  ranges); mgmt, build, inference and windows only through the proxy.
 - Inference engine: llama.cpp for one GPU, vLLM for several; pinnable.
 - Plan output: YAML with a comment above each decision.
 
