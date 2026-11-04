@@ -2,7 +2,6 @@
   ansible.builtin.apt:
     name: "postgresql-{{ postgres_version }}"
     update_cache: true
-    cache_valid_time: 3600
 
 - name: Server settings
   ansible.builtin.template:
