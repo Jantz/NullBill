@@ -9,5 +9,8 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod +x /usr/sbin
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       ansible-core python3-apt ca-certificates curl openssl gnupg \
  && cat /tmp/extra-ca.crt >> /etc/ssl/certs/ca-certificates.crt \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ # Empty lists with a fresh update stamp, the state that hid two missing
+ # cache refreshes from local runs: roles must not trust cache_valid_time.
+ && mkdir -p /var/lib/apt/periodic && touch /var/lib/apt/periodic/update-success-stamp
 COPY role-check.sh /usr/local/lib/role-check.sh

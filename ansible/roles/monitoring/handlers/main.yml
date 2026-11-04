@@ -1,0 +1,15 @@
+- name: Restart prometheus
+  ansible.builtin.systemd_service: {name: prometheus, state: restarted}
+  when: monitoring_manage_services | bool
+
+- name: Restart blackbox
+  ansible.builtin.systemd_service: {name: prometheus-blackbox-exporter, state: restarted}
+  when: monitoring_manage_services | bool
+
+- name: Restart loki
+  ansible.builtin.systemd_service: {name: loki, state: restarted}
+  when: monitoring_manage_services | bool
+
+- name: Restart grafana
+  ansible.builtin.systemd_service: {name: grafana-server, state: restarted}
+  when: monitoring_manage_services | bool

@@ -22,6 +22,11 @@ answered items move to the decisions list at the bottom.
    not measurements. Recommendation: accept them for M1; replace them with
    measured values once a test target exists.
 
+7. **Alert channel.** Alerts for failed backups, expiring certificates,
+   full disks and failed logins need somewhere to go. Recommendation: a
+   self-hosted ntfy in the services zone with its phone app, which costs
+   nothing; or name an email address and SMTP relay you already use.
+
 ## Defaults picked for cosmetic choices
 
 - Zone subnets: `10.42.<index>.0/24`, pinnable through `network.base`.

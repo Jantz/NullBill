@@ -1,0 +1,7 @@
+# Prometheus, Loki and Grafana in the monitoring container. apply runs this
+# with the scrape and probe targets from the plan.
+- name: Metrics, logs and dashboards
+  hosts: all
+  become: false
+  roles:
+    - monitoring
