@@ -1,0 +1,51 @@
+# NullBill
+
+NullBill turns a spare x86 machine running Proxmox VE into a self-hosted dev
+server for agentic workflows: coding agents, Linux and Windows CI, model
+serving and services, from one declarative config. Running it never requires
+a recurring payment; anything paid is opt-in and listed by the plan.
+
+Status: milestone 1. `nullbill probe` and `nullbill plan` work against
+synthetic fixtures; neither has run on real hardware yet. Nothing applies
+changes to a host.
+
+## Use
+
+Run on a controller, never on the PVE host. Python 3.11 or newer.
+
+```sh
+pip install -e .
+export NULLBILL_HOME=~/nullbill-home   # private, backed up, outside this repo
+nullbill probe                          # read-only commands over SSH
+nullbill plan                           # writes $NULLBILL_HOME/plan.yaml
+```
+
+`$NULLBILL_HOME/config.yaml` names the host and what to plan for:
+
+```yaml
+target:
+  ssh: root@pve.example.internal
+intent:
+  workloads: [agents, linux-ci, windows-ci, windows-dev, inference]
+people:
+  dev-b: {role: default}
+overrides:
+  linux-runner: {count: 2}
+disks:
+  ata-EXAMPLE_DISK: {use: pbs, wipe: true}   # required before a disk with signatures is formatted
+gpus:
+  "0000:01:00.0": {owner: host-shared, consumers: {inference: 20000}}
+```
+
+Every value in `src/nullbill/data/catalog.yaml` can be pinned the same way.
+`src/nullbill/data/schema.yaml` is the reference for each key. The
+`tests/golden/` plans show what `plan` prints for each hardware class.
+
+## Develop
+
+```sh
+tools/install-hooks          # gitleaks and the deny-list on commit and push
+tools/check                  # lint, tests, secret scan
+```
+
+Licensed under Apache-2.0.
