@@ -2,8 +2,10 @@
 
 import re
 
+import pytest
 from conftest import fixture_config
 
+from nullbill.errors import NullBillError
 from nullbill.model import build_model
 from nullbill.plan import build_plan
 from nullbill.proxy import render_proxy
@@ -60,6 +62,12 @@ def test_squid_admits_proxy_zones_only(facts):
 
 
 def test_config_allow_list_replaces_catalog(facts):
-    plan, model = planned(facts, "small", proxy={"allow": [".example.org"]})
+    plan, model = planned(facts, "small", proxy={"allow": [".example.org", "deb.debian.org"]})
     conf = render_proxy(plan, model)["etc/squid/squid.conf"]
-    assert "acl allowed dstdomain -n .example.org\n" in conf
+    assert "acl allowed dstdomain -n .example.org deb.debian.org\n" in conf
+
+
+def test_verify_name_must_be_on_the_allow_list(facts):
+    with pytest.raises(NullBillError) as exc:
+        planned(facts, "small", proxy={"allow": [".example.org"]})
+    assert exc.value.messages == ["verify.public_name: deb.debian.org is not on proxy.allow, so verify could not prove the proxy works"]

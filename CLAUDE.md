@@ -7,7 +7,7 @@ Guidance for Claude sessions working in this repository.
 NullBill turns a spare x86 machine running Proxmox VE into a self-hosted dev
 server from one declarative config. `nullbill` runs on a controller the owner
 names and reaches the host over SSH; it never runs on the host. Only `probe`,
-`plan` and `apply --dry-run` exist so far.
+`plan`, `apply --dry-run` and `verify` exist so far.
 
 ## Layout
 
@@ -24,6 +24,7 @@ names and reaches the host over SSH; it never runs on the host. Only `probe`,
 - `src/nullbill/tailnet.py`: Tailscale policy from people and roles, the only per-person gate; plan fails past the free-plan limits in `catalog.yaml`.
 - `ansible/`: host baseline (key-only SSH, auditd, no-subscription repo, security-only upgrades); `tools/check-host` runs it twice in a Debian 12 container and checks the result. `docs/runbooks/` holds steps the owner does by hand.
 - `src/nullbill/tofu.py`: OpenTofu JSON for bridges, images and guests (bpg/proxmox); `tools/check-tofu` runs `tofu validate` with the pinned provider in a container.
+- `src/nullbill/verify.py`: allowed and denied flows probed from one container per zone and from the LAN; SKIP when nothing can run, never PASS.
 - `src/nullbill/artifacts.py`: `apply --dry-run` output, one `build/<machine>/` per target.
 - `tools/check`: every check CI runs. Run it before pushing. In a TLS-intercepting sandbox set `EXTRA_CA_FILE` to the proxy CA bundle.
 

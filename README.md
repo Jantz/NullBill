@@ -7,7 +7,8 @@ a recurring payment; anything paid is opt-in and listed by the plan.
 
 Status: milestone 2 is rendered and container-checked; `docs/milestones/m2.md`
 lists what still needs a host. `nullbill probe`, `nullbill plan` and
-`nullbill apply --dry-run` work against synthetic fixtures. The dry run
+`nullbill apply --dry-run` work against synthetic fixtures, and `nullbill
+verify` reports SKIP until there is a host to probe. The dry run
 renders the pve-firewall, router, egress-proxy, tailnet policy and OpenTofu
 files. None has run on real hardware, and nothing applies changes to a host.
 
@@ -21,6 +22,7 @@ export NULLBILL_HOME=~/nullbill-home   # private, backed up, outside this repo
 nullbill probe                          # read-only commands over SSH
 nullbill plan                           # writes $NULLBILL_HOME/plan.yaml
 nullbill apply --dry-run                # renders host files into $NULLBILL_HOME/build
+nullbill verify                         # PASS/FAIL/SKIP per flow; exits 1 on FAIL
 ```
 
 `$NULLBILL_HOME/config.yaml` names the host and what to plan for:

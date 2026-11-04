@@ -8,6 +8,7 @@ import ipaddress
 from typing import Any
 
 from nullbill.errors import NullBillError
+from nullbill.proxy import allows
 from nullbill.render import Note
 from nullbill.tailnet import check_tailnet
 
@@ -52,6 +53,9 @@ def _check_refs(model: dict, errors: _Errors) -> None:
     for name, person in model["people"].items():
         if person["role"] not in model["roles"]:
             errors.append(f"people.{name}.role: role {person['role']!r} does not exist")
+    public = model["verify"]["public_name"]
+    if not allows(model["proxy"]["allow"], public):
+        errors.append(f"verify.public_name: {public} is not on proxy.allow, so verify could not prove the proxy works")
     ids: dict[int, str] = {}
     for name, svc in model["services"].items():
         if svc["id"] in ids:

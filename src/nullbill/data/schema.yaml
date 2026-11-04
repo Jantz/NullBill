@@ -144,6 +144,11 @@ $defs:
             users: {type: integer, minimum: 1}
             groups: {type: integer, minimum: 1}
             tagged_devices: {type: integer, minimum: 1}
+    verify:
+      type: object
+      additionalProperties: false
+      properties:
+        public_name: {$ref: "#/$defs/domain_pattern"}
     images:
       type: object
       additionalProperties: false
@@ -196,6 +201,7 @@ $defs:
       people: {$ref: "#/$defs/common/people"}
       proxy: {$ref: "#/$defs/common/proxy"}
       images: {$ref: "#/$defs/common/images"}
+      verify: {$ref: "#/$defs/common/verify"}
       gpus:
         # Keyed by PCI address as the probe reports it.
         type: object
@@ -218,7 +224,7 @@ $defs:
 
   model:
     type: object
-    required: [network, host, zones, roles, services, people, engines, proxy, tailnet, images]
+    required: [network, host, zones, roles, services, people, engines, proxy, tailnet, images, verify]
     properties:
       network: {$ref: "#/$defs/common/network", required: [base, domain, vmid_base]}
       host:

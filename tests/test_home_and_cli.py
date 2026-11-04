@@ -58,3 +58,17 @@ def test_apply_dry_run_renders_build(tmp_path, monkeypatch, capsys):
 def test_apply_without_dry_run_is_refused():
     with pytest.raises(SystemExit):
         main(["apply"])
+
+
+@pytest.mark.skipif(Path("/etc/pve").exists(), reason="nullbill refuses to run on a PVE host")
+def test_verify_without_target_skips_and_exits_zero(tmp_path, monkeypatch, capsys):
+    run = tmp_path / "probe" / "run1"
+    (run / "facts.json").parent.mkdir(parents=True)
+    (run / "facts.json").write_text(json.dumps(parse(write_raw(run / "raw", "small"))))
+    (tmp_path / "probe" / "latest").symlink_to("run1")
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump(fixture_config("small")))
+    monkeypatch.setenv("NULLBILL_HOME", str(tmp_path))
+    assert main(["verify"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[-1].startswith("0 PASS, 0 FAIL, ") and out[-1].endswith(" SKIP, 1 DEGRADED")
+    assert out[0] == "DEGRADED backups: no separate disk for PBS"
