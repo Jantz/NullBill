@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Render the OpenTofu configuration for every fixture class and validate it
+# with tofu and the pinned bpg/proxmox provider in a container. Needs docker
+# and network access to the OpenTofu registry.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+out=$(mktemp -d)
+trap 'rm -rf "$out"' EXIT
+mkdir "$out/context"
+cp tools/tofu-check/Dockerfile tools/tofu-check/check.sh tools/tofu-check/report.py "$out/context/"
+cat "${EXTRA_CA_FILE:-/dev/null}" > "$out/context/extra-ca.crt"
+docker build -q -t nullbill-tofu-check "$out/context" >/dev/null
+tools/render-fixtures "$out/build" >/dev/null
+docker run --rm -v "$out/build:/build:ro" nullbill-tofu-check small mid large

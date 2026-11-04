@@ -7,7 +7,8 @@ a recurring payment; anything paid is opt-in and listed by the plan.
 
 Status: milestone 2 in progress. `nullbill probe`, `nullbill plan` and
 `nullbill apply --dry-run` work against synthetic fixtures. The dry run
-renders the pve-firewall, router and egress-proxy files; none has run on
+renders the pve-firewall, router, egress-proxy, tailnet policy and OpenTofu
+files; none has run on
 real hardware yet. Nothing applies changes to a host.
 
 ## Use

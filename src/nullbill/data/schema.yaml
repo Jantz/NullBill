@@ -144,11 +144,25 @@ $defs:
             users: {type: integer, minimum: 1}
             groups: {type: integer, minimum: 1}
             tagged_devices: {type: integer, minimum: 1}
+    images:
+      type: object
+      additionalProperties: false
+      properties:
+        debian-lxc: {$ref: "#/$defs/image"}
+        debian-cloud: {$ref: "#/$defs/image"}
     proxy:
       type: object
       additionalProperties: false
       properties:
         allow: {type: array, uniqueItems: true, items: {$ref: "#/$defs/domain_pattern"}}
+
+  image:
+    type: object
+    additionalProperties: false
+    required: [url, sha512]
+    properties:
+      url: {type: string, pattern: "^https?://"}
+      sha512: {type: string, pattern: "^[0-9a-f]{128}$"}
 
   domain_pattern:
     # A host name; a leading dot also matches its subdomains.
@@ -181,6 +195,7 @@ $defs:
       services: {$ref: "#/$defs/common/services"}
       people: {$ref: "#/$defs/common/people"}
       proxy: {$ref: "#/$defs/common/proxy"}
+      images: {$ref: "#/$defs/common/images"}
       gpus:
         # Keyed by PCI address as the probe reports it.
         type: object
@@ -203,7 +218,7 @@ $defs:
 
   model:
     type: object
-    required: [network, host, zones, roles, services, people, engines, proxy, tailnet]
+    required: [network, host, zones, roles, services, people, engines, proxy, tailnet, images]
     properties:
       network: {$ref: "#/$defs/common/network", required: [base, domain, vmid_base]}
       host:

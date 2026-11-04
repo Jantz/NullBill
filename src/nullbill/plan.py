@@ -125,6 +125,15 @@ def _storage(facts: dict, errors: _Errors) -> dict | None:
     return max(usable, key=lambda s: (s["avail_gib"], s["name"]))
 
 
+def _media(facts: dict, errors: _Errors) -> str | None:
+    """Storage for downloaded container templates and disk images."""
+    usable = [s for s in facts["storage"] if {"iso", "vztmpl"} <= set(s["content"])]
+    if not usable:
+        errors.append("probe: no active storage holds both ISO images and container templates")
+        return None
+    return max(usable, key=lambda s: (s["avail_gib"], s["name"]))["name"]
+
+
 def _size(model: dict, planned: dict, facts: dict, errors: _Errors) -> tuple[dict, dict[str, Note], dict]:
     overrides = model.get("overrides", {})
     for name in sorted(set(overrides) - set(planned)):
@@ -204,6 +213,7 @@ def _size(model: dict, planned: dict, facts: dict, errors: _Errors) -> tuple[dic
         "storage": storage["name"] if storage else None,
         "needed_gib": Note(disk, "Includes one golden template per pool."),
         "free_gib": storage["avail_gib"] if storage else None,
+        "media": Note(_media(facts, errors), "Holds the downloaded container template and cloud image."),
     }
     pool_counts = {n: Note(counts[n], f"Clones, {limits[n]}.") for n in pools}
     return sizes, pool_counts, {"memory": memory, "disk": disk_section}

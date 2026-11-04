@@ -7,9 +7,10 @@ from nullbill.firewall import render_firewall
 from nullbill.proxy import render_proxy
 from nullbill.router import render_router
 from nullbill.tailnet import render_tailnet
+from nullbill.tofu import render_tofu
 
 # build/<part>/ holds what apply places on that machine, at its path there.
-PARTS = {"firewall": render_firewall, "router": render_router, "egress-proxy": render_proxy, "tailnet": render_tailnet}
+PARTS = {"firewall": render_firewall, "router": render_router, "egress-proxy": render_proxy, "tailnet": render_tailnet, "tofu": render_tofu}
 
 
 def render_all(plan: dict, model: dict) -> dict[str, str]:

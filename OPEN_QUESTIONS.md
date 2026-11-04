@@ -44,6 +44,12 @@ answered items move to the decisions list at the bottom.
   follows a service port, and the policy carries tests that Tailscale runs
   on every push, so a policy that lets a default user reach the host is
   rejected.
+- Guest images: Debian 12 for every container (Proxmox's standard
+  template) and Linux VM (Debian's dated generic cloud image), each pinned
+  by SHA-512 in `catalog.yaml`. PBS installs from its apt repository onto
+  the Debian VM. Windows installs from the ISO you supply.
+- OpenTofu 1.13.2 with bpg/proxmox 0.118.1; the API token comes from the
+  environment, never a file.
 - Inference engine: llama.cpp for one GPU, vLLM for several; pinnable.
 - Plan output: YAML with a comment above each decision.
 
