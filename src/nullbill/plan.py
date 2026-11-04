@@ -46,9 +46,14 @@ def _check_refs(model: dict, errors: _Errors) -> None:
     for name, svc in model["services"].items():
         if svc["zone"] not in model["zones"]:
             errors.append(f"services.{name}.zone: zone {svc['zone']!r} does not exist")
+        elif svc.get("agent_managed") and svc["zone"] in AGENT_FREE_ZONES:
+            errors.append(f"services.{name}.agent_managed: {svc['zone']} guests stay out of the agent's reach")
         for port in svc.get("ports", []):
             for ref in port["from"]:
                 check(ref, f"services.{name}.ports")
+    for port in model["host"].get("ports", []):
+        for ref in port["from"]:
+            check(ref, "host.ports")
     for name, role in model["roles"].items():
         for ref in role["reach"]:
             if ref == "host":
@@ -275,10 +280,17 @@ def _flows(model: dict, planned: dict, zones: set[str]) -> list[str]:
                 if kind == "service" and target not in planned:
                     continue
                 flows.append(f"{ref} -> {name} {port['proto']}/{port['port']}")
+    for port in model["host"].get("ports", []):
+        for ref in port["from"]:
+            if ref.startswith("service:") and ref.partition(":")[2] not in planned:
+                continue
+            flows.append(f"{ref} -> the PVE host {port['proto']}/{port['port']}")
     return flows
 
 
 POOL_RANGE = "128/26"
+# The router, PBS, the CA, the operator and the VPN live here.
+AGENT_FREE_ZONES = ("mgmt", "access")
 HOST_ID = 254
 
 
@@ -338,6 +350,8 @@ def build_plan(model: dict, facts: dict) -> dict:
             entry["attach"] = "all-zones"
             entry["ips"] = Note({z: _host(zones[z], svc["id"]) for z in zones}, "One leg in every planned zone.")
             del entry["ip"]
+        if svc.get("agent_managed"):
+            entry["agent_managed"] = True
         guests[name] = entry
 
     n_gpus = len([g for g in facts["gpus"] if not g["integrated"]])

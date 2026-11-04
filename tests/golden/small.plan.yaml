@@ -139,6 +139,7 @@ guests:
     template_vmid: 2030
     # Clones take DHCP leases from this range.
     clone_range: 10.42.3.128/26
+    agent_managed: true
   workspace:
     kind: lxc
     zone: build
@@ -147,6 +148,7 @@ guests:
     disk_gib: 32
     vmid: 2019
     ip: 10.42.3.19
+    agent_managed: true
 # No discrete GPU.
 gpus: {}
 # Not planned.
@@ -176,6 +178,7 @@ flows:
   - service:forgejo -> postgres tcp/5432
   - role:owner -> monitoring tcp/3000
   - zone:* -> monitoring tcp/3100
+  - service:operator -> monitoring tcp/9090
   - host -> pbs tcp/8007
   - role:owner -> pbs tcp/8007
   - role:owner -> forgejo tcp/443
@@ -183,8 +186,13 @@ flows:
   - zone:build -> forgejo tcp/443
   - role:owner -> forgejo tcp/22
   - role:default -> forgejo tcp/22
+  - service:operator -> linux-runner tcp/22
   - role:default -> workspace tcp/22
   - role:owner -> workspace tcp/22
+  - service:operator -> workspace tcp/22
+  - role:owner -> the PVE host tcp/8006
+  - service:operator -> the PVE host tcp/8006
+  - role:owner -> the PVE host tcp/22
 people:
   owner-a: owner
 # Tailscale Personal: free for personal, non-commercial use. One group per role; the vpn guest is the tagged device.

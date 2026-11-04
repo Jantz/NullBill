@@ -25,10 +25,15 @@ class _Rules:
     def __init__(self, plan: dict, model: dict) -> None:
         self.inbound: dict[str, list[str]] = {name: [] for name in plan["guests"]}
         self.outbound: dict[str, list[str]] = {name: [] for name in plan["guests"]}
+        self.host: list[str] = []
         for flow in resolve_flows(plan, model):
             match = f"-p {flow.proto} -dport {flow.port}"
             if flow.dest == HOST:
-                # The host admits the VPN through the management ipset.
+                # The host admits the VPN through the management ipset, which
+                # opens every PVE management port; any other source gets only
+                # its own port in host.fw.
+                if not flow.ref.startswith("role:"):
+                    self._add(self.host, f"IN ACCEPT -source +{flow.source_set} {match}", flow.ref)
                 dest, label = flow.dest_cidrs[0], "the PVE host"
             else:
                 self._add(self.inbound[flow.dest], f"IN ACCEPT -source +{flow.source_set} {match}", flow.ref)
@@ -93,7 +98,11 @@ def render_firewall(plan_with_notes: dict, model: dict) -> dict[str, str]:
     files = {
         "cluster.fw": _cluster(plan, lan_open=False),
         "cluster-lan-open.fw": _cluster(plan, lan_open=True),
-        "host.fw": HEADER + "# Host access comes from the management ipset in cluster.fw.\n[OPTIONS]\nenable: 1\n",
+        "host.fw": (
+            HEADER
+            + "# The VPN reaches the host through the management ipset in cluster.fw.\n[OPTIONS]\nenable: 1\n"
+            + ("\n[RULES]\n" + "".join(f"{r}\n" for r in by_guest.host) if by_guest.host else "")
+        ),
     }
     groups = []
     for name, guest in plan["guests"].items():

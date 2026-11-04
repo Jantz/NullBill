@@ -19,6 +19,10 @@ host:
   reserve:
     cores: 1
     memory_mib: 4096
+  # The operator holds the agent's API token, so it reaches the API only.
+  ports:
+    - {port: 8006, proto: tcp, from: ["role:owner", "service:operator"]}
+    - {port: 22, proto: tcp, from: ["role:owner"]}
 
 zones:
   mgmt:
@@ -54,6 +58,9 @@ roles:
     description: Git/CI and the credential-free workspace only.
     reach: ["service:forgejo", "service:workspace"]
 
+# agent_managed: in the PVE pool the agent may power-manage and snapshot,
+# and open to SSH from the operator with a short-lived certificate. Guests
+# that hold credentials (dispatcher, gateway) or the owner's desktop stay out.
 # id: unique per service; sets the VMID and the host part of the address.
 # workload: core services are always planned. Others are planned only when
 # intent.workloads lists their workload.
@@ -109,6 +116,7 @@ services:
     ports:
       - {port: 3000, proto: tcp, from: ["role:owner"]}
       - {port: 3100, proto: tcp, from: ["zone:*"]}
+      - {port: 9090, proto: tcp, from: ["service:operator"]}
   pbs:
     id: 15
     kind: vm
@@ -123,7 +131,7 @@ services:
     kind: lxc
     zone: mgmt
     workload: core
-    description: Holds the agent CLI and token. Owner only.
+    description: Holds the agent CLI and token. Owner only. Reaches the PVE API, CA, Loki, Prometheus and SSH on agent-managed guests.
     floor: {cores: 1, memory_mib: 512, disk_gib: 8}
   forgejo:
     id: 17
@@ -146,6 +154,7 @@ services:
     kind: vm-pool
     zone: build
     workload: linux-ci
+    agent_managed: true
     description: One golden-VM clone per CI job.
     floor: {cores: 2, memory_mib: 2048, disk_gib: 32}
     grow: 2
@@ -154,6 +163,7 @@ services:
     kind: lxc
     zone: build
     workload: agents
+    agent_managed: true
     description: Credential-free workspace for coding agents.
     floor: {cores: 1, memory_mib: 1024, disk_gib: 32}
     ports:
@@ -163,6 +173,7 @@ services:
     kind: lxc
     zone: inference
     workload: inference
+    agent_managed: true
     gpu: true
     floor: {cores: 2, memory_mib: 8192, disk_gib: 64}
   model-gateway:
@@ -179,6 +190,7 @@ services:
     kind: vm-pool
     zone: windows
     workload: windows-ci
+    agent_managed: true
     floor: {cores: 2, memory_mib: 4096, disk_gib: 64}
     grow: 1
   windows-dev:

@@ -71,6 +71,9 @@ $defs:
       workload: {$ref: "#/$defs/name"}
       description: {type: string}
       attach: {const: all-zones}
+      # In the pool the agent's PVE token may power-manage and snapshot,
+      # and reachable by SSH from the operator. Never in mgmt or access.
+      agent_managed: {type: boolean}
       gpu: {type: boolean}
       floor: {$ref: "#/$defs/size"}
       grow: {type: integer, minimum: 1}
@@ -120,6 +123,8 @@ $defs:
       additionalProperties: false
       properties:
         reserve: {$ref: "#/$defs/size"}
+        # Ports on the PVE host itself. Role sources arrive through the VPN.
+        ports: {type: array, items: {$ref: "#/$defs/port"}}
     zones: {type: object, propertyNames: {$ref: "#/$defs/name"}, additionalProperties: {$ref: "#/$defs/zone"}}
     roles: {type: object, propertyNames: {$ref: "#/$defs/name"}, additionalProperties: {$ref: "#/$defs/role"}}
     services: {type: object, propertyNames: {$ref: "#/$defs/name"}, additionalProperties: {$ref: "#/$defs/service"}}

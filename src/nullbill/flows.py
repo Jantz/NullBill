@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 PRIVATE = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16")
 HOST = "pve-host"
+# The PVE web UI/API and SSH: verify checks the LAN is refused both.
 HOST_PORTS = (8006, 22)
 HOST_SET = "nb-host"
 
@@ -69,12 +70,15 @@ def resolve_flows(plan: dict, model: dict) -> list[Flow]:
                     source_set, cidrs, sources = resolved
                     dest_cidrs = tuple(addresses(plan["guests"][dest]))
                     flows.append(Flow(ref, source_set, cidrs, sources, dest, dest_cidrs, port["proto"], port["port"]))
-    if "vpn" in plan["guests"]:
-        # The tailnet policy limits host access to the owner role.
-        vpn = plan["guests"]["vpn"]
-        host_ip = plan["zones"]["mgmt"]["host_ip"]
-        for port in HOST_PORTS:
-            flows.append(Flow("role:owner", svc_set("vpn"), (vpn["ip"],), ("vpn",), HOST, (host_ip,), "tcp", port))
+    # The PVE host's own ports. Role sources arrive through the VPN, and the
+    # tailnet policy limits them to the owner role.
+    host_ip = plan["zones"]["mgmt"]["host_ip"]
+    for port in model["host"].get("ports", []):
+        for ref in port["from"]:
+            resolved = _resolve(ref, plan, base) if ref != "host" else None
+            if resolved:
+                source_set, cidrs, sources = resolved
+                flows.append(Flow(ref, source_set, cidrs, sources, HOST, (host_ip,), port["proto"], port["port"]))
     return flows
 
 

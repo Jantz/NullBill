@@ -9,7 +9,7 @@ variables and environment, never part of the rendered files.
 
 import json
 
-from nullbill import backups
+from nullbill import agent, backups
 from nullbill.flows import mac
 from nullbill.render import strip_notes
 
@@ -81,7 +81,7 @@ def _dns(plan: dict, zone: str) -> dict:
 def _container(name: str, guest: dict, plan: dict, model: dict, storage: str) -> dict:
     zone = guest["zone"]
     index, host = model["zones"][zone]["index"], model["services"][name]["id"]
-    return {
+    container = {
         "node_name": NODE,
         "vm_id": guest["vmid"],
         "description": f"nullbill {name}",
@@ -107,6 +107,7 @@ def _container(name: str, guest: dict, plan: dict, model: dict, storage: str) ->
         },
         "depends_on": [_bridge_ref(plan["zones"][zone]["bridge"])],
     }
+    return _in_agent_pool(container, guest)
 
 
 def _nic(bridge: str, address: str) -> dict:
@@ -194,7 +195,14 @@ def _vm(name: str, guest: dict, plan: dict, model: dict, storage: str) -> dict:
             },
         }
     vm["depends_on"] = [_bridge_ref(b) for b in bridges]
-    return vm
+    return _in_agent_pool(vm, guest)
+
+
+def _in_agent_pool(resource: dict, guest: dict) -> dict:
+    if guest.get("agent_managed"):
+        resource["pool_id"] = agent.POOL
+        resource["depends_on"] = [*resource["depends_on"], "proxmox_virtual_environment_pool.agent_managed"]
+    return resource
 
 
 # PVE checks the PBS connection when the storage is added, so the storage and
@@ -234,6 +242,40 @@ def _backup_resources(plan: dict) -> dict:
     return {
         "proxmox_storage_pbs": {_tf_name(backups.STORAGE): storage},
         "proxmox_backup_job": {_tf_name(backups.JOB): job},
+    }
+
+
+def _agent_resources() -> dict:
+    """The agent's pool, role, user, token and ACLs. ACLs go to both the user
+    and the privilege-separated token, whose rights are the overlap."""
+    pool = "proxmox_virtual_environment_pool.agent_managed"
+    role = "proxmox_virtual_environment_role.agent"
+    token = "proxmox_user_token.agent"
+    grants = {"auditor": ("/", "PVEAuditor", []), "pool": (f"/pool/{agent.POOL}", agent.ROLE, [pool, role])}
+    acls = {}
+    for holder, key, value, needs in (
+        ("user", "user_id", agent.USER, ["proxmox_virtual_environment_user.agent"]),
+        ("token", "token_id", agent.TOKEN_ID, [token]),
+    ):
+        for grant, (path, role_id, deps) in grants.items():
+            acls[f"agent_{holder}_{grant}"] = {"path": path, "role_id": role_id, key: value, "propagate": True, "depends_on": deps + needs}
+    return {
+        "proxmox_virtual_environment_pool": {
+            "agent_managed": {"pool_id": agent.POOL, "comment": "Guests the agent may power-manage and snapshot"}
+        },
+        "proxmox_virtual_environment_role": {"agent": {"role_id": agent.ROLE, "privileges": agent.PRIVILEGES}},
+        "proxmox_virtual_environment_user": {
+            "agent": {"user_id": agent.USER, "enabled": True, "comment": "Runtime agent; token only, in the operator container"}
+        },
+        "proxmox_user_token": {
+            "agent": {
+                "user_id": "${proxmox_virtual_environment_user.agent.user_id}",
+                "token_name": agent.TOKEN,
+                "privileges_separation": True,
+                "comment": "nullbill operator",
+            }
+        },
+        "proxmox_acl": acls,
     }
 
 
@@ -282,4 +324,8 @@ def render_tofu(plan_with_notes: dict, model: dict) -> dict[str, str]:
     }
     if backups.enabled(plan):
         config["resource"] |= _backup_resources(plan)
+    config["resource"] |= _agent_resources()
+    # apply installs this in the operator container; it never reaches a file
+    # on the controller.
+    config["output"] = {"agent_token": {"value": "${proxmox_user_token.agent.value}", "sensitive": True}}
     return {"main.tf.json": json.dumps(config, indent=2) + "\n"}

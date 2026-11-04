@@ -42,10 +42,24 @@ def load_config(path: Path) -> dict:
     return yaml.safe_load(path.read_text()) or {}
 
 
+# The operator reaches agent-managed guests by SSH, with a short-lived
+# certificate that is valid on those guests only. Windows guests have no SSH.
+AGENT_SSH = {"port": 22, "proto": "tcp", "from": ["service:operator"]}
+
+
+def _agent_ssh(model: dict) -> None:
+    if "operator" not in model["services"]:
+        return
+    for svc in model["services"].values():
+        if svc.get("agent_managed") and svc["zone"] != "windows":
+            svc["ports"] = [*svc.get("ports", []), copy.deepcopy(AGENT_SSH)]
+
+
 def build_model(config: dict) -> dict:
     _check("config", config, "config.yaml")
     catalog = _data("catalog.yaml")
     _check("model", catalog, "catalog.yaml")
     model = merge(catalog, config)
     _check("model", model, "catalog.yaml + config.yaml")
+    _agent_ssh(model)
     return model

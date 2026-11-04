@@ -12,9 +12,11 @@ converge monitoring.yml -e monitoring_manage_services=false
 pass "every alert fires on the series it is meant for"
 
 # No init in the container: start each daemon the way its unit does.
+# shellcheck disable=SC1091 # written by the role
+. /etc/default/prometheus
+# shellcheck disable=SC2086 # ARGS is a flag list, as in the unit
 setpriv --reuid=prometheus --regid=prometheus --init-groups prometheus \
-  --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/tmp/prom \
-  --web.listen-address=127.0.0.1:9090 >/tmp/prometheus.log 2>&1 &
+  --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/tmp/prom $ARGS >/tmp/prometheus.log 2>&1 &
 setpriv --reuid=loki --regid=nogroup --init-groups loki -config.file=/etc/loki/config.yml >/tmp/loki.log 2>&1 &
 setpriv --reuid=grafana --regid=grafana --init-groups grafana server --homepath=/usr/share/grafana \
   --config=/etc/grafana/grafana.ini cfg:default.paths.provisioning=/etc/grafana/provisioning \
@@ -26,7 +28,9 @@ wait_for() {
 }
 wait_for http://127.0.0.1:9090/-/ready || { cat /tmp/prometheus.log; fail "prometheus ready"; }
 curl -fsS http://127.0.0.1:9090/api/v1/rules | grep -q CertificateExpiresSoon || fail "prometheus loaded the rules"
-pass "prometheus is up on localhost with the rules loaded"
+# The operator queries it from another guest; the guest firewall limits who.
+curl -fsS "http://$(hostname -i | cut -d' ' -f1):9090/-/ready" >/dev/null || fail "prometheus answers on the guest address"
+pass "prometheus is up on the guest address with the rules loaded"
 
 wait_for http://127.0.0.1:3100/ready || { tail -20 /tmp/loki.log; fail "loki ready"; }
 now=$(date +%s%N)

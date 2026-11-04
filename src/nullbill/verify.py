@@ -64,7 +64,7 @@ def _targets(plan: dict, model: dict, zone: str) -> list[tuple[str, str, int, st
         ip = guest["ips"][zone] if "ips" in guest else guest["ip"]
         out += [(dest, p["proto"], p["port"], ip) for p in svc.get("ports", [])]
     host_ip = plan["zones"]["mgmt"]["host_ip"]
-    out += [(HOST, "tcp", port, host_ip) for port in HOST_PORTS]
+    out += [(HOST, p["proto"], p["port"], host_ip) for p in model["host"].get("ports", [])]
     return out
 
 
@@ -77,21 +77,13 @@ def probes(plan_with_notes: dict, model: dict, public_ip: str) -> tuple[list[Pro
     proxy = plan["guests"].get("egress-proxy")
     proxy_port = next((p["port"] for p in model["services"]["egress-proxy"].get("ports", [])), None)
     public_name = model["verify"]["public_name"]
-    for zone, rep in representatives(plan).items():
+    reps = representatives(plan)
+    for zone, rep in reps.items():
         if rep is None:
             skipped.append(Result("SKIP", f"zone {zone}", "no container to probe from"))
             continue
+        out += _port_probes(plan, model, flows, zone, rep)
         vmid = plan["guests"][rep]["vmid"]
-        for dest, proto, port, ip in _targets(plan, model, zone):
-            if dest == rep:
-                continue
-            allowed = any(rep in f.sources and f.dest == dest and f.proto == proto and f.port == port for f in flows)
-            label = "the PVE host" if dest == HOST else dest
-            if proto == "udp":
-                # A UDP connect proves nothing; DNS is checked by resolving below.
-                continue
-            verb = "reaches" if allowed else "is refused"
-            out.append(Probe(f"{rep} ({zone}) {verb} {label} tcp/{port}", vmid, _tcp(ip, port), "open" if allowed else "closed"))
         egress = plan["zones"][zone]["egress"]
         direct = egress == "direct"
         verb = "reaches" if direct else "is refused"
@@ -107,7 +99,25 @@ def probes(plan_with_notes: dict, model: dict, public_ip: str) -> tuple[list[Pro
         name = f"router.{plan['domain']}"
         cmd = f"timeout {TIMEOUT_S} getent ahostsv4 {name} >/dev/null; echo rc=$?"
         out.append(Probe(f"{rep} ({zone}) resolves {name} via {router}", vmid, cmd, "open", "dns"))
+    operator = plan["guests"].get("operator")
+    if operator and operator["kind"] == "lxc" and "operator" not in reps.values():
+        # The operator holds the agent's token: prove its reach separately.
+        out += _port_probes(plan, model, flows, operator["zone"], "operator")
     return out, skipped
+
+
+def _port_probes(plan: dict, model: dict, flows: list, zone: str, rep: str) -> list[Probe]:
+    out = []
+    vmid = plan["guests"][rep]["vmid"]
+    for dest, proto, port, ip in _targets(plan, model, zone):
+        if dest == rep or proto == "udp":
+            # A UDP connect proves nothing; DNS is checked by resolving.
+            continue
+        allowed = any(rep in f.sources and f.dest == dest and f.proto == proto and f.port == port for f in flows)
+        label = "the PVE host" if dest == HOST else dest
+        verb = "reaches" if allowed else "is refused"
+        out.append(Probe(f"{rep} ({zone}) {verb} {label} tcp/{port}", vmid, _tcp(ip, port), "open" if allowed else "closed"))
+    return out
 
 
 def _judge(probe: Probe, rc: int, out: str, err: str) -> Result:

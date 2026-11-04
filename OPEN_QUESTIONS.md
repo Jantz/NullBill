@@ -61,6 +61,14 @@ answered items move to the decisions list at the bottom.
   garbage collection daily and re-verifies each snapshot after 30 days. The
   PVE host's token may write backups but not delete them, so retention is
   enforced on PBS, out of the host's reach. All in `ansible/roles/pbs`.
+- Agent access: the agent-managed pool holds the workspace, the inference
+  container and the Linux and Windows runners. The runner dispatcher and
+  the model gateway hold credentials, and windows-dev is your desktop, so
+  they stay out; mgmt and access guests can never be in it. The agent's
+  token may read everything, and power-manage and snapshot (not roll back)
+  pool guests. The operator reaches the PVE API (not host SSH), the CA,
+  Loki, Prometheus and SSH on agent-managed Linux guests. Set
+  `services.<name>.agent_managed` to change the pool.
 - Inference engine: llama.cpp for one GPU, vLLM for several; pinnable.
 - Plan output: YAML with a comment above each decision.
 
