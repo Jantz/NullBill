@@ -12,16 +12,13 @@ if ! command -v gitleaks >/dev/null; then
   exit 1
 fi
 
-while read -r _local_ref local_sha _remote_ref remote_sha; do
+while read -r _local_ref local_sha _remote_ref _remote_sha; do
   [[ "$local_sha" == "$zero" ]] && continue # branch deletion
-  if [[ "$remote_sha" == "$zero" ]]; then
-    range_args=("$local_sha" --not "--remotes=$remote")
-    log_opts="$local_sha --not --remotes=$remote"
-  else
-    range_args=("$remote_sha..$local_sha")
-    log_opts="$remote_sha..$local_sha"
-  fi
-
+  # Only commits the remote does not have yet. Commits already published
+  # (for example a merge GitHub made on main) cannot be fixed by refusing
+  # this push.
+  range_args=("$local_sha" --not "--remotes=$remote")
+  log_opts="$local_sha --not --remotes=$remote"
   commits=$(git rev-list "${range_args[@]}")
   [[ -z "$commits" ]] && continue
 
