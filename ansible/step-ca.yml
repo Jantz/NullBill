@@ -1,0 +1,7 @@
+# step-ca in its container: the internal CA every guest trusts. apply runs
+# this against the step-ca guest with variables from the plan.
+- name: Internal certificate authority
+  hosts: all
+  become: false
+  roles:
+    - step_ca

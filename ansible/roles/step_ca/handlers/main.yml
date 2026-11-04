@@ -1,0 +1,6 @@
+- name: Restart step-ca
+  ansible.builtin.systemd_service:
+    name: step-ca
+    state: restarted
+    daemon_reload: true
+  when: step_ca_manage_services | bool
