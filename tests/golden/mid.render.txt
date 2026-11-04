@@ -913,6 +913,30 @@ WantedBy=multi-user.target
         "source": "bpg/proxmox",
         "version": "0.118.1"
       }
+    },
+    "encryption": {
+      "key_provider": {
+        "pbkdf2": {
+          "nullbill": {
+            "passphrase": "${var.state_passphrase}"
+          }
+        }
+      },
+      "method": {
+        "aes_gcm": {
+          "nullbill": {
+            "keys": "key_provider.pbkdf2.nullbill"
+          }
+        }
+      },
+      "state": {
+        "method": "method.aes_gcm.nullbill",
+        "enforced": true
+      },
+      "plan": {
+        "method": "method.aes_gcm.nullbill",
+        "enforced": true
+      }
     }
   },
   "provider": {
@@ -937,6 +961,11 @@ WantedBy=multi-user.target
     "ssh_authorized_keys": {
       "type": "list(string)",
       "description": "Keys for the nullbill user on Linux guests"
+    },
+    "state_passphrase": {
+      "type": "string",
+      "sensitive": true,
+      "description": "Encrypts state and plans; 16 characters or more"
     },
     "pbs_fingerprint": {
       "type": "string",

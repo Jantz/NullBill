@@ -54,7 +54,9 @@ answered items move to the decisions list at the bottom.
   by SHA-512 in `catalog.yaml`. PBS installs from its apt repository onto
   the Debian VM. Windows installs from the ISO you supply.
 - OpenTofu 1.13.2 with bpg/proxmox 0.118.1; the API token comes from the
-  environment, never a file.
+  environment, never a file. State and saved plans are encrypted with
+  OpenTofu's own AES-GCM and a passphrase from the environment
+  (`TF_VAR_state_passphrase`); unencrypted state is refused.
 - Backups: PBS keeps 7 daily, 4 weekly and 6 monthly snapshots, runs
   garbage collection daily and re-verifies each snapshot after 30 days. The
   PVE host's token may write backups but not delete them, so retention is

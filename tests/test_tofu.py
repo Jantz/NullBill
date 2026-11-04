@@ -73,3 +73,11 @@ def test_images_are_checksummed_and_nothing_identifying_is_rendered(facts):
 def test_windows_iso_variable_only_with_windows(facts):
     assert "windows_iso" not in rendered(facts, "small")[0]["variable"]
     assert "windows_iso" in rendered(facts, "mid")[0]["variable"]
+
+
+def test_state_and_plans_are_encrypted(facts):
+    config, _, _ = rendered(facts, "small")
+    encryption = config["terraform"]["encryption"]
+    assert encryption["state"] == encryption["plan"] == {"method": "method.aes_gcm.nullbill", "enforced": True}
+    passphrase = config["variable"]["state_passphrase"]
+    assert passphrase["sensitive"] and "default" not in passphrase
