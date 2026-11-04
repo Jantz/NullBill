@@ -176,6 +176,13 @@ def test_unknown_workload_and_dangling_refs_fail(facts):
     ]
 
 
+def test_host_is_not_a_reach_target(facts):
+    config = {"roles": {"default": {"reach": ["host"]}}}
+    assert errors_of(facts("small"), config) == [
+        "roles.default.reach: host is only a flow source; the owner role reaches the host through the VPN"
+    ]
+
+
 def test_duplicate_service_id_fails(facts):
     config = {
         "services": {

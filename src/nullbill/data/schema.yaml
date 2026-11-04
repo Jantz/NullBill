@@ -11,9 +11,10 @@ $defs:
     pattern: "^[a-z][a-z0-9-]{0,30}$"
 
   ref:
-    # zone:<name>, service:<name>, role:<name>; zone:* means every zone.
+    # zone:<name>, service:<name>, role:<name>; zone:* means every zone;
+    # host is the PVE host itself.
     type: string
-    pattern: "^(zone:(\\*|[a-z][a-z0-9-]*)|service:[a-z][a-z0-9-]*|role:[a-z][a-z0-9-]*)$"
+    pattern: "^(zone:(\\*|[a-z][a-z0-9-]*)|service:[a-z][a-z0-9-]*|role:[a-z][a-z0-9-]*|host)$"
 
   size:
     type: object

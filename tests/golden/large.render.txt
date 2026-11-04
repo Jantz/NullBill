@@ -68,6 +68,7 @@ OUT ACCEPT -dest +nb-svc-router -p tcp -dport 22 # to router
 OUT ACCEPT -dest +nb-svc-step-ca -p tcp -dport 443 # to step-ca
 OUT ACCEPT -dest +nb-svc-monitoring -p tcp -dport 3000 # to monitoring
 OUT ACCEPT -dest +nb-svc-monitoring -p tcp -dport 3100 # to monitoring
+OUT ACCEPT -dest +nb-svc-pbs -p tcp -dport 8007 # to pbs
 OUT ACCEPT -dest +nb-svc-forgejo -p tcp -dport 443 # to forgejo
 OUT ACCEPT -dest +nb-svc-forgejo -p tcp -dport 22 # to forgejo
 OUT ACCEPT -dest +nb-svc-workspace -p tcp -dport 22 # to workspace
@@ -143,6 +144,8 @@ policy_out: DROP
 10.42.1.15
 
 [RULES]
+IN ACCEPT -source +nb-host -p tcp -dport 8007 # host
+IN ACCEPT -source +nb-svc-vpn -p tcp -dport 8007 # role:owner
 OUT ACCEPT -dest +nb-svc-router -p udp -dport 53 # to router
 OUT ACCEPT -dest +nb-svc-router -p tcp -dport 53 # to router
 OUT ACCEPT -dest +nb-svc-egress-proxy -p tcp -dport 3128 # to egress-proxy
@@ -326,6 +329,9 @@ policy_out: ACCEPT
 100.64.0.0/10
 169.254.0.0/16
 
+[IPSET nb-host]
+10.42.1.254
+
 [IPSET nb-zone-mgmt]
 10.42.1.0/24
 
@@ -430,6 +436,9 @@ policy_out: ACCEPT
 192.168.0.0/16
 100.64.0.0/10
 169.254.0.0/16
+
+[IPSET nb-host]
+10.42.1.254
 
 [IPSET nb-zone-mgmt]
 10.42.1.0/24
@@ -592,6 +601,8 @@ table inet nullbill {
         ip saddr { 10.42.2.17 } ip daddr { 10.42.2.13 } tcp dport 5432 accept # service:forgejo to postgres
         ip saddr { 10.42.6.11 } ip daddr { 10.42.1.14 } tcp dport 3000 accept # role:owner to monitoring
         ip saddr { 10.42.0.0/16 } ip daddr { 10.42.1.14 } tcp dport 3100 accept # zone:* to monitoring
+        ip saddr { 10.42.1.254 } ip daddr { 10.42.1.15 } tcp dport 8007 accept # host to pbs
+        ip saddr { 10.42.6.11 } ip daddr { 10.42.1.15 } tcp dport 8007 accept # role:owner to pbs
         ip saddr { 10.42.6.11 } ip daddr { 10.42.2.17 } tcp dport 443 accept # role:owner to forgejo
         ip saddr { 10.42.3.0/24 } ip daddr { 10.42.2.17 } tcp dport 443 accept # zone:build to forgejo
         ip saddr { 10.42.5.0/24 } ip daddr { 10.42.2.17 } tcp dport 443 accept # zone:windows to forgejo
@@ -789,6 +800,17 @@ WantedBy=multi-user.target
         "group:nb-owner"
       ],
       "dst": [
+        "10.42.1.15"
+      ],
+      "ip": [
+        "tcp:8007"
+      ]
+    },
+    {
+      "src": [
+        "group:nb-owner"
+      ],
+      "dst": [
         "10.42.2.17"
       ],
       "ip": [
@@ -885,6 +907,7 @@ WantedBy=multi-user.target
       "proto": "tcp",
       "accept": [
         "10.42.1.14:3000",
+        "10.42.1.15:8007",
         "10.42.1.1:22",
         "10.42.1.254:22",
         "10.42.1.254:8006",

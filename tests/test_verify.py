@@ -129,3 +129,10 @@ def test_probe_commands_work_in_bash():
     assert out.splitlines()[0].startswith("HTTP/1.1 403") and out.splitlines()[-1] == "rc=0"
     server.close()
     assert _run_locally(_tcp("127.0.0.1", port)).strip() == "rc=1"  # closed port: refused
+
+
+def test_host_only_port_is_refused_from_mgmt_guests(facts):
+    plan, model = setup(facts)
+    names = [p.name for p in probes(plan, model, PUBLIC)[0]]
+    assert any(n.endswith("(mgmt) is refused pbs tcp/8007") for n in names)
+    assert any(n.endswith("(access) reaches pbs tcp/8007") for n in names)

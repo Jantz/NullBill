@@ -38,6 +38,8 @@ def _check_refs(model: dict, errors: _Errors) -> None:
 
     def check(ref: str, where: str) -> None:
         kind, _, name = ref.partition(":")
+        if kind == "host":
+            return
         if name != "*" and name not in kinds[kind]:
             errors.append(f"{where}: {ref} does not exist")
 
@@ -49,6 +51,8 @@ def _check_refs(model: dict, errors: _Errors) -> None:
                 check(ref, f"services.{name}.ports")
     for name, role in model["roles"].items():
         for ref in role["reach"]:
+            if ref == "host":
+                errors.append(f"roles.{name}.reach: host is only a flow source; the owner role reaches the host through the VPN")
             check(ref, f"roles.{name}.reach")
     for name, person in model["people"].items():
         if person["role"] not in model["roles"]:

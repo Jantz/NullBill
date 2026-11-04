@@ -1,0 +1,7 @@
+# Proxmox Backup Server in the pbs VM: the datastore on its own disk, a
+# backup-only token for the PVE host, and prune, GC and verify jobs.
+- name: Backup server
+  hosts: all
+  become: false
+  roles:
+    - pbs

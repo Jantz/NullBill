@@ -75,3 +75,11 @@ def test_write_build_replaces_stale_files(tmp_path):
     (tmp_path / "build" / "old" / "stale.fw").write_text("x")
     write_build({"firewall/a.fw": "a\n"}, tmp_path / "build")
     assert sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file()) == ["build/firewall/a.fw"]
+
+
+def test_host_source_admits_only_the_host(facts):
+    files = rendered(facts, "small")
+    pbs = rules(files["firewall/2015.fw"])
+    assert "IN ACCEPT -source +nb-host -p tcp -dport 8007" in pbs
+    assert not any("nb-zone-mgmt" in r for r in pbs if "8007" in r)
+    assert "[IPSET nb-host]\n10.42.1.254\n" in files["firewall/cluster.fw"]

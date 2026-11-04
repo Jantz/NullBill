@@ -1,0 +1,107 @@
+#!/usr/bin/python3
+"""Bring the PBS datastore, client token, ACLs and jobs to a spec.
+
+Usage: pbs-configure SPEC.json
+
+Prints {"changed": [...]} naming each change made, so a second run with
+the same spec prints an empty list. Installed and run by the pbs role.
+"""
+
+import json
+import os
+import subprocess
+import sys
+
+PBM = "proxmox-backup-manager"
+DATASTORE_CFG = "/etc/proxmox-backup/datastore.cfg"
+
+
+def pbm(*args: str) -> str:
+    done = subprocess.run([PBM, *args], capture_output=True, text=True)
+    if done.returncode != 0:
+        sys.exit(f"{PBM} {' '.join(args)}: {done.stderr.strip() or done.stdout.strip()}")
+    return done.stdout
+
+
+def listing(*args: str) -> list | dict:
+    return json.loads(pbm(*args, "--output-format", "json") or "[]")
+
+
+def flags(options: dict) -> list[str]:
+    return [arg for key, value in options.items() for arg in (f"--{key}", str(value).lower() if isinstance(value, bool) else str(value))]
+
+
+def datastore(spec: dict, changed: list[str]) -> None:
+    name, path = spec["name"], spec["path"]
+    if name not in {d["name"] for d in listing("datastore", "list")}:
+        if os.path.isdir(os.path.join(path, ".chunks")):
+            # A rebuilt VM over a kept disk. PBS 3 has no CLI to adopt an
+            # existing chunk store; its docs say to add the section by hand.
+            with open(DATASTORE_CFG, "a") as cfg:
+                cfg.write(f"\ndatastore: {name}\n\tpath {path}\n")
+            changed.append(f"adopted the existing chunk store at {path}")
+        else:
+            pbm("datastore", "create", name, path)
+            changed.append(f"created datastore {name}")
+    current = listing("datastore", "show", name)
+    if current.get("gc-schedule") != spec["gc-schedule"]:
+        pbm("datastore", "update", name, "--gc-schedule", spec["gc-schedule"])
+        changed.append(f"gc-schedule {spec['gc-schedule']}")
+
+
+def client(spec: dict, store: str, changed: list[str]) -> None:
+    user, token_file = spec["user"], spec["token_file"]
+    tokenid = f"{user}!{spec['token']}"
+    if user not in {u["userid"] for u in listing("user", "list")}:
+        pbm("user", "create", user, "--comment", "PVE host backups; managed by nullbill")
+        changed.append(f"created user {user}")
+    tokens = {t["tokenid"] for t in listing("user", "list-tokens", user)}
+    if tokenid not in tokens or not os.path.exists(token_file):
+        # The secret is shown once. Without the file it is lost, so replace
+        # the token; the next apply hands the new one to the PVE host.
+        if tokenid in tokens:
+            pbm("user", "delete-token", user, spec["token"])
+        out = pbm("user", "generate-token", user, spec["token"])
+        secret = json.loads(out[out.index("{") :])
+        os.makedirs(os.path.dirname(token_file), mode=0o700, exist_ok=True)
+        fd = os.open(token_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump({"tokenid": secret["tokenid"], "value": secret["value"]}, f)
+        changed.append(f"generated token {tokenid}")
+    path = f"/datastore/{store}"
+    # A token holds at most what its user holds, so both need the role.
+    for auth_id in (user, tokenid):
+        held = {(a["path"], a["roleid"]) for a in listing("acl", "list") if a["ugid"] == auth_id}
+        if (path, "DatastoreBackup") not in held:
+            pbm("acl", "update", path, "DatastoreBackup", "--auth-id", auth_id)
+            changed.append(f"DatastoreBackup on {path} for {auth_id}")
+        for other_path, role in held - {(path, "DatastoreBackup")}:
+            pbm("acl", "update", other_path, role, "--auth-id", auth_id, "--delete", "true")
+            changed.append(f"removed {role} on {other_path} from {auth_id}")
+
+
+def job(kind: str, job_id: str, store: str, options: dict, changed: list[str]) -> None:
+    want = {"store": store, **options}
+    current = next((j for j in listing(kind, "list") if j["id"] == job_id), None)
+    if current is None:
+        pbm(kind, "create", job_id, *flags(want))
+        changed.append(f"created {kind} {job_id}")
+    elif any(current.get(k) != v for k, v in want.items()):
+        pbm(kind, "update", job_id, *flags(want))
+        changed.append(f"updated {kind} {job_id}")
+
+
+def main() -> None:
+    with open(sys.argv[1]) as f:
+        spec = json.load(f)
+    changed: list[str] = []
+    datastore(spec["datastore"], changed)
+    store = spec["datastore"]["name"]
+    client(spec["client"], store, changed)
+    job("prune-job", "nb-keep", store, spec["prune"], changed)
+    job("verify-job", "nb-verify", store, spec["verify"], changed)
+    print(json.dumps({"changed": changed}))
+
+
+if __name__ == "__main__":
+    main()

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 PRIVATE = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16")
 HOST = "pve-host"
 HOST_PORTS = (8006, 22)
+HOST_SET = "nb-host"
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,9 @@ def addresses(guest: dict) -> list[str]:
 def _resolve(ref: str, plan: dict, base: str) -> tuple[str, tuple[str, ...], tuple[str, ...]] | None:
     kind, _, name = ref.partition(":")
     guests = plan["guests"]
+    if kind == "host":
+        # The host sits on the mgmt bridge; no guest originates this flow.
+        return HOST_SET, (plan["zones"]["mgmt"]["host_ip"],), ()
     if kind == "zone" and name == "*":
         return "nb-zones", (base,), tuple(guests)
     if kind == "zone":

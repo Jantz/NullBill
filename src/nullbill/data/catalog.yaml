@@ -114,7 +114,10 @@ services:
     kind: vm
     zone: mgmt
     workload: core
+    description: Proxmox Backup Server on its own disk. The host sends encrypted backups.
     floor: {cores: 1, memory_mib: 2048, disk_gib: 8}
+    ports:
+      - {port: 8007, proto: tcp, from: ["host", "role:owner"]}
   operator:
     id: 16
     kind: lxc

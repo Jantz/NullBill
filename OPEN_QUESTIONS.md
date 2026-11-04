@@ -55,6 +55,10 @@ answered items move to the decisions list at the bottom.
   the Debian VM. Windows installs from the ISO you supply.
 - OpenTofu 1.13.2 with bpg/proxmox 0.118.1; the API token comes from the
   environment, never a file.
+- Backups: PBS keeps 7 daily, 4 weekly and 6 monthly snapshots, runs
+  garbage collection daily and re-verifies each snapshot after 30 days. The
+  PVE host's token may write backups but not delete them, so retention is
+  enforced on PBS, out of the host's reach. All in `ansible/roles/pbs`.
 - Inference engine: llama.cpp for one GPU, vLLM for several; pinnable.
 - Plan output: YAML with a comment above each decision.
 

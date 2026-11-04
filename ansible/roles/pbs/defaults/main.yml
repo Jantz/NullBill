@@ -1,0 +1,32 @@
+# PBS 3 is built for bookworm, the release of the pbs VM's cloud image.
+# Proxmox publishes this SHA-512 for the key in its install docs.
+pbs_signer_url: https://enterprise.proxmox.com/debian/proxmox-release-bookworm.gpg
+pbs_signer_sha512: 7da6fe34168adc6e479327ba517796d4702fa2f8b4f0a9833f5ea6e6b48f6507a6da403a274fe201595edc86a84463d50383d07f64bdde2e3658108db7d6dc87
+
+pbs_datastore: backups
+# apply mounts the pinned disk here before the role runs.
+pbs_datastore_path: /mnt/datastore/backups
+
+# The PVE host backs up with this token. DatastoreBackup lets it write
+# and read its own snapshots but not delete them, so a compromised host
+# cannot remove the history; retention runs on the PBS side.
+pbs_client_user: nb-pve@pbs
+pbs_client_token: pve
+# Created once, root only. apply reads it to configure the PVE storage.
+pbs_token_file: /root/nullbill/pbs-token.json
+
+pbs_gc_schedule: daily
+pbs_prune:
+  schedule: daily
+  keep-daily: 7
+  keep-weekly: 4
+  keep-monthly: 6
+# Re-read every chunk of a snapshot once it is 30 days past its last check.
+pbs_verify:
+  schedule: weekly
+  outdated-after: 30
+
+# Start services through systemd. The container test turns this off and
+# passes pbs_start_command instead, because a container has no init.
+pbs_manage_services: true
+pbs_start_command: ""
