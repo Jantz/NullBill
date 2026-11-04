@@ -1,0 +1,202 @@
+# JSON Schema (draft 2020-12) for NullBill data.
+#   $defs.config: $NULLBILL_HOME/config.yaml as the owner writes it.
+#   $defs.model:  catalog.yaml merged with config.yaml; plan reads this.
+# A service, zone, role or person added in config.yaml must be complete
+# after the merge, so the model schema is the strict one.
+$schema: https://json-schema.org/draft/2020-12/schema
+
+$defs:
+  name:
+    type: string
+    pattern: "^[a-z][a-z0-9-]{0,30}$"
+
+  ref:
+    # zone:<name>, service:<name>, role:<name>; zone:* means every zone.
+    type: string
+    pattern: "^(zone:(\\*|[a-z][a-z0-9-]*)|service:[a-z][a-z0-9-]*|role:[a-z][a-z0-9-]*)$"
+
+  size:
+    type: object
+    additionalProperties: false
+    properties:
+      cores: {type: integer, minimum: 1}
+      memory_mib: {type: integer, minimum: 128}
+      disk_gib: {type: integer, minimum: 1}
+
+  port:
+    type: object
+    additionalProperties: false
+    required: [port, proto, from]
+    properties:
+      port: {type: integer, minimum: 1, maximum: 65535}
+      proto: {enum: [tcp, udp]}
+      from: {type: array, minItems: 1, items: {$ref: "#/$defs/ref"}}
+
+  zone:
+    type: object
+    additionalProperties: false
+    properties:
+      index: {type: integer, minimum: 1, maximum: 254}
+      description: {type: string}
+      egress: {enum: [none, proxy]}
+
+  role:
+    type: object
+    additionalProperties: false
+    properties:
+      description: {type: string}
+      reach: {type: array, items: {$ref: "#/$defs/ref"}}
+
+  person:
+    type: object
+    additionalProperties: false
+    required: [role]
+    properties:
+      role: {$ref: "#/$defs/name"}
+
+  service:
+    type: object
+    additionalProperties: false
+    properties:
+      enabled: {type: boolean}
+      kind: {enum: [lxc, vm, vm-pool]}
+      zone: {$ref: "#/$defs/name"}
+      workload: {$ref: "#/$defs/name"}
+      description: {type: string}
+      attach: {const: all-zones}
+      gpu: {type: boolean}
+      floor: {$ref: "#/$defs/size"}
+      grow: {type: integer, minimum: 1}
+      ports: {type: array, items: {$ref: "#/$defs/port"}}
+
+  gpu_pin:
+    type: object
+    additionalProperties: false
+    properties:
+      # host-shared, or vm:<service> to pass the whole GPU to one VM.
+      owner: {type: string, pattern: "^(host-shared|vm:[a-z][a-z0-9-]*)$"}
+      # Answer for GPUs whose VRAM the probe cannot read.
+      vram_mib: {type: integer, minimum: 1}
+      # VRAM budget per consuming service, host-shared GPUs only.
+      consumers:
+        type: object
+        additionalProperties: {type: integer, minimum: 1}
+
+  disk_pin:
+    type: object
+    additionalProperties: false
+    required: [use]
+    properties:
+      use: {enum: [pbs, ignore]}
+      # Required to let apply format a disk that carries signatures.
+      wipe: {type: boolean}
+
+  override:
+    type: object
+    additionalProperties: false
+    properties:
+      cores: {type: integer, minimum: 1}
+      memory_mib: {type: integer, minimum: 128}
+      disk_gib: {type: integer, minimum: 1}
+      count: {type: integer, minimum: 1}
+
+  common:
+    network:
+      type: object
+      additionalProperties: false
+      properties:
+        base: {type: string, pattern: "^10\\.[0-9]{1,3}\\.0\\.0/16$"}
+    host:
+      type: object
+      additionalProperties: false
+      properties:
+        reserve: {$ref: "#/$defs/size"}
+    zones: {type: object, propertyNames: {$ref: "#/$defs/name"}, additionalProperties: {$ref: "#/$defs/zone"}}
+    roles: {type: object, propertyNames: {$ref: "#/$defs/name"}, additionalProperties: {$ref: "#/$defs/role"}}
+    services: {type: object, propertyNames: {$ref: "#/$defs/name"}, additionalProperties: {$ref: "#/$defs/service"}}
+    people: {type: object, propertyNames: {$ref: "#/$defs/name"}, additionalProperties: {$ref: "#/$defs/person"}}
+    engines:
+      type: array
+      items:
+        type: object
+        additionalProperties: false
+        required: [min_gpus, engine]
+        properties:
+          min_gpus: {type: integer, minimum: 1}
+          max_gpus: {type: integer, minimum: 1}
+          engine: {enum: [llama.cpp, vllm]}
+
+  config:
+    type: object
+    additionalProperties: false
+    properties:
+      target:
+        type: object
+        additionalProperties: false
+        required: [ssh]
+        properties:
+          # ssh destination of the PVE host, e.g. root@pve.example.internal
+          ssh: {type: string, minLength: 1}
+      intent:
+        type: object
+        additionalProperties: false
+        properties:
+          workloads:
+            type: array
+            uniqueItems: true
+            items: {$ref: "#/$defs/name"}
+      network: {$ref: "#/$defs/common/network"}
+      host: {$ref: "#/$defs/common/host"}
+      zones: {$ref: "#/$defs/common/zones"}
+      roles: {$ref: "#/$defs/common/roles"}
+      services: {$ref: "#/$defs/common/services"}
+      people: {$ref: "#/$defs/common/people"}
+      gpus:
+        # Keyed by PCI address as the probe reports it.
+        type: object
+        # Quote them: YAML 1.1 reads an unquoted 0000:01:00.0 as a number.
+        propertyNames: {type: string, pattern: "^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\\.[0-7]$"}
+        additionalProperties: {$ref: "#/$defs/gpu_pin"}
+      disks:
+        # Keyed by the disk id the probe reports.
+        type: object
+        additionalProperties: {$ref: "#/$defs/disk_pin"}
+      overrides:
+        type: object
+        propertyNames: {$ref: "#/$defs/name"}
+        additionalProperties: {$ref: "#/$defs/override"}
+      inference:
+        type: object
+        additionalProperties: false
+        properties:
+          engine: {enum: [llama.cpp, vllm]}
+
+  model:
+    type: object
+    required: [network, host, zones, roles, services, people, engines]
+    properties:
+      network: {$ref: "#/$defs/common/network", required: [base]}
+      host:
+        allOf:
+          - {$ref: "#/$defs/common/host"}
+          - required: [reserve]
+            properties:
+              reserve: {required: [cores, memory_mib]}
+      zones:
+        type: object
+        additionalProperties:
+          allOf: [{$ref: "#/$defs/zone"}, {required: [index]}]
+      roles:
+        type: object
+        additionalProperties:
+          allOf: [{$ref: "#/$defs/role"}, {required: [reach]}]
+      services:
+        type: object
+        additionalProperties:
+          allOf:
+            - {$ref: "#/$defs/service"}
+            - required: [kind, zone, workload, floor]
+              properties:
+                floor: {required: [cores, memory_mib, disk_gib]}
+      people: {$ref: "#/$defs/common/people"}
+      engines: {$ref: "#/$defs/common/engines"}

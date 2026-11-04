@@ -1,0 +1,30 @@
+# Default gitleaks rules plus checks for identifiers the privacy rules forbid.
+# The pre-push deny-list in $NULLBILL_HOME covers owner-specific strings.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "mac-address"
+description = "MAC address (use none; fixtures carry no MACs)"
+regex = '''(?i)\b[0-9a-f]{2}(?::[0-9a-f]{2}){5}\b'''
+
+[[rules]]
+id = "public-ipv4"
+description = "IPv4 outside RFC 1918, RFC 5737, loopback and 100.64/10"
+# Not preceded by '=', '.', '-' or a word character, so version pins such as
+# pkg==1.2.3.4 do not match.
+regex = '''(?:^|[^\w.=-])((?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3})\b'''
+secretGroup = 1
+[rules.allowlist]
+regexes = [
+  '''^10\.''',
+  '''^172\.(?:1[6-9]|2\d|3[01])\.''',
+  '''^192\.168\.''',
+  '''^192\.0\.2\.''',
+  '''^198\.51\.100\.''',
+  '''^203\.0\.113\.''',
+  '''^127\.''',
+  '''^0\.0\.0\.0$''',
+  '''^100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.''',
+  '''^255\.''',
+]

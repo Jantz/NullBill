@@ -1,0 +1,27 @@
+# Owner data never enters the repo. Real config, probe output, tofu state and
+# sops files live in $NULLBILL_HOME, outside this checkout.
+local/
+*.secret.*
+.env*
+*.tfstate*
+.terraform/
+probe/
+probe-*/
+facts.json
+plan.yaml
+config.yaml
+denylist.txt
+
+# Build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+.ruff_cache/
+packer_cache/
+output-*/
+*.iso
+*.qcow2

@@ -1,0 +1,140 @@
+# NullBill plan. Generated; change config.yaml instead of this file.
+# facts sha256: fa927c17c5ebe36f
+# Follows the discrete GPU count: none, one, several.
+class: small
+host:
+  threads: 4
+  host_mib: 15848
+  # Left to PVE itself; pin with host.reserve.memory_mib.
+  reserve_mib: 4096
+  guests_mib: 11008
+  # Not assigned to any guest.
+  unallocated_mib: 744
+disk:
+  storage: local-lvm
+  # Includes one golden template per pool.
+  needed_gib: 208
+  free_gib: 350
+# Uplink-less bridges; the router guest routes between them.
+zones:
+  mgmt:
+    bridge: vmbr101
+    subnet: 10.42.1.0/24
+    egress: none
+  services:
+    bridge: vmbr102
+    subnet: 10.42.2.0/24
+    egress: none
+  build:
+    bridge: vmbr103
+    subnet: 10.42.3.0/24
+    egress: proxy
+  access:
+    bridge: vmbr106
+    subnet: 10.42.6.0/24
+    egress: none
+guests:
+  router:
+    kind: vm
+    zone: mgmt
+    cores: 1
+    memory_mib: 512
+    disk_gib: 4
+    attach: all-zones
+  egress-proxy:
+    kind: lxc
+    zone: services
+    cores: 1
+    memory_mib: 512
+    disk_gib: 4
+  vpn:
+    kind: lxc
+    zone: access
+    cores: 1
+    memory_mib: 256
+    disk_gib: 2
+  step-ca:
+    kind: lxc
+    zone: mgmt
+    cores: 1
+    memory_mib: 256
+    disk_gib: 2
+  postgres:
+    kind: lxc
+    zone: services
+    cores: 1
+    memory_mib: 1024
+    disk_gib: 16
+  monitoring:
+    kind: lxc
+    zone: mgmt
+    cores: 1
+    memory_mib: 1536
+    disk_gib: 32
+  pbs:
+    kind: vm
+    zone: mgmt
+    cores: 1
+    memory_mib: 2048
+    disk_gib: 8
+  operator:
+    kind: lxc
+    zone: mgmt
+    cores: 1
+    memory_mib: 512
+    disk_gib: 8
+  forgejo:
+    kind: lxc
+    zone: services
+    cores: 1
+    memory_mib: 1024
+    disk_gib: 32
+  runner-dispatcher:
+    kind: lxc
+    zone: services
+    cores: 1
+    memory_mib: 256
+    disk_gib: 4
+  linux-runner:
+    kind: vm-pool
+    zone: build
+    cores: 2
+    memory_mib: 2048
+    disk_gib: 32
+    # Clones, limited by memory.
+    count: 1
+  workspace:
+    kind: lxc
+    zone: build
+    cores: 1
+    memory_mib: 1024
+    disk_gib: 32
+# No discrete GPU.
+gpus: {}
+# Not planned.
+inference: {}
+disks:
+  # Holds PVE; never touched.
+  ata-SYNTHETIC_SSD_0001:
+    size_gib: 476
+    signatures:
+      - LVM2_member
+      - ext4
+      - gpt
+      - vfat
+    use: system
+# No separate disk for PBS; add a blank disk or pin one.
+backups:
+  target: null
+  status: DEGRADED
+# Allowed flows; everything else is denied.
+flows:
+  - zone:build -> egress-proxy tcp/3128
+  - zone:* -> step-ca tcp/443
+  - service:forgejo -> postgres tcp/5432
+  - role:owner -> monitoring tcp/3000
+  - zone:* -> monitoring tcp/3100
+  - role:default -> forgejo tcp/443
+  - zone:build -> forgejo tcp/443
+  - role:default -> forgejo tcp/22
+people: {}
