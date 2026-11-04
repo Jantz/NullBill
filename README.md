@@ -5,7 +5,8 @@ server for agentic workflows: coding agents, Linux and Windows CI, model
 serving and services, from one declarative config. Running it never requires
 a recurring payment; anything paid is opt-in and listed by the plan.
 
-Status: milestone 2 in progress. `nullbill probe`, `nullbill plan` and
+Status: milestone 2 rendered and container-checked; see
+`docs/milestones/m2.md` for what still needs a host. `nullbill probe`, `nullbill plan` and
 `nullbill apply --dry-run` work against synthetic fixtures. The dry run
 renders the pve-firewall, router, egress-proxy, tailnet policy and OpenTofu
 files; none has run on
