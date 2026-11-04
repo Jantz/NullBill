@@ -1,0 +1,7 @@
+# PostgreSQL in its container. apply runs this against the postgres guest
+# with the databases and client addresses its flows allow.
+- name: Shared PostgreSQL
+  hosts: all
+  become: false
+  roles:
+    - postgres

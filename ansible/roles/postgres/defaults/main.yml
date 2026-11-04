@@ -1,0 +1,10 @@
+# Debian 12 ships PostgreSQL 15; security updates come with Debian's.
+postgres_version: 15
+# Addresses the server listens on besides localhost: the guest's own.
+postgres_listen: []
+# One entry per client service: its database, role, password and the only
+# address it may connect from. The plan derives name and client from the
+# flows into postgres; apply supplies the password from sops.
+postgres_databases: []
+#  - {name: forgejo, client: 10.42.2.17, password: "..."}
+postgres_manage_services: true

@@ -1,0 +1,76 @@
+- name: Install PostgreSQL
+  ansible.builtin.apt:
+    name: "postgresql-{{ postgres_version }}"
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Server settings
+  ansible.builtin.template:
+    src: nullbill.conf.j2
+    dest: "/etc/postgresql/{{ postgres_version }}/main/conf.d/nullbill.conf"
+    owner: postgres
+    group: postgres
+    mode: "0644"
+  notify: Restart postgres
+
+- name: Client access
+  ansible.builtin.template:
+    src: pg_hba.conf.j2
+    dest: "/etc/postgresql/{{ postgres_version }}/main/pg_hba.conf"
+    owner: postgres
+    group: postgres
+    mode: "0640"
+  notify: Restart postgres
+
+- name: Run PostgreSQL
+  ansible.builtin.systemd_service:
+    name: "postgresql@{{ postgres_version }}-main"
+    enabled: true
+    state: started
+  when: postgres_manage_services | bool
+
+- name: Run PostgreSQL without systemd
+  ansible.builtin.shell: pg_ctlcluster {{ postgres_version }} main status || pg_ctlcluster {{ postgres_version }} main start
+  register: postgres_start
+  changed_when: "'server is running' not in postgres_start.stdout"
+  when: not (postgres_manage_services | bool)
+
+- name: Apply settings before creating roles
+  ansible.builtin.meta: flush_handlers
+
+# Without a postgres collection, roles and databases are created with psql.
+# A role's password is set only when the role is created, and it travels on
+# stdin, never on a command line.
+- name: Find existing roles and databases
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - postgres
+      - --
+      - psql
+      - -tAc
+      - SELECT 'role:' || rolname FROM pg_roles UNION ALL SELECT 'db:' || datname FROM pg_database
+  register: postgres_existing
+  changed_when: false
+
+- name: Create missing roles
+  ansible.builtin.command:
+    argv: [runuser, -u, postgres, --, psql, -v, ON_ERROR_STOP=1, -q]
+    stdin: >-
+      CREATE ROLE "{{ item.name }}" LOGIN PASSWORD '{{ item.password | replace("'", "''") }}';
+  loop: "{{ postgres_databases }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: ("role:" + item.name) not in postgres_existing.stdout_lines
+  changed_when: true
+  no_log: true
+
+- name: Create missing databases
+  ansible.builtin.command:
+    argv: [runuser, -u, postgres, --, createdb, "--owner={{ item.name }}", "{{ item.name }}"]
+  loop: "{{ postgres_databases }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: ("db:" + item.name) not in postgres_existing.stdout_lines
+  changed_when: true
