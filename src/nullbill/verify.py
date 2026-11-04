@@ -3,32 +3,26 @@ plan allows pass and everything else is refused.
 
 Checks are built from the plan, so a service added by YAML is verified the
 same way as the catalog's. They run over SSH as `pct exec` in one container
-per zone. A check that cannot run reports SKIP, never PASS.
+per zone; backups.py adds backup age and a restore test. A check that cannot
+run reports SKIP, never PASS.
 """
 
 import shlex
 import socket
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from nullbill import backups
 from nullbill.errors import NullBillError
 from nullbill.flows import HOST, HOST_PORTS, resolve_flows
 from nullbill.probe import Runner
 from nullbill.render import strip_notes
+from nullbill.results import Result
 
 TIMEOUT_S = 3
 Connect = Callable[[str, int], str]  # -> "open", "refused" or "timeout"
 Resolve = Callable[[str], str]
-
-
-@dataclass(frozen=True)
-class Result:
-    status: str  # PASS, FAIL, SKIP or DEGRADED
-    name: str
-    detail: str = ""
-
-    def line(self) -> str:
-        return f"{self.status:<8} {self.name}" + (f": {self.detail}" if self.detail else "")
 
 
 @dataclass(frozen=True)
@@ -173,6 +167,7 @@ def run_verify(
     run: Runner,
     connect: Connect = tcp_connect,
     resolve: Resolve = resolve_ipv4,
+    now: backups.Clock = time.time,
 ) -> list[Result]:
     results: list[Result] = []
     bare = strip_notes(plan)
@@ -186,6 +181,7 @@ def run_verify(
             + skipped
             + [Result("SKIP", p.name, reason) for p in planned]
             + [Result("SKIP", f"LAN is refused the PVE host tcp/{port}", reason) for port in HOST_PORTS]
+            + backups.skipped(plan, reason)
         )
     name = model["verify"]["public_name"]
     try:
@@ -203,4 +199,5 @@ def run_verify(
         results.append(_judge(probe, *run(target, command)))
     results += skipped
     results += _lan(target.rpartition("@")[2], connect)
+    results += backups.check(plan, target, run, now)
     return results

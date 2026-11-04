@@ -24,6 +24,7 @@ names and reaches the host over SSH; it never runs on the host. Only `probe`,
 - `src/nullbill/tailnet.py`: Tailscale policy from people and roles, the only per-person gate; plan fails past the free-plan limits in `catalog.yaml`.
 - `ansible/`: host baseline (key-only SSH, auditd, no-subscription repo, security-only upgrades); `tools/check-host` runs it twice in a Debian 12 container and checks the result. `docs/runbooks/` holds steps the owner does by hand. Guest roles carry `tests/check.sh`, which `tools/check-roles` runs in a Debian 12 container.
 - `ansible/roles/pbs`: Proxmox Backup Server with a backup-only token for the host; its check backs up with client-side encryption, restores, and rebuilds over a kept datastore.
+- `src/nullbill/backups.py`: the PBS storage and nightly job the OpenTofu render adds, and verify's backup-age and restore checks.
 - `src/nullbill/tofu.py`: OpenTofu JSON for bridges, images and guests (bpg/proxmox); `tools/check-tofu` runs `tofu validate` with the pinned provider in a container.
 - `src/nullbill/verify.py`: allowed and denied flows probed from one container per zone and from the LAN; SKIP when nothing can run, never PASS.
 - `src/nullbill/artifacts.py`: `apply --dry-run` output, one `build/<machine>/` per target.

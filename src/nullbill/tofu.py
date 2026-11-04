@@ -9,6 +9,7 @@ variables and environment, never part of the rendered files.
 
 import json
 
+from nullbill import backups
 from nullbill.flows import mac
 from nullbill.render import strip_notes
 
@@ -186,6 +187,50 @@ def _vm(name: str, guest: dict, plan: dict, model: dict, storage: str) -> dict:
     return vm
 
 
+# PVE checks the PBS connection when the storage is added, so the storage and
+# the job wait until apply has configured PBS and set these variables (#16).
+WHEN_PBS_READY = '${var.pbs_fingerprint == "" ? 0 : 1}'
+
+
+def _backup_resources(plan: dict) -> dict:
+    pbs_ip = plan["guests"]["pbs"]["ip"]
+    storage = {
+        "count": WHEN_PBS_READY,
+        "id": backups.STORAGE,
+        "server": pbs_ip,
+        "datastore": backups.DATASTORE,
+        "username": backups.TOKEN_ID,
+        "password": "${var.pbs_token_secret}",
+        "fingerprint": "${var.pbs_fingerprint}",
+        # Encrypted on the host before upload. The key is made on the
+        # controller (issue #16), so a copy survives the host.
+        "encryption_key": "${var.pbs_encryption_key}",
+        "content": ["backup"],
+        # The token cannot delete; retention runs on PBS, so PVE must not try.
+        "backups": {"keep_all": True},
+    }
+    job = {
+        "count": WHEN_PBS_READY,
+        "id": backups.JOB,
+        "schedule": backups.SCHEDULE,
+        "storage": f"${{proxmox_storage_pbs.{_tf_name(backups.STORAGE)}[0].id}}",
+        "vmid": [str(g["vmid"]) for g in backups.guests(plan).values()],
+        "mode": "snapshot",
+        "enabled": True,
+        "repeat_missed": True,
+        "notes_template": "{{guestname}}",
+        "comment": "nullbill nightly backup; retention runs on PBS",
+    }
+    return {
+        "proxmox_storage_pbs": {_tf_name(backups.STORAGE): storage},
+        "proxmox_backup_job": {_tf_name(backups.JOB): job},
+    }
+
+
+def _tf_name(name: str) -> str:
+    return name.replace("-", "_")
+
+
 def _variables(plan: dict) -> dict:
     variables = {
         "pve_endpoint": {"type": "string", "description": "PVE API URL, e.g. https://pve.example.internal:8006/"},
@@ -193,6 +238,13 @@ def _variables(plan: dict) -> dict:
         "lan_bridge": {"type": "string", "default": "vmbr0", "description": "Bridge on the LAN, the router's uplink"},
         "ssh_authorized_keys": {"type": "list(string)", "description": "Keys for the nullbill user on Linux guests"},
     }
+    if backups.enabled(plan):
+        secret = {"type": "string", "default": "", "sensitive": True}
+        variables |= {
+            "pbs_fingerprint": {"type": "string", "default": "", "description": "PBS certificate SHA-256; empty until PBS is set up"},
+            "pbs_token_secret": secret | {"description": "Secret of the PVE host's PBS token"},
+            "pbs_encryption_key": secret | {"description": "Backup encryption key (JSON), kept on the controller"},
+        }
     if any(g["zone"] == "windows" for g in plan["guests"].values()):
         variables["windows_iso"] = {"type": "string", "description": "Volume id of the Windows ISO, e.g. local:iso/windows.iso"}
     return variables
@@ -217,4 +269,6 @@ def render_tofu(plan_with_notes: dict, model: dict) -> dict[str, str]:
             "proxmox_virtual_environment_vm": vms,
         },
     }
+    if backups.enabled(plan):
+        config["resource"] |= _backup_resources(plan)
     return {"main.tf.json": json.dumps(config, indent=2) + "\n"}

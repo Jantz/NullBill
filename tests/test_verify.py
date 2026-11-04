@@ -4,7 +4,7 @@ import subprocess
 import threading
 
 import pytest
-from conftest import fixture_config
+from conftest import backup_host, fixture_config
 
 from nullbill.model import build_model
 from nullbill.plan import build_plan
@@ -30,10 +30,14 @@ def firewall(plan, model, leak: bool = False):
             out = "rc=124\n"
         answers[f"pct exec {p.vmid} -- bash -c {shlex.quote(p.command)}"] = out
 
+    backup = backup_host(plan)
+
     def run(target, command):
         if command == "pve-firewall status":
             return 0, "Status: enabled/running\n", ""
-        return 0, answers[command], ""
+        if command in answers:
+            return 0, answers[command], ""
+        return backup(target, command)
 
     return run
 
@@ -54,6 +58,8 @@ def test_correct_host_passes_everything_it_can(facts):
     assert "vpn (access) reaches forgejo tcp/443" in names
     assert "egress-proxy (services) is refused postgres tcp/5432" in names
     assert "LAN is refused the PVE host tcp/8006" in names
+    assert "forgejo has an encrypted backup under 26 h old" in names
+    assert "restore test" in names
 
 
 def test_open_host_fails_every_denial(facts):

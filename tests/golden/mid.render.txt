@@ -938,6 +938,23 @@ WantedBy=multi-user.target
       "type": "list(string)",
       "description": "Keys for the nullbill user on Linux guests"
     },
+    "pbs_fingerprint": {
+      "type": "string",
+      "default": "",
+      "description": "PBS certificate SHA-256; empty until PBS is set up"
+    },
+    "pbs_token_secret": {
+      "type": "string",
+      "default": "",
+      "sensitive": true,
+      "description": "Secret of the PVE host's PBS token"
+    },
+    "pbs_encryption_key": {
+      "type": "string",
+      "default": "",
+      "sensitive": true,
+      "description": "Backup encryption key (JSON), kept on the controller"
+    },
     "windows_iso": {
       "type": "string",
       "description": "Volume id of the Windows ISO, e.g. local:iso/windows.iso"
@@ -2129,6 +2146,52 @@ WantedBy=multi-user.target
         "depends_on": [
           "proxmox_network_linux_bridge.vmbr105"
         ]
+      }
+    },
+    "proxmox_storage_pbs": {
+      "nb_pbs": {
+        "count": "${var.pbs_fingerprint == \"\" ? 0 : 1}",
+        "id": "nb-pbs",
+        "server": "10.42.1.15",
+        "datastore": "backups",
+        "username": "nb-pve@pbs!pve",
+        "password": "${var.pbs_token_secret}",
+        "fingerprint": "${var.pbs_fingerprint}",
+        "encryption_key": "${var.pbs_encryption_key}",
+        "content": [
+          "backup"
+        ],
+        "backups": {
+          "keep_all": true
+        }
+      }
+    },
+    "proxmox_backup_job": {
+      "nb_nightly": {
+        "count": "${var.pbs_fingerprint == \"\" ? 0 : 1}",
+        "id": "nb-nightly",
+        "schedule": "02:00",
+        "storage": "${proxmox_storage_pbs.nb_pbs[0].id}",
+        "vmid": [
+          "2001",
+          "2010",
+          "2011",
+          "2012",
+          "2013",
+          "2014",
+          "2016",
+          "2017",
+          "2018",
+          "2019",
+          "2020",
+          "2021",
+          "2022"
+        ],
+        "mode": "snapshot",
+        "enabled": true,
+        "repeat_missed": true,
+        "notes_template": "{{guestname}}",
+        "comment": "nullbill nightly backup; retention runs on PBS"
       }
     }
   }

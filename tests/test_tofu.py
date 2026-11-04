@@ -62,9 +62,12 @@ def test_images_are_checksummed_and_nothing_identifying_is_rendered(facts):
         assert download["checksum_algorithm"] == "sha512" and len(download["checksum"]) == 128
     # The endpoint, node and keys come from apply; the token from its environment.
     assert config["provider"]["proxmox"] == {"endpoint": "${var.pve_endpoint}"}
-    assert [n for n, v in config["variable"].items() if "default" in v] == ["lan_bridge"]
-    text = json.dumps(config)
-    assert "password" not in text and "api_token" not in text
+    assert [n for n, v in config["variable"].items() if "default" in v and not n.startswith("pbs_")] == ["lan_bridge"]
+    assert all(config["variable"][n]["sensitive"] for n in ("pbs_token_secret", "pbs_encryption_key"))
+    storage = config["resource"]["proxmox_storage_pbs"]["nb_pbs"]
+    assert storage["password"] == "${var.pbs_token_secret}"
+    assert storage["encryption_key"] == "${var.pbs_encryption_key}"
+    assert "api_token" not in json.dumps(config)
 
 
 def test_windows_iso_variable_only_with_windows(facts):
