@@ -102,7 +102,9 @@ def test_firewall_down_and_unreachable_guest_fail(facts):
     results = run_verify(plan, model, "root@pve.example.internal", broken, lambda h, p: "timeout", lambda n: PUBLIC)
     by = statuses(results)
     assert by["FAIL"][0].name == "pve-firewall is running"
-    assert all(r.detail.startswith("probe did not run") for r in by["FAIL"][1:])
+    probe_fails = [r for r in by["FAIL"][1:] if not r.name.startswith("agent token")]
+    assert all(r.detail.startswith("probe did not run") for r in probe_fails)
+    assert all("ssh: connect" in r.detail for r in by["FAIL"] if r.name.startswith("agent token"))
     assert [r.name for r in by["DEGRADED"]] == ["backups"]
 
 

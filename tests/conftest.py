@@ -54,6 +54,7 @@ def backup_host(plan: dict, age_h: float = 3, encrypted: bool = True, hostname: 
         }
         for g in guests.values()
     ]
+    api = agent_api(plan)
     storage = {"server": "10.42.1.15", "datastore": backups.DATASTORE, "username": backups.TOKEN_ID, "fingerprint": "aa:bb"}
 
     def run(target, command):
@@ -64,6 +65,36 @@ def backup_host(plan: dict, age_h: float = 3, encrypted: bool = True, hostname: 
         if "proxmox-backup-client restore" in command:
             vmid = int(re.search(r"ct/(\d+)/", command)[1])
             return 0, (hostname or by_vmid[vmid]) + "\n", ""
+        return api(target, command)
+
+    return run
+
+
+def agent_api(plan: dict, extra: dict[str, set] | None = None, snapshot_status: str = "403"):
+    """A runner answering the agent's API calls like a correctly set up host:
+    PVEAuditor everywhere, the agent role on pool guests. `extra` adds
+    privileges per path to model a mistake."""
+    from nullbill import agent
+    from nullbill.render import strip_notes
+
+    bare = strip_notes(plan)
+    auditor = {"VM.Audit", "Sys.Audit", "Datastore.Audit", "Pool.Audit"}
+    grants = {"/": set(auditor)}
+    for g in bare["guests"].values():
+        vmid = g.get("vmid") or g["template_vmid"]
+        grants[f"/vms/{vmid}"] = auditor | (set(agent.PRIVILEGES) if g.get("agent_managed") else set())
+    for path, privs in (extra or {}).items():
+        grants[path] = grants.get(path, set()) | privs
+
+    def run(target, command):
+        url = re.search(r"api2/json([^';\s]+)", command)[1]
+        if url.startswith("/access/permissions?path="):
+            path = url.partition("=")[2]
+            return 0, "200\n" + json.dumps({"data": {path: {p: 1 for p in grants.get(path, set())}}}), ""
+        if url == "/nodes":
+            return 0, "200\n" + json.dumps({"data": [{"node": "pve"}]}), ""
+        if url.endswith("/snapshot"):
+            return 0, snapshot_status + "\n" + json.dumps({"data": None}), ""
         raise KeyError(command)
 
     return run

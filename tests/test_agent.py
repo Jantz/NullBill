@@ -82,3 +82,65 @@ def test_verify_probes_the_operator(facts):
         "step-ca (mgmt) is refused workspace tcp/22",
     ):
         assert expected in names, expected
+
+
+def _agent_results(facts, **kw):
+    from conftest import agent_api
+
+    from nullbill.agent import check
+
+    plan, _ = planned(facts, "mid")
+    return plan, {r.name: (r.status, r.detail) for r in check(plan, "root@pve.example.internal", agent_api(plan, **kw))}
+
+
+def test_correct_grants_pass(facts):
+    _, results = _agent_results(facts)
+    assert {s for s, _ in results.values()} == {"PASS"}
+    assert "agent token may power-manage and snapshot workspace, nothing else" in results
+    assert "agent token cannot change pbs" in results
+    assert "agent token is refused a snapshot of router" in results
+
+
+def test_a_grant_outside_the_pool_fails(facts):
+    plan = strip_notes(planned(facts, "mid")[0])
+    pbs = plan["guests"]["pbs"]["vmid"]
+    _, results = _agent_results(facts, extra={f"/vms/{pbs}": {"VM.PowerMgmt"}, "/": {"Sys.Modify"}})
+    assert results["agent token cannot change pbs"] == ("FAIL", "holds VM.PowerMgmt")
+    assert results["agent token cannot change the host"] == ("FAIL", "Sys.Modify")
+
+
+def test_extra_privilege_inside_the_pool_fails(facts):
+    plan = strip_notes(planned(facts, "mid")[0])
+    ws = plan["guests"]["workspace"]["vmid"]
+    _, results = _agent_results(facts, extra={f"/vms/{ws}": {"VM.Snapshot.Rollback"}})
+    status, detail = results["agent token may power-manage and snapshot workspace, nothing else"]
+    assert status == "FAIL" and "VM.Snapshot.Rollback" in detail
+
+
+def test_accepted_snapshot_outside_the_pool_fails(facts):
+    _, results = _agent_results(facts, snapshot_status="200")
+    status, detail = results["agent token is refused a snapshot of router"]
+    assert status == "FAIL" and "delete snapshot nb-verify-denied" in detail
+
+
+def test_api_call_runs_in_bash(tmp_path):
+    """The generated shell against a stand-in curl that checks its arguments."""
+    import subprocess
+
+    from nullbill.agent import _api
+
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    curl = bindir / "curl"
+    curl.write_text(
+        "#!/usr/bin/env bash\n"
+        'args=" $* "; [[ $args == *" -X POST "* && $args == *" --data snapname=x "* ]] || exit 9\n'
+        '[[ $args == *"PVEAPIToken=nb-agent@pve!operator=s3cret"* ]] || exit 8\n'
+        'while [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done; echo \'{"data":null}\' >"$out"; echo 403\n'
+    )
+    curl.chmod(0o755)
+    token = tmp_path / "token"
+    token.write_text("nb-agent@pve!operator=s3cret")
+    command = _api("10.42.1.254", "POST", "/nodes/pve/qemu/2001/snapshot", "snapname=x").replace(agent.TOKEN_FILE, str(token))
+    done = subprocess.run(["bash", "-c", command], capture_output=True, text=True, env={"PATH": f"{bindir}:/usr/bin:/bin"})
+    assert (done.returncode, done.stdout) == (0, '403\n{"data":null}\n'), done.stderr
