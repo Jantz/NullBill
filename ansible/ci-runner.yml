@@ -1,0 +1,8 @@
+# The golden image of a Linux runner pool. apply boots the template VM, runs
+# this (and agent-ssh.yml when the pool is agent-managed), shuts it down and
+# converts it to a template. Each clone runs one job and powers off.
+- name: One-job CI runner image
+  hosts: all
+  become: false
+  roles:
+    - ci_runner

@@ -1,0 +1,31 @@
+# The certificate tls_cert keeps renewed (group nb-dispatcher). Clones
+# fetch their one-time registration from this name on listen's port.
+runner_dispatcher_tls_name: runner-dispatcher.nullbill.internal
+runner_dispatcher_listen: "0.0.0.0:8443"
+
+runner_dispatcher_forgejo_url: https://forgejo.nullbill.internal
+# A Forgejo access token with scope write:admin, for the runner endpoints.
+# apply makes it with `nb-forgejo admin user generate-access-token` on the
+# forgejo guest.
+runner_dispatcher_forgejo_token: ""
+
+# The PVE API on the mgmt bridge, the node's name, the dispatcher's token
+# ("nb-dispatcher@pve!dispatcher=<secret>", OpenTofu output
+# dispatcher_token) and PVE's root CA (/etc/pve/pve-root-ca.pem).
+runner_dispatcher_pve_url: ""
+runner_dispatcher_node: ""
+runner_dispatcher_pve_token: ""
+runner_dispatcher_pve_ca: ""
+runner_dispatcher_ci_pool: nb-ci
+
+# One entry per vm-pool service, from the plan:
+#  - name: linux-runner
+#    template: 2030              # template_vmid
+#    vmids: [6000, 6005]         # clone_vmids
+#    labels: [linux]             # jobs whose runs-on is within these
+#    runner_labels: ["linux:host"]
+#    max_job_seconds: 21600
+runner_dispatcher_pools: []
+runner_dispatcher_interval_seconds: 5
+
+runner_dispatcher_manage_services: true

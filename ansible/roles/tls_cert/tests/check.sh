@@ -19,7 +19,6 @@ token() {
   STEPPATH=/etc/step-ca step ca token "$name" --san "$name" "${ca[@]}" \
     --provisioner admin --provisioner-password-file /etc/step-ca/secrets/password 2>/dev/null
 }
-groupadd -f forgejo
 vars=$(mktemp)
 python3 - "$vars" "$(token)" <<'PY'
 import json, sys

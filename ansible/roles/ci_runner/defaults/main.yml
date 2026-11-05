@@ -1,0 +1,20 @@
+# Forgejo Runner from its release, pinned by checksum. The checksum was
+# taken from a download whose detached signature verified against
+# Forgejo's release key EB114F5E6C0DC2BCDD183550A4B61A2DC5923710.
+ci_runner_version: 13.2.1
+ci_runner_sha256: bb369fe1ecb50fdc983c0b1d993f19b0920df6e5864511892b3cdbf16d858b34
+ci_runner_url: "https://code.forgejo.org/forgejo/runner/releases/download/v{{ ci_runner_version }}/forgejo-runner-{{ ci_runner_version }}-linux-amd64"
+
+# Where a clone fetches its one-time registration at boot.
+ci_runner_dispatcher_url: https://runner-dispatcher.nullbill.internal:8443
+# step-ca's root, PEM: the clone verifies the dispatcher and Forgejo with it.
+ci_runner_ca_root: ""
+# The build zone's egress proxy, for jobs that fetch from the internet.
+ci_runner_proxy_url: ""
+ci_runner_no_proxy: ".nullbill.internal,localhost,127.0.0.1"
+
+# PVE puts the dispatcher's nonce in the clone's SMBIOS serial. The check
+# points these at a file and a no-op instead.
+ci_runner_serial_file: /sys/class/dmi/id/product_serial
+ci_runner_poweroff: systemctl poweroff
+ci_runner_manage_services: true

@@ -1,0 +1,3 @@
+- name: Restart dispatcher
+  ansible.builtin.systemd_service: {name: nb-dispatcher, state: restarted, daemon_reload: true}
+  when: runner_dispatcher_manage_services | bool

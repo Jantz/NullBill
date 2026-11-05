@@ -1,0 +1,8 @@
+# The runner dispatcher in its container: one clone of a pool's golden image
+# per queued Forgejo Actions job. apply runs tls-cert.yml for its name first
+# (tls_cert_group=nb-dispatcher; the dispatcher takes up renewals itself).
+- name: CI runner dispatcher
+  hosts: all
+  become: false
+  roles:
+    - runner_dispatcher

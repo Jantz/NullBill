@@ -1,0 +1,296 @@
+#!/usr/bin/python3
+"""Run each queued Forgejo Actions job on a fresh clone of a golden VM.
+
+Usage: nb-dispatcher CONFIG.json
+
+Every few seconds, for each pool in the config:
+
+1. List the jobs waiting for the pool's labels (Forgejo admin API).
+2. For a job not yet given a clone, take a free VMID from the pool's range,
+   register an ephemeral runner for it, and keep the registration under a
+   random one-time nonce.
+3. Make a linked clone of the template into the CI pool, put the nonce in
+   its SMBIOS serial, and start it. At boot the clone reads its serial and
+   fetches the registration from GET /handoff/<nonce> on this service, once.
+   It then runs that one job (forgejo-runner one-job --handle) and powers
+   off.
+4. Destroy clones that are stopped, and stop clones past the pool's time
+   limit or whose nonce was never fetched. Delete registrations whose clone
+   is gone (Forgejo deletes an ephemeral runner itself once its job ends).
+
+The PVE token may only clone the templates and manage the CI pool; the
+Forgejo token is an admin token used for the runner endpoints only. State
+lives in memory: after a restart, stopped clones are destroyed and running
+ones finish their job. Installed and run by the runner_dispatcher role.
+"""
+
+import http.server
+import json
+import os
+import secrets
+import ssl
+import sys
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from collections.abc import Callable
+
+PREFIX = "nb-"
+NONCE_BYTES = 16
+CLONE_TIMEOUT_S = 300
+# A clone must fetch its job this soon after it was started.
+BOOT_GRACE_S = 300
+
+
+def log(message: str) -> None:
+    print(message, flush=True)
+
+
+def read(path: str) -> str:
+    with open(path) as f:
+        return f.read().strip()
+
+
+class Api:
+    def __init__(self, base: str, auth: str, cafile: str):
+        self.base = base.rstrip("/")
+        self.auth = auth
+        self.tls = ssl.create_default_context(cafile=cafile)
+
+    def call(self, method: str, path: str, data: dict | None = None, form: bool = False) -> object:
+        body, headers = None, {"Authorization": self.auth, "Accept": "application/json"}
+        if data is not None and form:
+            body = urllib.parse.urlencode(data).encode()
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
+        elif data is not None:
+            body = json.dumps(data).encode()
+            headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(self.base + path, data=body, method=method, headers=headers)
+        with urllib.request.urlopen(req, context=self.tls, timeout=30) as resp:
+            raw = resp.read()
+        return json.loads(raw) if raw else None
+
+
+class Pve:
+    """The PVE calls the dispatcher's token is allowed."""
+
+    def __init__(self, conf: dict):
+        token = read(conf["pve_token_file"])
+        self.api = Api(conf["pve_url"] + "/api2/json", f"PVEAPIToken={token}", conf["pve_ca_file"])
+        self.node = conf["node"]
+        self.pool = conf["ci_pool"]
+
+    def data(self, method: str, path: str, data: dict | None = None) -> object:
+        return self.api.call(method, path, data, form=True)["data"]
+
+    def clones(self) -> dict[int, dict]:
+        vms = self.data("GET", "/cluster/resources?type=vm")
+        return {vm["vmid"]: vm for vm in vms if vm.get("pool") == self.pool}
+
+    def wait(self, upid: str) -> None:
+        path = f"/nodes/{self.node}/tasks/{urllib.parse.quote(upid, safe='')}/status"
+        deadline = time.monotonic() + CLONE_TIMEOUT_S
+        while time.monotonic() < deadline:
+            status = self.data("GET", path)
+            if status["status"] == "stopped":
+                if status.get("exitstatus") != "OK":
+                    raise RuntimeError(f"task {upid}: {status.get('exitstatus')}")
+                return
+            time.sleep(1)
+        raise RuntimeError(f"task {upid} did not finish")
+
+    def clone(self, template: int, vmid: int, name: str, nonce: str) -> None:
+        upid = self.data("POST", f"/nodes/{self.node}/qemu/{template}/clone", {"newid": vmid, "name": name, "pool": self.pool, "full": 0})
+        self.wait(upid)
+        config = self.data("GET", f"/nodes/{self.node}/qemu/{vmid}/config")
+        # Keep the uuid PVE gave the clone; add the serial the clone reads.
+        smbios = [p for p in config.get("smbios1", "").split(",") if p and not p.startswith("serial=")]
+        self.data("PUT", f"/nodes/{self.node}/qemu/{vmid}/config", {"smbios1": ",".join([*smbios, f"serial={nonce}"])})
+        self.wait(self.data("POST", f"/nodes/{self.node}/qemu/{vmid}/status/start"))
+
+    def stop(self, vmid: int) -> None:
+        self.wait(self.data("POST", f"/nodes/{self.node}/qemu/{vmid}/status/stop"))
+
+    def destroy(self, vmid: int) -> None:
+        self.wait(self.data("DELETE", f"/nodes/{self.node}/qemu/{vmid}?purge=1&destroy-unreferenced-disks=1"))
+
+
+class Forgejo:
+    def __init__(self, conf: dict):
+        self.url = conf["forgejo_url"].rstrip("/")
+        self.api = Api(self.url + "/api/v1", f"token {read(conf['forgejo_token_file'])}", conf["ca_file"])
+
+    def waiting(self, labels: list[str]) -> list[dict]:
+        jobs = self.api.call("GET", "/admin/actions/runners/jobs?" + urllib.parse.urlencode({"labels": ",".join(labels)})) or []
+        return [j for j in jobs if j["status"] == "waiting" and j.get("handle")]
+
+    def register(self, name: str, description: str) -> dict:
+        return self.api.call("POST", "/admin/actions/runners", {"name": name, "description": description, "ephemeral": True})
+
+    def runners(self) -> list[dict]:
+        out, page = [], 1
+        while True:
+            batch = self.api.call("GET", f"/admin/actions/runners?page={page}&limit=50") or []
+            out += batch
+            if len(batch) < 50:
+                return out
+            page += 1
+
+    def unregister(self, runner_id: int) -> None:
+        try:
+            self.api.call("DELETE", f"/admin/actions/runners/{runner_id}")
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise
+
+
+class Dispatcher:
+    def __init__(self, conf: dict, pve: Pve, forgejo: Forgejo):
+        self.conf, self.pve, self.forgejo = conf, pve, forgejo
+        self.lock = threading.Lock()
+        self.handoffs: dict[str, dict] = {}  # nonce -> what the clone fetches, once
+        self.clones: dict[int, dict] = {}  # vmid -> {handle, nonce, runner_id, started, fetched}
+
+    def take(self, nonce: str) -> dict | None:
+        with self.lock:
+            handoff = self.handoffs.pop(nonce, None)
+            if handoff:
+                self.clones[handoff["vmid"]]["fetched"] = True
+            return handoff and handoff["payload"]
+
+    def step(self) -> None:
+        live = self.pve.clones()
+        self.reap(live)
+        for pool in self.conf["pools"]:
+            self.dispatch(pool, live)
+
+    def dispatch(self, pool: dict, live: dict[int, dict]) -> None:
+        first, last = pool["vmids"]
+        busy = {c["handle"] for c in self.clones.values()}
+        for job in self.forgejo.waiting(pool["labels"]):
+            if job["handle"] in busy:
+                continue
+            free = [v for v in range(first, last + 1) if v not in live and v not in self.clones]
+            if not free:
+                return
+            vmid = free[0]
+            name = f"{PREFIX}{pool['name']}-{vmid}"
+            runner = self.forgejo.register(name, f"job {job['id']} attempt {job['attempt']}")
+            nonce = secrets.token_hex(NONCE_BYTES)
+            payload = {
+                "url": self.forgejo.url,
+                "uuid": runner["uuid"],
+                "token": runner["token"],
+                "handle": job["handle"],
+                "labels": pool["runner_labels"],
+            }
+            with self.lock:
+                self.clones[vmid] = {"handle": job["handle"], "runner_id": runner["id"], "started": time.monotonic(), "fetched": False}
+                self.handoffs[nonce] = {"vmid": vmid, "payload": payload}
+            log(f"job {job['id']} ({job['name']}): cloning {pool['template']} to {vmid}")
+            try:
+                self.pve.clone(pool["template"], vmid, name, nonce)
+            except Exception as e:  # noqa: BLE001 - the clone is reaped below, the job retried
+                log(f"job {job['id']}: clone {vmid} failed: {e}")
+            busy.add(job["handle"])
+            live[vmid] = {"vmid": vmid, "status": "unknown"}
+
+    def reap(self, live: dict[int, dict]) -> None:
+        now = time.monotonic()
+        limits = {v: p["max_job_seconds"] for p in self.conf["pools"] for v in range(p["vmids"][0], p["vmids"][1] + 1)}
+        for vmid, vm in list(live.items()):
+            if vmid not in limits:
+                continue  # not ours to touch
+            mine = self.clones.get(vmid)
+            young = mine is not None and now - mine["started"] <= BOOT_GRACE_S
+            if vm["status"] == "stopped" and (not young or mine["fetched"]):
+                log(f"destroying {vmid}")
+                self.pve.destroy(vmid)
+                self.forget(vmid)
+                del live[vmid]
+            elif vm["status"] == "running" and vm.get("uptime", 0) > limits[vmid]:
+                log(f"stopping {vmid}: ran past the time limit")
+                self.pve.stop(vmid)
+            elif vm["status"] == "running" and mine and not young and not mine["fetched"]:
+                log(f"stopping {vmid}: never fetched its job")
+                self.pve.stop(vmid)
+        for vmid in [v for v in self.clones if v not in live and now - self.clones[v]["started"] > BOOT_GRACE_S]:
+            self.forget(vmid)  # a clone that failed before it existed
+        # Registrations of ours whose clone is gone: the job never ran there.
+        # (After a restart, running clones keep theirs and finish the job.)
+        for runner in self.forgejo.runners():
+            _, _, vmid = runner["name"].removeprefix(PREFIX).rpartition("-")
+            if runner["name"].startswith(PREFIX) and runner.get("ephemeral") and vmid.isdigit():
+                if int(vmid) in limits and int(vmid) not in live and int(vmid) not in self.clones:
+                    log(f"deleting runner {runner['id']} ({runner['name']})")
+                    self.forgejo.unregister(runner["id"])
+
+    def forget(self, vmid: int) -> None:
+        with self.lock:
+            clone = self.clones.pop(vmid, None)
+            self.handoffs = {n: h for n, h in self.handoffs.items() if h["vmid"] != vmid}
+        if clone:
+            self.forgejo.unregister(clone["runner_id"])
+
+
+def serve(conf: dict, dispatcher: Dispatcher) -> Callable[[], None]:
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 - http.server's naming
+            nonce = self.path.removeprefix("/handoff/")
+            handoff = dispatcher.take(nonce) if self.path.startswith("/handoff/") else None
+            body = json.dumps(handoff).encode() if handoff else b"{}"
+            self.send_response(200 if handoff else 404)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, fmt: str, *args: object) -> None:
+            # Never log the path: it is the nonce.
+            log(f"handoff from {self.client_address[0]}: {args[1] if len(args) > 1 else ''}")
+
+    class Server(http.server.ThreadingHTTPServer):
+        daemon_threads = True
+
+        def finish_request(self, request, client_address) -> None:  # noqa: ANN001
+            # The handshake runs in the request's thread, not the accept loop.
+            request.settimeout(10)
+            super().finish_request(tls.wrap_socket(request, server_side=True), client_address)
+
+    host, port = conf["listen"].rsplit(":", 1)
+    tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    tls.minimum_version = ssl.TLSVersion.TLSv1_2
+    tls.load_cert_chain(conf["tls_cert"], conf["tls_key"])
+    loaded = [os.stat(conf["tls_cert"]).st_mtime]
+    server = Server((host, int(port)), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    def refresh() -> None:
+        """Take up a renewed certificate (step-ca's last 24 h)."""
+        mtime = os.stat(conf["tls_cert"]).st_mtime
+        if mtime != loaded[0]:
+            tls.load_cert_chain(conf["tls_cert"], conf["tls_key"])
+            loaded[0] = mtime
+            log("loaded the renewed certificate")
+
+    return refresh
+
+
+def main() -> None:
+    conf = json.loads(read(sys.argv[1]))
+    dispatcher = Dispatcher(conf, Pve(conf), Forgejo(conf))
+    refresh = serve(conf, dispatcher)
+    log(f"dispatching for {', '.join(p['name'] for p in conf['pools'])}")
+    while True:
+        try:
+            refresh()
+            dispatcher.step()
+        except Exception as e:  # noqa: BLE001 - keep serving; the next step retries
+            log(f"step failed: {e}")
+        time.sleep(conf.get("interval_seconds", 5))
+
+
+if __name__ == "__main__":
+    main()

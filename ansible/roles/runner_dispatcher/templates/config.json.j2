@@ -1,0 +1,15 @@
+{{ {
+  "forgejo_url": runner_dispatcher_forgejo_url,
+  "forgejo_token_file": "/etc/nullbill/dispatcher/forgejo-token",
+  "ca_file": "/etc/nullbill/tls/root_ca.crt",
+  "pve_url": runner_dispatcher_pve_url,
+  "pve_token_file": "/etc/nullbill/dispatcher/pve-token",
+  "pve_ca_file": "/etc/nullbill/dispatcher/pve-root-ca.pem",
+  "node": runner_dispatcher_node,
+  "ci_pool": runner_dispatcher_ci_pool,
+  "listen": runner_dispatcher_listen,
+  "tls_cert": "/etc/nullbill/tls/" + runner_dispatcher_tls_name + ".crt",
+  "tls_key": "/etc/nullbill/tls/" + runner_dispatcher_tls_name + ".key",
+  "interval_seconds": runner_dispatcher_interval_seconds,
+  "pools": runner_dispatcher_pools,
+} | to_nice_json }}

@@ -1,0 +1,66 @@
+- name: step-ca's root is set
+  ansible.builtin.assert:
+    that: ci_runner_ca_root | length > 0
+    fail_msg: ci_runner_ca_root is empty; apply reads it from step-ca
+
+- name: Tools jobs and the runner need
+  ansible.builtin.apt:
+    name: [git, curl, ca-certificates, nodejs]
+    update_cache: true
+
+- name: Trust step-ca's root
+  ansible.builtin.copy:
+    dest: /usr/local/share/ca-certificates/nullbill-root.crt
+    content: "{{ ci_runner_ca_root | trim }}\n"
+    mode: "0644"
+  register: ci_runner_root
+
+- name: Rebuild the system trust store
+  ansible.builtin.command: update-ca-certificates
+  when: ci_runner_root.changed
+  changed_when: true
+
+# Jobs run as this user, directly on the throwaway clone.
+- name: runner user
+  ansible.builtin.user:
+    name: runner
+    shell: /bin/bash
+    password: "!"
+
+- name: Release directory
+  ansible.builtin.file:
+    path: "/opt/forgejo-runner/{{ ci_runner_version }}"
+    state: directory
+    mode: "0755"
+
+- name: Forgejo Runner at the pinned version
+  ansible.builtin.get_url:
+    url: "{{ ci_runner_url }}"
+    dest: "/opt/forgejo-runner/{{ ci_runner_version }}/forgejo-runner"
+    checksum: "sha256:{{ ci_runner_sha256 }}"
+    mode: "0755"
+
+- name: Forgejo Runner on the path
+  ansible.builtin.file:
+    src: "/opt/forgejo-runner/{{ ci_runner_version }}/forgejo-runner"
+    dest: /usr/local/bin/forgejo-runner
+    state: link
+
+- name: Boot-time job pickup
+  ansible.builtin.template:
+    src: nb-runner-job.j2
+    dest: /usr/local/sbin/nb-runner-job
+    mode: "0755"
+
+- name: Job pickup unit
+  ansible.builtin.template:
+    src: nb-runner-job.service.j2
+    dest: /etc/systemd/system/nb-runner-job.service
+    mode: "0644"
+
+- name: Run the job pickup at boot
+  ansible.builtin.systemd_service:
+    name: nb-runner-job
+    enabled: true
+    daemon_reload: true
+  when: ci_runner_manage_services | bool

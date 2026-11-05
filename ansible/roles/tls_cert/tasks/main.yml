@@ -62,6 +62,13 @@
   no_log: true
   notify: Restart renewer
 
+# Made here when the service's package or role has not made it yet, so
+# apply can run this first on any guest.
+- name: The service's group
+  ansible.builtin.group:
+    name: "{{ tls_cert_group }}"
+    system: true
+
 - name: Certificate readable by all, key by the service's group only
   ansible.builtin.file:
     path: "/etc/nullbill/tls/{{ item.file }}"

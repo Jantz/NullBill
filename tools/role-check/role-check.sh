@@ -65,3 +65,15 @@ test_pki() {
     leaf rogue rogue-ca test.shipper
   )
 }
+
+# After the postgres and forgejo roles: start Forgejo the way its unit does,
+# and nginx in front, and wait until it answers over HTTPS. $1 is the CA
+# that signed its certificate.
+start_forgejo() {
+  (cd /var/lib/forgejo && setpriv --reuid=git --regid=git --init-groups env HOME=/var/lib/forgejo USER=git \
+    /usr/local/bin/forgejo web --config /etc/forgejo/app.ini --work-path /var/lib/forgejo >/tmp/forgejo.log 2>&1 &)
+  nginx
+  for _ in $(seq 60); do curl -fsS --cacert "$1" https://forgejo.nullbill.internal/api/healthz >/dev/null 2>&1 && return 0; sleep 1; done
+  tail -30 /tmp/forgejo.log
+  fail "forgejo healthy over HTTPS"
+}

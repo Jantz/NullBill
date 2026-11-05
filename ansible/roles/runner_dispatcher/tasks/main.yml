@@ -1,0 +1,89 @@
+- name: Tokens, PVE details and pools are set
+  ansible.builtin.assert:
+    that:
+      - runner_dispatcher_forgejo_token | length > 0
+      - runner_dispatcher_pve_token is match('^nb-dispatcher@pve!dispatcher=')
+      - runner_dispatcher_pve_url is match('^https://')
+      - runner_dispatcher_pve_ca | length > 0
+      - runner_dispatcher_node | length > 0
+      - runner_dispatcher_pools | length > 0
+    fail_msg: apply supplies the tokens, the PVE details and the pools from the plan
+
+- name: Certificate from the tls_cert role
+  ansible.builtin.stat:
+    path: "/etc/nullbill/tls/{{ runner_dispatcher_tls_name }}.key"
+  register: runner_dispatcher_tls_key
+
+- name: The certificate is in place
+  ansible.builtin.assert:
+    that: runner_dispatcher_tls_key.stat.exists and runner_dispatcher_tls_key.stat.gr_name == "nb-dispatcher"
+    fail_msg: "run tls-cert.yml for {{ runner_dispatcher_tls_name }} with tls_cert_group=nb-dispatcher first"
+
+- name: python3
+  ansible.builtin.apt:
+    name: python3
+    update_cache: true
+
+- name: Dispatcher user
+  ansible.builtin.user:
+    name: nb-dispatcher
+    group: nb-dispatcher
+    system: true
+    home: /nonexistent
+    create_home: false
+    shell: /usr/sbin/nologin
+
+- name: Secrets directory
+  ansible.builtin.file:
+    path: /etc/nullbill/dispatcher
+    state: directory
+    owner: root
+    group: nb-dispatcher
+    mode: "0750"
+
+- name: Tokens and PVE's root CA, readable by the dispatcher only
+  ansible.builtin.copy:
+    dest: "/etc/nullbill/dispatcher/{{ item.file }}"
+    content: "{{ item.value | trim }}\n"
+    owner: root
+    group: nb-dispatcher
+    mode: "0640"
+  loop:
+    - {file: forgejo-token, value: "{{ runner_dispatcher_forgejo_token }}"}
+    - {file: pve-token, value: "{{ runner_dispatcher_pve_token }}"}
+    - {file: pve-root-ca.pem, value: "{{ runner_dispatcher_pve_ca }}"}
+  loop_control:
+    label: "{{ item.file }}"
+  no_log: true
+  notify: Restart dispatcher
+
+- name: Dispatcher settings
+  ansible.builtin.template:
+    src: config.json.j2
+    dest: /etc/nullbill/dispatcher/config.json
+    owner: root
+    group: nb-dispatcher
+    mode: "0640"
+  notify: Restart dispatcher
+
+- name: Dispatcher
+  ansible.builtin.copy:
+    src: nb-dispatcher
+    dest: /usr/local/sbin/nb-dispatcher
+    mode: "0755"
+  notify: Restart dispatcher
+
+- name: Dispatcher unit
+  ansible.builtin.template:
+    src: nb-dispatcher.service.j2
+    dest: /etc/systemd/system/nb-dispatcher.service
+    mode: "0644"
+  notify: Restart dispatcher
+
+- name: Run the dispatcher
+  ansible.builtin.systemd_service:
+    name: nb-dispatcher
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: runner_dispatcher_manage_services | bool

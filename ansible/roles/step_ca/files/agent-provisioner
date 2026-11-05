@@ -26,9 +26,22 @@ def main(spec_path: str) -> None:
 
     if provisioner() is None:
         done = subprocess.run(
-            ["step", "ca", "provisioner", "add", spec["name"], "--type", "JWK", "--create",
-             "--password-file", spec["password_file"], "--ca-config", config],
-            capture_output=True, text=True,
+            [
+                "step",
+                "ca",
+                "provisioner",
+                "add",
+                spec["name"],
+                "--type",
+                "JWK",
+                "--create",
+                "--password-file",
+                spec["password_file"],
+                "--ca-config",
+                config,
+            ],
+            capture_output=True,
+            text=True,
         )
         if done.returncode != 0:
             sys.exit(f"step ca provisioner add: {done.stderr.strip()}")

@@ -38,16 +38,9 @@ test "$(stat -c '%U %a' /etc/forgejo/admin-password)" = "root 600" || fail "admi
 test -s /etc/forgejo/admin-password || fail "admin password written"
 nb-forgejo admin user list --admin | grep -q nullbill-admin || fail "administrator exists"
 
-# No init in the container: start Forgejo the way its unit does, and nginx.
-cd /var/lib/forgejo
-setpriv --reuid=git --regid=git --init-groups env HOME=/var/lib/forgejo USER=git \
-  /usr/local/bin/forgejo web --config /etc/forgejo/app.ini --work-path /var/lib/forgejo >/tmp/forgejo.log 2>&1 &
-cd /
-nginx
+start_forgejo /tmp/pki/ca.crt
 url=https://forgejo.nullbill.internal
 tls=(--cacert /tmp/pki/ca.crt)
-for _ in $(seq 60); do curl -fsS "${tls[@]}" "$url/api/healthz" >/dev/null 2>&1 && break; sleep 1; done
-curl -fsS "${tls[@]}" "$url/api/healthz" >/dev/null || { tail -30 /tmp/forgejo.log; fail "forgejo healthy over HTTPS"; }
 pass "forgejo answers over HTTPS with the step-ca certificate"
 basic=$(printf 'nullbill-admin:%s' "$(cat /etc/forgejo/admin-password)" | base64 -w0)
 curl -fsS "${tls[@]}" -H "Authorization: Basic $basic" "$url/api/v1/user" | grep -q '"is_admin":true' \
