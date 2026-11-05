@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run apply's real Reach and secrets codec against stand-ins: a controller
-# container with the pinned tools, a PVE host container reached over SSH
+# container set up by tools/setup-controller, a PVE host container reached over SSH
 # with a fake pct, and a VM container behind it. Needs docker and network.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
@@ -13,7 +13,10 @@ cleanup() {
   rm -rf "$ctx"
 }
 trap cleanup EXIT
-cp tools/apply-check/*.Dockerfile tools/apply-check/fake-pct requirements-apply.txt requirements-dev.txt tools/install-apply-deps "$ctx/"
+cp tools/apply-check/*.Dockerfile tools/apply-check/fake-pct "$ctx/"
+# The controller image gets this working tree, as install.sh would clone it.
+mkdir "$ctx/tree"
+git ls-files -co --exclude-standard -z | xargs -0 tar -cf - | tar -xf - -C "$ctx/tree"
 cat "${EXTRA_CA_FILE:-/dev/null}" > "$ctx/extra-ca.crt"
 docker build -q -t nullbill-apply-controller -f "$ctx/controller.Dockerfile" "$ctx" >/dev/null
 # A throwaway key for this run only, made where ssh-keygen surely exists.
@@ -31,11 +34,11 @@ docker network create --subnet 10.42.1.0/24 "$net" >/dev/null
 docker run -d --name "$net-pve" --network "$net" --ip 10.42.1.254 nullbill-apply-pve >/dev/null
 docker run -d --name "$net-vm" --network "$net" --ip 10.42.1.15 nullbill-apply-vm >/dev/null
 docker run --rm --network "$net" --ip 10.42.1.100 \
-  -v "$PWD:/repo:ro" -v "$ctx/id:/tmp/id:ro" \
-  -e NULLBILL_HOME=/nb-home -e PYTHONPATH=/repo/src \
+  -v "$ctx/id:/tmp/id:ro" -e NULLBILL_HOME=/nb-home \
   nullbill-apply-controller bash -c '
     set -euo pipefail
     install -d -m 0700 /root/.ssh /nb-home
-    install -m 0600 /tmp/id /root/.ssh/id_ed25519
+    # The throwaway key replaces the one setup-controller made.
+    install -m 0600 /tmp/id /root/.ssh/id_ed25519 && rm -f /root/.ssh/id_ed25519.pub
     for _ in $(seq 20); do ssh-keyscan -T 2 10.42.1.254 >/root/.ssh/known_hosts 2>/dev/null && [ -s /root/.ssh/known_hosts ] && break; sleep 0.5; done
-    python3 /repo/tools/apply-check/drive.py'
+    python3 /opt/nullbill/tools/apply-check/drive.py'

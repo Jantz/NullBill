@@ -11,8 +11,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, "/repo/tests")
-from conftest import fixture_config, write_raw  # noqa: E402
+sys.path.insert(0, "/opt/nullbill/tests")
+from fixturedata import fixture_config, write_raw  # noqa: E402
 
 from nullbill import apply  # noqa: E402
 from nullbill.artifacts import render_all  # noqa: E402
@@ -24,7 +24,7 @@ from nullbill.secretfile import Secrets, Sops  # noqa: E402
 
 TARGET = "root@10.42.1.254"
 HOME = Path(os.environ["NULLBILL_HOME"])
-REACH = "/repo/tools/apply-check/reach.yml"
+REACH = "/opt/nullbill/tools/apply-check/reach.yml"
 
 
 def ok(message: str) -> None:
@@ -60,7 +60,7 @@ def context() -> apply.Context:
     raw = write_raw(HOME / "raw", "mid")
     model = build_model(fixture_config("mid"))
     plan = build_plan(model, parse(raw))
-    reach = apply.SshReach(TARGET, Path("/opt/collections"), extra={"host_baseline_manage_services": False})
+    reach = apply.SshReach(TARGET, Path("/opt/nullbill/.ansible/collections"), extra={"host_baseline_manage_services": False})
     return apply.Context(plan, model, HOME, TARGET, reach, Secrets(Sops(HOME)), render_all(plan, model))
 
 
@@ -90,7 +90,7 @@ def check_guests(ctx: apply.Context) -> None:
         fail("a VM is reached through the host as jump host, as root")
     ok("VM reached as nullbill through the host, with sudo")
     try:
-        apply.run_playbook(ctx, "check", "/repo/tools/apply-check/missing.yml", "pbs")
+        apply.run_playbook(ctx, "check", "/opt/nullbill/tools/apply-check/missing.yml", "pbs")
     except NullBillError as exc:
         if "apply stopped at check" not in str(exc):
             fail(f"a failed playbook names its stage: {exc}")
