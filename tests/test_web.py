@@ -189,6 +189,14 @@ def test_choices_write_config_and_probe_gives_a_plan(site):
     client.call("/api/choices", {"workloads": ["agents", "linux-ci"], "backups": True, "owner_login": "owner-a@example.internal"})
     assert "services" not in yaml.safe_load((app.home / "config.yaml").read_text())
     assert fixture_config("small")["intent"] == yaml.safe_load((app.home / "config.yaml").read_text())["intent"]
+    # The on-site screen: on, then off again leaves no host key behind.
+    on = {"workloads": ["agents", "linux-ci"], "console": True, "owner_login": "owner-a@example.internal"}
+    client.call("/api/choices", on)
+    assert yaml.safe_load((app.home / "config.yaml").read_text())["host"] == {"console": {"enabled": True}}
+    assert client.call("/api/state")[1]["choices"]["console"] is True
+    assert "console:\n    enabled: true" in client.call("/api/state")[1]["plan"]["text"]
+    client.call("/api/choices", {**on, "console": False})
+    assert "host" not in yaml.safe_load((app.home / "config.yaml").read_text())
 
 
 def test_jobs_report_failure_and_offsets(site):

@@ -1,0 +1,7 @@
+# The on-site screen on the PVE host; apply's host stage runs it after the
+# baseline with console_enabled from the plan.
+- name: On-site screen
+  hosts: all
+  become: false
+  roles:
+    - console

@@ -214,6 +214,7 @@ class App:
         return {
             "workloads": config.get("intent", {}).get("workloads", ["agents", "linux-ci"]),
             "backups": config.get("services", {}).get("pbs", {}).get("enabled", True),
+            "console": config.get("host", {}).get("console", {}).get("enabled", False),
             "owner_login": owner,
         }
 
@@ -239,6 +240,15 @@ class App:
             services["pbs"] = {**services.get("pbs", {}), "enabled": False}
         if not services:
             del config["services"]
+        host = config.setdefault("host", {})
+        if body.get("console"):
+            host["console"] = {**host.get("console", {}), "enabled": True}
+        else:
+            host.get("console", {}).pop("enabled", None)
+            if host.get("console") == {}:
+                del host["console"]
+        if not host:
+            del config["host"]
         build_model(config)  # validates against the schema before anything is written
         _write_private(self.home / "config.yaml", yaml.safe_dump(config, sort_keys=False))
 

@@ -76,6 +76,7 @@ async function refresh() {
   $("probed").textContent = state.probed ? "Done." : "";
   renderWorkloads(state);
   $("backups").checked = state.choices.backups;
+  $("console").checked = state.choices.console;
   $("owner-login").value = state.choices.owner_login;
   renderPlan(state.plan);
   renderAlerts(state.alerts);
@@ -124,7 +125,7 @@ document.addEventListener("DOMContentLoaded", () => {
     event.preventDefault();
     const workloads = [...$("workloads").querySelectorAll("input:checked")].map((i) => i.value);
     try {
-      const result = await api("/api/choices", {workloads, backups: $("backups").checked, owner_login: $("owner-login").value});
+      const result = await api("/api/choices", {workloads, backups: $("backups").checked, console: $("console").checked, owner_login: $("owner-login").value});
       renderPlan(result.plan);
       $("plan-details").open = true;
     } catch (error) { showError(error); }

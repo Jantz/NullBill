@@ -1,0 +1,3 @@
+- name: Restart console
+  ansible.builtin.systemd_service: {name: nullbill-console, state: restarted, daemon_reload: true}
+  when: console_manage_services | bool and console_enabled | bool

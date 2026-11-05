@@ -89,6 +89,19 @@ links to the PVE UI, Grafana and Forgejo.
   which a server that is off cannot do for itself. When the host starts
   again, a HostStarted alert says so.
 
+**On-site screen (optional, owner 2026-11-05).** When `host.console` is
+on, the host runs cage, a Wayland kiosk compositor, with Chromium on tty1,
+showing the NullBill page and nothing else: a managed browser policy blocks
+every other address, DevTools, downloads and printing. Chromium pins the
+page certificate's key, so the self-signed certificate is trusted and no
+other. The keyboard and mouse use the same page and password as remote
+access. Ctrl+Alt+F2 still reaches PVE's own text console as the way in when
+everything else is broken. It costs about 512 MiB of host memory, so it is
+off by default; the plan adds that to the host reserve and fails when every
+GPU is passed through to a VM. The alternative of a VM with a passed-through
+GPU would take the GPU and more memory; a full desktop on the host would
+add far more packages to the one machine that must not break.
+
 **Agents.**
 
 - *Agents on the server* run in the operator container (ADR 0002/0003). The

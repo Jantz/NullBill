@@ -36,6 +36,12 @@ answered items move to the decisions list at the bottom.
 7. **Windows Update.** Not managed yet; the plan lists Windows guests under
    `updates.not_managed`. Recommendation: Group Policy for automatic
    install and an exporter for update age, when Windows work starts.
+8. **On-site screen.** Plug the monitor into the motherboard's output: the
+   i9-9900K's integrated graphics then drive it and the RTX 4070 stays free
+   for guests. Some boards switch integrated graphics off when a graphics
+   card is present; look for "iGPU multi-monitor" or "integrated graphics:
+   enabled" in the BIOS. Recommendation: switch the screen on in the setup
+   page only if you want it; it costs about 512 MB.
 
 ## Defaults picked for cosmetic choices
 
