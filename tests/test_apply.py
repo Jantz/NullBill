@@ -36,8 +36,11 @@ class FakeReach:
     """Records every call; the PVE host's files live in self.files and its
     API tokens in self.tokens."""
 
-    def __init__(self, fail_playbook=None, fail_local=None):
+    def __init__(self, fail_playbook=None, fail_local=None, flaky=None):
         self.calls = []
+        # A local command, by the start of its command line (or all of it,
+        # ending in $), and how often it fails before it works.
+        self.flaky = dict(flaky or {})
         self.files = {}
         self.tokens = []
         self.envs = []
@@ -161,6 +164,11 @@ class FakeReach:
             return self.vm(argv[-2], argv[-1])
         if argv[:2] == ["tofu", "apply"] and any(a.startswith("-replace=") for a in argv):
             self.templates.clear()  # OpenTofu made a fresh, plain VM
+        for start, left in self.flaky.items():
+            line = " ".join(argv)
+            if left and (line == start[:-1] if start.endswith("$") else line.startswith(start)):
+                self.flaky[start] = left - 1
+                return 1, ""
         return (2 if argv[:2] == self.fail_local else 0), ("secret-token" if capture else "")
 
     def vm(self, login, command):
@@ -743,10 +751,14 @@ def test_tofu_stage_runs_init_and_apply_with_everything_in_the_environment(ctx):
     c = ctx("small")
     apply.stage_tofu(c)
     local = [call for call in c.reach.calls if call[0] == "local"]
-    assert [call[1][:2] for call in local] == [["tofu", "init"], ["tofu", "apply"]]
+    assert [call[1][:2] for call in local] == [["tofu", "init"], ["tofu", "apply"], ["tofu", "apply"]]
+    # The image downloads first, on their own, then everything.
+    downloads = json.loads(c.files["tofu/main.tf.json"])["resource"]["proxmox_download_file"]
+    assert local[1][1][5:] == [f"-target=proxmox_download_file.{name}" for name in sorted(downloads)]
+    assert local[2][1] == ["tofu", "apply", "-auto-approve", "-input=false", "-no-color"]
     assert all(call[2] == c.home / "tofu" for call in local)
     assert (c.home / "tofu" / "main.tf.json").read_text() == c.files["tofu/main.tf.json"]
-    init_env, env = c.reach.envs
+    init_env, _, env = c.reach.envs
     assert "SSL_CERT_FILE" not in init_env
     assert env["SSL_CERT_FILE"] == str(c.home / "pve-root-ca.pem")
     assert env["PROXMOX_VE_API_TOKEN"].startswith("root@pam!nullbill=uuid-")
@@ -785,9 +797,34 @@ def test_tofu_token_is_kept_and_remade_when_the_host_lost_it(ctx):
     assert apply.api_token(c) != first
 
 
-def test_tofu_failure_stops_apply(ctx):
+def test_tofu_downloads_are_retried_with_growing_pauses_and_then_give_up(ctx, monkeypatch):
+    pauses = []
+    monkeypatch.setattr(apply, "sleep", pauses.append)
+    c = ctx("small", reach=FakeReach(flaky={"tofu init": 1, "tofu apply -auto-approve -input=false -no-color -target=": 2}))
+    apply.stage_tofu(c)
+    assert pauses == [15, 15, 60]
+    assert "tofu: tofu apply (downloads) failed (exit 1); trying again in 60 s" in c.log
+    assert "/etc/systemd/system/nullbill-routes.service" in c.reach.files
+
+    pauses.clear()
+    c = ctx("small", reach=FakeReach(flaky={"tofu init": 9}))
+    with pytest.raises(ApplyError, match="tofu init failed"):
+        apply.stage_tofu(c)
+    assert pauses == list(apply.DOWNLOAD_RETRY_S)
+    assert not [call for call in c.reach.calls if call[0] == "local" and call[1][:2] == ["tofu", "apply"]]
+
+
+def test_full_tofu_apply_is_not_retried(ctx, monkeypatch):
+    monkeypatch.setattr(apply, "sleep", lambda s: pytest.fail("slept"))
+    c = ctx("small", reach=FakeReach(flaky={"tofu apply -auto-approve -input=false -no-color$": 1}))
+    with pytest.raises(ApplyError, match=r"tofu: tofu apply failed \(exit 1\)"):
+        apply.stage_tofu(c)
+
+
+def test_tofu_failure_stops_apply(ctx, monkeypatch):
+    monkeypatch.setattr(apply, "sleep", lambda s: None)
     c = ctx("small", reach=FakeReach(fail_local=["tofu", "apply"]))
-    with pytest.raises(ApplyError, match="apply stopped at tofu: tofu apply failed"):
+    with pytest.raises(ApplyError, match=r"apply stopped at tofu: tofu apply \(downloads\) failed"):
         apply.stage_tofu(c)
     assert "/etc/systemd/system/nullbill-routes.service" not in c.reach.files
 

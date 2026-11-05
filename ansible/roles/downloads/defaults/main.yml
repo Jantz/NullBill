@@ -1,0 +1,8 @@
+# Retries for downloads on a line that drops now and then. apt retries each
+# file with its own growing pause (1 s, 2 s, ... up to 60 s); get_url
+# (tasks/fetch.yml) tries downloads_retries more times, downloads_delay
+# seconds apart, about two minutes in all. The checksum is checked on
+# every try, so a bad mirror still fails.
+downloads_apt_retries: 6
+downloads_retries: 6
+downloads_delay: 20

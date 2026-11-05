@@ -88,12 +88,15 @@
     mode: "0755"
 
 - name: Agent CLI package, checked against its pinned checksum
-  ansible.builtin.get_url:
-    url: "{{ operator_claude_code_url }}"
-    dest: "/opt/claude-code/{{ operator_claude_code_version }}/package.tgz"
-    checksum: "sha512:{{ operator_claude_code_sha512 }}"
-    mode: "0644"
-  environment: "{{ {'https_proxy': operator_proxy_url} if operator_proxy_url else {} }}"
+  ansible.builtin.include_role:
+    name: downloads
+    tasks_from: fetch
+  vars:
+    downloads_url: "{{ operator_claude_code_url }}"
+    downloads_dest: "/opt/claude-code/{{ operator_claude_code_version }}/package.tgz"
+    downloads_checksum: "sha512:{{ operator_claude_code_sha512 }}"
+    downloads_mode: "0644"
+    downloads_proxy: "{{ operator_proxy_url }}"
 
 - name: Agent CLI binary
   ansible.builtin.unarchive:

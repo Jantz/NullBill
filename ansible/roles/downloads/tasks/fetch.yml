@@ -1,0 +1,15 @@
+# One pinned download, retried. Include with tasks_from: fetch and
+# downloads_url, downloads_dest, downloads_checksum ("<algo>:<hex>"), and
+# optionally downloads_mode and downloads_proxy (an https_proxy URL).
+- name: "Fetch {{ downloads_dest | basename }}"
+  ansible.builtin.get_url:
+    url: "{{ downloads_url }}"
+    dest: "{{ downloads_dest }}"
+    checksum: "{{ downloads_checksum }}"
+    mode: "{{ downloads_mode | default('0644') }}"
+    timeout: 60
+  environment: "{{ {'https_proxy': downloads_proxy} if downloads_proxy | default('') else {} }}"
+  register: downloads_result
+  until: downloads_result is succeeded
+  retries: "{{ downloads_retries }}"
+  delay: "{{ downloads_delay }}"

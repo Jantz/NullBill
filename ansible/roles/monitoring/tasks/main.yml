@@ -25,11 +25,14 @@
     mode: "0755"
 
 - name: Grafana repository key
-  ansible.builtin.get_url:
-    url: https://apt.grafana.com/gpg.key
-    dest: /etc/apt/keyrings/grafana.asc
-    checksum: "sha256:{{ monitoring_grafana_repo_signer_sha256 }}"
-    mode: "0644"
+  ansible.builtin.include_role:
+    name: downloads
+    tasks_from: fetch
+  vars:
+    downloads_url: https://apt.grafana.com/gpg.key
+    downloads_dest: /etc/apt/keyrings/grafana.asc
+    downloads_checksum: "sha256:{{ monitoring_grafana_repo_signer_sha256 }}"
+    downloads_mode: "0644"
 
 - name: Grafana repository
   register: monitoring_repo

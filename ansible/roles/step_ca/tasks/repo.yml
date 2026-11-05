@@ -6,11 +6,14 @@
     mode: "0755"
 
 - name: Smallstep repository key
-  ansible.builtin.get_url:
-    url: "{{ step_ca_repo_key_url }}"
-    dest: /etc/apt/keyrings/smallstep.asc
-    checksum: "sha256:{{ step_ca_repo_signer_sha256 }}"
-    mode: "0644"
+  ansible.builtin.include_role:
+    name: downloads
+    tasks_from: fetch
+  vars:
+    downloads_url: "{{ step_ca_repo_key_url }}"
+    downloads_dest: /etc/apt/keyrings/smallstep.asc
+    downloads_checksum: "sha256:{{ step_ca_repo_signer_sha256 }}"
+    downloads_mode: "0644"
 
 - name: Smallstep repository
   register: step_ca_repo

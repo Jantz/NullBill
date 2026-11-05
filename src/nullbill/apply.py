@@ -42,6 +42,7 @@ PVE_FIREWALL = "/etc/pve/firewall"
 # Alerts go to a ntfy.sh topic named by a random string NullBill makes (no
 # account needed); the page makes the topic, apply hands it to monitoring.
 NTFY = "https://ntfy.sh/"
+DOWNLOAD_RESOURCE = "proxmox_download_file"
 
 
 class Reach(Protocol):
@@ -307,18 +308,37 @@ FIRST_BACKUP_S = 3 * 3600
 PBS_VARS = ("pbs_fingerprint", "pbs_token_secret", "pbs_encryption_key")
 
 
-def run_tofu(ctx: Context, stage: str, init: bool, replace: tuple[str, ...] = ()) -> None:
+# Pauses between tries of a download: tofu init's provider and the images
+# PVE fetches for OpenTofu. A residential line drops for seconds to minutes;
+# a real error still fails after the last try. Tries are idempotent.
+DOWNLOAD_RETRY_S = (15, 60, 180)
+sleep = time.sleep
+
+
+def run_tofu(ctx: Context, stage: str, init: bool, replace: tuple[str, ...] = (), downloads: bool = False) -> None:
+    """init (when asked), then, with downloads, an apply of the image
+    downloads alone, both retried; then the full apply, run once."""
     work = ctx.home / "tofu"
     env = tofu_env(ctx, stage)
     # init fetches the provider from the registry, so it keeps the system CAs.
     init_env = {k: v for k, v in env.items() if k != "SSL_CERT_FILE"}
-    steps = [(["tofu", "init", "-input=false", "-no-color"], init_env)] if init else []
-    steps.append((["tofu", "apply", "-auto-approve", "-input=false", "-no-color", *(f"-replace={a}" for a in replace)], env))
-    for argv, extra in steps:
-        ctx.say(f"{stage}: {' '.join(argv[:2])}")
-        rc, _ = ctx.reach.local(argv, work, extra)
-        if rc != 0:
-            raise ApplyError(stage, f"{' '.join(argv[:2])} failed (exit {rc})")
+    apply_argv = ["tofu", "apply", "-auto-approve", "-input=false", "-no-color"]
+    steps = [(["tofu", "init", "-input=false", "-no-color"], init_env, True)] if init else []
+    if downloads:
+        targets = sorted(json.loads(ctx.files["tofu/main.tf.json"])["resource"].get(DOWNLOAD_RESOURCE, {}))
+        steps.append(([*apply_argv, *(f"-target={DOWNLOAD_RESOURCE}.{t}" for t in targets)], env, True))
+    steps.append(([*apply_argv, *(f"-replace={a}" for a in replace)], env, False))
+    for argv, extra, retried in steps:
+        what = " ".join(argv[:2]) + (" (downloads)" if any(a.startswith("-target=") for a in argv) else "")
+        for pause in (*DOWNLOAD_RETRY_S, None) if retried else (None,):
+            ctx.say(f"{stage}: {what}")
+            rc, _ = ctx.reach.local(argv, work, extra)
+            if rc == 0:
+                break
+            if pause is None:
+                raise ApplyError(stage, f"{what} failed (exit {rc})")
+            ctx.say(f"{stage}: {what} failed (exit {rc}); trying again in {pause} s")
+            sleep(pause)
 
 
 def backup_disk(ctx: Context) -> None:
@@ -339,7 +359,7 @@ def stage_tofu(ctx: Context) -> None:
     (work / "main.tf.json").write_text(ctx.files["tofu/main.tf.json"])
     windows_iso(ctx, "tofu")
     backup_disk(ctx)
-    run_tofu(ctx, "tofu", init=True)
+    run_tofu(ctx, "tofu", init=True, downloads=True)
     # The host reaches the zones through the router, not its LAN gateway.
     host_files(ctx, "tofu", "/etc/systemd/system", {ROUTES_UNIT: routes_unit(ctx)})
     host_out(ctx, "tofu", f"systemctl daemon-reload && systemctl enable -q {ROUTES_UNIT} && systemctl restart {ROUTES_UNIT}")

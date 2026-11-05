@@ -52,12 +52,15 @@
     mode: "0755"
 
 - name: Forgejo Runner at the pinned version
-  ansible.builtin.get_url:
-    url: "{{ ci_runner_url }}"
-    dest: "/opt/forgejo-runner/{{ ci_runner_version }}/forgejo-runner"
-    checksum: "sha256:{{ ci_runner_sha256 }}"
-    mode: "0755"
-  environment: "{{ {'https_proxy': ci_runner_proxy_url} if ci_runner_proxy_url else {} }}"
+  ansible.builtin.include_role:
+    name: downloads
+    tasks_from: fetch
+  vars:
+    downloads_url: "{{ ci_runner_url }}"
+    downloads_dest: "/opt/forgejo-runner/{{ ci_runner_version }}/forgejo-runner"
+    downloads_checksum: "sha256:{{ ci_runner_sha256 }}"
+    downloads_mode: "0755"
+    downloads_proxy: "{{ ci_runner_proxy_url }}"
 
 - name: Forgejo Runner on the path
   ansible.builtin.file:

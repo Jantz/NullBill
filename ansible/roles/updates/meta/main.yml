@@ -1,0 +1,3 @@
+# apt and pinned fetches retry on a flaky line.
+dependencies:
+  - role: downloads

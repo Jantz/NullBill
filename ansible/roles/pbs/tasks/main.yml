@@ -84,13 +84,15 @@
       when: pbs_manage_services | bool
 
 - name: Proxmox release key
-  ansible.builtin.get_url:
-    url: "{{ pbs_signer_url }}"
-    dest: /usr/share/keyrings/proxmox-archive-keyring.gpg
-    checksum: "sha256:{{ pbs_signer_sha256 }}"
-    mode: "0644"
-  environment:
-    https_proxy: "{{ pbs_proxy_url }}"
+  ansible.builtin.include_role:
+    name: downloads
+    tasks_from: fetch
+  vars:
+    downloads_url: "{{ pbs_signer_url }}"
+    downloads_dest: /usr/share/keyrings/proxmox-archive-keyring.gpg
+    downloads_checksum: "sha256:{{ pbs_signer_sha256 }}"
+    downloads_mode: "0644"
+    downloads_proxy: "{{ pbs_proxy_url }}"
 
 - name: PBS no-subscription repository
   ansible.builtin.copy:

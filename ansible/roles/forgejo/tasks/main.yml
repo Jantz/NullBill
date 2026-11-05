@@ -75,11 +75,14 @@
     mode: "0755"
 
 - name: Forgejo at the pinned version
-  ansible.builtin.get_url:
-    url: "{{ forgejo_url }}"
-    dest: "/opt/forgejo/{{ forgejo_version }}/forgejo"
-    checksum: "sha256:{{ forgejo_sha256 }}"
-    mode: "0755"
+  ansible.builtin.include_role:
+    name: downloads
+    tasks_from: fetch
+  vars:
+    downloads_url: "{{ forgejo_url }}"
+    downloads_dest: "/opt/forgejo/{{ forgejo_version }}/forgejo"
+    downloads_checksum: "sha256:{{ forgejo_sha256 }}"
+    downloads_mode: "0755"
 
 - name: Forgejo on the path
   ansible.builtin.file:

@@ -5,11 +5,14 @@
     mode: "0755"
 
 - name: Tailscale repository key
-  ansible.builtin.get_url:
-    url: "{{ vpn_repo_key_url }}"
-    dest: /usr/share/keyrings/tailscale-archive-keyring.gpg
-    checksum: "sha256:{{ vpn_repo_signer_sha256 }}"
-    mode: "0644"
+  ansible.builtin.include_role:
+    name: downloads
+    tasks_from: fetch
+  vars:
+    downloads_url: "{{ vpn_repo_key_url }}"
+    downloads_dest: /usr/share/keyrings/tailscale-archive-keyring.gpg
+    downloads_checksum: "sha256:{{ vpn_repo_signer_sha256 }}"
+    downloads_mode: "0644"
 
 - name: Tailscale repository
   ansible.builtin.copy:
