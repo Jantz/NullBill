@@ -5,7 +5,7 @@ import json
 import pytest
 from conftest import fixture_config
 
-from nullbill import agent
+from nullbill import agent, ci
 from nullbill.artifacts import render_all
 from nullbill.errors import NullBillError
 from nullbill.model import build_model
@@ -33,19 +33,22 @@ def test_pool_holds_only_agent_managed_guests(facts):
         for name, guest in res[kind].items()
         if guest.get("pool_id") == agent.POOL
     }
-    assert in_pool == set(agent.managed(strip_notes(plan)))
+    # A pool service's template sits in no pool; its clones join the CI pool.
+    assert in_pool == {n for n, g in agent.managed(strip_notes(plan)).items() if g["kind"] != "vm-pool"}
     assert in_pool and not in_pool & set(NEVER)
-    assert {"workspace", "linux-runner", "inference"} <= in_pool
+    assert {"workspace", "inference"} <= in_pool
     assert not in_pool & {"runner-dispatcher", "model-gateway", "windows-dev", "forgejo", "postgres"}
 
 
-def test_token_is_separated_and_holds_two_grants(facts):
+def test_token_is_separated_and_holds_three_grants(facts):
     plan, model = planned(facts, "small")
     res = json.loads(render_tofu(plan, model)["main.tf.json"])["resource"]
     assert res["proxmox_virtual_environment_role"]["agent"]["privileges"] == ["VM.PowerMgmt", "VM.Snapshot"]
     assert res["proxmox_user_token"]["agent"]["privileges_separation"] is True
     grants = {(a.get("user_id") or a.get("token_id"), a["path"], a["role_id"]) for a in res["proxmox_acl"].values()}
-    expected = {("/", "PVEAuditor"), (f"/pool/{agent.POOL}", agent.ROLE)}
+    # The CI pool holds clones of the agent-managed linux-runner.
+    expected = {("/", "PVEAuditor"), (f"/pool/{agent.POOL}", agent.ROLE), (f"/pool/{ci.POOL}", agent.ROLE)}
+    grants = {g for g in grants if g[0] in (agent.USER, agent.TOKEN_ID)}
     assert grants == {(who, p, r) for who in (agent.USER, agent.TOKEN_ID) for p, r in expected}
     assert "password" not in res["proxmox_virtual_environment_user"]["agent"]
 

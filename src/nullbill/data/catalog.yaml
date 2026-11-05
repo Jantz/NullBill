@@ -21,7 +21,8 @@ host:
     memory_mib: 4096
   # The operator holds the agent's API token, so it reaches the API only.
   ports:
-    - {port: 8006, proto: tcp, from: ["role:owner", "service:operator"]}
+    # The runner dispatcher's token may only clone runners (ci.py).
+    - {port: 8006, proto: tcp, from: ["role:owner", "service:operator", "service:runner-dispatcher"]}
     - {port: 22, proto: tcp, from: ["role:owner"]}
 
 zones:
@@ -147,7 +148,7 @@ services:
     workload: core
     floor: {cores: 1, memory_mib: 1024, disk_gib: 32}
     ports:
-      - {port: 443, proto: tcp, from: ["role:owner", "role:default", "zone:build", "zone:windows"]}
+      - {port: 443, proto: tcp, from: ["role:owner", "role:default", "zone:build", "zone:windows", "service:runner-dispatcher"]}
       - {port: 22, proto: tcp, from: ["role:owner", "role:default"]}
   runner-dispatcher:
     id: 18
@@ -156,6 +157,9 @@ services:
     workload: linux-ci
     description: Clones a golden VM per job. Lives outside build.
     floor: {cores: 1, memory_mib: 256, disk_gib: 4}
+    ports:
+      # Each clone fetches its one-time runner registration here at boot.
+      - {port: 8443, proto: tcp, from: ["zone:build"]}
   linux-runner:
     id: 30
     kind: vm-pool

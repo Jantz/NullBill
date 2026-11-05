@@ -9,7 +9,7 @@ variables and environment, never part of the rendered files.
 
 import json
 
-from nullbill import agent, backups
+from nullbill import agent, backups, ci
 from nullbill.flows import mac
 from nullbill.render import strip_notes
 
@@ -138,7 +138,7 @@ def _vm(name: str, guest: dict, plan: dict, model: dict, storage: str) -> dict:
         "node_name": NODE,
         "vm_id": guest["template_vmid"] if pool else guest["vmid"],
         "name": name,
-        "description": f"nullbill {name}" + (" golden image; clones are made per job" if pool else ""),
+        "description": f"nullbill {name}" + (" golden image; apply bakes it, the dispatcher clones it per job" if pool else ""),
         "tags": TAGS,
         "on_boot": not pool,
         "started": not pool,
@@ -173,7 +173,8 @@ def _vm(name: str, guest: dict, plan: dict, model: dict, storage: str) -> dict:
         }
     else:
         vm |= {
-            "template": pool,
+            # apply bakes a pool's golden image, then converts it (ci.py).
+            "template": False,
             "operating_system": {"type": "l26"},
             # Debian cloud images log to a serial console.
             "serial_device": [{"device": "socket"}],
@@ -195,6 +196,10 @@ def _vm(name: str, guest: dict, plan: dict, model: dict, storage: str) -> dict:
             },
         }
     vm["depends_on"] = [_bridge_ref(b) for b in bridges]
+    if pool:
+        vm["lifecycle"] = {"ignore_changes": ["template"]}
+        # In no pool: the dispatcher may clone it, nobody may start or change it.
+        return vm
     return _in_agent_pool(vm, guest)
 
 
@@ -245,37 +250,82 @@ def _backup_resources(plan: dict) -> dict:
     }
 
 
-def _agent_resources() -> dict:
-    """The agent's pool, role, user, token and ACLs. ACLs go to both the user
-    and the privilege-separated token, whose rights are the overlap."""
-    pool = "proxmox_virtual_environment_pool.agent_managed"
-    role = "proxmox_virtual_environment_role.agent"
-    token = "proxmox_user_token.agent"
-    grants = {"auditor": ("/", "PVEAuditor", []), "pool": (f"/pool/{agent.POOL}", agent.ROLE, [pool, role])}
+def _acls(prefix: str, user: str, token_id: str, grants: dict[str, tuple[str, str, list[str]]]) -> dict:
+    """The same ACLs for a user and its privilege-separated token, whose
+    rights are the overlap of the two."""
     acls = {}
     for holder, key, value, needs in (
-        ("user", "user_id", agent.USER, ["proxmox_virtual_environment_user.agent"]),
-        ("token", "token_id", agent.TOKEN_ID, [token]),
+        ("user", "user_id", user, [f"proxmox_virtual_environment_user.{prefix}"]),
+        ("token", "token_id", token_id, [f"proxmox_user_token.{prefix}"]),
     ):
         for grant, (path, role_id, deps) in grants.items():
-            acls[f"agent_{holder}_{grant}"] = {"path": path, "role_id": role_id, key: value, "propagate": True, "depends_on": deps + needs}
+            acls[f"{prefix}_{holder}_{grant}"] = {
+                "path": path,
+                "role_id": role_id,
+                key: value,
+                "propagate": True,
+                "depends_on": deps + needs,
+            }
+    return acls
+
+
+def _identity(prefix: str, user: str, token: str, comment: str) -> dict:
     return {
+        "proxmox_virtual_environment_user": {prefix: {"user_id": user, "enabled": True, "comment": comment}},
+        "proxmox_user_token": {
+            prefix: {
+                "user_id": f"${{proxmox_virtual_environment_user.{prefix}.user_id}}",
+                "token_name": token,
+                "privileges_separation": True,
+                "comment": f"nullbill {token}",
+            }
+        },
+    }
+
+
+CI_POOL = "proxmox_virtual_environment_pool.ci"
+
+
+def _agent_resources(plan: dict) -> dict:
+    """The agent's pool, role, user, token and ACLs. Agent-managed pool
+    services are cloned into the CI pool, so the agent's role covers it too."""
+    pool = "proxmox_virtual_environment_pool.agent_managed"
+    role = "proxmox_virtual_environment_role.agent"
+    grants = {"auditor": ("/", "PVEAuditor", []), "pool": (f"/pool/{agent.POOL}", agent.ROLE, [pool, role])}
+    if any(g.get("agent_managed") for g in ci.pools(plan).values()):
+        grants["ci_pool"] = (f"/pool/{ci.POOL}", agent.ROLE, [CI_POOL, role])
+    resources = _identity("agent", agent.USER, agent.TOKEN, "Runtime agent; token only, in the operator container")
+    resources["proxmox_user_token"]["agent"]["comment"] = "nullbill operator"
+    return resources | {
         "proxmox_virtual_environment_pool": {
             "agent_managed": {"pool_id": agent.POOL, "comment": "Guests the agent may power-manage and snapshot"}
         },
         "proxmox_virtual_environment_role": {"agent": {"role_id": agent.ROLE, "privileges": agent.PRIVILEGES}},
-        "proxmox_virtual_environment_user": {
-            "agent": {"user_id": agent.USER, "enabled": True, "comment": "Runtime agent; token only, in the operator container"}
+        "proxmox_acl": _acls("agent", agent.USER, agent.TOKEN_ID, grants),
+    }
+
+
+def _ci_resources(plan: dict) -> dict:
+    """The CI pool, and the dispatcher's roles, user, token and ACLs."""
+    role, source = "proxmox_virtual_environment_role.dispatcher", "proxmox_virtual_environment_role.clone_source"
+    grants = {
+        "pool": (f"/pool/{ci.POOL}", ci.ROLE, [CI_POOL, role]),
+        "storage": (f"/storage/{plan['disk']['storage']}", ci.STORAGE_ROLE, []),
+    }
+    for name, guest in ci.pools(plan).items():
+        bridge = plan["zones"][guest["zone"]]["bridge"]
+        grants[f"template_{_tf_name(name)}"] = (
+            f"/vms/{guest['template_vmid']}",
+            ci.SOURCE_ROLE,
+            [source, f"proxmox_virtual_environment_vm.{name}"],
+        )
+        grants[f"bridge_{bridge}"] = (f"/sdn/zones/localnetwork/{bridge}", ci.BRIDGE_ROLE, [_bridge_ref(bridge)])
+    return _identity("dispatcher", ci.USER, ci.TOKEN, "Runner dispatcher; token only, in its container") | {
+        "proxmox_virtual_environment_role": {
+            "dispatcher": {"role_id": ci.ROLE, "privileges": ci.PRIVILEGES},
+            "clone_source": {"role_id": ci.SOURCE_ROLE, "privileges": ci.SOURCE_PRIVILEGES},
         },
-        "proxmox_user_token": {
-            "agent": {
-                "user_id": "${proxmox_virtual_environment_user.agent.user_id}",
-                "token_name": agent.TOKEN,
-                "privileges_separation": True,
-                "comment": "nullbill operator",
-            }
-        },
-        "proxmox_acl": acls,
+        "proxmox_acl": _acls("dispatcher", ci.USER, ci.TOKEN_ID, grants),
     }
 
 
@@ -324,8 +374,16 @@ def render_tofu(plan_with_notes: dict, model: dict) -> dict[str, str]:
     }
     if backups.enabled(plan):
         config["resource"] |= _backup_resources(plan)
-    config["resource"] |= _agent_resources()
-    # apply installs this in the operator container; it never reaches a file
-    # on the controller.
+    # apply installs each token in its container; neither reaches a file on
+    # the controller.
     config["output"] = {"agent_token": {"value": "${proxmox_user_token.agent.value}", "sensitive": True}}
+    resource = config["resource"]
+    for kind, items in _agent_resources(plan).items():
+        resource[kind] = resource.get(kind, {}) | items
+    if ci.pools(plan):
+        resource["proxmox_virtual_environment_pool"]["ci"] = {"pool_id": ci.POOL, "comment": "Runner clones, one per CI job"}
+    if ci.pools(plan) and "runner-dispatcher" in plan["guests"]:
+        for kind, items in _ci_resources(plan).items():
+            resource[kind] = resource.get(kind, {}) | items
+        config["output"]["dispatcher_token"] = {"value": "${proxmox_user_token.dispatcher.value}", "sensitive": True}
     return {"main.tf.json": json.dumps(config, indent=2) + "\n"}

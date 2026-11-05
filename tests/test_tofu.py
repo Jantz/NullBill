@@ -44,7 +44,10 @@ def test_guests_match_plan(facts):
     forgejo = res["proxmox_virtual_environment_container"]["forgejo"]
     assert forgejo["initialization"]["ip_config"]["ipv4"] == {"address": "10.42.2.17/24", "gateway": "10.42.2.1"}
     assert forgejo["network_interface"][0]["bridge"] == "vmbr102"
-    assert res["proxmox_virtual_environment_vm"]["linux-runner"]["template"] is True
+    # apply bakes the golden image and converts it; OpenTofu leaves that alone.
+    runner = res["proxmox_virtual_environment_vm"]["linux-runner"]
+    assert runner["template"] is False and runner["started"] is False
+    assert runner["lifecycle"] == {"ignore_changes": ["template"]}
 
 
 def test_router_macs_match_its_link_files(facts):

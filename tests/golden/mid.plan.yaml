@@ -151,6 +151,8 @@ guests:
     template_vmid: 2030
     # Clones take DHCP leases from this range.
     clone_range: 10.42.3.128/26
+    # The dispatcher clones one per queued job into these.
+    clone_vmids: 6000-6005
     agent_managed: true
   workspace:
     kind: lxc
@@ -189,6 +191,8 @@ guests:
     template_vmid: 2031
     # Clones take DHCP leases from this range.
     clone_range: 10.42.5.128/26
+    # The dispatcher clones one per queued job into these.
+    clone_vmids: 6100-6102
     agent_managed: true
   windows-dev:
     kind: vm
@@ -248,8 +252,10 @@ flows:
   - role:default -> forgejo tcp/443
   - zone:build -> forgejo tcp/443
   - zone:windows -> forgejo tcp/443
+  - service:runner-dispatcher -> forgejo tcp/443
   - role:owner -> forgejo tcp/22
   - role:default -> forgejo tcp/22
+  - zone:build -> runner-dispatcher tcp/8443
   - service:operator -> linux-runner tcp/22
   - role:default -> workspace tcp/22
   - role:owner -> workspace tcp/22
@@ -260,6 +266,7 @@ flows:
   - role:owner -> windows-dev tcp/3389
   - role:owner -> the PVE host tcp/8006
   - service:operator -> the PVE host tcp/8006
+  - service:runner-dispatcher -> the PVE host tcp/8006
   - role:owner -> the PVE host tcp/22
 people:
   owner-a: owner

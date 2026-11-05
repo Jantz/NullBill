@@ -99,10 +99,12 @@ def probes(plan_with_notes: dict, model: dict, public_ip: str) -> tuple[list[Pro
         name = f"router.{plan['domain']}"
         cmd = f"timeout {TIMEOUT_S} getent ahostsv4 {name} >/dev/null; echo rc=$?"
         out.append(Probe(f"{rep} ({zone}) resolves {name} via {router}", vmid, cmd, "open", "dns"))
-    operator = plan["guests"].get("operator")
-    if operator and operator["kind"] == "lxc" and "operator" not in reps.values():
-        # The operator holds the agent's token: prove its reach separately.
-        out += _port_probes(plan, model, flows, operator["zone"], "operator")
+    # The operator and the dispatcher hold PVE tokens: prove their reach
+    # separately.
+    for holder in ("operator", "runner-dispatcher"):
+        guest = plan["guests"].get(holder)
+        if guest and guest["kind"] == "lxc" and holder not in reps.values():
+            out += _port_probes(plan, model, flows, guest["zone"], holder)
     return out, skipped
 
 

@@ -7,6 +7,7 @@ of them, so the owner sees every problem in one run.
 import ipaddress
 from typing import Any
 
+from nullbill import ci
 from nullbill.errors import NullBillError
 from nullbill.proxy import allows
 from nullbill.render import Note
@@ -213,6 +214,9 @@ def _size(model: dict, planned: dict, facts: dict, errors: _Errors) -> tuple[dic
         name = max(shrinkable, key=lambda n: (sizes[n]["disk_gib"] * counts[n], n))
         counts[name] -= 1
         limits[name] = "limited by disk"
+    for name in pools:
+        if counts[name] > ci.MAX_CLONES:
+            errors.append(f"{name}: {counts[name]} clones; its zone's DHCP range has {ci.MAX_CLONES} leases")
     disk = disk_needed()
     if storage and disk > storage["avail_gib"]:
         errors.append(f"disk: guests need {disk} GiB, storage {storage['name']} has {storage['avail_gib']} GiB free")
@@ -345,6 +349,9 @@ def build_plan(model: dict, facts: dict) -> dict:
             entry["count"] = counts[name]
             entry["template_vmid"] = vmid_base + svc["id"]
             entry["clone_range"] = Note(_host(zones[svc["zone"]], POOL_RANGE), "Clones take DHCP leases from this range.")
+            entry["clone_vmids"] = Note(
+                ci.clone_vmids(vmid_base, svc["id"], counts[name].value), "The dispatcher clones one per queued job into these."
+            )
         else:
             entry["vmid"] = vmid_base + svc["id"]
             entry["ip"] = _host(zones[svc["zone"]], svc["id"])
