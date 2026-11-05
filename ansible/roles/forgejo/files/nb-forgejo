@@ -1,0 +1,8 @@
+#!/bin/sh
+# Forgejo's command line as the git user with the guest's configuration,
+# e.g. `nb-forgejo admin user list`. Root only: it can mint admin tokens.
+set -e
+[ "$(id -u)" = 0 ] || { echo "nb-forgejo: run as root" >&2; exit 1; }
+cd /var/lib/forgejo
+exec runuser -u git -- env HOME=/var/lib/forgejo USER=git \
+  /usr/local/bin/forgejo --config /etc/forgejo/app.ini --work-path /var/lib/forgejo "$@"

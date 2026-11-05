@@ -1,0 +1,171 @@
+- name: Database password is set
+  ansible.builtin.assert:
+    that:
+      - forgejo_db_password | length > 0
+      # Quoted with backticks in app.ini, so it may hold anything else.
+      - "'`' not in forgejo_db_password and '\n' not in forgejo_db_password"
+    fail_msg: forgejo_db_password is empty or holds a backtick or newline; apply supplies it from sops
+
+- name: Certificate from the tls_cert role
+  ansible.builtin.stat:
+    path: "/etc/nullbill/tls/{{ forgejo_tls_name }}.key"
+  register: forgejo_tls_key
+
+- name: The certificate and step-ca's root are in place
+  ansible.builtin.assert:
+    that: forgejo_tls_key.stat.exists and forgejo_tls_key.stat.gr_name == "www-data"
+    fail_msg: "run tls-cert.yml for {{ forgejo_tls_name }} with tls_cert_group=www-data first"
+
+# Forgejo's own SSH server answers on 22 for git.
+- name: No OpenSSH server on the forge
+  ansible.builtin.apt:
+    name: openssh-server
+    state: absent
+
+- name: git and nginx from Debian
+  ansible.builtin.apt:
+    name: [git, nginx-light, ca-certificates]
+    update_cache: true
+
+# Go's TLS reads the system store, so Forgejo verifies PostgreSQL (and any
+# other internal service) against step-ca's root.
+- name: Trust step-ca's root
+  ansible.builtin.copy:
+    src: /etc/nullbill/tls/root_ca.crt
+    remote_src: true
+    dest: /usr/local/share/ca-certificates/nullbill-root.crt
+    mode: "0644"
+  register: forgejo_root
+
+- name: Rebuild the system trust store
+  ansible.builtin.command: update-ca-certificates
+  when: forgejo_root.changed
+  changed_when: true
+
+- name: git user
+  ansible.builtin.user:
+    name: git
+    system: true
+    home: /var/lib/forgejo
+    create_home: false
+    shell: /usr/sbin/nologin
+    password: "!"
+
+- name: Data directory
+  ansible.builtin.file:
+    path: /var/lib/forgejo
+    state: directory
+    owner: git
+    group: git
+    mode: "0750"
+
+- name: Configuration directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: git
+    mode: "0750"
+  loop: [/etc/forgejo, /etc/forgejo/secrets]
+
+- name: Release directory
+  ansible.builtin.file:
+    path: "/opt/forgejo/{{ forgejo_version }}"
+    state: directory
+    mode: "0755"
+
+- name: Forgejo at the pinned version
+  ansible.builtin.get_url:
+    url: "{{ forgejo_url }}"
+    dest: "/opt/forgejo/{{ forgejo_version }}/forgejo"
+    checksum: "sha256:{{ forgejo_sha256 }}"
+    mode: "0755"
+
+- name: Forgejo on the path
+  ansible.builtin.file:
+    src: "/opt/forgejo/{{ forgejo_version }}/forgejo"
+    dest: /usr/local/bin/forgejo
+    state: link
+  notify: Restart forgejo
+
+- name: Command line wrapper
+  ansible.builtin.copy:
+    src: nb-forgejo
+    dest: /usr/local/sbin/nb-forgejo
+    mode: "0700"
+
+# Generated on the guest once and read by Forgejo through *_URI settings,
+# so app.ini stays a template and nothing secret passes through apply.
+- name: Generate Forgejo's own secrets once
+  ansible.builtin.shell: |
+    set -o pipefail
+    umask 027
+    /usr/local/bin/forgejo generate secret {{ item | upper }} > /etc/forgejo/secrets/{{ item }}.tmp
+    chgrp git /etc/forgejo/secrets/{{ item }}.tmp
+    mv /etc/forgejo/secrets/{{ item }}.tmp /etc/forgejo/secrets/{{ item }}
+  args:
+    executable: /bin/bash
+    creates: "/etc/forgejo/secrets/{{ item }}"
+  loop: [secret_key, internal_token, jwt_secret, lfs_jwt_secret]
+
+- name: Forgejo settings
+  ansible.builtin.template:
+    src: app.ini.j2
+    dest: /etc/forgejo/app.ini
+    owner: root
+    group: git
+    mode: "0640"
+  notify: Restart forgejo
+
+- name: Forgejo unit
+  ansible.builtin.template:
+    src: forgejo.service.j2
+    dest: /etc/systemd/system/forgejo.service
+    mode: "0644"
+  notify: Restart forgejo
+
+- name: No default nginx site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Reload nginx
+
+- name: HTTPS in front of Forgejo
+  ansible.builtin.template:
+    src: nullbill-forgejo.conf.j2
+    dest: /etc/nginx/conf.d/nullbill-forgejo.conf
+    mode: "0644"
+  notify: Reload nginx
+
+- name: nginx accepts its configuration
+  ansible.builtin.command: nginx -t
+  changed_when: false
+
+# Creates or upgrades the schema; a no-op when it is current.
+- name: Database schema
+  ansible.builtin.command: /usr/local/sbin/nb-forgejo migrate
+  register: forgejo_migrate
+  changed_when: "'Migration' in forgejo_migrate.stdout + forgejo_migrate.stderr"
+
+- name: Create the first administrator once
+  ansible.builtin.shell: |
+    set -o pipefail
+    umask 077
+    /usr/local/sbin/nb-forgejo admin user create --admin --random-password \
+      --username {{ forgejo_admin_user | quote }} --email {{ forgejo_admin_email | quote }} \
+      | sed -n "s/^generated random password is '\(.*\)'$/\1/p" > /etc/forgejo/admin-password.tmp
+    test -s /etc/forgejo/admin-password.tmp
+    mv /etc/forgejo/admin-password.tmp /etc/forgejo/admin-password
+  args:
+    executable: /bin/bash
+    creates: /etc/forgejo/admin-password
+  no_log: true
+
+- name: Run Forgejo and nginx
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+  loop: [forgejo, nginx]
+  when: forgejo_manage_services | bool

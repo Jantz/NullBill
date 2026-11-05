@@ -1,0 +1,8 @@
+# Forgejo in its container: git over HTTPS and SSH, Actions for the CI
+# runners, its data in the shared PostgreSQL. apply runs tls-cert.yml for
+# its name first (tls_cert_group=www-data, reload nginx).
+- name: Git forge
+  hosts: all
+  become: false
+  roles:
+    - forgejo

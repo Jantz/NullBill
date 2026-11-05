@@ -9,6 +9,8 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod +x /usr/sbin
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       ansible-core python3-apt ca-certificates curl openssl gnupg systemd \
  && cat /tmp/extra-ca.crt >> /etc/ssl/certs/ca-certificates.crt \
+ # Also where update-ca-certificates keeps it, for roles that rebuild the store.
+ && if [ -s /tmp/extra-ca.crt ]; then cp /tmp/extra-ca.crt /usr/local/share/ca-certificates/extra-ca.crt; fi \
  && rm -rf /var/lib/apt/lists/* \
  # Empty lists with a fresh update stamp, the state that hid two missing
  # cache refreshes from local runs: roles must not trust cache_valid_time.
