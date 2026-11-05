@@ -75,6 +75,17 @@ def test_images_are_checksummed_and_nothing_identifying_is_rendered(facts):
     assert "api_token" not in json.dumps(config)
 
 
+def test_pbs_boots_debian_13_and_other_vms_debian_12(facts):
+    # PBS 4 is built for Debian 13; PBS 3 on Debian 12 is past its end of life.
+    config, _, _ = rendered(facts, "small")
+    vms = config["resource"]["proxmox_virtual_environment_vm"]
+    images = {name: vm["disk"][0]["file_id"] for name, vm in vms.items()}
+    assert images.pop("pbs") == "${proxmox_download_file.debian_13_cloud.id}"
+    assert set(images.values()) == {"${proxmox_download_file.debian_cloud.id}"}
+    downloads = config["resource"]["proxmox_download_file"]
+    assert "/trixie/" in downloads["debian_13_cloud"]["url"] and "/bookworm/" in downloads["debian_cloud"]["url"]
+
+
 def test_windows_iso_variable_only_with_windows(facts):
     assert "windows_iso" not in rendered(facts, "small")[0]["variable"]
     assert "windows_iso" in rendered(facts, "mid")[0]["variable"]

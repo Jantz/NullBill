@@ -59,7 +59,7 @@ setup page and remote access.
 ## What you need
 
 - A spare x86 PC on your home network, with
-  [Proxmox VE](https://www.proxmox.com/en/downloads) 8 or 9 installed.
+  [Proxmox VE](https://www.proxmox.com/en/downloads) 9 installed (PVE 8 is past its end of life).
   A second, empty disk is needed only for backups.
 - Another device with a web browser, on the same network.
 - On your phone: the free [ntfy](https://ntfy.sh/) app, for alerts.

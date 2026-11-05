@@ -154,6 +154,7 @@ services:
     zone: mgmt
     workload: core
     description: Proxmox Backup Server on its own disk. The host sends encrypted backups.
+    image: debian-13-cloud
     floor: {cores: 1, memory_mib: 2048, disk_gib: 8}
     ports:
       - {port: 8007, proto: tcp, from: ["host", "role:owner"]}
@@ -284,7 +285,7 @@ proxy:
 # Images apply downloads onto the media storage. Pinned by checksum, so a
 # changed file fails the download instead of booting.
 images:
-  # From http://download.proxmox.com/images/aplinfo-pve-8.dat
+  # From http://download.proxmox.com/images/aplinfo-pve-9.dat
   debian-lxc:
     url: http://download.proxmox.com/images/system/debian-12-standard_12.12-1_amd64.tar.zst
     sha512: 50c85eaaece677a3ebe01cc909b83872e9da2a22c29ae652838afce71e83222fdf40f6accecd7d52b180e912fc1f85ecdf7b3fc4d3027da4d865e509a9e76597
@@ -292,6 +293,12 @@ images:
   debian-cloud:
     url: https://cloud.debian.org/images/cloud/bookworm/20261021-2638/debian-12-genericcloud-amd64-20261021-2638.qcow2
     sha512: 9f181877006e8d9ca4f4554eba8729a829936f0f7d1db5e77f69b1ef0f6bc372b4d46f3dae39b10d84f9131496c2cc1d449264f26577fe934a79de5a5512a3dd
+  # PBS 4 is built for Debian 13; PBS 3 on Debian 12 reached its end of life
+  # in 2026-08 (https://pbs.proxmox.com/docs/faq.html).
+  # From https://cloud.debian.org/images/cloud/trixie/20261026-2643/SHA512SUMS
+  debian-13-cloud:
+    url: https://cloud.debian.org/images/cloud/trixie/20261026-2643/debian-13-genericcloud-amd64-20261026-2643.qcow2
+    sha512: 3ace18e33bdd036edb49d1f79342bd01d2ab980e35194edb0b410435cd543538d286a0bd13bbb0835f7862306e3d385ce2f6a70d8ecf0bd961111166adbc1b8e
 
 # verify checks direct egress against this name's address, and the proxy
 # with both the name and the bare address. It must be on proxy.allow.

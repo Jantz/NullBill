@@ -55,11 +55,24 @@ def _startup(name: str) -> dict:
     return {"order": BOOT_ORDER.get(name, LATER)}
 
 
+# A VM boots the cloud image its service names; most use Debian 12, PBS 4
+# needs Debian 13.
+DEFAULT_IMAGE = "debian-cloud"
+
+
+def _vm_image(model: dict, name: str) -> str:
+    return model["services"][name].get("image", DEFAULT_IMAGE)
+
+
+def _image_ref(image: str) -> str:
+    return f"proxmox_download_file.{_tf_name(image)}"
+
+
 def _downloads(plan: dict, model: dict) -> dict:
     images = model["images"]
     media = plan["disk"]["media"]
-    lxc, cloud = images["debian-lxc"], images["debian-cloud"]
-    return {
+    lxc = images["debian-lxc"]
+    downloads = {
         "debian_lxc": {
             "node_name": NODE,
             "datastore_id": media,
@@ -68,7 +81,11 @@ def _downloads(plan: dict, model: dict) -> dict:
             "checksum": lxc["sha512"],
             "checksum_algorithm": "sha512",
         },
-        "debian_cloud": {
+    }
+    linux_vms = [n for n, g in plan["guests"].items() if g["kind"] != "lxc" and g["zone"] != "windows"]
+    for image in sorted({DEFAULT_IMAGE, *(_vm_image(model, n) for n in linux_vms)}):
+        cloud = images[image]
+        downloads[_tf_name(image)] = {
             "node_name": NODE,
             "datastore_id": media,
             # PVE lists disk images under iso content only with an .img name.
@@ -77,8 +94,8 @@ def _downloads(plan: dict, model: dict) -> dict:
             "url": cloud["url"],
             "checksum": cloud["sha512"],
             "checksum_algorithm": "sha512",
-        },
-    }
+        }
+    return downloads
 
 
 def _ipv4(plan: dict, zone: str, address: str | None) -> dict:
@@ -200,7 +217,7 @@ def _vm(name: str, guest: dict, plan: dict, model: dict, storage: str) -> dict:
                     "datastore_id": storage,
                     "interface": "scsi0",
                     "size": guest["disk_gib"],
-                    "file_id": "${proxmox_download_file.debian_cloud.id}",
+                    "file_id": f"${{{_image_ref(_vm_image(model, name))}.id}}",
                     "discard": "on",
                     "iothread": True,
                 }

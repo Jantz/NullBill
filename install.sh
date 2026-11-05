@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # NullBill installer (docs/adr/0006-nullbill-on-the-server.md). Run it once,
-# as root, in the shell of a fresh Proxmox VE 8 or 9 host (in the web UI:
+# as root, in the shell of a fresh Proxmox VE 9 host (in the web UI:
 # select the node, then Shell):
 #
 #   bash -c "$(curl -fsSL https://raw.githubusercontent.com/Jantz/NullBill/main/install.sh)"
@@ -24,7 +24,8 @@ in_ct() { pct exec "$vmid" -- "$@"; }
 
 [ "$(id -u)" = 0 ] || die "run this as root"
 { [ -d /etc/pve ] && command -v pct >/dev/null; } || die "this is not a Proxmox VE host"
-pveversion | grep -Eq 'pve-manager/(8|9)\.' || die "needs Proxmox VE 8 or 9, found: $(pveversion)"
+# PVE 8 reached its end of life in 2026-08 (https://pve.proxmox.com/wiki/FAQ).
+pveversion | grep -Eq 'pve-manager/9\.' || die "needs Proxmox VE 9 (PVE 8 is past its end of life; upgrade first), found: $(pveversion)"
 host_ip=$(ip -4 -o addr show dev "$bridge" | awk '{print $4}' | cut -d/ -f1 | head -1)
 [ -n "$host_ip" ] || die "no IPv4 address on $bridge; set NULLBILL_BRIDGE to the bridge on your LAN"
 

@@ -55,7 +55,7 @@ grep -qx "What=/var/tmp/datastore.img" /etc/systemd/system/mnt-datastore-backups
 grep -qx "RequiresMountsFor=/mnt/datastore/backups" /etc/systemd/system/proxmox-backup-proxy.service.d/nullbill-datastore.conf || fail "PBS does not wait for the mount"
 pass "a blank datastore disk is formatted once and mounted at boot, before PBS starts"
 
-test ! -e /etc/apt/sources.list.d/pbs-enterprise.list || fail "enterprise repository left in place"
+for f in /etc/apt/sources.list.d/pbs-enterprise.{list,sources}; do test ! -e "$f" || fail "enterprise repository $f left in place"; done
 if ! apt-get update >/tmp/apt.log 2>&1 || grep -Eq '^(Err|W):' /tmp/apt.log; then
   cat /tmp/apt.log
   fail "apt update after install"

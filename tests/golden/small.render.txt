@@ -949,6 +949,15 @@ WantedBy=multi-user.target
         "checksum": "50c85eaaece677a3ebe01cc909b83872e9da2a22c29ae652838afce71e83222fdf40f6accecd7d52b180e912fc1f85ecdf7b3fc4d3027da4d865e509a9e76597",
         "checksum_algorithm": "sha512"
       },
+      "debian_13_cloud": {
+        "node_name": "${var.node_name}",
+        "datastore_id": "local",
+        "content_type": "iso",
+        "file_name": "debian-13-genericcloud-amd64-20261026-2643.img",
+        "url": "https://cloud.debian.org/images/cloud/trixie/20261026-2643/debian-13-genericcloud-amd64-20261026-2643.qcow2",
+        "checksum": "3ace18e33bdd036edb49d1f79342bd01d2ab980e35194edb0b410435cd543538d286a0bd13bbb0835f7862306e3d385ce2f6a70d8ecf0bd961111166adbc1b8e",
+        "checksum_algorithm": "sha512"
+      },
       "debian_cloud": {
         "node_name": "${var.node_name}",
         "datastore_id": "local",
@@ -1719,7 +1728,7 @@ WantedBy=multi-user.target
             "datastore_id": "local-lvm",
             "interface": "scsi0",
             "size": 8,
-            "file_id": "${proxmox_download_file.debian_cloud.id}",
+            "file_id": "${proxmox_download_file.debian_13_cloud.id}",
             "discard": "on",
             "iothread": true
           }

@@ -77,6 +77,8 @@ $defs:
       # Made by install.sh, not OpenTofu: the nullbill container itself,
       # which runs apply (docs/adr/0006-nullbill-on-the-server.md).
       installed: {type: boolean}
+      # The cloud image a Linux VM boots; debian-cloud when omitted.
+      image: {enum: [debian-cloud, debian-13-cloud]}
       # Names egress-proxy forwards for this guest only, on top of
       # proxy.allow. Only for fixed-address guests in egress: proxy zones.
       proxy_allow: {type: array, uniqueItems: true, items: {$ref: "#/$defs/domain_pattern"}}
@@ -188,6 +190,7 @@ $defs:
       properties:
         debian-lxc: {$ref: "#/$defs/image"}
         debian-cloud: {$ref: "#/$defs/image"}
+        debian-13-cloud: {$ref: "#/$defs/image"}
     proxy:
       type: object
       additionalProperties: false

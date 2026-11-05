@@ -1,8 +1,5 @@
-# Proxmox signs each release's repository with the key its installer
-# places here.
-host_baseline_pve_keyring:
-  bookworm: /etc/apt/trusted.gpg.d/proxmox-release-bookworm.gpg
-  trixie: /usr/share/keyrings/proxmox-archive-keyring.gpg
+# Proxmox signs PVE 9's repository with the key its installer places here.
+host_baseline_pve_keyring: /usr/share/keyrings/proxmox-archive-keyring.gpg
 
 # The name and mgmt address guests reach the PVE API at; apply sets both
 # (pve.<domain>, zones.mgmt.host_ip). Empty leaves PVE's certificate alone.

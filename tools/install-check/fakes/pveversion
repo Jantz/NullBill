@@ -1,2 +1,2 @@
 #!/bin/sh
-echo "pve-manager/8.4.1/2a5fa54a8503f96d (running kernel: 6.8.12-9-pve)"
+echo "pve-manager/9.2.13/2a5fa54a8503f96d (running kernel: 6.17.2-1-pve)"

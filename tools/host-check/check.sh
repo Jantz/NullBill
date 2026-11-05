@@ -23,7 +23,7 @@ grep -q "authorized_keys is missing or empty" /tmp/nokey.log || fail "no-key ref
 test ! -e /etc/ssh/sshd_config.d/10-nullbill.conf || fail "sshd changed without a root key"
 echo "ok   refuses to run without a root key"
 
-# What a fresh PVE 8 install has: a key, the enterprise repositories, and
+# What a fresh PVE 9 install has: a key, the enterprise repositories, and
 # PVE's CA with a node certificate for the LAN name and address only.
 # pvenode stands in by putting the certificate where PVE's would.
 node=$(hostname)
@@ -43,8 +43,10 @@ cp "$4" "/etc/pve/nodes/$(hostname)/pveproxy-ssl.key"
 SH
 chmod +x /usr/bin/pvenode
 echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExampleExample test" >/root/.ssh/authorized_keys
-echo "deb https://enterprise.proxmox.com/debian/pve bookworm pve-enterprise" >/etc/apt/sources.list.d/pve-enterprise.list
-echo "deb https://enterprise.proxmox.com/debian/ceph-quincy bookworm enterprise" >/etc/apt/sources.list.d/ceph.list
+printf 'Types: deb\nURIs: https://enterprise.proxmox.com/debian/%s\nSuites: trixie\nComponents: %s\nSigned-By: /usr/share/keyrings/proxmox-archive-keyring.gpg\n' \
+  pve pve-enterprise >/etc/apt/sources.list.d/pve-enterprise.sources
+printf 'Types: deb\nURIs: https://enterprise.proxmox.com/debian/%s\nSuites: trixie\nComponents: %s\nSigned-By: /usr/share/keyrings/proxmox-archive-keyring.gpg\n' \
+  ceph-squid enterprise >/etc/apt/sources.list.d/ceph.sources
 
 play >/tmp/first.log 2>&1 || { cat /tmp/first.log; fail "first run"; }
 echo "ok   first run"
@@ -60,12 +62,12 @@ echo "ok   sshd is key-only"
 
 ! grep -rl enterprise.proxmox.com /etc/apt/sources.list.d/ || fail "enterprise repository left"
 apt-get update >/tmp/apt.log 2>&1 || { cat /tmp/apt.log; fail "apt update"; }
-grep -q "download.proxmox.com/debian/pve bookworm InRelease" /tmp/apt.log || fail "no-subscription repository not fetched"
+grep -q "download.proxmox.com/debian/pve trixie InRelease" /tmp/apt.log || fail "no-subscription repository not fetched"
 ! grep -E '^(W|E):' /tmp/apt.log || fail "apt update warnings"
 echo "ok   no-subscription repository, no enterprise one"
 
 origins=$(unattended-upgrade --dry-run --debug 2>&1 | grep "Allowed origins are:")
-[[ $origins == "Allowed origins are: origin=Debian,codename=bookworm-security,label=Debian-Security" ]] || fail "unattended origins: $origins"
+[[ $origins == "Allowed origins are: origin=Debian,codename=trixie-security,label=Debian-Security" ]] || fail "unattended origins: $origins"
 apt-config dump Unattended-Upgrade::Automatic-Reboot | grep -qx 'Unattended-Upgrade::Automatic-Reboot "false";' || fail "the host must not reboot by itself"
 test ! -e /etc/needrestart/conf.d/50-nullbill.conf || fail "needrestart left to PVE on the host"
 test -x /usr/local/sbin/nb-update-metrics || fail "update metrics script"

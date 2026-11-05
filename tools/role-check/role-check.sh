@@ -50,14 +50,17 @@ test_pki() {
   (
     cd "$d" || exit 1
     for ca in ca shipper-ca rogue-ca; do
+      # Key usage as real CAs carry it; Python 3.13 (Debian 13) refuses a CA without.
       openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 \
+        -addext "keyUsage=critical,keyCertSign,cRLSign" \
         -subj "/CN=test $ca" -keyout "$ca.key" -out "$ca.crt" 2>/dev/null
     done
     leaf() { # name issuer cn [san]
       openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=$3" \
         -keyout "$1.key" -out "$1.csr" 2>/dev/null
       openssl x509 -req -in "$1.csr" -CA "$2.crt" -CAkey "$2.key" -CAcreateserial -days 2 \
-        ${4:+-extfile <(printf 'subjectAltName=%s\n' "$4")} -out "$1.crt" 2>/dev/null
+        -extfile <(printf 'authorityKeyIdentifier=keyid\nbasicConstraints=CA:FALSE\n%s\n' "${4:+subjectAltName=$4}") \
+        -out "$1.crt" 2>/dev/null
     }
     leaf loki ca "$server" "DNS:$server"
     for name in "${more[@]}"; do leaf "$name" ca "$name" "DNS:$name"; done
