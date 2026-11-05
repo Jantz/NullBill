@@ -12,9 +12,11 @@ against synthetic fixtures, and `nullbill verify` reports SKIP until there
 is a host to probe. The dry run renders the pve-firewall, router,
 egress-proxy, tailnet policy and OpenTofu files; `ansible/` holds the host
 baseline and the step-ca, Postgres, monitoring, PBS, Forgejo and CI runner
-roles. `nullbill apply` runs its first stages (host baseline, pve-firewall
-files, verify) against stand-ins in `tools/check-apply`; the rest are being
-wired (#22). None has run on real hardware.
+roles. `nullbill apply` runs every stage from the host baseline to the log
+shippers against stand-ins (`tests/test_apply.py`, `tools/check-apply` and
+each role's container check); backups and the VPN are still being wired
+(#22). None has run on real hardware yet: `docs/runbooks/first-install.md`
+is the first run.
 
 ## Use
 
