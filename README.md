@@ -119,8 +119,9 @@ It runs these stages in order and stops at the first one that fails.
 - **Change something**: change your choices on the page and press **Run
   setup** again. Only what changed is changed.
 - **Alerts** arrive in ntfy: a guest that stops answering, a nearly full
-  disk, an expiring certificate, updates that fail or wait, a server that
-  restarted, and (with Healthchecks.io) a server that went quiet.
+  disk, an expiring certificate, updates that fail or wait, a guest whose
+  nightly backup did not happen, a server that restarted, and (with
+  Healthchecks.io) a server that went quiet.
 - **Updates**: guests install security updates each night and restart at
   04:30 when one needs it. Proxmox's own packages and restarts of the
   server itself wait for you, with an alert while they wait.

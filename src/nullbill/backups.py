@@ -48,6 +48,9 @@ def disk(plan: dict) -> tuple[str, int]:
     return disk_id, bare["disks"][disk_id]["size_gib"] - 1
 
 
+# host_baseline's hourly textfile metrics for the BackupTooOld alert.
+METRICS = "/usr/local/sbin/nb-backup-metrics"
+
 LIST = f"pvesh get /nodes/localhost/storage/{STORAGE}/content --content backup --output-format json"
 
 

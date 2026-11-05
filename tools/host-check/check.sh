@@ -113,5 +113,13 @@ grep -qx "add lvm nb-pbs-disk --vgname nb-pbs-disk --content images" /tmp/pvesm.
 [ "$(wc -l </tmp/pvesm.log)" = 1 ] || fail "storage added twice"
 echo "ok   with wipe it becomes the nb-pbs-disk volume group and PVE storage, kept on the next run"
 
+# Backup metrics: Debian's python3 runs it against a pvesh with no job yet.
+printf '#!/bin/sh\necho "[]"\n' >/usr/bin/pvesh
+chmod +x /usr/bin/pvesh
+[ "$(/usr/local/sbin/nb-backup-metrics)" = "no nightly job" ] || fail "backup metrics without a job"
+test ! -e /var/lib/prometheus/node-exporter/nullbill-backups.prom || fail "backup metrics written without a job"
+grep -qx "OnUnitActiveSec=1h" /etc/systemd/system/nb-backup-metrics.timer || fail "backup metrics timer"
+echo "ok   backup metrics script and hourly timer, silent until the nightly job exists"
+
 test -s /etc/audit/rules.d/50-nullbill.rules || fail "audit rules"
 echo "ok   audit rules installed (loading them needs a kernel; not checked here)"

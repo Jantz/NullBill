@@ -92,3 +92,26 @@ groups:
         labels: {severity: warn}
         annotations:
           summary: "{{ $labels.instance }} has had updates waiting for two weeks that NullBill does not install by itself"
+  # Backups: nb-backup-metrics on the host, hourly (ansible/roles/host_baseline).
+  # A failed nightly job shows as the guest's newest backup growing old.
+  - name: nullbill-backups
+    rules:
+      - alert: BackupTooOld
+        # backups.MAX_AGE_H: a daily job plus slack for a long run.
+        expr: time() - nb_backup_last_success_timestamp_seconds > 26 * 3600
+        for: 1h
+        labels: {severity: page}
+        annotations:
+          summary: "{{ $labels.guest }} ({{ $labels.vmid }}) has no encrypted backup from the last 26 hours"
+      - alert: BackupStatusUnknown
+        expr: nb_backup_status_ok == 0
+        for: 2h
+        labels: {severity: page}
+        annotations:
+          summary: "the PVE host cannot list the backups on PBS; check the pbs guest"
+      - alert: BackupMetricsStale
+        expr: time() - node_textfile_mtime_seconds{file=~".*nullbill-backups\\.prom"} > 3 * 3600
+        for: 30m
+        labels: {severity: page}
+        annotations:
+          summary: "{{ $labels.instance }} has not refreshed its backup metrics for three hours (nb-backup-metrics.timer)"

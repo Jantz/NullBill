@@ -129,3 +129,39 @@ tests:
         exp_alerts:
           - exp_labels: {severity: warn, instance: "pve:9100"}
             exp_annotations: {summary: "pve:9100 has had updates waiting for two weeks that NullBill does not install by itself"}
+  - interval: 1m
+    input_series:
+      # forgejo's newest backup stays at the start; git's renews every hour.
+      - series: 'nb_backup_last_success_timestamp_seconds{instance="pve:9100",vmid="2017",guest="forgejo"}'
+        values: "0x1700"
+      - series: 'nb_backup_last_success_timestamp_seconds{instance="pve:9100",vmid="2018",guest="git"}'
+        values: "0+60x1700"
+      - series: 'nb_backup_status_ok{instance="pve:9100"}'
+        values: "0x1700"
+      - series: 'node_textfile_mtime_seconds{instance="pve:9100",file="/var/lib/prometheus/node-exporter/nullbill-backups.prom"}'
+        values: "0x1700"
+    alert_rule_test:
+      - eval_time: 26h50m
+        alertname: BackupTooOld
+        exp_alerts: []
+      - eval_time: 27h10m
+        alertname: BackupTooOld
+        exp_alerts:
+          - exp_labels: {severity: page, instance: "pve:9100", vmid: "2017", guest: forgejo}
+            exp_annotations: {summary: "forgejo (2017) has no encrypted backup from the last 26 hours"}
+      - eval_time: 1h50m
+        alertname: BackupStatusUnknown
+        exp_alerts: []
+      - eval_time: 2h10m
+        alertname: BackupStatusUnknown
+        exp_alerts:
+          - exp_labels: {severity: page, instance: "pve:9100"}
+            exp_annotations: {summary: "the PVE host cannot list the backups on PBS; check the pbs guest"}
+      - eval_time: 3h20m
+        alertname: BackupMetricsStale
+        exp_alerts: []
+      - eval_time: 3h40m
+        alertname: BackupMetricsStale
+        exp_alerts:
+          - exp_labels: {severity: page, instance: "pve:9100", file: "/var/lib/prometheus/node-exporter/nullbill-backups.prom"}
+            exp_annotations: {summary: "pve:9100 has not refreshed its backup metrics for three hours (nb-backup-metrics.timer)"}

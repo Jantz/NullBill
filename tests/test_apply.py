@@ -109,6 +109,8 @@ class FakeReach:
             self.timeouts.append(timeout)
             self.backed_up |= {int(a) for a in shlex.split(command)[1:] if a.isdigit()}
             return 0, "", ""
+        if command == backups.METRICS:
+            return 0, "14 guests, 14 with a backup\n", ""
         if "proxmox-backup-client key create --kdf none" in command:
             return 0, json.dumps({"kdf": None, "data": f"key-{len(self.calls)}"}) + "\n", ""
         if command.startswith("pct exec "):
@@ -495,6 +497,9 @@ def test_backups_stage_hands_tofu_the_pbs_token_fingerprint_and_a_kept_key(ctx, 
     assert len(vzdump) == 1 and " --storage nb-pbs --mode snapshot " in vzdump[0]
     assert c.reach.backed_up == {g["vmid"] for g in backups.guests(c.plan).values()}
     assert c.reach.timeouts == [apply.FIRST_BACKUP_S]
+    # Then monitoring learns of the job and the backups at once.
+    hosts = [call[1] for call in c.reach.calls if call[0] == "host"]
+    assert hosts.index(backups.METRICS) > hosts.index(vzdump[0])
 
     # Nothing new: no second tofu run or backup, and the key stays.
     c.reach.calls.clear()

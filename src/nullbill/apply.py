@@ -809,6 +809,8 @@ def stage_backups(ctx: Context) -> None:
         ctx.say(f"backups: first backup of {len(missing)} guests now; this can take a while")
         argv = ["vzdump", *map(str, missing), "--storage", backups.STORAGE, "--mode", "snapshot", "--notes-template", "{{guestname}}"]
         host_out(ctx, "backups", shlex.join(argv), timeout=FIRST_BACKUP_S)
+    # Monitoring sees the job and the first backups now, not within the hour.
+    host_out(ctx, "backups", backups.METRICS)
     ctx.say(f"backups: nightly at {backups.SCHEDULE} to {backups.STORAGE}, encrypted on the host")
 
 
