@@ -36,3 +36,68 @@ tests:
         exp_alerts:
           - exp_labels: {severity: page, job: tls, instance: "forgejo:443"}
             exp_annotations: {summary: "TLS handshake with forgejo:443 fails"}
+  # Update alerts, minute by minute (a sample older than five minutes no
+  # longer counts). forgejo's runs fail and leave security updates pending;
+  # pbs's succeed; router stopped fetching lists and has upgrades off; the
+  # host waits on a reboot and on Proxmox updates.
+  - interval: 1m
+    input_series:
+      - series: 'apt_upgrades_pending{instance="forgejo:9100",origin="Debian:bookworm-security/oldstable-security",arch="amd64"}'
+        values: "2x3000"
+      - series: 'apt_upgrades_pending{instance="pbs:9100",origin="",arch=""}'
+        values: "0x3000"
+      - series: 'apt_upgrades_pending{instance="pve:9100",origin="Proxmox:bookworm/stable",arch="amd64"}'
+        values: "3x20300"
+      - series: 'nb_unattended_upgrade_success_timestamp_seconds{instance="forgejo:9100"}'
+        values: "0x4500"
+      - series: 'nb_unattended_upgrade_success_timestamp_seconds{instance="pbs:9100"}'
+        values: "0+60x4500"
+      - series: 'nb_unattended_upgrade_enabled{instance="router:9100"}'
+        values: "0x200"
+      - series: 'nb_unattended_upgrade_enabled{instance="pbs:9100"}'
+        values: "1x200"
+      - series: 'apt_package_cache_timestamp_seconds{instance="router:9100"}'
+        values: "0x3100"
+      - series: 'apt_package_cache_timestamp_seconds{instance="pbs:9100"}'
+        values: "0+60x3100"
+      - series: 'node_reboot_required{instance="pve:9100"}'
+        values: "1x4500"
+      - series: 'node_reboot_required{instance="pbs:9100"}'
+        values: "0x4500"
+    alert_rule_test:
+      - eval_time: 47h
+        alertname: SecurityUpdatesPending
+        exp_alerts: []
+      - eval_time: 49h
+        alertname: SecurityUpdatesPending
+        exp_alerts:
+          - exp_labels: {severity: page, instance: "forgejo:9100"}
+            exp_annotations: {summary: "forgejo:9100 has had security updates waiting for two days; they are not installing"}
+      - eval_time: 74h
+        alertname: UnattendedUpgradesFailing
+        exp_alerts:
+          - exp_labels: {severity: page, instance: "forgejo:9100"}
+            exp_annotations: {summary: "forgejo:9100 has had no successful unattended upgrade for three days"}
+      - eval_time: 2h
+        alertname: UnattendedUpgradesOff
+        exp_alerts:
+          - exp_labels: {severity: page, instance: "router:9100"}
+            exp_annotations: {summary: "router:9100 has unattended upgrades switched off"}
+      - eval_time: 50h
+        alertname: PackageListsStale
+        exp_alerts:
+          - exp_labels: {severity: page, instance: "router:9100"}
+            exp_annotations: {summary: "router:9100 has not fetched package lists for two days; check its mirror and proxy"}
+      - eval_time: 73h
+        alertname: RebootRequired
+        exp_alerts:
+          - exp_labels: {severity: warn, instance: "pve:9100"}
+            exp_annotations: {summary: "pve:9100 needs a reboot to finish installing updates"}
+      - eval_time: 300h
+        alertname: UpdatesWaiting
+        exp_alerts: []
+      - eval_time: 337h
+        alertname: UpdatesWaiting
+        exp_alerts:
+          - exp_labels: {severity: warn, instance: "pve:9100"}
+            exp_annotations: {summary: "pve:9100 has had updates waiting for two weeks that NullBill does not install by itself"}

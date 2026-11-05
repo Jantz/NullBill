@@ -168,6 +168,12 @@ $defs:
       additionalProperties: false
       properties:
         public_name: {$ref: "#/$defs/domain_pattern"}
+    updates:
+      type: object
+      additionalProperties: false
+      properties:
+        # Local time, HH:MM, when a guest whose update needs a reboot reboots.
+        reboot_time: {type: string, pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$"}
     images:
       type: object
       additionalProperties: false
@@ -219,6 +225,7 @@ $defs:
       services: {$ref: "#/$defs/common/services"}
       people: {$ref: "#/$defs/common/people"}
       proxy: {$ref: "#/$defs/common/proxy"}
+      updates: {$ref: "#/$defs/common/updates"}
       images: {$ref: "#/$defs/common/images"}
       verify: {$ref: "#/$defs/common/verify"}
       gpus:
@@ -243,7 +250,7 @@ $defs:
 
   model:
     type: object
-    required: [network, host, zones, roles, services, people, engines, proxy, tailnet, images, verify]
+    required: [network, host, zones, roles, services, people, engines, proxy, tailnet, images, verify, updates]
     properties:
       network: {$ref: "#/$defs/common/network", required: [base, domain, vmid_base]}
       host:

@@ -47,7 +47,10 @@ echo "ok   no-subscription repository, no enterprise one"
 
 origins=$(unattended-upgrade --dry-run --debug 2>&1 | grep "Allowed origins are:")
 [[ $origins == "Allowed origins are: origin=Debian,codename=bookworm-security,label=Debian-Security" ]] || fail "unattended origins: $origins"
-echo "ok   unattended upgrades take Debian security updates only"
+apt-config dump Unattended-Upgrade::Automatic-Reboot | grep -qx 'Unattended-Upgrade::Automatic-Reboot "false";' || fail "the host must not reboot by itself"
+test ! -e /etc/needrestart/conf.d/50-nullbill.conf || fail "needrestart left to PVE on the host"
+test -x /usr/local/sbin/nb-update-metrics || fail "update metrics script"
+echo "ok   unattended upgrades take Debian security updates only, never reboot the host"
 
 test -s /etc/audit/rules.d/50-nullbill.rules || fail "audit rules"
 echo "ok   audit rules installed (loading them needs a kernel; not checked here)"

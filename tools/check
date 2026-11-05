@@ -6,7 +6,7 @@ cd "$(git rev-parse --show-toplevel)"
 
 ruff check .
 ruff format --check .
-shellcheck -x hooks/* install.sh tools/check-install tools/install-check/check.sh tools/install-check/fakes/* tools/check tools/check-apply tools/install-apply-deps tools/setup-controller tools/check-firewall tools/check-guests tools/check-host tools/check-roles tools/check-tofu tools/guest-check/check.sh tools/host-check/check.sh tools/tofu-check/check.sh tools/role-check/role-check.sh ansible/roles/*/tests/check.sh tools/denylist-scan tools/install-hooks
+shellcheck -x hooks/* install.sh tools/check-install tools/install-check/check.sh tools/install-check/fakes/* tools/check tools/check-apply tools/install-apply-deps tools/setup-controller tools/check-firewall tools/check-guests tools/check-host tools/check-roles tools/check-tofu tools/guest-check/check.sh tools/host-check/check.sh tools/tofu-check/check.sh tools/role-check/role-check.sh ansible/roles/*/tests/check.sh ansible/roles/updates/files/nb-update-metrics ansible/roles/egress_proxy/files/nb-squid-check tools/denylist-scan tools/install-hooks
 python3 -m pytest -q
 gitleaks dir --no-banner --redact -c .gitleaks.toml .
 gitleaks git --no-banner --redact -c .gitleaks.toml .

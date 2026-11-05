@@ -23,7 +23,9 @@ from typing import Protocol
 from nullbill.artifacts import write_build
 from nullbill.errors import NullBillError
 from nullbill.home import REPO_ROOT
+from nullbill.model import node_exporter_guest
 from nullbill.probe import Runner
+from nullbill.proxy import PROXY, proxy_port
 from nullbill.render import strip_notes
 from nullbill.secretfile import Secrets
 from nullbill.verify import run_verify
@@ -239,6 +241,40 @@ def stage_router(ctx: Context) -> None:
     run_playbook(ctx, "router", "router.yml", "router", {"router_files": files})
 
 
+def stage_proxy(ctx: Context) -> None:
+    """Squid on the egress proxy, which every proxied zone's apt needs next."""
+    prefix = f"{PROXY}/"
+    files = {"/" + rel.removeprefix(prefix): text for rel, text in ctx.files.items() if rel.startswith(prefix)}
+    run_playbook(ctx, "proxy", "egress-proxy.yml", PROXY, {"egress_proxy_files": files})
+
+
+def update_guests(ctx: Context) -> dict[str, dict]:
+    """Each Linux guest that lives on, with its proxy and reboot settings."""
+    owner_reboots = set(ctx.bare["updates"]["owner_reboots"])
+    proxy = f"http://{ctx.bare['guests'][PROXY]['ip']}:{proxy_port(ctx.model)}"
+    guests = {}
+    for name, guest in ctx.bare["guests"].items():
+        if not node_exporter_guest(guest):
+            continue
+        # The router has its own uplink; other guests in a proxied zone
+        # reach the mirrors through the proxy only.
+        proxied = name != "router" and ctx.bare["zones"][guest["zone"]]["egress"] == "proxy"
+        guests[name] = connection(ctx, name) | {
+            "updates_apt_proxy": proxy if proxied else "",
+            "updates_auto_reboot": name not in owner_reboots,
+            "updates_reboot_time": ctx.bare["updates"]["reboot_at"],
+        }
+    return guests
+
+
+def stage_updates(ctx: Context) -> None:
+    guests = update_guests(ctx)
+    ctx.say(f"updates: updates.yml on {len(guests)} guests")
+    rc = ctx.reach.playbook("updates.yml", guests, {})
+    if rc != 0:
+        raise ApplyError("updates", f"updates.yml failed (exit {rc}); its log names the guest")
+
+
 def stage_verify(ctx: Context) -> None:
     results = run_verify(ctx.plan, ctx.model, ctx.target, ctx.run)
     for result in results:
@@ -254,6 +290,8 @@ STAGES: list[Stage] = [
     ("host", stage_host),
     ("tofu", stage_tofu),
     ("router", stage_router),
+    ("proxy", stage_proxy),
+    ("updates", stage_updates),
     ("verify", stage_verify),
 ]
 

@@ -28,6 +28,7 @@ host:
     # The runner dispatcher's token may only clone runners (ci.py).
     - {port: 8006, proto: tcp, from: ["role:owner", "service:nullbill", "service:operator", "service:runner-dispatcher"]}
     - {port: 22, proto: tcp, from: ["role:owner", "service:nullbill"]}
+    - {port: 9100, proto: tcp, from: ["service:monitoring"]}
 
 zones:
   mgmt:
@@ -281,6 +282,12 @@ images:
 # with both the name and the bare address. It must be on proxy.allow.
 verify:
   public_name: deb.debian.org
+
+# Debian security updates install every night on the host and every Linux
+# guest (ansible/roles/updates). A guest whose update needs a reboot reboots
+# at reboot_time; the host and agent-managed guests wait for the owner.
+updates:
+  reboot_time: "04:30"
 
 # Limits of Tailscale's free Personal plan, from https://tailscale.com/pricing
 # (2026-11-04). plan fails when people and roles would exceed them.

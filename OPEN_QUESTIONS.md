@@ -13,6 +13,29 @@ answered items move to the decisions list at the bottom.
    its phone app. Recommendation: sign up when the wizard asks.
 3. **Design records.** ADRs 0001 to 0006 are proposed; you asked me to
    decide, so they stand unless you object.
+4. **Updates that wait for you.** Every Linux guest installs Debian
+   security updates and point releases each night and reboots at 04:30
+   when one needs it. Three things do not happen by themselves, and
+   monitoring warns about each: Proxmox packages on the host (their
+   upgrades restart PVE's services and want a full upgrade, which
+   unattended-upgrades does not do safely), any reboot of the host (it
+   takes every guest down) and reboots of agent-managed guests (agents run
+   long jobs there). Recommendation: keep these manual, with an "Update and
+   reboot the host" button on the setup page and an alert after 14 days of
+   waiting Proxmox updates or 3 days of a waiting reboot.
+5. **Debian 13.** Guests run Debian 12, which is now oldstable; its
+   security updates continue through Debian LTS until mid-2028. Proxmox VE
+   9 is on Debian 13. Recommendation: move every guest to Debian 13 before
+   the first real install is a few months old; it touches every role check.
+6. **Pinned versions.** Grafana, Loki, step-ca, Forgejo, OpenTofu, sops and
+   the agent CLI install at versions this repository pins, so their fixes
+   arrive only when the pin moves. apt-installed pins show as waiting
+   updates in monitoring; binary pins do not yet. Recommendation: a weekly
+   CI job in this repository that compares each pin with its upstream
+   release and opens an issue.
+7. **Windows Update.** Not managed yet; the plan lists Windows guests under
+   `updates.not_managed`. Recommendation: Group Policy for automatic
+   install and an exporter for update age, when Windows work starts.
 
 ## Defaults picked for cosmetic choices
 
@@ -74,6 +97,15 @@ answered items move to the decisions list at the bottom.
   Set both per pool through the dispatcher's pool entries (#22).
 - Inference engine: llama.cpp for one GPU, vLLM for several; pinnable.
 - Plan output: YAML with a comment above each decision.
+- Updates: unattended-upgrades on the host (Debian security only) and on
+  every Linux guest (Debian security and point releases, as Debian's own
+  default), with needrestart restarting services on guests. node_exporter
+  and Debian's apt collector on each report waiting updates, the last
+  successful run and reboots needed; Prometheus alerts when security
+  updates wait two days, no run succeeds for three, package lists go stale
+  for two, upgrades are switched off, or a reboot waits three days. All in
+  `ansible/roles/updates`. Pool clones live for one job; keeping their
+  golden images fresh is part of image baking (#22).
 
 ## Decisions
 

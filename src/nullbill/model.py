@@ -55,6 +55,23 @@ def _agent_ssh(model: dict) -> None:
             svc["ports"] = [*svc.get("ports", []), copy.deepcopy(AGENT_SSH)]
 
 
+# Monitoring scrapes node_exporter (update and disk metrics) on every Linux
+# guest that lives on. Pool clones are short-lived; Windows has none.
+NODE_EXPORTER = {"port": 9100, "proto": "tcp", "from": ["service:monitoring"]}
+
+
+def node_exporter_guest(svc: dict) -> bool:
+    return svc["kind"] != "vm-pool" and svc["zone"] != "windows"
+
+
+def _node_exporter(model: dict) -> None:
+    if "monitoring" not in model["services"]:
+        return
+    for svc in model["services"].values():
+        if node_exporter_guest(svc):
+            svc["ports"] = [*svc.get("ports", []), copy.deepcopy(NODE_EXPORTER)]
+
+
 def build_model(config: dict) -> dict:
     _check("config", config, "config.yaml")
     catalog = _data("catalog.yaml")
@@ -62,4 +79,5 @@ def build_model(config: dict) -> dict:
     model = merge(catalog, config)
     _check("model", model, "catalog.yaml + config.yaml")
     _agent_ssh(model)
+    _node_exporter(model)
     return model

@@ -1,0 +1,4 @@
+# Files from build/egress-proxy keyed by their path on the guest; apply
+# passes them. The role places them and runs Squid.
+egress_proxy_files: {}
+egress_proxy_manage_services: true

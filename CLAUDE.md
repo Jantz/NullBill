@@ -7,7 +7,7 @@ Guidance for Claude sessions working in this repository.
 NullBill turns a spare x86 machine running Proxmox VE into a self-hosted dev
 server from one declarative config. `nullbill` runs on a controller the owner
 names and reaches the host over SSH; it never runs on the host. Only `probe`,
-`plan`, `apply` (stages so far: render, host, tofu, router, verify; the rest is #22) and
+`plan`, `apply` (stages so far: render, host, tofu, router, proxy, updates, verify; the rest is #22) and
 `verify` exist.
 
 ## Layout
@@ -24,7 +24,9 @@ names and reaches the host over SSH; it never runs on the host. Only `probe`,
 - `src/nullbill/router.py`, `src/nullbill/proxy.py`: router (nftables, dnsmasq, interfaces) and Squid files; `tools/check-guests` checks them with Debian 12's nft, dnsmasq, ifupdown and squid.
 - `src/nullbill/tailnet.py`: Tailscale policy from people and roles, the only per-person gate; plan fails past the free-plan limits in `catalog.yaml`.
 - `ansible/`: host baseline (key-only SSH, auditd, no-subscription repo, security-only upgrades); `tools/check-host` runs it twice in a Debian 12 container and checks the result. `docs/runbooks/` holds steps the owner does by hand. Guest roles carry `tests/check.sh`, which `tools/check-roles` runs in a Debian 12 container.
-- `ansible/roles/router`: places `build/router` on the router VM, each nft and dnsmasq file checked before it replaces the old one; reboots when interface names change. Its check uses `tests/files`, which `tests/test_router_role.py` keeps equal to the small render.
+- `ansible/roles/router`: places `build/router` on the router VM, each nft and dnsmasq file checked before it replaces the old one; reboots when interface names change. Its check uses `tests/files`, which `tests/test_role_check_files.py` keeps equal to the small render.
+- `ansible/roles/updates`: unattended-upgrades, needrestart and node_exporter with Debian's apt collector, plus `nb-update-metrics` (last successful run). apply's updates stage runs it on every Linux guest that lives on; `host_baseline` includes it for the host (security only, never reboots). Its alert rules are in the monitoring role's `nullbill.rules.yml`.
+- `ansible/roles/egress_proxy`: Squid with the rendered `squid.conf`, each version checked before it replaces the last.
 - `ansible/roles/pbs`: Proxmox Backup Server with a backup-only token for the host; its check backs up with client-side encryption, restores, and rebuilds over a kept datastore.
 - `ansible/roles/tls_cert`: a step-ca certificate at `/etc/nullbill/tls/<name>.crt|.key`, first from a one-time token apply makes, then renewed by `step ca renew --daemon` (step-ca certificates last 24 h). Service roles (monitoring, postgres) read it from there and refuse to run without it; their checks seed those files from `test_pki`.
 - `ansible/roles/forgejo`: Forgejo from a checksum-pinned release behind nginx (HTTPS on 443 with its tls_cert certificate), its own SSH server on 22 (no OpenSSH on that guest), PostgreSQL with `sslmode=verify-full`, no sign-up, Actions on. `nb-forgejo` runs its CLI as `git`. Its check runs the postgres role in the same container.

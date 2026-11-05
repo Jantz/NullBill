@@ -1,0 +1,20 @@
+# Security updates install every night. A guest whose update needs a reboot
+# reboots at updates_reboot_time; apply turns that off on the host and on
+# guests that run agents' long jobs, where the owner chooses the moment and
+# monitoring reminds them.
+updates_auto_reboot: true
+# Debian security updates and point releases, as Debian's own default.
+# The host takes security updates only (host_baseline). Packages from other
+# repositories (Proxmox, Grafana, smallstep) stay at what the roles install;
+# monitoring warns when updates for them wait two weeks.
+updates_origins:
+  - origin=Debian,codename=${distro_codename}-security,label=Debian-Security
+  - origin=Debian,codename=${distro_codename},label=Debian
+updates_reboot_time: "04:30"
+# Restart services still running replaced libraries (needrestart). Off on
+# the host, where PVE's own services restart through its packages.
+updates_restart_services: true
+# http://<egress-proxy>:3128 in zones whose egress goes through the proxy;
+# empty where the guest reaches the mirrors directly.
+updates_apt_proxy: ""
+updates_manage_services: true

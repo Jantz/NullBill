@@ -27,3 +27,45 @@ groups:
         labels: {severity: page}
         annotations:
           summary: "TLS handshake with {{ $labels.instance }} fails"
+  # Updates (ansible/roles/updates): node_exporter's apt collector and
+  # nb-update-metrics on the host and every Linux guest.
+  - name: nullbill-updates
+    rules:
+      - alert: SecurityUpdatesPending
+        expr: sum by (instance) (apt_upgrades_pending{origin=~".*-security.*"}) > 0
+        for: 2d
+        labels: {severity: page}
+        annotations:
+          summary: "{{ $labels.instance }} has had security updates waiting for two days; they are not installing"
+      - alert: UnattendedUpgradesFailing
+        expr: time() - nb_unattended_upgrade_success_timestamp_seconds > 3 * 86400
+        for: 1h
+        labels: {severity: page}
+        annotations:
+          summary: "{{ $labels.instance }} has had no successful unattended upgrade for three days"
+      - alert: UnattendedUpgradesOff
+        expr: nb_unattended_upgrade_enabled == 0
+        for: 1h
+        labels: {severity: page}
+        annotations:
+          summary: "{{ $labels.instance }} has unattended upgrades switched off"
+      - alert: PackageListsStale
+        expr: time() - apt_package_cache_timestamp_seconds > 2 * 86400
+        for: 1h
+        labels: {severity: page}
+        annotations:
+          summary: "{{ $labels.instance }} has not fetched package lists for two days; check its mirror and proxy"
+      - alert: RebootRequired
+        expr: node_reboot_required == 1
+        for: 3d
+        labels: {severity: warn}
+        annotations:
+          summary: "{{ $labels.instance }} needs a reboot to finish installing updates"
+      # Updates that do not install by themselves: Proxmox packages and
+      # point releases on the host, pinned Grafana or smallstep versions.
+      - alert: UpdatesWaiting
+        expr: sum by (instance) (apt_upgrades_pending{origin!~".*-security.*"}) > 0
+        for: 14d
+        labels: {severity: warn}
+        annotations:
+          summary: "{{ $labels.instance }} has had updates waiting for two weeks that NullBill does not install by itself"

@@ -1,0 +1,7 @@
+# The egress proxy: Squid with the allowlist nullbill renders into
+# build/egress-proxy. apply runs this with egress_proxy_files.
+- name: Egress proxy
+  hosts: all
+  become: false
+  roles:
+    - egress_proxy

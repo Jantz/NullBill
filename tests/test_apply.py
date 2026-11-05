@@ -142,6 +142,32 @@ def test_router_stage_hands_the_router_its_rendered_files(ctx):
     assert set(files) == {"/" + rel.removeprefix("router/") for rel in c.files if rel.startswith("router/")}
 
 
+def test_proxy_stage_hands_squid_its_config(ctx):
+    c = ctx("small")
+    apply.stage_proxy(c)
+    (_, playbook, hosts, variables), *rest = c.reach.calls
+    assert (playbook, list(hosts), rest) == ("egress-proxy.yml", ["egress-proxy"], [])
+    assert variables == {"egress_proxy_files": {"/etc/squid/squid.conf": c.files["egress-proxy/etc/squid/squid.conf"]}}
+
+
+def test_updates_stage_sets_up_every_linux_guest_once(ctx):
+    c = ctx("large")
+    apply.stage_updates(c)
+    (_, playbook, hosts, variables), *rest = c.reach.calls
+    assert (playbook, variables, rest) == ("updates.yml", {}, [])
+    # Pool clones are short-lived and Windows has no apt; the installed
+    # NullBill container is a guest like any other.
+    assert "linux-runner" not in hosts and "windows-dev" not in hosts and "windows-runner" not in hosts
+    assert {"router", "nullbill", "egress-proxy", "workspace"} <= set(hosts)
+    proxy = "http://10.42.2.10:3128"
+    assert hosts["nullbill"]["updates_apt_proxy"] == proxy  # mgmt: proxied
+    assert hosts["forgejo"]["updates_apt_proxy"] == ""  # services: direct
+    assert hosts["router"]["updates_apt_proxy"] == ""  # its own uplink
+    assert hosts["forgejo"]["updates_auto_reboot"] and hosts["forgejo"]["updates_reboot_time"] == "04:30"
+    assert not hosts["workspace"]["updates_auto_reboot"]  # agents' long jobs
+    assert hosts["forgejo"]["ansible_connection"] == "community.proxmox.proxmox_pct_remote"
+
+
 def test_host_stage_rewrites_only_what_changed(ctx):
     c = ctx()
     apply.stage_host(c)

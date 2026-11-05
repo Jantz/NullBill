@@ -1,0 +1,44 @@
+- name: Files from apply
+  ansible.builtin.assert:
+    that: "'/etc/squid/squid.conf' in egress_proxy_files"
+    fail_msg: egress_proxy_files has no squid.conf; run this through nullbill apply
+
+- name: Squid
+  ansible.builtin.apt:
+    name: squid
+    install_recommends: false
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: squid.conf checker
+  ansible.builtin.copy:
+    src: nb-squid-check
+    dest: /usr/local/sbin/nb-squid-check
+    mode: "0755"
+
+# Squid checks each file before it replaces the one in place.
+- name: Rendered files
+  ansible.builtin.copy:
+    dest: "{{ item.key }}"
+    content: "{{ item.value }}"
+    mode: "0644"
+    validate: "{{ '/usr/local/sbin/nb-squid-check %s' if item.key == '/etc/squid/squid.conf' else omit }}"
+  loop: "{{ egress_proxy_files | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  register: egress_proxy_placed
+
+- name: Squid runs
+  when: egress_proxy_manage_services | bool
+  block:
+    - name: Restart Squid after a change
+      ansible.builtin.systemd_service:
+        name: squid
+        state: restarted
+      when: egress_proxy_placed.changed
+
+    - name: Squid enabled and running
+      ansible.builtin.systemd_service:
+        name: squid
+        enabled: true
+        state: started

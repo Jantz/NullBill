@@ -1,0 +1,8 @@
+# Security updates and their metrics on every Debian guest; apply runs it
+# with each guest's proxy and reboot settings. The host gets the same role
+# through host_baseline.
+- name: Security updates
+  hosts: all
+  become: false
+  roles:
+    - updates

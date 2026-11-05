@@ -353,6 +353,21 @@ def _zones(model: dict, planned: dict) -> dict:
     return zones
 
 
+def _updates(model: dict, guests: dict) -> dict:
+    section: dict[str, Any] = {
+        "security": Note("nightly", "Debian security updates install by themselves on the host and every Linux guest."),
+        "reboot_at": Note(model["updates"]["reboot_time"], "When a guest whose update needs a reboot reboots."),
+        "owner_reboots": Note(
+            ["host", *(name for name, g in guests.items() if g.get("agent_managed") and g["kind"] != "vm-pool")],
+            "These wait for the owner: the host takes every guest down, agents run long jobs. Monitoring reminds.",
+        ),
+    }
+    windows = [name for name, g in guests.items() if g["zone"] == "windows"]
+    if windows:
+        section["not_managed"] = Note(windows, "Windows Update is not managed by NullBill yet.")
+    return section
+
+
 def build_plan(model: dict, facts: dict) -> dict:
     errors = _Errors()
     _check_refs(model, errors)
@@ -407,6 +422,7 @@ def build_plan(model: dict, facts: dict) -> dict:
         "backups": _backups(planned, pbs),
         "flows": Note(_flows(model, planned, set(zones)), "Allowed flows; everything else is denied."),
         "people": {name: p["role"] for name, p in model["people"].items()},
+        "updates": _updates(model, guests),
     }
     plan["tailnet"] = check_tailnet(plan, model, errors)
     errors.raise_if_any()

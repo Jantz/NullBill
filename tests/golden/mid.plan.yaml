@@ -248,19 +248,28 @@ flows:
   - zone:* -> router tcp/53
   - host -> router tcp/22
   - role:owner -> router tcp/22
+  - service:monitoring -> router tcp/9100
   - role:owner -> nullbill tcp/8443
+  - service:monitoring -> nullbill tcp/9100
   - zone:mgmt -> egress-proxy tcp/3128
   - zone:build -> egress-proxy tcp/3128
   - zone:inference -> egress-proxy tcp/3128
   - zone:windows -> egress-proxy tcp/3128
+  - service:monitoring -> egress-proxy tcp/9100
+  - service:monitoring -> vpn tcp/9100
   - zone:* -> step-ca tcp/443
+  - service:monitoring -> step-ca tcp/9100
   - service:forgejo -> postgres tcp/5432
+  - service:monitoring -> postgres tcp/9100
   - role:owner -> monitoring tcp/3000
   - zone:* -> monitoring tcp/3100
   - service:operator -> monitoring tcp/9090
+  - service:monitoring -> monitoring tcp/9100
   - host -> pbs tcp/8007
   - role:owner -> pbs tcp/8007
   - host -> pbs tcp/22
+  - service:monitoring -> pbs tcp/9100
+  - service:monitoring -> operator tcp/9100
   - role:owner -> forgejo tcp/443
   - role:default -> forgejo tcp/443
   - zone:build -> forgejo tcp/443
@@ -268,14 +277,19 @@ flows:
   - service:runner-dispatcher -> forgejo tcp/443
   - role:owner -> forgejo tcp/22
   - role:default -> forgejo tcp/22
+  - service:monitoring -> forgejo tcp/9100
   - zone:build -> runner-dispatcher tcp/8443
+  - service:monitoring -> runner-dispatcher tcp/9100
   - service:operator -> linux-runner tcp/22
   - role:default -> workspace tcp/22
   - role:owner -> workspace tcp/22
   - service:operator -> workspace tcp/22
+  - service:monitoring -> workspace tcp/9100
   - service:operator -> inference tcp/22
+  - service:monitoring -> inference tcp/9100
   - zone:build -> model-gateway tcp/4000
   - role:owner -> model-gateway tcp/4000
+  - service:monitoring -> model-gateway tcp/9100
   - role:owner -> windows-dev tcp/3389
   - role:owner -> the PVE host tcp/8006
   - service:nullbill -> the PVE host tcp/8006
@@ -283,8 +297,23 @@ flows:
   - service:runner-dispatcher -> the PVE host tcp/8006
   - role:owner -> the PVE host tcp/22
   - service:nullbill -> the PVE host tcp/22
+  - service:monitoring -> the PVE host tcp/9100
 people:
   owner-a: owner
+updates:
+  # Debian security updates install by themselves on the host and every Linux guest.
+  security: nightly
+  # When a guest whose update needs a reboot reboots.
+  reboot_at: 04:30
+  # These wait for the owner: the host takes every guest down, agents run long jobs. Monitoring reminds.
+  owner_reboots:
+    - host
+    - workspace
+    - inference
+  # Windows Update is not managed by NullBill yet.
+  not_managed:
+    - windows-runner
+    - windows-dev
 # Tailscale Personal: free for personal, non-commercial use. One group per role; the vpn guest is the tagged device.
 tailnet:
   users: 1 of 6
