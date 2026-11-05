@@ -12,7 +12,7 @@ References: <https://pve.proxmox.com/pve-docs/chapter-pveum.html>,
 
 ## Start a session
 
-1. Open a shell in the operator: `ssh root@pve.<your domain> pct enter <operator vmid>`.
+1. Open a shell in the operator: `ssh -t root@pve.<your domain> pct enter <operator vmid>`.
 2. `su - agent`, then `claude`. The CLI reads its key, proxy and rules from
    `/etc/claude-code/`, which only root can change.
 3. To act on a guest yourself the way the agent does: `nb-ssh <guest ip> <command>`.

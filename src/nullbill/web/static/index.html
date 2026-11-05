@@ -82,7 +82,7 @@
 
     <section>
       <h2>6. Sign in the coding agent</h2>
-      <p>Only needed if you chose coding agents. Paste an Anthropic API key, or run <code>claude setup-token</code> on a computer where you use Claude with your subscription and paste the token it prints. It is kept encrypted on this server and shown to nobody.</p>
+      <p>Only needed if you chose coding agents. Paste an Anthropic API key, or run <code>claude setup-token</code> on a computer where you use Claude Code with a Pro, Max, Team or Enterprise plan and paste the token it prints. That token lasts a year. It is kept encrypted on this server and shown to nobody.</p>
       <form id="agent-form">
         <label>API key or subscription token
           <input id="agent-credential" type="password" autocomplete="off" placeholder="sk-ant-...">
@@ -97,7 +97,7 @@
       <p>Optional. Your server joins your free <a href="https://tailscale.com/" rel="noopener noreferrer" target="_blank">Tailscale</a> network, so this page and your guests are reachable from your own devices wherever you are. Until then everything stays on your local network.</p>
       <ol>
         <li>Sign in to the Tailscale admin console with the login you gave in step 3. Under <b>Access controls</b>, replace the policy with the one below and save. It lets you, and nobody else, reach the server.</li>
-        <li>Under <b>Settings, Keys</b>, generate an auth key: not reusable, pre-approved, tagged <code>tag:nb-vpn</code>.</li>
+        <li>Under <b>Settings, Keys</b>, press <b>Generate auth key</b>. Leave <b>Reusable</b> and <b>Ephemeral</b> off, turn on <b>Pre-approved</b> and <b>Tags</b> with <code>tag:nb-vpn</code>, and press <b>Generate key</b>.</li>
         <li>Paste the key here and run setup. The server uses it once to join, then forgets it.</li>
       </ol>
       <p id="tailnet-hint">The policy appears once the plan is ready.</p>

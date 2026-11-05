@@ -10,20 +10,28 @@ Reference: <https://tailscale.com/kb/1019/subnets>,
 
 ## Once
 
-1. Sign in to <https://login.tailscale.com/admin> with the login you gave as
-   the owner on the page.
-2. **Access controls**: replace the policy with the one the page shows under
-   step 7 (it is also `build/tailnet/policy.json` from `nullbill apply
-   --dry-run`) and save. Tailscale runs the policy's tests before it accepts
-   it; a refusal names the test.
-3. **Settings, Keys, Generate auth key**: not reusable, not ephemeral,
-   pre-approved, tag `tag:nb-vpn`. Copy it; Tailscale shows it once.
+1. Sign in to the admin console, <https://console.tailscale.com/admin>, with
+   the login you gave as the owner on the page. A new account gets a
+   tailnet of its own on the free Personal plan.
+2. **Access controls** (<https://console.tailscale.com/admin/acls>): in the
+   editor that shows the policy file as JSON, replace all of it with the
+   policy the page shows under step 7 (it is also
+   `build/tailnet/policy.json` from `nullbill apply --dry-run`) and save.
+   Tailscale runs the policy's tests before it accepts it; a refusal names
+   the test. The policy must be saved before the key in the next step,
+   because a key can carry only a tag the policy defines.
+3. **Settings, Keys** (<https://console.tailscale.com/admin/settings/keys>):
+   press **Generate auth key**. Leave **Reusable** and **Ephemeral** off,
+   turn on **Pre-approved** and **Tags** and pick `tag:nb-vpn`, then press
+   **Generate key**. Copy it; Tailscale shows it once. It expires after 90
+   days at most, so use it soon.
 4. Paste it on the page under step 7 and press **Run setup**. The vpn stage
    logs in once, forgets the key and prints the page's address on the
    tailnet.
-5. On your phone or laptop, install Tailscale and sign in. On Linux, run
-   `tailscale set --accept-routes`; other systems accept the routes as they
-   are. Open the address the vpn stage printed.
+5. On your phone or laptop, install Tailscale and sign in with the same
+   login. Linux needs `sudo tailscale set --accept-routes`; Windows, macOS,
+   iOS and Android accept the routes by themselves. Open the address the
+   vpn stage printed.
 
 The routes need no approval in the admin console: the policy's
 `autoApprovers` lets the tagged guest advertise addresses inside the
@@ -35,7 +43,9 @@ NullBill network only.
 - `vpn.yml failed`: the log names the reason Tailscale gave. A one-time key
   works once and expires (90 days at most); generate a new one and paste it.
 - Joined, but nothing answers: check that the device accepts routes and
-  that the admin console lists the routes on the `nullbill` machine.
+  that **Machines** in the admin console shows a **Subnets** badge on the
+  `nullbill` machine, and that selecting it shows the routes as approved
+  in its **Subnets** section.
 
 ## Close the home network
 

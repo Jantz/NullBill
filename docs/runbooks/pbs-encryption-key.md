@@ -39,8 +39,12 @@ You do this yourself, once, after the first setup run with backups:
    pvesm add pbs nb-pbs --server <pbs ip> --datastore backups \
      --username 'nb-pve@pbs!pve' --password '<token secret>' \
      --fingerprint '<PBS certificate fingerprint>' \
-     --encryption-key "$(cat nb-pbs.key.json)"
+     --encryption-key nb-pbs.key.json
    ```
+
+   `pvesm` reads the key from that file
+   (<https://pve.proxmox.com/pve-docs/pvesm.1.html>); delete the file
+   afterwards, PVE keeps its own copy.
 
 3. Restore guests from the PVE UI (Storage > nb-pbs > Backups) or with
    `pct restore` and `qmrestore`.
