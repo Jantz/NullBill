@@ -73,6 +73,13 @@ answered items move to the decisions list at the bottom.
   pool guests. The operator reaches the PVE API (not host SSH), the CA,
   Loki, Prometheus and SSH on agent-managed Linux guests. Set
   `services.<name>.agent_managed` to change the pool.
+- Command log: every command the agent runs over SSH and every agent CLI
+  tool call is written to the guest's journal before it runs, and refused
+  if that fails. A small shipper (`ansible/roles/log_shipper`, Python
+  standard library only, chosen over Grafana Alloy at about 550 MB per
+  guest) sends those and sshd's auth lines to Loki. Only a certificate from
+  a shipper CA whose key stays in `NULLBILL_HOME` may push; anyone the
+  firewall admits may query; nobody may delete.
 - Inference engine: llama.cpp for one GPU, vLLM for several; pinnable.
 - Plan output: YAML with a comment above each decision.
 

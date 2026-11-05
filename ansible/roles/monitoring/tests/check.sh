@@ -5,7 +5,15 @@ set -euo pipefail
 # shellcheck source=tools/role-check/role-check.sh
 source /usr/local/lib/role-check.sh
 
-converge monitoring.yml -e monitoring_manage_services=false
+test_pki /tmp/pki
+vars=$(mktemp)
+python3 - "$vars" <<'PY'
+import json, sys
+read = lambda f: open(f"/tmp/pki/{f}").read()
+json.dump({"monitoring_loki_tls_cert": read("loki.crt"), "monitoring_loki_tls_key": read("loki.key"),
+           "monitoring_shipper_ca": read("shipper-ca.crt")}, open(sys.argv[1], "w"))
+PY
+converge monitoring.yml -e monitoring_manage_services=false -e "@$vars"
 
 (cd /ansible/roles/monitoring/files && promtool test rules nullbill.rules.test.yml) >/tmp/rules.log 2>&1 \
   || { cat /tmp/rules.log; fail "alert rule unit tests"; }
@@ -18,6 +26,7 @@ pass "every alert fires on the series it is meant for"
 setpriv --reuid=prometheus --regid=prometheus --init-groups prometheus \
   --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/tmp/prom $ARGS >/tmp/prometheus.log 2>&1 &
 setpriv --reuid=loki --regid=nogroup --init-groups loki -config.file=/etc/loki/config.yml >/tmp/loki.log 2>&1 &
+nginx
 setpriv --reuid=grafana --regid=grafana --init-groups grafana server --homepath=/usr/share/grafana \
   --config=/etc/grafana/grafana.ini cfg:default.paths.provisioning=/etc/grafana/provisioning \
   cfg:default.paths.data=/tmp/grafana >/tmp/grafana.log 2>&1 &
@@ -32,20 +41,39 @@ curl -fsS http://127.0.0.1:9090/api/v1/rules | grep -q CertificateExpiresSoon ||
 curl -fsS "http://$(hostname -i | cut -d' ' -f1):9090/-/ready" >/dev/null || fail "prometheus answers on the guest address"
 pass "prometheus is up on the guest address with the rules loaded"
 
-wait_for http://127.0.0.1:3100/ready || { tail -20 /tmp/loki.log; fail "loki ready"; }
-now=$(date +%s%N)
-curl -fsS -H 'Content-Type: application/json' http://127.0.0.1:3100/loki/api/v1/push --data \
-  "{\"streams\":[{\"stream\":{\"job\":\"auth\",\"host\":\"forgejo\"},\"values\":[[\"$now\",\"sshd: Failed password for root\"]]}]}" \
-  || fail "push a log line"
+wait_for http://127.0.0.1:3101/ready || { tail -20 /tmp/loki.log; fail "loki ready"; }
+echo "127.0.0.1 monitoring.nullbill.internal" >>/etc/hosts
+gate=https://monitoring.nullbill.internal:3100
+tls=(--cacert /tmp/pki/ca.crt)
+shipper=(--cert /tmp/pki/shipper.crt --key /tmp/pki/shipper.key)
+# push [curl options...]: push one failed-login line; prints the HTTP status.
+push() {
+  curl -sS -o /dev/null -w '%{http_code}' "${tls[@]}" "$@" -H 'Content-Type: application/json' "$gate/loki/api/v1/push" --data \
+    "{\"streams\":[{\"stream\":{\"job\":\"auth\",\"host\":\"forgejo\"},\"values\":[[\"$(date +%s%N)\",\"sshd: Failed password for root\"]]}]}"
+}
+test "$(push "${shipper[@]}")" = 204 || fail "a shipper certificate pushes"
 found=0
 for _ in $(seq 20); do
-  curl -fsS -G http://127.0.0.1:3100/loki/api/v1/query_range --data-urlencode 'query={job="auth"} |~ "Failed password"' \
+  curl -fsS "${tls[@]}" -G "$gate/loki/api/v1/query_range" --data-urlencode 'query={job="auth"} |~ "Failed password"' \
     | grep -q "Failed password for root" && { found=1; break; }
   sleep 1
 done
-[ "$found" = 1 ] || fail "query the pushed line back"
-curl -fsS http://127.0.0.1:3100/prometheus/api/v1/rules | grep -q FailedLogins || fail "loki ruler loaded FailedLogins"
-pass "loki stores and returns logs, and the failed-login rule is loaded"
+[ "$found" = 1 ] || fail "query the pushed line back without a certificate"
+curl -fsS http://127.0.0.1:3101/prometheus/api/v1/rules | grep -q FailedLogins || fail "loki ruler loaded FailedLogins"
+pass "loki stores lines a shipper pushes, anyone may query them, and the failed-login rule is loaded"
+
+test "$(push)" = 403 || fail "push without a certificate"
+code=$(push --cert /tmp/pki/rogue.crt --key /tmp/pki/rogue.key || true)
+case $code in 2*) fail "push with a certificate from an untrusted CA" ;; esac
+for path in "loki/api/v1/delete?query=%7Bjob%3D%22auth%22%7D&start=0" loki/api/v1/rules/x; do
+  code=$(curl -sS -o /dev/null -w '%{http_code}' "${tls[@]}" "${shipper[@]}" -X POST "$gate/$path")
+  test "$code" = 403 || fail "POST /$path answered $code"
+done
+code=$(curl -sS -o /dev/null -w '%{http_code}' "${tls[@]}" "$gate/config")
+test "$code" = 403 || fail "/config answered $code"
+guest=$(hostname -i | cut -d' ' -f1)
+if curl -fsS -m 3 "http://$guest:3101/ready" >/dev/null 2>&1; then fail "loki answers on the guest address"; fi
+pass "no push without a shipper certificate; no deletes, rule changes or other paths; loki itself is local"
 
 wait_for http://127.0.0.1:3000/api/health || { tail -20 /tmp/grafana.log; fail "grafana health"; }
 pw=$(cat /etc/grafana/admin-password)

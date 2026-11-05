@@ -1,0 +1,14 @@
+#!/bin/bash
+# Installed by nullbill. sshd runs this for every session of the agent user
+# (ForceCommand). It records the command in the journal under the agent's
+# uid, which the log shipper sends to Loki, then runs it. A session without
+# a command is refused, and so is a command that cannot be recorded.
+if [ -z "${SSH_ORIGINAL_COMMAND:-}" ]; then
+  echo "agent sessions run one command each: nb-ssh GUEST COMMAND" >&2
+  exit 1
+fi
+if ! logger --socket-errors=on -t nb-cmd -- "ssh: $SSH_ORIGINAL_COMMAND"; then
+  echo "nb-agent-command: cannot record the command, so it does not run" >&2
+  exit 1
+fi
+exec /bin/bash -c "$SSH_ORIGINAL_COMMAND"

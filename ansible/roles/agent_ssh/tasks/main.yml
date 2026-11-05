@@ -35,6 +35,12 @@
     content: "{{ agent_ssh_principal }}\n"
     mode: "0644"
 
+- name: Command recorder sshd runs for every agent session
+  ansible.builtin.copy:
+    src: nb-agent-command
+    dest: /usr/local/sbin/nb-agent-command
+    mode: "0755"
+
 - name: sshd settings for certificates and the agent user
   ansible.builtin.template:
     src: nullbill-agent.conf.j2

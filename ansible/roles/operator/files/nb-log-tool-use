@@ -1,0 +1,26 @@
+#!/usr/bin/python3
+"""PreToolUse hook for the agent CLI, set in its root-owned managed settings.
+
+Records every tool call (a Bash command, a file write, a fetch) in the
+journal under the agent's uid before it runs; the log shipper sends it to
+Loki. Exit 2 blocks the call when it cannot be recorded. Installed by the
+operator role.
+"""
+
+import json
+import subprocess
+import sys
+
+LIMIT = 4000
+
+event = json.load(sys.stdin)
+tool = event.get("tool_name", "?")
+given = event.get("tool_input", {})
+detail = given.get("command") if tool == "Bash" else json.dumps(given, sort_keys=True)
+line = f"tool {tool}: {detail}"
+if len(line) > LIMIT:
+    line = line[:LIMIT] + f" ... ({len(line) - LIMIT} more characters)"
+done = subprocess.run(["logger", "--socket-errors=on", "-t", "nb-cmd", "--", line], capture_output=True)
+if done.returncode != 0:
+    print("nb-log-tool-use: cannot record this tool call, so it does not run", file=sys.stderr)
+    sys.exit(2)

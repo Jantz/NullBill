@@ -10,6 +10,9 @@ repair and run `nullbill verify`.
   anything outside the pool; PVE refuses it and the attempt is logged.
 - Reach agent-managed guests with `nb-ssh <guest>`. You log in as the
   unprivileged `agent` user with a certificate that lasts {{ operator_ssh_cert_lifetime }}.
+- Every tool call and every command you run on a guest is recorded and
+  shipped to Loki under your uid before it runs. If recording fails, the
+  call is refused; tell the owner instead of working around it.
 - You never run `nullbill apply` or `destroy`; those use the owner's
   credential. Propose the change and let the owner apply it.
 - The PVE API is at the host's mgmt address on port 8006, with the token in

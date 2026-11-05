@@ -6,8 +6,11 @@ TrustedUserCAKeys /etc/ssh/nullbill_user_ca.pub
 AuthorizedPrincipalsFile /etc/ssh/auth_principals/%u
 
 # The agent's access ends when its certificate expires: it cannot add a key
-# of its own, use a password, or open tunnels through the guest.
+# of its own, use a password, or open tunnels through the guest. Every
+# session runs one command, which nb-agent-command records first.
 Match User {{ agent_ssh_user }}
+    ForceCommand /usr/local/sbin/nb-agent-command
+    PermitTTY no
     AuthorizedKeysFile none
     AuthenticationMethods publickey
     PasswordAuthentication no

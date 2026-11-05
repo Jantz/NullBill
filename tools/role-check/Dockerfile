@@ -7,7 +7,7 @@ COPY extra-ca.crt /tmp/extra-ca.crt
 RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod +x /usr/sbin/policy-rc.d \
  && apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ansible-core python3-apt ca-certificates curl openssl gnupg \
+      ansible-core python3-apt ca-certificates curl openssl gnupg systemd \
  && cat /tmp/extra-ca.crt >> /etc/ssl/certs/ca-certificates.crt \
  && rm -rf /var/lib/apt/lists/* \
  # Empty lists with a fresh update stamp, the state that hid two missing

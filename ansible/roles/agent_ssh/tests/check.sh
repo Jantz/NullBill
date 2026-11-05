@@ -15,6 +15,7 @@ ssh-keygen -q -t ed25519 -N '' -C agent -f key
 converge agent-ssh.yml -e agent_ssh_manage_services=false -e "agent_ssh_user_ca_key='$(cat ca.pub)'"
 
 mkdir -p /run/sshd
+start_journald
 /usr/sbin/sshd -E /tmp/sshd.log
 
 # sign CA PRINCIPAL VALIDITY: a fresh certificate for key.pub.
@@ -60,6 +61,25 @@ if ssh -n -i key -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking
   fail "a key the agent added logs in"
 fi
 pass "a key the agent adds for itself is ignored"
+
+sign ca agent +30m
+login agent >/dev/null
+uid=$(id -u agent)
+journalctl -t nb-cmd -o json --no-pager | python3 -c '
+import json, sys
+uid = sys.argv[1]
+hits = [e for e in map(json.loads, sys.stdin) if e["MESSAGE"] == "ssh: id -u" and e["_UID"] == uid]
+sys.exit(0 if hits else 1)' "$uid" || fail "command not in the journal under the agent's uid"
+if ssh -i key -o CertificateFile=key-cert.pub -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=no \
+  -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR agent@127.0.0.1 </dev/null >/dev/null 2>&1; then
+  fail "a session without a command was allowed"
+fi
+pass "each agent command is in the journal under the agent's uid before it runs; no bare sessions"
+
+stop_journald
+if login agent >/dev/null 2>&1; then fail "a command ran without being recorded"; fi
+start_journald
+pass "a command that cannot be recorded does not run"
 
 id -nG agent | grep -qwE 'sudo|root|adm' && fail "agent is in a privileged group"
 grep -q '^agent:!' /etc/shadow || fail "agent has a usable password"

@@ -1,0 +1,7 @@
+# Ship commands and auth logs from a guest to Loki on the monitoring guest.
+# apply runs this on every guest with that guest's shipper certificate.
+- name: Log shipper
+  hosts: all
+  become: false
+  roles:
+    - log_shipper

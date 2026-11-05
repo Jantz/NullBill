@@ -59,6 +59,7 @@ pass "agent provisioner signs no host or X.509 certificate"
 ansible-playbook -i localhost, -c local -e agent_ssh_manage_services=false \
   -e "agent_ssh_user_ca_key='$(cat /etc/step-ca/certs/ssh_user_ca_key.pub)'" /ansible/agent-ssh.yml >/tmp/agent-ssh.log 2>&1 ||
   { cat /tmp/agent-ssh.log; fail "agent_ssh role"; }
+start_journald
 /usr/sbin/sshd -E /tmp/sshd.log
 agent_cert agent agent || fail "agent certificate"
 ssh_as() {

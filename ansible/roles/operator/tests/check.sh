@@ -22,6 +22,7 @@ step ca health --ca-url https://step-ca.nullbill.internal --root /etc/step-ca/ce
 ansible-playbook -i localhost, -c local -e agent_ssh_manage_services=false \
   -e "agent_ssh_user_ca_key='$(cat /etc/step-ca/certs/ssh_user_ca_key.pub)'" /ansible/agent-ssh.yml >/tmp/guest.log 2>&1 ||
   { cat /tmp/guest.log; fail "agent_ssh role"; }
+start_journald
 /usr/sbin/sshd -E /tmp/sshd.log
 
 vars=$(mktemp)
@@ -56,6 +57,19 @@ if su agent -c 'test -w /etc/claude-code/managed-settings.json || test -w /etc/c
   fail "agent can change its rules"
 fi
 pass "agent CLI pinned by checksum; its managed settings and rules are root's"
+
+hook=$(python3 -c 'import json; print(json.load(open("/etc/claude-code/managed-settings.json"))["hooks"]["PreToolUse"][0]["hooks"][0]["command"])')
+echo '{"tool_name": "Bash", "tool_input": {"command": "echo hook-marker"}}' | su agent -c "$hook" || fail "hook refused a call"
+journalctl -t nb-cmd -o json --no-pager | python3 -c '
+import json, sys
+hits = [e for e in map(json.loads, sys.stdin) if e["MESSAGE"] == "tool Bash: echo hook-marker" and e["_UID"] == sys.argv[1]]
+sys.exit(0 if hits else 1)' "$(id -u agent)" || fail "tool call not in the journal under the agent's uid"
+stop_journald
+code=0
+echo '{"tool_name": "Bash", "tool_input": {"command": "true"}}' | su agent -c "$hook" 2>/dev/null || code=$?
+start_journald
+test "$code" = 2 || fail "hook exit $code with the journal down, expected 2 (block)"
+pass "the agent CLI records each tool call under the agent's uid first, and blocks it when it cannot"
 
 out=$(su - agent -c 'nb-ssh 127.0.0.1 id -un' 2>/tmp/nb-ssh.log) || { cat /tmp/nb-ssh.log /tmp/sshd.log; fail "nb-ssh"; }
 test "$out" = agent || fail "nb-ssh logged in as '$out'"

@@ -1,0 +1,6 @@
+- name: Restart nb-log-shipper
+  ansible.builtin.systemd_service:
+    name: nb-log-shipper
+    state: restarted
+    daemon_reload: true
+  when: log_shipper_manage_services | bool

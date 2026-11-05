@@ -1,0 +1,88 @@
+- name: Certificates from apply are set
+  ansible.builtin.assert:
+    that: lookup('ansible.builtin.vars', item) | length > 0
+    fail_msg: "{{ item }} is empty; apply issues it"
+  loop: [log_shipper_ca, log_shipper_cert, log_shipper_key]
+
+- name: journalctl and Python
+  ansible.builtin.apt:
+    name: [systemd, python3]
+    update_cache: true
+
+# Only this user reads the shipper key. It reads the journal through the
+# systemd-journal group and nothing else; the agent is in neither group.
+- name: Shipper user
+  ansible.builtin.user:
+    name: nb-shipper
+    system: true
+    shell: /usr/sbin/nologin
+    home: /var/lib/nb-log-shipper
+    create_home: false
+    groups: [systemd-journal]
+
+- name: Shipper directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: nb-shipper
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: /etc/nullbill/shipper, owner: root, mode: "0750"}
+    - {path: /var/lib/nb-log-shipper, owner: nb-shipper, mode: "0700"}
+
+- name: Shipper certificates
+  ansible.builtin.copy:
+    dest: "/etc/nullbill/shipper/{{ item.file }}"
+    content: "{{ item.value | trim }}\n"
+    owner: root
+    group: nb-shipper
+    mode: "0640"
+  loop:
+    - {file: ca.crt, value: "{{ log_shipper_ca }}"}
+    - {file: shipper.crt, value: "{{ log_shipper_cert }}"}
+    - {file: shipper.key, value: "{{ log_shipper_key }}"}
+  loop_control:
+    label: "{{ item.file }}"
+  no_log: true
+  notify: Restart nb-log-shipper
+
+- name: Shipper configuration
+  ansible.builtin.copy:
+    dest: /etc/nullbill/shipper/config.json
+    owner: root
+    group: nb-shipper
+    mode: "0640"
+    content: "{{ config | to_nice_json }}\n"
+  vars:
+    config:
+      url: "{{ log_shipper_url }}"
+      host: "{{ log_shipper_host }}"
+      ca: /etc/nullbill/shipper/ca.crt
+      cert: /etc/nullbill/shipper/shipper.crt
+      key: /etc/nullbill/shipper/shipper.key
+      state: /var/lib/nb-log-shipper/cursor
+      sources: "{{ log_shipper_sources }}"
+  notify: Restart nb-log-shipper
+
+- name: Shipper program
+  ansible.builtin.copy:
+    src: nb-log-shipper
+    dest: /usr/local/sbin/nb-log-shipper
+    mode: "0755"
+  notify: Restart nb-log-shipper
+
+- name: Shipper unit
+  ansible.builtin.template:
+    src: nb-log-shipper.service.j2
+    dest: /etc/systemd/system/nb-log-shipper.service
+    mode: "0644"
+  notify: Restart nb-log-shipper
+
+- name: Run the shipper
+  ansible.builtin.systemd_service:
+    name: nb-log-shipper
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: log_shipper_manage_services | bool

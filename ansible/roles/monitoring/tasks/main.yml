@@ -1,6 +1,12 @@
-- name: Prometheus, blackbox exporter and promtool from Debian
+- name: Certificates from apply are set
+  ansible.builtin.assert:
+    that: lookup('ansible.builtin.vars', item) | length > 0
+    fail_msg: "{{ item }} is empty; apply issues it"
+  loop: [monitoring_loki_tls_cert, monitoring_loki_tls_key, monitoring_shipper_ca]
+
+- name: Prometheus, blackbox exporter, promtool and nginx from Debian
   ansible.builtin.apt:
-    name: [prometheus, prometheus-blackbox-exporter]
+    name: [prometheus, prometheus-blackbox-exporter, nginx-light]
     update_cache: true
 
 - name: Keyring directory
@@ -115,6 +121,43 @@
     mode: "0644"
   notify: Restart loki
 
+- name: nginx certificate directory
+  ansible.builtin.file:
+    path: /etc/nginx/nullbill
+    state: directory
+    mode: "0750"
+
+- name: nginx certificates for the Loki gate
+  ansible.builtin.copy:
+    dest: "/etc/nginx/nullbill/{{ item.file }}"
+    content: "{{ item.value | trim }}\n"
+    mode: "{{ item.mode }}"
+  loop:
+    - {file: loki.crt, value: "{{ monitoring_loki_tls_cert }}", mode: "0644"}
+    - {file: loki.key, value: "{{ monitoring_loki_tls_key }}", mode: "0600"}
+    - {file: shipper-ca.crt, value: "{{ monitoring_shipper_ca }}", mode: "0644"}
+  loop_control:
+    label: "{{ item.file }}"
+  no_log: true
+  notify: Reload nginx
+
+- name: No default nginx site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Reload nginx
+
+- name: Loki gate
+  ansible.builtin.template:
+    src: nullbill-loki.conf.j2
+    dest: /etc/nginx/conf.d/nullbill-loki.conf
+    mode: "0644"
+  notify: Reload nginx
+
+- name: nginx accepts its configuration
+  ansible.builtin.command: nginx -t
+  changed_when: false
+
 - name: Generate the Grafana admin password once
   ansible.builtin.shell: |
     set -o pipefail
@@ -148,5 +191,5 @@
     name: "{{ item }}"
     enabled: true
     state: started
-  loop: [prometheus, prometheus-blackbox-exporter, loki, grafana-server]
+  loop: [prometheus, prometheus-blackbox-exporter, loki, grafana-server, nginx]
   when: monitoring_manage_services | bool

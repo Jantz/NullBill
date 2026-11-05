@@ -96,6 +96,12 @@
     dest: /usr/local/bin/claude
     state: link
 
+- name: Tool-call recorder the managed settings run before every tool
+  ansible.builtin.copy:
+    src: nb-log-tool-use
+    dest: /usr/local/sbin/nb-log-tool-use
+    mode: "0755"
+
 - name: Managed settings directory
   ansible.builtin.file:
     path: /etc/claude-code

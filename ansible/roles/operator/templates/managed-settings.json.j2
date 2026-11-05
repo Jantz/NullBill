@@ -1,5 +1,11 @@
 {
   "apiKeyHelper": "cat /etc/nullbill/agent/anthropic-api-key",
+  "allowManagedHooksOnly": true,
+  "hooks": {
+    "PreToolUse": [
+      {"matcher": "*", "hooks": [{"type": "command", "command": "/usr/local/sbin/nb-log-tool-use"}]}
+    ]
+  },
   "env": {
 {% if operator_proxy_url %}
     "HTTPS_PROXY": "{{ operator_proxy_url }}",

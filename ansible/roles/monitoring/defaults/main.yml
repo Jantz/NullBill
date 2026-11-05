@@ -13,4 +13,16 @@ monitoring_loki_version: 3.7.8
 # All addresses: the guest firewall limits 9090 to the operator.
 monitoring_prometheus_listen: "0.0.0.0:9090"
 
+# Loki itself, on localhost. Other guests reach it through nginx on 3100
+# with TLS: anyone the firewall admits may query, only a log shipper with a
+# certificate from monitoring_shipper_ca may push, and nobody may delete.
+monitoring_loki_internal_port: 3101
+monitoring_loki_port: 3100
+# PEM strings apply fills in: nginx's certificate and key from step-ca, and
+# the shipper CA whose key stays on the controller, so no guest (and not the
+# agent) can mint a push certificate.
+monitoring_loki_tls_cert: ""
+monitoring_loki_tls_key: ""
+monitoring_shipper_ca: ""
+
 monitoring_manage_services: true

@@ -1,0 +1,15 @@
+# The Loki gate on the monitoring guest (ansible/roles/monitoring).
+log_shipper_url: https://monitoring.nullbill.internal:3100/loki/api/v1/push
+# The host label on every line; apply sets the guest's name.
+log_shipper_host: "{{ inventory_hostname }}"
+# PEM strings apply fills in: step-ca's root, which the gate's certificate
+# chains to, and this guest's certificate and key from the shipper CA.
+log_shipper_ca: ""
+log_shipper_cert: ""
+log_shipper_key: ""
+# Journal matches per job. nb-cmd is what nb-agent-command and the
+# operator's tool hook write; auth feeds the FailedLogins rule.
+log_shipper_sources:
+  - {job: commands, match: [SYSLOG_IDENTIFIER=nb-cmd]}
+  - {job: auth, match: [SYSLOG_IDENTIFIER=sshd]}
+log_shipper_manage_services: true

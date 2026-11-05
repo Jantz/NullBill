@@ -1,0 +1,116 @@
+#!/usr/bin/python3
+"""Ship journal entries to Loki through the gate on the monitoring guest.
+
+Usage: nb-log-shipper CONFIG.json
+
+Follows the journal for the entries each source matches, and pushes them in
+batches over TLS with this guest's shipper certificate. Labels: job (from
+the source), host (from the config) and uid, the journal's trusted record
+of the sending process's user, which that process cannot forge. The cursor
+of the last pushed entry is saved after each push, so a restart resends
+nothing and skips nothing the journal still holds. Installed and run by
+the log_shipper role.
+"""
+
+import json
+import os
+import select
+import ssl
+import subprocess
+import sys
+import time
+import urllib.request
+
+BATCH = 500
+FLUSH_S = 1.0
+
+
+def load(path: str) -> dict:
+    with open(path) as f:
+        return json.load(f)
+
+
+def journal_args(conf: dict, cursor: str | None) -> list[str]:
+    args = ["journalctl", "--follow", "--output=json", "--no-pager", "--no-tail"]
+    args += [f"--after-cursor={cursor}"] if cursor else ["--lines=all"]
+    for i, source in enumerate(conf["sources"]):
+        if i:
+            args.append("+")
+        args += source["match"]
+    return args
+
+
+def job(conf: dict, entry: dict) -> str | None:
+    for source in conf["sources"]:
+        if all(entry.get(k) == v for k, v in (m.split("=", 1) for m in source["match"])):
+            return source["job"]
+    return None
+
+
+def payload(conf: dict, entries: list[dict]) -> bytes:
+    streams: dict[tuple, list] = {}
+    for e in entries:
+        name = job(conf, e)
+        if name is None:
+            continue
+        key = (name, e.get("_UID", ""))
+        message = e.get("MESSAGE")
+        if isinstance(message, list):  # journald sends non-UTF-8 as bytes
+            message = bytes(message).decode("utf-8", "replace")
+        streams.setdefault(key, []).append([str(int(e["__REALTIME_TIMESTAMP"]) * 1000), message or ""])
+    body = [{"stream": {"job": name, "host": conf["host"], "uid": uid}, "values": values} for (name, uid), values in streams.items()]
+    return json.dumps({"streams": body}).encode()
+
+
+def push(conf: dict, context: ssl.SSLContext, entries: list[dict]) -> None:
+    """Retry until Loki takes the batch; the journal keeps entries meanwhile."""
+    data = payload(conf, entries)
+    delay = 1
+    while True:
+        request = urllib.request.Request(conf["url"], data=data, headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(request, context=context, timeout=10):
+                return
+        except OSError as err:
+            print(f"push failed, retrying in {delay} s: {err}", file=sys.stderr, flush=True)
+            time.sleep(delay)
+            delay = min(delay * 2, 60)
+
+
+def save_cursor(path: str, cursor: str) -> None:
+    tmp = f"{path}.tmp"
+    with open(tmp, "w") as f:
+        f.write(cursor)
+    os.replace(tmp, path)
+
+
+def main(config: str) -> None:
+    conf = load(config)
+    context = ssl.create_default_context(cafile=conf["ca"])
+    context.load_cert_chain(conf["cert"], conf["key"])
+    state = conf["state"]
+    cursor = open(state).read().strip() if os.path.exists(state) else None
+    journal = subprocess.Popen(journal_args(conf, cursor), stdout=subprocess.PIPE, bufsize=0)
+    fd = journal.stdout.fileno()
+    pending = b""
+    batch: list[dict] = []
+    deadline = time.monotonic() + FLUSH_S
+    while True:
+        # Raw reads, so no line waits in a buffer select cannot see.
+        ready, _, _ = select.select([fd], [], [], max(0.0, deadline - time.monotonic()))
+        if ready:
+            chunk = os.read(fd, 1 << 16)
+            if not chunk:
+                sys.exit(f"journalctl ended with {journal.wait()}")
+            *lines, pending = (pending + chunk).split(b"\n")
+            batch += [json.loads(line) for line in lines if line]
+        if batch and (len(batch) >= BATCH or time.monotonic() >= deadline):
+            push(conf, context, batch)
+            save_cursor(state, batch[-1]["__CURSOR"])
+            batch = []
+        if time.monotonic() >= deadline:
+            deadline = time.monotonic() + FLUSH_S
+
+
+if __name__ == "__main__":
+    main(sys.argv[1])
