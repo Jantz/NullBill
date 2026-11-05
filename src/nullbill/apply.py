@@ -294,6 +294,60 @@ def stage_updates(ctx: Context) -> None:
         raise ApplyError("updates", f"updates.yml failed (exit {rc}); its log names the guest")
 
 
+def guest_out(ctx: Context, stage: str, name: str, argv: list[str], stdin: str | None = None) -> str:
+    """Run a command in a container through the host's pct and return its output."""
+    vmid = ctx.bare["guests"][name]["vmid"]
+    rc, out, err = ctx.reach.host(shlex.join(["pct", "exec", str(vmid), "--", *argv]), stdin=stdin)
+    if rc != 0:
+        raise ApplyError(stage, f"{name}: {argv[0]} {argv[1] if len(argv) > 1 else ''} failed: {(err.strip() or f'exit {rc}')[:200]}")
+    return out
+
+
+STEP = "/etc/step-ca"
+
+
+def ca_root(ctx: Context, stage: str) -> str:
+    return guest_out(ctx, stage, "step-ca", ["cat", f"{STEP}/certs/root_ca.crt"])
+
+
+def ca_token(ctx: Context, stage: str, name: str) -> str:
+    """A one-time token for name's first certificate, made on the CA guest so
+    the provisioner password never leaves it."""
+    fqdn = f"{name}.{ctx.bare['domain']}"
+    argv = ["env", f"STEPPATH={STEP}", "step", "ca", "token", fqdn, "--san", fqdn]
+    argv += ["--ca-url", f"https://step-ca.{ctx.bare['domain']}", "--root", f"{STEP}/certs/root_ca.crt"]
+    argv += ["--provisioner", "admin", "--provisioner-password-file", f"{STEP}/secrets/password"]
+    return guest_out(ctx, stage, "step-ca", argv).strip()
+
+
+# Each TLS service, the group that reads its key and what reloads it.
+TLS = {
+    "postgres": ("postgres", "systemctl reload postgresql"),
+    "monitoring": ("www-data", "systemctl reload nginx"),
+    "forgejo": ("www-data", "systemctl reload nginx"),
+    "runner-dispatcher": ("nb-dispatcher", "systemctl restart nb-dispatcher"),
+}
+
+
+def stage_ca(ctx: Context) -> None:
+    """step-ca, then a certificate for each planned TLS service."""
+    domain = ctx.bare["domain"]
+    run_playbook(ctx, "ca", "step-ca.yml", "step-ca", {"step_ca_domain": domain})
+    root = ca_root(ctx, "ca")
+    for name, (group, reload) in TLS.items():
+        if name not in ctx.bare["guests"]:
+            continue
+        variables = {
+            "tls_cert_name": f"{name}.{domain}",
+            "tls_cert_ca_url": f"https://step-ca.{domain}",
+            "tls_cert_ca_root": root,
+            "tls_cert_token": ca_token(ctx, "ca", name),
+            "tls_cert_group": group,
+            "tls_cert_reload": reload,
+        }
+        run_playbook(ctx, "ca", "tls-cert.yml", name, variables)
+
+
 def stage_verify(ctx: Context) -> None:
     results = run_verify(ctx.plan, ctx.model, ctx.target, ctx.run)
     for result in results:
@@ -311,6 +365,7 @@ STAGES: list[Stage] = [
     ("router", stage_router),
     ("proxy", stage_proxy),
     ("updates", stage_updates),
+    ("ca", stage_ca),
     ("verify", stage_verify),
 ]
 

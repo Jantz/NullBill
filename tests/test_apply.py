@@ -1,4 +1,5 @@
 import json
+import shlex
 
 import pytest
 from conftest import fixture_config
@@ -65,7 +66,17 @@ class FakeReach:
             return 0, answers[command], ""
         if command.startswith("systemctl "):
             return 0, "", ""
+        if command.startswith("pct exec "):
+            return self.guest(shlex.split(command)[2], shlex.split(command)[4:])
         return 127, "", f"fake host: unexpected {command}"
+
+    def guest(self, vmid, argv):
+        """Containers, reached with pct exec: step-ca answers for its CA."""
+        if argv == ["cat", "/etc/step-ca/certs/root_ca.crt"]:
+            return 0, "-----BEGIN CERTIFICATE-----\nroot\n-----END CERTIFICATE-----\n", ""
+        if argv[:5] == ["env", "STEPPATH=/etc/step-ca", "step", "ca", "token"]:
+            return 0, f"token-for-{argv[5]}\n", ""
+        return 127, "", f"fake guest {vmid}: unexpected {argv}"
 
     def local(self, argv, cwd, env, capture=False):
         self.calls.append(("local", argv, cwd))
@@ -183,6 +194,26 @@ def test_host_stage_points_the_on_site_screen_at_the_page_with_its_key(ctx):
     assert variables == {"console_enabled": True, "console_url": "https://10.42.1.2:8443/", "console_page_spki": "secret-token"}
     (spki,) = [call for call in c.reach.calls if call[0] == "local"]
     assert spki[1][:3] == ["sh", "-c", apply.SPKI] and spki[1][4] == str(c.home / "web" / "cert.pem")
+
+
+def test_ca_stage_issues_each_tls_service_a_certificate_from_a_one_time_token(ctx):
+    c = ctx("small")
+    apply.stage_ca(c)
+    playbooks = [call[1:] for call in c.reach.calls if call[0] == "playbook"]
+    assert playbooks[0] == ("step-ca.yml", {"step-ca": connection(c, "step-ca")}, {"step_ca_domain": "nullbill.internal"})
+    certs = {next(iter(hosts)): v for name, hosts, v in playbooks[1:] if name == "tls-cert.yml"}
+    assert set(certs) == {"postgres", "monitoring", "forgejo", "runner-dispatcher"}
+    assert certs["postgres"] == {
+        "tls_cert_name": "postgres.nullbill.internal",
+        "tls_cert_ca_url": "https://step-ca.nullbill.internal",
+        "tls_cert_ca_root": "-----BEGIN CERTIFICATE-----\nroot\n-----END CERTIFICATE-----\n",
+        "tls_cert_token": "token-for-postgres.nullbill.internal",
+        "tls_cert_group": "postgres",
+        "tls_cert_reload": "systemctl reload postgresql",
+    }
+    # Tokens are made on the CA guest, by pct exec through the host.
+    tokens = [call[1] for call in c.reach.calls if call[0] == "host" and " token " in call[1]]
+    assert all(t.startswith("pct exec 2012 -- env STEPPATH=/etc/step-ca step ca token ") for t in tokens) and len(tokens) == 4
 
 
 def test_host_stage_rewrites_only_what_changed(ctx):
