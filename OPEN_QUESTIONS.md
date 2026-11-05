@@ -42,12 +42,6 @@ answered items move to the decisions list at the bottom.
    card is present; look for "iGPU multi-monitor" or "integrated graphics:
    enabled" in the BIOS. Recommendation: switch the screen on in the setup
    page only if you want it; it costs about 512 MB.
-9. **CI image age.** apply bakes each runner image once, with every update
-   pending at that moment, and keeps it; clones live for one job, so they
-   take no updates themselves and the image ages until it is baked again.
-   Recommendation: a weekly re-bake (apply rebuilds the template VM and
-   bakes it while the old template keeps serving jobs), plus an alert when
-   an image is over 14 days old. Not built yet.
 
 ## Defaults picked for cosmetic choices
 
@@ -119,10 +113,14 @@ answered items move to the decisions list at the bottom.
   `ansible/roles/updates`. Alerts reach your ntfy topic with high priority
   for "page" alerts and normal priority for "warn" ones. Pool clones live
   for one job and start from a golden image baked with every pending
-  update (question 9).
+  update and baked again weekly (decisions, question 9).
 
 ## Decisions
 
+- CI image age (question 9): the recommendation, built: apply bakes each
+  golden image again once it is a week old, the page runs that weekly, and
+  an alert fires past 14 days. Jobs wait in Forgejo while it bakes; say if
+  you want a second template so they never wait (Claude, 2026-11-05).
 - Server: i9-9900K, 16 GB, RTX 4070 12 GB, mid class (owner, 2026-11-05).
 - First real test on that server once the owner has access; until then
   everything is tested against stand-ins (owner, 2026-11-05).

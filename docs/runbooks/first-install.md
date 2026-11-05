@@ -58,4 +58,4 @@ the log carries addresses on your network and guest names, not secrets.
 
 ## What is not in this run yet
 
-- Re-baking the CI image on a schedule (OPEN_QUESTIONS 9).
+- Windows and local models: options to add after a RAM upgrade.

@@ -378,3 +378,29 @@ def test_closing_the_lan_needs_the_page_over_tailscale_and_then_shuts_the_lan_ou
     assert client.call("/api/login", {"secret": "x"})[0] == 403
     monkeypatch.setattr(app, "network", lambda: ("127.0.0.0/8", "127.0.0.1"))
     assert client.call("/api/state")[1]["lan"]["state"] == "closed"
+
+
+def test_the_ci_images_are_baked_again_each_sunday_night(site, tmp_path):
+    app, _ = site
+    sunday = time.mktime((2026, 11, 8, 3, 15, 0, 0, 0, -1))
+    # Nothing to bake before a first apply made a Linux pool.
+    assert app.scheduled(sunday) is None
+    (app.home / "tofu").mkdir()
+    (app.home / "plan.yaml").write_text(yaml.safe_dump({"guests": {"linux-runner": {"kind": "vm-pool", "zone": "build"}}}))
+    assert app.scheduled(sunday - 86400) is None
+    assert app.scheduled(sunday - 3600) is None
+    job = app.scheduled(sunday)
+    assert job.action == "rebake-ci" and job.args == ["apply", "--stage", "ci"]
+    job.process.wait()
+    # Once a week, and not while another job runs.
+    assert app.scheduled(sunday + 600) is None
+    next_week = sunday + 7 * 86400
+    command, slow = app.command, tmp_path / "slow.py"
+    slow.write_text("import time; time.sleep(5)\n")
+    app.command = [sys.executable, str(slow)]
+    busy = app.start("verify")
+    assert app.scheduled(next_week) is None
+    busy.process.kill()
+    busy.process.wait()
+    app.command = command
+    assert app.scheduled(next_week + 1800).args == ["apply", "--stage", "ci"]

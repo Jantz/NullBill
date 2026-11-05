@@ -1,10 +1,11 @@
 import json
 import shlex
+import time
 
 import pytest
 from conftest import fixture_config
 
-from nullbill import apply, backups, lan
+from nullbill import apply, backups, ci, lan
 from nullbill.apply import ApplyError, Context, connection, run_apply
 from nullbill.artifacts import render_all
 from nullbill.errors import NullBillError
@@ -51,6 +52,7 @@ class FakeReach:
         self.backed_up = set()
         self.revert = None  # the LAN revert timer: None, "armed" or "gone"
         self.timeouts = []
+        self.dispatcher_stopped = False
 
     def host(self, command, stdin=None, timeout=900):
         self.calls.append(("host", command))
@@ -92,6 +94,11 @@ class FakeReach:
         if command.startswith("pct set 2002 --net1 "):
             self.nets[1] = shlex.split(command)[4]
             return 0, "", ""
+        if command.startswith("cat ") and command.endswith(" 2>/dev/null || true"):
+            return 0, self.files.get(command.split()[1], ""), ""
+        if command.startswith("bash -c ") and "qm destroy" in command:
+            self.timeouts.append(timeout)
+            return 0, "", ""
         if command.startswith("qm config "):
             return 0, "template: 1\n" if command.split()[2] in self.templates else "name: x\n", ""
         if command.startswith("qm shutdown "):
@@ -119,6 +126,9 @@ class FakeReach:
 
     def guest(self, vmid, argv):
         """Containers, reached with pct exec: step-ca answers for its CA."""
+        if argv == ["sh", "-c", "systemctl stop nb-dispatcher 2>/dev/null || true"]:
+            self.dispatcher_stopped = True
+            return 0, "", ""
         if vmid == "2002" and argv[:2] == ["sh", "-c"]:
             self.nullbill.append(argv[2])
             return 0, "", ""
@@ -145,6 +155,8 @@ class FakeReach:
             return self.openssl(argv[1:], cwd)
         if argv[0] == "ssh":
             return self.vm(argv[-2], argv[-1])
+        if argv[:2] == ["tofu", "apply"] and any(a.startswith("-replace=") for a in argv):
+            self.templates.clear()  # OpenTofu made a fresh, plain VM
         return (2 if argv[:2] == self.fail_local else 0), ("secret-token" if capture else "")
 
     def vm(self, login, command):
@@ -405,12 +417,38 @@ def test_ci_stage_bakes_each_golden_image_once_then_runs_the_dispatcher(ctx):
         }
     ]
 
+    # The host's textfile collector learns when it was baked.
+    metric = f"{ci.TEXTFILE_DIR}/{ci.baked_file('linux-runner')}"
+    assert time.time() - ci.baked_time(c.reach.files[metric]) < 60
+
     # Again: the template is kept and so is the Forgejo token.
     c.reach.calls.clear()
     apply.stage_ci(c)
     assert [call[1] for call in c.reach.calls if call[0] == "playbook"] == ["runner-dispatcher.yml"]
     assert c.secrets.data["forgejo_dispatcher_token"] == token
     assert "ci: linux-runner's golden image is baked" in c.log
+    assert not c.reach.dispatcher_stopped
+
+    # A week on, the dispatcher stops taking jobs, the old image's clones
+    # finish, OpenTofu makes a fresh VM and it is baked again.
+    c.reach.files[metric] = ci.baked_metric("linux-runner", time.time() - ci.REBAKE_AFTER_S - 60)
+    c.reach.calls.clear()
+    apply.stage_ci(c)
+    assert c.reach.dispatcher_stopped
+    host = [call[1] for call in c.reach.calls if call[0] == "host"]
+    drain = next(h for h in host if "qm destroy" in h)
+    assert "-v a=6000 -v b=6000" in drain and c.reach.timeouts[-1] > ci.MAX_JOB_S
+    tofu = [call[1] for call in c.reach.calls if call[0] == "local" and call[1][:2] == ["tofu", "apply"]]
+    assert tofu == [["tofu", "apply", "-auto-approve", "-input=false", "-no-color", "-replace=proxmox_virtual_environment_vm.linux-runner"]]
+    assert [call[1] for call in c.reach.calls if call[0] == "playbook"] == [
+        "ci-runner.yml",
+        "agent-ssh.yml",
+        "ci-runner-seal.yml",
+        "runner-dispatcher.yml",
+    ]
+    order = [i for i, call in enumerate(c.reach.calls) if call[0] in ("local", "playbook") and call[1] in (tofu[0], "ci-runner.yml")]
+    assert len(order) == 2 and c.reach.calls[order[0]][1] == tofu[0]
+    assert time.time() - ci.baked_time(c.reach.files[metric]) < 60
 
 
 def test_agents_stage_waits_for_a_credential(ctx):

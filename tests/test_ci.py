@@ -1,8 +1,10 @@
 """The runner dispatcher: its pool, its token's grants and its reach."""
 
 import json
+from pathlib import Path
 
 import pytest
+import yaml
 from conftest import fixture_config
 
 from nullbill import agent, ci
@@ -150,3 +152,12 @@ def test_without_target_the_new_checks_skip(facts):
     plan, model = planned(facts, "mid")
     names = {r.name for r in run_verify(plan, model, None, None, None, None) if r.status == "SKIP"}
     assert {"forgejo refuses sign-up", "runner dispatcher is running", "dispatcher token cannot change the host"} <= names
+
+
+def test_bake_time_round_trips_and_the_alert_uses_the_age_limit():
+    text = ci.baked_metric("linux-runner", 1700000000.7)
+    assert ci.baked_time(text) == 1700000000 and ci.baked_time("") is None
+    rules = Path(__file__).parents[1] / "ansible/roles/monitoring/files/nullbill.rules.yml"
+    alert = next(r for g in yaml.safe_load(rules.read_text())["groups"] for r in g["rules"] if r.get("alert") == "CiImageOld")
+    assert f"> {ci.MAX_IMAGE_AGE_DAYS} * 86400" in alert["expr"] and ci.BAKED_METRIC in alert["expr"]
+    assert ci.REBAKE_AFTER_S * 2 == ci.MAX_IMAGE_AGE_DAYS * 86400

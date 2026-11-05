@@ -38,10 +38,19 @@ A clone's own log is on its serial console: `qm terminal <vmid>`.
 
 ## Re-bake the golden image
 
-When no clones exist (a linked clone keeps its template's disk in use),
-destroy the template on the host, `qm destroy <template vmid> --purge`,
-then run apply. OpenTofu recreates the VM from the cloud image, and apply
-bakes it and converts it again. apply cannot do this yet (#22).
+Clones take no updates of their own, so apply bakes each golden image again
+once it is a week old. The page runs that every Sunday at 03:00, and any
+**Run setup** does it too. apply then:
+
+1. stops the dispatcher, so new jobs wait in Forgejo;
+2. waits for the old image's clones to finish their jobs (at most 6 hours;
+   any clone still running after that is stopped) and destroys them;
+3. has OpenTofu replace the template with a fresh VM from the pinned cloud
+   image, bakes it with every update pending, and starts the dispatcher
+   again.
+
+The `CiImageOld` alert fires when an image is over 14 days old, which means
+the re-bake keeps failing. The ci stage's log in the page names the reason.
 
 ## Clean up by hand
 

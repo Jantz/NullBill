@@ -133,7 +133,7 @@ It runs these stages in order and stops at the first one that fails.
 
 ## Not done yet
 
-- Rebuilding the CI image on a schedule, and Windows and local AI models.
+- Windows and local AI models.
 
 [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) lists the decisions still open, and
 [`docs/milestones/`](docs/milestones/) what each milestone finished.

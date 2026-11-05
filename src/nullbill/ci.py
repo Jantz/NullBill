@@ -14,9 +14,16 @@ reaches only what that takes:
 The template is baked by apply (boot, configure, shut down, convert), so
 OpenTofu creates it as a plain stopped VM and ignores the conversion.
 
+Clones take no updates of their own, so the image ages from its bake. apply
+records when it baked each one for node_exporter's textfile collector on
+the host; its ci stage bakes an image again once it is REBAKE_AFTER_S old,
+and the page runs that stage weekly. The CiImageOld alert fires when an
+image passes MAX_IMAGE_AGE_DAYS, which means the re-bake keeps failing.
+
 Reference: https://pve.proxmox.com/pve-docs/chapter-pveum.html
 """
 
+import re
 import shlex
 
 from nullbill.probe import Runner
@@ -25,6 +32,33 @@ from nullbill.render import strip_notes
 from nullbill.results import Result
 
 POOL = "nb-ci"
+# The dispatcher stops a clone whose job runs longer.
+MAX_JOB_S = 6 * 3600
+REBAKE_AFTER_S = 7 * 86400
+# The monitoring role's CiImageOld rule; tests/test_ci.py checks they agree.
+MAX_IMAGE_AGE_DAYS = 14
+TEXTFILE_DIR = "/var/lib/prometheus/node-exporter"
+BAKED_METRIC = "nb_ci_image_baked_timestamp_seconds"
+
+
+def baked_file(name: str) -> str:
+    return f"nullbill-ci-{name}.prom"
+
+
+def baked_metric(name: str, when: float) -> str:
+    return (
+        f"# HELP {BAKED_METRIC} When apply last baked the pool's golden image.\n"
+        f"# TYPE {BAKED_METRIC} gauge\n"
+        f'{BAKED_METRIC}{{pool="{name}"}} {int(when)}\n'
+    )
+
+
+def baked_time(text: str) -> int | None:
+    """The bake time in a file baked_metric wrote, or None."""
+    found = re.search(rf"^{BAKED_METRIC}\{{[^}}]*\}} (\d+)$", text, re.M)
+    return int(found.group(1)) if found else None
+
+
 ROLE = "NullBillDispatcher"
 # VM.Allocate covers creating (cloning into the pool) and destroying;
 # smbios1, which hands a clone its job, is a VM.Config.HWType option.

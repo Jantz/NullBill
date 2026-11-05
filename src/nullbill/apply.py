@@ -15,12 +15,13 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from nullbill import backups, lan
+from nullbill import backups, ci, lan
 from nullbill.artifacts import write_build
 from nullbill.errors import NullBillError
 from nullbill.flows import mac
@@ -299,13 +300,13 @@ FIRST_BACKUP_S = 3 * 3600
 PBS_VARS = ("pbs_fingerprint", "pbs_token_secret", "pbs_encryption_key")
 
 
-def run_tofu(ctx: Context, stage: str, init: bool) -> None:
+def run_tofu(ctx: Context, stage: str, init: bool, replace: tuple[str, ...] = ()) -> None:
     work = ctx.home / "tofu"
     env = tofu_env(ctx, stage)
     # init fetches the provider from the registry, so it keeps the system CAs.
     init_env = {k: v for k, v in env.items() if k != "SSL_CERT_FILE"}
     steps = [(["tofu", "init", "-input=false", "-no-color"], init_env)] if init else []
-    steps.append((["tofu", "apply", "-auto-approve", "-input=false", "-no-color"], env))
+    steps.append((["tofu", "apply", "-auto-approve", "-input=false", "-no-color", *(f"-replace={a}" for a in replace)], env))
     for argv, extra in steps:
         ctx.say(f"{stage}: {' '.join(argv[:2])}")
         rc, _ = ctx.reach.local(argv, work, extra)
@@ -617,13 +618,44 @@ def forget_host_key(ctx: Context, address: str) -> None:
         known.write_text("".join(line for line in lines if line.split(" ", 1)[0] != address))
 
 
+def drain_clones(first: int, last: int, limit_s: int) -> str:
+    """A host script: wait up to limit_s for the clones in first..last to
+    finish their jobs, stop any still running, and destroy them all."""
+    return (
+        f'clones() {{ qm list | awk -v a={first} -v b={last} -v want="$1" '
+        "'NR > 1 && $1 >= a && $1 <= b && (want == \"\" || $3 == want) { print $1 }'; }; "
+        f"end=$((SECONDS + {limit_s})); "
+        'while [ -n "$(clones running)" ] && [ "$SECONDS" -lt "$end" ]; do sleep 30; done; '
+        'for v in $(clones running); do qm stop "$v"; done; '
+        'for v in $(clones ""); do qm destroy "$v" --purge; done'
+    )
+
+
+def retire(ctx: Context, name: str, guest: dict) -> None:
+    """Make way for a new golden image: the dispatcher stops taking jobs
+    (the stage's dispatcher run starts it again), the old image's clones
+    finish, and OpenTofu replaces the template with a fresh VM from the
+    pinned image. Jobs queue in Forgejo meanwhile."""
+    guest_out(ctx, "ci", "runner-dispatcher", ["sh", "-c", "systemctl stop nb-dispatcher 2>/dev/null || true"])
+    first, last = (int(v) for v in guest["clone_vmids"].split("-"))
+    ctx.say(f"ci: waiting for {name}'s running jobs to finish, at most {ci.MAX_JOB_S // 3600} h")
+    host_out(ctx, "ci", f"bash -c {shlex.quote(drain_clones(first, last, ci.MAX_JOB_S))}", timeout=ci.MAX_JOB_S + 900)
+    run_tofu(ctx, "ci", init=False, replace=(f"proxmox_virtual_environment_vm.{name}",))
+
+
 def bake(ctx: Context, name: str, guest: dict) -> None:
     """Boot the pool's template VM, make it a one-job runner, seal it and
-    convert it to a template. A template already converted is kept."""
+    convert it to a template. A template is kept until it is
+    ci.REBAKE_AFTER_S old, then replaced and baked again."""
     vmid = guest["template_vmid"]
     if "template: 1" in host_out(ctx, "ci", f"qm config {vmid}"):
-        ctx.say(f"ci: {name}'s golden image is baked")
-        return
+        recorded = host_out(ctx, "ci", f"cat {ci.TEXTFILE_DIR}/{ci.baked_file(name)} 2>/dev/null || true")
+        baked = ci.baked_time(recorded)
+        if baked is not None and time.time() - baked < ci.REBAKE_AFTER_S:
+            ctx.say(f"ci: {name}'s golden image is baked")
+            return
+        ctx.say(f"ci: {name}'s golden image is over {ci.REBAKE_AFTER_S // 86400} days old; baking it again")
+        retire(ctx, name, guest)
     ctx.say(f"ci: baking {name}'s golden image (VM {vmid})")
     host_out(ctx, "ci", f"qm status {vmid} | grep -q running || qm start {vmid}")
     address = guest["template_ip"]
@@ -641,6 +673,7 @@ def bake(ctx: Context, name: str, guest: dict) -> None:
         run_playbook(ctx, "ci", "agent-ssh.yml", name, {"agent_ssh_user_ca_key": ssh_user_ca(ctx, "ci")})
     run_playbook(ctx, "ci", "ci-runner-seal.yml", name)
     host_out(ctx, "ci", f"qm shutdown {vmid} --timeout 180 && qm template {vmid}")
+    host_files(ctx, "ci", ci.TEXTFILE_DIR, {ci.baked_file(name): ci.baked_metric(name, time.time())})
     ctx.say(f"ci: {name}'s golden image is a template")
 
 
@@ -668,7 +701,7 @@ def dispatcher_vars(ctx: Context) -> dict:
                 "vmids": [first, last],
                 "labels": labels,
                 "runner_labels": [f"{label}:host" for label in labels],
-                "max_job_seconds": 6 * 3600,
+                "max_job_seconds": ci.MAX_JOB_S,
             }
         )
     return {

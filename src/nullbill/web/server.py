@@ -46,6 +46,12 @@ WORKLOADS = ["agents", "linux-ci", "inference", "windows-ci", "windows-dev"]
 ACTIONS = {"probe", "apply", "verify"}
 # Closing the LAN to Proxmox (nullbill/lan.py), run as apply's host stage.
 LAN_ACTIONS = {"close-lan": ["apply", "--close-lan"], "keep-lan-closed": ["apply", "--confirm-lan"], "open-lan": ["apply", "--open-lan"]}
+# The page's own weekly job: the ci stage bakes each golden image again once
+# it is a week old (nullbill/ci.py). Sunday 03:00 local time, after the
+# nightly backups; skipped for the week if another job runs then.
+SCHEDULED = {"rebake-ci": ["apply", "--stage", "ci"]}
+REBAKE_WEEKDAY, REBAKE_HOUR = 6, 3
+SCHEDULE_CHECK_S = 300
 # An optional Healthchecks.io check notices silence; alerts go to NTFY.
 HEALTHCHECKS = re.compile(r"https://hc-ping\.com/[A-Za-z0-9_-]{8,}(/[a-z0-9_-]+)?")
 # The agent CLI signs in with an Anthropic API key or a Claude subscription
@@ -375,15 +381,18 @@ class App:
     def start(self, action: str, stage: str | None = None, client: str = "") -> Job:
         if action == "keep-lan-closed" and not self.via_vpn(client):
             raise NullBillError("press Keep it closed on the page opened over Tailscale; that press is what shows Tailscale works")
-        if action not in ACTIONS and action not in LAN_ACTIONS:
+        fixed = LAN_ACTIONS | SCHEDULED
+        if action not in ACTIONS and action not in fixed:
             raise NullBillError(f"unknown action {action!r}")
         with self.lock:
             if any(j.state() == "running" for j in self.jobs.values()):
                 raise NullBillError("another job is still running")
             jobs = self.home / "jobs"
             jobs.mkdir(mode=0o700, exist_ok=True)
-            job_id = time.strftime("%Y%m%dT%H%M%S") + "-" + action
-            args = LAN_ACTIONS[action] if action in LAN_ACTIONS else [action] + (["--stage", stage] if stage else [])
+            # To the millisecond: the weekly job and a press can share a second.
+            now = time.time()
+            job_id = time.strftime("%Y%m%dT%H%M%S", time.localtime(now)) + f"{int(now * 1000) % 1000:03d}-{action}"
+            args = fixed[action] if action in fixed else [action] + (["--stage", stage] if stage else [])
             job = Job(job_id, action, args, jobs / f"{job_id}.log", time.time())
             env = os.environ | {"NULLBILL_HOME": str(self.home), "PYTHONUNBUFFERED": "1", "ANSIBLE_FORCE_COLOR": "0"}
             fd = os.open(job.log, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -392,6 +401,30 @@ class App:
                 job.process = subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, env=env, stdin=subprocess.DEVNULL)
             self.jobs[job_id] = job
             return job
+
+    def rebake_due(self, now: float) -> bool:
+        """Sunday's 03:00 hour, once a week, after a first apply made the CI pools."""
+        t = time.localtime(now)
+        if (t.tm_wday, t.tm_hour) != (REBAKE_WEEKDAY, REBAKE_HOUR):
+            return False
+        stamp = self.home / "web" / "last-rebake"
+        if stamp.exists() and now - float(stamp.read_text() or 0) < 6 * 86400:
+            return False
+        path = self.home / "plan.yaml"
+        if not (self.home / "tofu").is_dir() or not path.exists():
+            return False
+        guests = (yaml.safe_load(path.read_text()) or {}).get("guests") or {}
+        return any(g.get("kind") == "vm-pool" and g.get("zone") != "windows" for g in guests.values())
+
+    def scheduled(self, now: float) -> Job | None:
+        if not self.rebake_due(now):
+            return None
+        try:
+            job = self.start("rebake-ci")
+        except NullBillError:
+            return None
+        _write_private(self.home / "web" / "last-rebake", f"{now}\n")
+        return job
 
     def job_view(self, job: Job, offset: int = 0) -> dict:
         data = job.log.read_bytes()
@@ -567,4 +600,11 @@ def serve(home: Path, listen: str) -> None:
     # cannot hold up the accept loop.
     server.socket = tls.wrap_socket(server.socket, server_side=True, do_handshake_on_connect=False)
     print(f"nullbill web on https://{listen}, certificate SHA-256 {fingerprint(cert)}", flush=True)
+
+    def schedule() -> None:
+        while True:
+            time.sleep(SCHEDULE_CHECK_S)
+            app.scheduled(time.time())
+
+    threading.Thread(target=schedule, daemon=True).start()
     server.serve_forever()

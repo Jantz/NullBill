@@ -165,3 +165,17 @@ tests:
         exp_alerts:
           - exp_labels: {severity: page, instance: "pve:9100", file: "/var/lib/prometheus/node-exporter/nullbill-backups.prom"}
             exp_annotations: {summary: "pve:9100 has not refreshed its backup metrics for three hours (nb-backup-metrics.timer)"}
+  # Samples 4 minutes apart stay inside Prometheus's 5-minute lookback.
+  - interval: 4m
+    input_series:
+      - series: 'nb_ci_image_baked_timestamp_seconds{instance="pve:9100",pool="linux-runner"}'
+        values: "0x5500"
+    alert_rule_test:
+      - eval_time: 14d50m
+        alertname: CiImageOld
+        exp_alerts: []
+      - eval_time: 14d1h10m
+        alertname: CiImageOld
+        exp_alerts:
+          - exp_labels: {severity: page, instance: "pve:9100", pool: linux-runner}
+            exp_annotations: {summary: "the linux-runner CI image is over 14 days old and its re-bake keeps failing; run setup and read the ci stage"}

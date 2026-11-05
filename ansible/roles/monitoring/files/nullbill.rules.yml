@@ -115,3 +115,14 @@ groups:
         labels: {severity: page}
         annotations:
           summary: "{{ $labels.instance }} has not refreshed its backup metrics for three hours (nb-backup-metrics.timer)"
+  # CI images: apply records each bake on the host (nullbill/ci.py) and bakes
+  # an image again after a week; the page runs that weekly.
+  - name: nullbill-ci
+    rules:
+      - alert: CiImageOld
+        # ci.MAX_IMAGE_AGE_DAYS: two missed weekly re-bakes.
+        expr: time() - nb_ci_image_baked_timestamp_seconds > 14 * 86400
+        for: 1h
+        labels: {severity: page}
+        annotations:
+          summary: "the {{ $labels.pool }} CI image is over 14 days old and its re-bake keeps failing; run setup and read the ci stage"
