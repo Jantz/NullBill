@@ -93,7 +93,26 @@
     </section>
 
     <section>
-      <h2>7. Build it</h2>
+      <h2>7. Reach it from anywhere</h2>
+      <p>Optional. Your server joins your free <a href="https://tailscale.com/" rel="noopener noreferrer" target="_blank">Tailscale</a> network, so this page and your guests are reachable from your own devices wherever you are. Until then everything stays on your local network.</p>
+      <ol>
+        <li>Sign in to the Tailscale admin console with the login you gave in step 3. Under <b>Access controls</b>, replace the policy with the one below and save. It lets you, and nobody else, reach the server.</li>
+        <li>Under <b>Settings, Keys</b>, generate an auth key: not reusable, pre-approved, tagged <code>tag:nb-vpn</code>.</li>
+        <li>Paste the key here and run setup. The server uses it once to join, then forgets it.</li>
+      </ol>
+      <p id="tailnet-hint">The policy appears once the plan is ready.</p>
+      <details id="tailnet-details" hidden><summary>Tailscale policy</summary><pre id="tailnet-policy"></pre></details>
+      <form id="vpn-form">
+        <label>Tailscale auth key
+          <input id="tailscale-key" type="password" autocomplete="off" placeholder="tskey-auth-...">
+        </label>
+        <button type="submit">Save</button>
+        <span id="vpn-result"></span>
+      </form>
+    </section>
+
+    <section>
+      <h2>8. Build it</h2>
       <p>Each step can be run again safely. If one fails, fix the cause and press the button again.</p>
       <button data-action="apply">Run setup</button>
       <button data-action="verify" class="secondary">Run checks</button>

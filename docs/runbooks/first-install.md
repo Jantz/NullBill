@@ -37,9 +37,12 @@ the button again. Every stage can be run again safely.
 5. **Alerts**: subscribe to the topic shown in the ntfy app, paste the
    Healthchecks.io URL if you made one, and press **Send a test alert**.
 6. **Coding agent**: paste the key or token.
-7. **Run setup**. The log shows each stage: render, host, tofu, router,
+7. **Reach it from anywhere** (optional): paste the policy into Tailscale and
+   a one-time auth key here, as [vpn.md](vpn.md) describes. Without a key the
+   vpn stage waits and the rest still runs.
+8. **Run setup**. The log shows each stage: render, host, tofu, router,
    proxy, updates, ca, postgres, monitoring, forgejo, ci, agents, logs,
-   verify. The first run downloads images and packages and takes a while;
+   vpn, verify. The first run downloads images and packages and takes a while;
    tofu and ci are the longest.
 
 ## If a stage fails
@@ -50,8 +53,8 @@ the log carries addresses on your network and guest names, not secrets.
 
 ## What is not in this run yet
 
-- VPN access (Tailscale): the page stays on your local network, and the LAN
-  keeps Proxmox's own access until VPN access is confirmed (#9).
+- Closing the LAN: it keeps Proxmox's own web UI and SSH until you have
+  reached them over Tailscale (#9).
 - Backups to PBS: the PBS disk is not attached by apply yet (#16).
 - Re-baking the CI image on a schedule (OPEN_QUESTIONS 9).
 - Shipping the host's own SSH logins to Loki; guests' are shipped.

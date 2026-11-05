@@ -7,7 +7,7 @@ Guidance for Claude sessions working in this repository.
 NullBill turns a spare x86 machine running Proxmox VE into a self-hosted dev
 server from one declarative config. `nullbill` runs on a controller the owner
 names and reaches the host over SSH; it never runs on the host. Only `probe`,
-`plan`, `apply` (stages so far: render, host, tofu, router, proxy, updates, ca, postgres, monitoring, forgejo, ci, agents, logs, verify; backups and the VPN are #22) and
+`plan`, `apply` (stages so far: render, host, tofu, router, proxy, updates, ca, postgres, monitoring, forgejo, ci, agents, logs, vpn, verify; backups are #22) and
 `verify` exist.
 
 ## Layout
@@ -22,7 +22,8 @@ names and reaches the host over SSH; it never runs on the host. Only `probe`,
 - `src/nullbill/flows.py`: the one flow list both firewall layers are generated from.
 - `src/nullbill/firewall.py`: pve-firewall files; `tools/check-firewall` parses them with the stock parser in a container.
 - `src/nullbill/router.py`, `src/nullbill/proxy.py`: router (nftables, dnsmasq, interfaces) and Squid files; `tools/check-guests` checks them with Debian 12's nft, dnsmasq, ifupdown and squid.
-- `src/nullbill/tailnet.py`: Tailscale policy from people and roles, the only per-person gate; plan fails past the free-plan limits in `catalog.yaml`.
+- `src/nullbill/tailnet.py`: Tailscale policy from people and roles, the only per-person gate; plan fails past the free-plan limits in `catalog.yaml`. `routes` are the zones the vpn guest advertises.
+- `ansible/roles/vpn`: pinned Tailscale in userspace networking (no tun in the container); logs in once with the owner's one-time auth key (`tailscale_auth_key`, pasted on the page, dropped by apply after login), then keeps routes and name with `tailscale set`.
 - `ansible/`: host baseline (key-only SSH, auditd, no-subscription repo, security-only upgrades); `tools/check-host` runs it twice in a Debian 12 container and checks the result. `docs/runbooks/` holds steps the owner does by hand. Guest roles carry `tests/check.sh`, which `tools/check-roles` runs in a Debian 12 container.
 - `ansible/roles/router`: places `build/router` on the router VM, each nft and dnsmasq file checked before it replaces the old one; reboots when interface names change. Its check uses `tests/files`, which `tests/test_role_check_files.py` keeps equal to the small render.
 - `ansible/roles/updates`: unattended-upgrades, needrestart and node_exporter with Debian's apt collector, plus `nb-update-metrics` (last successful run). apply's updates stage runs it on every Linux guest that lives on; `host_baseline` includes it for the host (security only, never reboots). Its alert rules are in the monitoring role's `nullbill.rules.yml`.

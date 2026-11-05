@@ -96,3 +96,8 @@ class Secrets:
             return
         self.data[name] = value
         self.codec.save(self.data)
+
+    def drop(self, name: str) -> None:
+        """Forget a value that has been used up, such as a one-time key."""
+        if self.data.pop(name, None) is not None:
+            self.codec.save(self.data)

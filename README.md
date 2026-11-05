@@ -12,8 +12,7 @@ choice and the plan lists it.
 **Status.** Every part has been built and tested against stand-ins:
 containers that play the Proxmox host, the guests and the services. None of
 it has run on real hardware yet. The [first install](docs/runbooks/first-install.md)
-is that first run. VPN access and backups are not wired in yet
-([below](#not-done-yet)).
+is that first run. Backups are not wired in yet ([below](#not-done-yet)).
 
 ## What you get
 
@@ -83,7 +82,8 @@ setup page and remote access.
    the fingerprint matches, then continue. Enter the code and choose a
    password.
 3. Follow the page from top to bottom: look at the hardware, choose what to
-   run, check the plan, set up alerts and paste the agent's key.
+   run, check the plan, set up alerts, paste the agent's key and, to reach
+   the server from anywhere, a Tailscale auth key ([docs/runbooks/vpn.md](docs/runbooks/vpn.md)).
 4. Press **Run setup** and watch the log. The first run downloads images
    and packages and takes a while.
 
@@ -110,6 +110,7 @@ It runs these stages in order and stops at the first one that fails.
 | ci | Builds the CI runner image, then the service that gives each job its own copy. |
 | agents | The agent's container and CLI, and its SSH access to the guests it may manage. |
 | logs | Sends agent commands and SSH logins to Loki. |
+| vpn | Joins your Tailscale network, once you paste an auth key. |
 | verify | Checks every allowed and forbidden connection. |
 
 ## After setup
@@ -130,10 +131,9 @@ It runs these stages in order and stops at the first one that fails.
 
 ## Not done yet
 
-- **VPN access (Tailscale).** Until it lands, the setup page is reachable
-  only on your home network, and Proxmox keeps its usual access there.
-  Forgejo, Grafana and the agent's guests have no way in from your network
-  yet; the agent can be used from the Proxmox shell.
+- **Closing the home network** to Proxmox's own web UI and SSH once you
+  reach everything over Tailscale (#9). Until then Proxmox keeps its usual
+  access there.
 - **Backups** to Proxmox Backup Server: the role exists, apply does not
   attach the backup disk yet.
 - Rebuilding the CI image on a schedule, and Windows and local AI models.

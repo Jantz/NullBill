@@ -1,0 +1,15 @@
+# Tailscale from its signed apt repository, the key pinned by checksum
+# (fingerprint 2596A99EAAB33821893C0A79458CA832957F5868).
+vpn_tailscale_version: 1.104.5
+vpn_repo_key_url: https://pkgs.tailscale.com/stable/debian/bookworm.noarmor.gpg
+vpn_repo_signer_sha256: 3e03dacf222698c60b8e2f990b809ca1b3e104de127767864284e6c228f1fb39
+# The zone subnets this guest routes for the tailnet; apply sets them from
+# the plan. Tailscale's policy approves them for tag:nb-vpn (tailnet.py).
+vpn_routes: []
+vpn_hostname: nullbill
+vpn_tag: tag:nb-vpn
+# A one-time auth key the owner makes in Tailscale's admin console and
+# pastes on the page: tagged tag:nb-vpn, pre-approved, not reusable. Used
+# only while this guest is logged out.
+vpn_auth_key: ""
+vpn_manage_services: true

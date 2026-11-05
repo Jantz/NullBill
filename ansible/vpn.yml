@@ -1,0 +1,8 @@
+# Tailscale on the vpn guest: the subnet router through which people reach
+# the zones. apply runs this with the plan's zone subnets and, until the
+# guest is logged in, the owner's one-time auth key.
+- name: Tailscale subnet router
+  hosts: all
+  become: false
+  roles:
+    - vpn

@@ -35,6 +35,7 @@ from nullbill.cli import plan_text
 from nullbill.errors import NullBillError
 from nullbill.model import build_model
 from nullbill.secretfile import Codec, Secrets, Sops
+from nullbill.tailnet import render_tailnet
 
 SESSION_S = 12 * 3600
 MIN_PASSWORD = 12
@@ -47,6 +48,8 @@ HEALTHCHECKS = re.compile(r"https://hc-ping\.com/[A-Za-z0-9_-]{8,}(/[a-z0-9_-]+)
 # The agent CLI signs in with an Anthropic API key or a Claude subscription
 # token from `claude setup-token`; each is kept under its own name.
 AGENT_CREDENTIALS = {"sk-ant-api": ("anthropic_api_key", "API key"), "sk-ant-oat": ("claude_oauth_token", "subscription token")}
+# A Tailscale auth key logs the vpn guest in once; apply forgets it after.
+TAILSCALE_KEY = re.compile(r"tskey-auth-[A-Za-z0-9-]{8,200}")
 STATIC = {"/": ("index.html", "text/html"), "/app.js": ("app.js", "text/javascript"), "/style.css": ("style.css", "text/css")}
 SECURITY_HEADERS = {
     "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'",
@@ -268,6 +271,19 @@ class App:
             store.data[kind[0]] = value
             store.codec.save(store.data)
 
+    # The vpn guest's one-time auth key: whether one waits, never the value.
+    def tailscale_key(self) -> bool:
+        return bool(Secrets(self.codec(self.home)).data.get("tailscale_auth_key"))
+
+    def save_tailscale_key(self, body: dict) -> None:
+        value = str(body.get("key", "")).strip()
+        if not TAILSCALE_KEY.fullmatch(value):
+            raise NullBillError("paste the auth key Tailscale shows once you generate it (tskey-auth-...)")
+        with self.lock:
+            if any(job.state() == "running" for job in self.jobs.values()):
+                raise NullBillError("wait until the running job finishes")
+            Secrets(self.codec(self.home)).set("tailscale_auth_key", value)
+
     # Config and plan.
     def config(self) -> dict | None:
         path = self.home / "config.yaml"
@@ -321,13 +337,15 @@ class App:
         facts = self.home / "probe" / "latest" / "facts.json"
         config = self.config()
         if config is None or not facts.is_file():
-            return {"text": None, "errors": []}
+            return {"text": None, "errors": [], "tailnet_policy": None}
         try:
-            text = plan_text(build_model(config), facts.read_bytes())
+            model = build_model(config)
+            text = plan_text(model, facts.read_bytes())
         except NullBillError as exc:
-            return {"text": None, "errors": exc.messages}
+            return {"text": None, "errors": exc.messages, "tailnet_policy": None}
         _write_private(self.home / "plan.yaml", text)
-        return {"text": text, "errors": []}
+        policy = render_tailnet(yaml.safe_load(text), model)["policy.json"]
+        return {"text": text, "errors": [], "tailnet_policy": policy}
 
     # Jobs.
     def start(self, action: str, stage: str | None = None) -> Job:
@@ -376,6 +394,7 @@ class App:
             "plan": self.plan(),
             "alerts": self.alerts() if has_password else None,
             "agent_credential": self.agent_credential(),
+            "tailscale_key": self.tailscale_key(),
             "job": self.job_view(latest) | {"text": ""} if latest else None,
         }
 
@@ -458,6 +477,9 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 if self.path == "/api/agent":
                     app.save_agent_credential(body)
                     return self.json(200, {"ok": True, "agent_credential": app.agent_credential()})
+                if self.path == "/api/vpn":
+                    app.save_tailscale_key(body)
+                    return self.json(200, {"ok": True, "tailscale_key": app.tailscale_key()})
                 if self.path == "/api/alerts/test":
                     return self.json(200, {"ok": True, "sent": app.test_alerts()})
                 if self.path == "/api/jobs":

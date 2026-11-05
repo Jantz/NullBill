@@ -81,6 +81,14 @@ def _tests(plan: dict, model: dict) -> list[dict]:
     return tests
 
 
+def routes(plan_with_notes: dict, model: dict) -> list[str]:
+    """Subnets the vpn guest advertises: each zone a role's flow ends in. The
+    grants above still decide which person reaches which address in them."""
+    plan = strip_notes(plan_with_notes)
+    zones = {"mgmt" if f.dest == HOST else plan["guests"][f.dest]["zone"] for f in _role_flows(plan, model)}
+    return [plan["zones"][z]["subnet"] for z in plan["zones"] if z in zones]
+
+
 def render_tailnet(plan_with_notes: dict, model: dict) -> dict[str, str]:
     """Return {"policy.json": the tailnet policy file}."""
     plan = strip_notes(plan_with_notes)

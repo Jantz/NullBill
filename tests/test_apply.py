@@ -12,6 +12,7 @@ from nullbill.model import build_model
 from nullbill.plan import build_plan
 from nullbill.results import Result
 from nullbill.secretfile import Secrets
+from nullbill.tailnet import routes
 
 TARGET = "root@pve.example.internal"
 
@@ -44,6 +45,7 @@ class FakeReach:
         self.templates = set()
         self.nets = {0: "name=eth0,bridge=vmbr0,hwaddr=02:4E:42:00:00:99,ip=dhcp,type=veth"}
         self.nullbill = []
+        self.tailnet = "NeedsLogin"
 
     def host(self, command, stdin=None):
         self.calls.append(("host", command))
@@ -103,6 +105,8 @@ class FakeReach:
             return 0, "ecdsa-sha2-nistp256 AAAAuserca\n", ""
         if argv[:5] == ["/usr/local/sbin/nb-forgejo", "admin", "user", "generate-access-token", "--username"]:
             return 0, f"forgejo-token-{argv[7]}\n", ""
+        if argv == ["tailscale", "status", "--json"]:
+            return 0, json.dumps({"BackendState": self.tailnet, "Self": {"DNSName": "nullbill.example-tailnet.ts.net."}}), ""
         return 127, "", f"fake guest {vmid}: unexpected {argv}"
 
     def local(self, argv, cwd, env, capture=False):
@@ -124,7 +128,11 @@ class FakeReach:
 
     def playbook(self, playbook, hosts, variables):
         self.calls.append(("playbook", playbook, hosts, variables))
-        return 2 if playbook == self.fail_playbook else 0
+        if playbook == self.fail_playbook:
+            return 2
+        if playbook == "vpn.yml" and variables["vpn_auth_key"].startswith("tskey-auth-"):
+            self.tailnet = "Running"
+        return 0
 
 
 @pytest.fixture
@@ -402,6 +410,39 @@ def test_logs_stage_gives_each_shipper_its_own_certificate(ctx):
     assert workspace["log_shipper_key"] == (c.home / "shipper-ca" / "workspace.key").read_text()
 
 
+def test_vpn_stage_waits_for_a_key_then_logs_in_once_and_forgets_it(ctx):
+    c = ctx("small")
+    apply.stage_vpn(c)
+    (_, playbook, hosts, variables), _ = c.reach.calls
+    assert (playbook, hosts) == ("vpn.yml", {"vpn": connection(c, "vpn")})
+    assert variables["vpn_tag"] == "tag:nb-vpn" and variables["vpn_auth_key"] == ""
+    # The owner reaches every zone that holds a service, mgmt included; access
+    # holds only the vpn guest itself.
+    assert variables["vpn_routes"] == [z["subnet"] for n, z in c.bare["zones"].items() if n != "access"]
+    assert c.log[-1].startswith("vpn: waiting for a Tailscale auth key")
+
+    c.secrets.set("tailscale_auth_key", "tskey-auth-example")
+    apply.stage_vpn(c)
+    assert c.reach.calls[-2][3]["vpn_auth_key"] == "tskey-auth-example"
+    assert c.log[-2].startswith("vpn: on the tailnet as nullbill.example-tailnet.ts.net, advertising 10.42.1.0/24")
+    assert c.log[-1] == f"vpn: from your devices on the tailnet the page is https://{c.bare['guests']['nullbill']['ip']}:8443"
+    assert "tailscale_auth_key" not in c.secrets.data
+
+    apply.stage_vpn(c)
+    assert c.reach.calls[-2][3]["vpn_auth_key"] == ""
+    assert c.log[-2].startswith("vpn: on the tailnet")
+
+
+def test_vpn_routes_cover_only_zones_a_role_reaches(ctx):
+    c = ctx("small")
+    c.model["roles"]["owner"]["reach"] = ["service:forgejo"]
+    c.model["host"]["ports"] = []
+    for name, svc in c.model["services"].items():
+        for port in svc.get("ports", []):
+            port["from"] = [r for r in port["from"] if not r.startswith("role:") or (r == "role:owner" and name == "forgejo")]
+    assert routes(c.plan, c.model) == [c.bare["zones"][c.bare["guests"]["forgejo"]["zone"]]["subnet"]]
+
+
 def test_host_stage_rewrites_only_what_changed(ctx):
     c = ctx()
     apply.stage_host(c)
@@ -542,6 +583,7 @@ def test_a_full_apply_runs_every_stage_against_the_stand_ins(ctx, monkeypatch):
         "operator.yml",
         "agent-ssh.yml",
         "log-shipper.yml",
+        "vpn.yml",
     ):
         assert playbook in ran, playbook
     assert ran.index("forgejo.yml") < ran.index("runner-dispatcher.yml") and ran.index("postgres.yml") < ran.index("forgejo.yml")

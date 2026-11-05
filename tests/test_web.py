@@ -173,7 +173,7 @@ def test_choices_write_config_and_probe_gives_a_plan(site):
     assert client.call("/api/choices", {"workloads": ["agents"], "owner_login": "not an email"})[0] == 400
     choices = {"workloads": ["agents", "linux-ci", "bogus"], "backups": False, "owner_login": "owner-a@example.internal"}
     status, data = client.call("/api/choices", choices)
-    assert status == 200 and data["plan"] == {"text": None, "errors": []}
+    assert status == 200 and data["plan"] == {"text": None, "errors": [], "tailnet_policy": None}
     config = yaml.safe_load((app.home / "config.yaml").read_text())
     assert config["target"] == {"ssh": "root@192.0.2.10"}
     assert config["intent"] == {"workloads": ["agents", "linux-ci"]}
@@ -186,6 +186,9 @@ def test_choices_write_config_and_probe_gives_a_plan(site):
     state = client.call("/api/state")[1]
     assert state["probed"] and state["plan"]["errors"] == []
     assert "class: small" in state["plan"]["text"] and "status: disabled" in state["plan"]["text"]
+    # The policy to paste into Tailscale names the owner and the vpn guest's tag.
+    policy = json.loads(state["plan"]["tailnet_policy"])
+    assert policy["groups"] == {"group:nb-owner": ["owner-a@example.internal"]} and "tag:nb-vpn" in policy["tagOwners"]
     # Backups back on: the services key goes away again.
     client.call("/api/choices", {"workloads": ["agents", "linux-ci"], "backups": True, "owner_login": "owner-a@example.internal"})
     assert "services" not in yaml.safe_load((app.home / "config.yaml").read_text())
@@ -258,6 +261,18 @@ def test_agent_credential_is_kept_by_kind_and_never_shown(site):
     assert stored["claude_oauth_token"] == token and "anthropic_api_key" not in stored
     state = json.dumps(client.call("/api/state")[1])
     assert token not in state and '"agent_credential": "subscription token"' in state
+
+
+def test_tailscale_key_waits_for_setup_and_is_never_shown(site):
+    app, client = site
+    sign_in(app, client)
+    assert client.call("/api/state")[1]["tailscale_key"] is False
+    bad = client.call("/api/vpn", {"key": "tskey-api-" + "c" * 30})
+    assert bad[0] == 400 and "tskey-auth-" in bad[1]["error"]
+    key = "tskey-auth-kExample1CNTRL-" + "d" * 30
+    assert client.call("/api/vpn", {"key": f" {key}\n"}) == (200, {"ok": True, "tailscale_key": True})
+    assert app.codec(app.home).load()["tailscale_auth_key"] == key
+    assert key not in json.dumps(client.call("/api/state")[1])
 
 
 def test_a_failed_test_alert_says_so(site):

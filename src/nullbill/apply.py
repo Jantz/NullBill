@@ -29,6 +29,7 @@ from nullbill.probe import Runner
 from nullbill.proxy import PROXY, proxy_port
 from nullbill.render import strip_notes
 from nullbill.secretfile import Secrets
+from nullbill.tailnet import TAG, routes
 from nullbill.verify import run_verify
 
 ANSIBLE = REPO_ROOT / "ansible"
@@ -664,6 +665,31 @@ def stage_logs(ctx: Context) -> None:
         run_playbook(ctx, "logs", "log-shipper.yml", name, variables)
 
 
+def stage_vpn(ctx: Context) -> None:
+    """Tailscale on the vpn guest as the tagged subnet router. It logs in once
+    with the owner's one-time auth key; until then it waits, logged out."""
+    if not planned(ctx, "vpn"):
+        return
+    variables = {
+        "vpn_routes": routes(ctx.plan, ctx.model),
+        "vpn_tag": TAG,
+        "vpn_auth_key": ctx.secrets.data.get("tailscale_auth_key", ""),
+    }
+    run_playbook(ctx, "vpn", "vpn.yml", "vpn", variables)
+    status = json.loads(guest_out(ctx, "vpn", "vpn", ["tailscale", "status", "--json"]))
+    if status.get("BackendState") == "Running":
+        name = (status.get("Self") or {}).get("DNSName", "").rstrip(".")
+        ctx.say(f"vpn: on the tailnet as {name or 'nullbill'}, advertising {', '.join(variables['vpn_routes'])}")
+        ctx.say(f"vpn: from your devices on the tailnet the page is https://{ctx.bare['guests']['nullbill']['ip']}:8443")
+        # A one-time key is spent once it has logged in.
+        ctx.secrets.drop("tailscale_auth_key")
+    elif variables["vpn_auth_key"]:
+        state = status.get("BackendState")
+        raise ApplyError("vpn", f"Tailscale did not log in ({state}); make a new one-time auth key and paste it on the page")
+    else:
+        ctx.say("vpn: waiting for a Tailscale auth key; paste one on the page and run setup again")
+
+
 def stage_verify(ctx: Context) -> None:
     results = run_verify(ctx.plan, ctx.model, ctx.target, ctx.run)
     for result in results:
@@ -688,6 +714,7 @@ STAGES: list[Stage] = [
     ("ci", stage_ci),
     ("agents", stage_agents),
     ("logs", stage_logs),
+    ("vpn", stage_vpn),
     ("verify", stage_verify),
 ]
 

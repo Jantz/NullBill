@@ -51,6 +51,9 @@ function renderPlan(plan) {
   $("plan").textContent = plan.text || "";
   $("plan-details").hidden = !plan.text;
   $("plan-hint").hidden = Boolean(plan.text || plan.errors.length);
+  $("tailnet-policy").textContent = plan.tailnet_policy || "";
+  $("tailnet-details").hidden = !plan.tailnet_policy;
+  $("tailnet-hint").hidden = Boolean(plan.tailnet_policy);
 }
 
 function renderAlerts(alerts) {
@@ -60,6 +63,12 @@ function renderAlerts(alerts) {
 
 function renderAgent(kind) {
   $("agent-result").textContent = kind ? `A ${kind} is saved.` : "Nothing saved yet.";
+}
+
+function renderVpn(waiting) {
+  $("vpn-result").textContent = waiting
+    ? "A key is saved; the next setup run uses it."
+    : "No key waiting. Once the server has joined, it needs none.";
 }
 
 function li(text, cls) {
@@ -115,6 +124,7 @@ async function refresh() {
   renderPlan(state.plan);
   renderAlerts(state.alerts);
   renderAgent(state.agent_credential);
+  renderVpn(state.tailscale_key);
   clearInterval(statusTimer);
   refreshStatus().catch(showError);
   statusTimer = setInterval(() => refreshStatus().catch(() => {}), 30000);
@@ -182,6 +192,14 @@ document.addEventListener("DOMContentLoaded", () => {
       const result = await api("/api/agent", {credential: $("agent-credential").value});
       $("agent-credential").value = "";
       renderAgent(result.agent_credential);
+    } catch (error) { showError(error); }
+  });
+  $("vpn-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const result = await api("/api/vpn", {key: $("tailscale-key").value});
+      $("tailscale-key").value = "";
+      renderVpn(result.tailscale_key);
     } catch (error) { showError(error); }
   });
   $("test-alerts").addEventListener("click", async () => {
