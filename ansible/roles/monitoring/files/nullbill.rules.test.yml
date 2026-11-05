@@ -17,7 +17,17 @@ tests:
         values: "0x15"
       - series: 'node_boot_time_seconds{job="host",instance="pve.nullbill.internal:9100"}'
         values: "0x60"
+      - series: 'nb_pve_api_cert_expiry_timestamp_seconds{job="host",instance="pve"}'
+        values: "1209000x70"
     alert_rule_test:
+      - eval_time: 59m
+        alertname: PveApiCertificateExpires
+        exp_alerts: []
+      - eval_time: 61m
+        alertname: PveApiCertificateExpires
+        exp_alerts:
+          - exp_labels: {severity: page, job: host, instance: pve}
+            exp_annotations: {summary: "the PVE API certificate guests use expires within 14 days; run apply"}
       - eval_time: 1m
         alertname: Watchdog
         exp_alerts:

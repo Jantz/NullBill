@@ -4,7 +4,8 @@
 set -euo pipefail
 
 play() {
-  ansible-playbook -i localhost, -c local -e host_baseline_manage_services=false /ansible/host-baseline.yml
+  ansible-playbook -i localhost, -c local -e host_baseline_manage_services=false \
+    -e host_baseline_api_name=pve.nullbill.internal -e host_baseline_api_address=10.42.1.254 /ansible/host-baseline.yml
 }
 fail() {
   echo "FAIL $1"
@@ -22,7 +23,25 @@ grep -q "authorized_keys is missing or empty" /tmp/nokey.log || fail "no-key ref
 test ! -e /etc/ssh/sshd_config.d/10-nullbill.conf || fail "sshd changed without a root key"
 echo "ok   refuses to run without a root key"
 
-# What a fresh PVE 8 install has: a key and the enterprise repositories.
+# What a fresh PVE 8 install has: a key, the enterprise repositories, and
+# PVE's CA with a node certificate for the LAN name and address only.
+# pvenode stands in by putting the certificate where PVE's would.
+node=$(hostname)
+mkdir -p /etc/pve/priv "/etc/pve/nodes/$node"
+openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=Proxmox Virtual Environment" \
+  -keyout /etc/pve/priv/pve-root-ca.key -out /etc/pve/pve-root-ca.pem 2>/dev/null
+openssl req -newkey rsa:2048 -nodes -subj "/CN=$node.example.internal" \
+  -keyout "/etc/pve/nodes/$node/pve-ssl.key" -out /tmp/node.csr 2>/dev/null
+openssl x509 -req -in /tmp/node.csr -CA /etc/pve/pve-root-ca.pem -CAkey /etc/pve/priv/pve-root-ca.key -CAcreateserial \
+  -CAserial /etc/pve/priv/pve-root-ca.srl -days 730 -out "/etc/pve/nodes/$node/pve-ssl.pem" \
+  -extfile <(echo "subjectAltName=IP:127.0.0.1,IP:::1,DNS:localhost,IP:192.0.2.10,DNS:$node,DNS:$node.example.internal") 2>/dev/null
+cat >/usr/local/bin/pvenode <<'SH'
+#!/bin/sh
+[ "$1 $2" = "cert set" ] || exit 2
+cp "$3" "/etc/pve/nodes/$(hostname)/pveproxy-ssl.pem"
+cp "$4" "/etc/pve/nodes/$(hostname)/pveproxy-ssl.key"
+SH
+chmod +x /usr/local/bin/pvenode
 echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExampleExample test" >/root/.ssh/authorized_keys
 echo "deb https://enterprise.proxmox.com/debian/pve bookworm pve-enterprise" >/etc/apt/sources.list.d/pve-enterprise.list
 echo "deb https://enterprise.proxmox.com/debian/ceph-quincy bookworm enterprise" >/etc/apt/sources.list.d/ceph.list
@@ -51,6 +70,14 @@ apt-config dump Unattended-Upgrade::Automatic-Reboot | grep -qx 'Unattended-Upgr
 test ! -e /etc/needrestart/conf.d/50-nullbill.conf || fail "needrestart left to PVE on the host"
 test -x /usr/local/sbin/nb-update-metrics || fail "update metrics script"
 echo "ok   unattended upgrades take Debian security updates only, never reboot the host"
+
+api=/etc/pve/nodes/$node/pveproxy-ssl.pem
+for check in "-verify_hostname pve.nullbill.internal" "-verify_ip 10.42.1.254" "-verify_ip 192.0.2.10" "-verify_hostname $node"; do
+  # shellcheck disable=SC2086
+  openssl verify -CAfile /etc/pve/pve-root-ca.pem $check "$api" | grep -q ": OK" || fail "API certificate: $check"
+done
+grep -q "^nb_pve_api_cert_expiry_timestamp_seconds [0-9]" /var/lib/prometheus/node-exporter/nullbill-pve-api.prom || fail "API certificate metric"
+echo "ok   the PVE API certificate names the mgmt name and address besides PVE's own, from PVE's CA"
 
 test -s /etc/audit/rules.d/50-nullbill.rules || fail "audit rules"
 echo "ok   audit rules installed (loading them needs a kernel; not checked here)"

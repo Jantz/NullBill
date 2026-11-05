@@ -135,7 +135,8 @@ def stage_render(ctx: Context) -> None:
 
 
 def stage_host(ctx: Context) -> None:
-    run_playbook(ctx, "host", "host-baseline.yml", None)
+    api = {"host_baseline_api_name": f"pve.{ctx.bare['domain']}", "host_baseline_api_address": ctx.bare["zones"]["mgmt"]["host_ip"]}
+    run_playbook(ctx, "host", "host-baseline.yml", None, api)
     prefix = "firewall/"
     files = {rel.removeprefix(prefix): text for rel, text in ctx.files.items() if rel.startswith(prefix)}
     # Until VPN reach is confirmed (#9), the LAN keeps PVE's default access to

@@ -37,6 +37,13 @@ groups:
         labels: {severity: page}
         annotations:
           summary: "certificate on {{ $labels.instance }} expires within 6 hours; its renewal has stopped"
+      # nb-pve-api-cert on the host; apply issues a new one under 30 days.
+      - alert: PveApiCertificateExpires
+        expr: nb_pve_api_cert_expiry_timestamp_seconds - time() < 14 * 86400
+        for: 1h
+        labels: {severity: page}
+        annotations:
+          summary: "the PVE API certificate guests use expires within 14 days; run apply"
       - alert: CertificateProbeFailing
         expr: probe_success{job="tls"} == 0
         for: 10m

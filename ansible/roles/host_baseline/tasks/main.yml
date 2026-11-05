@@ -98,6 +98,21 @@
     updates_restart_services: false
     updates_manage_services: "{{ host_baseline_manage_services }}"
 
+# PVE's certificate names only the host's LAN name and address; guests
+# reach the API as pve.<domain> on the mgmt bridge (files/nb-pve-api-cert).
+- name: API certificate script
+  ansible.builtin.copy:
+    src: nb-pve-api-cert
+    dest: /usr/local/sbin/nb-pve-api-cert
+    mode: "0755"
+
+- name: API certificate that also names the mgmt address
+  ansible.builtin.command:
+    argv: [/usr/local/sbin/nb-pve-api-cert, "{{ host_baseline_api_name }}", "{{ host_baseline_api_address }}"]
+  register: host_baseline_api_cert
+  changed_when: host_baseline_api_cert.stdout == "issued"
+  when: host_baseline_api_name | length > 0
+
 - name: Run auditd
   ansible.builtin.service:
     name: auditd

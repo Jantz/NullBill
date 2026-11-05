@@ -4,6 +4,11 @@ host_baseline_pve_keyring:
   bookworm: /etc/apt/trusted.gpg.d/proxmox-release-bookworm.gpg
   trixie: /usr/share/keyrings/proxmox-archive-keyring.gpg
 
+# The name and mgmt address guests reach the PVE API at; apply sets both
+# (pve.<domain>, zones.mgmt.host_ip). Empty leaves PVE's certificate alone.
+host_baseline_api_name: ""
+host_baseline_api_address: ""
+
 # Start, reload and load services. Only the container test turns this off,
 # because a container has neither an init system nor kernel audit.
 host_baseline_manage_services: true

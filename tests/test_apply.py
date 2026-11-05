@@ -149,6 +149,8 @@ def test_host_stage_runs_the_baseline_then_installs_the_lan_open_firewall(ctx):
     apply.stage_host(c)
     reach = c.reach
     assert reach.calls[0][:2] == ("playbook", "host-baseline.yml")
+    # Guests reach the API by its mgmt name and address; its certificate names both.
+    assert reach.calls[0][3] == {"host_baseline_api_name": "pve.nullbill.internal", "host_baseline_api_address": "10.42.1.254"}
     assert reach.calls[0][2] == {"pve": connection(c, None)}
     expected = {f"/etc/pve/firewall/{rel.removeprefix('firewall/')}" for rel in c.files if rel.startswith("firewall/")}
     expected.discard("/etc/pve/firewall/cluster-lan-open.fw")
