@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Run install.sh against a stand-in Proxmox host, whose fake pct drives a
+# sibling container through the docker socket, from the committed HEAD of
+# this repo. Needs docker and network access.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+ctx=$(mktemp -d)
+run=nb-install-check-$$
+cleanup() {
+  docker rm -f "$run-ct" >/dev/null 2>&1 || true
+  docker network rm "$run" >/dev/null 2>&1 || true
+  rm -rf "$ctx"
+}
+trap cleanup EXIT
+cp -r tools/install-check/Dockerfile tools/install-check/ct.Dockerfile tools/install-check/fakes "$ctx/"
+cat "${EXTRA_CA_FILE:-/dev/null}" > "$ctx/extra-ca.crt"
+docker build -q -t nullbill-install-check "$ctx" >/dev/null
+docker build -q -t nullbill-install-ct -f "$ctx/ct.Dockerfile" "$ctx" >/dev/null
+docker network create "$run" >/dev/null
+docker run --rm --network "$run" -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/src:ro" \
+  -e NB_CT="$run-ct" -e NB_CT_IMAGE=nullbill-install-ct -e NB_NET="$run" -e NB_SRC="$PWD" \
+  nullbill-install-check bash /src/tools/install-check/check.sh "$(git rev-parse HEAD)"

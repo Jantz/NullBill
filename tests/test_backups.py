@@ -141,7 +141,7 @@ def test_backups_can_be_switched_off(facts):
     model = build_model(config)
     plan = strip_notes(build_plan(model, facts("mid")))
     assert "pbs" not in plan["guests"]
-    assert plan["backups"] == {"target": None, "status": "off"}
+    assert plan["backups"] == {"target": None, "status": "disabled"}
     assert "pbs" not in {d["use"] for d in plan["disks"].values()}
     assert not backups.enabled(plan)
     config = json.loads(render_tofu(plan, model)["main.tf.json"])

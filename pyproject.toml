@@ -17,7 +17,7 @@ nullbill = "nullbill.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-nullbill = ["data/*.yaml"]
+nullbill = ["data/*.yaml", "web/static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

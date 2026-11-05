@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Stand-in for pct: VMID 2002 is the sibling container $NB_CT, made from the
+# image $NB_CT_IMAGE on network $NB_NET with the repo $NB_SRC at /src.
+set -euo pipefail
+cmd=$1
+shift
+case $cmd in
+  status)
+    state=$(docker inspect -f '{{.State.Status}}' "$NB_CT" 2>/dev/null) || {
+      echo "Configuration file 'nodes/pve/lxc/$1.conf' does not exist" >&2
+      exit 2
+    }
+    [ "$state" = running ] && echo "status: running" || echo "status: stopped" ;;
+  config) docker inspect "$NB_CT" >/dev/null 2>&1 && echo "hostname: nullbill" ;;
+  create)
+    echo "create $*" >>/var/log/fake-pct.log
+    docker create --name "$NB_CT" --hostname nullbill --network "$NB_NET" -v "$NB_SRC:/src:ro" "$NB_CT_IMAGE" >/dev/null ;;
+  start) docker start "$NB_CT" >/dev/null ;;
+  exec) shift 2; exec docker exec -i "$NB_CT" "$@" ;;
+  push)
+    docker cp "$2" "$NB_CT:$3" >/dev/null
+    docker exec "$NB_CT" chmod "${5:-0644}" "$3" ;;
+  *) echo "fake pct: $cmd is not supported" >&2; exit 2 ;;
+esac

@@ -1,0 +1,8 @@
+#!/bin/sh
+# Stand-in for pveam: lists one template, downloads nothing.
+case $1 in
+  update) echo "update successful" ;;
+  available) printf 'system          debian-12-standard_12.7-1_amd64.tar.zst\nsystem          debian-11-standard_11.7-1_amd64.tar.zst\n' ;;
+  list) echo "NAME SIZE" ;;
+  download) echo "downloaded $3" ;;
+esac

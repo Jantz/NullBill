@@ -1,0 +1,85 @@
+:root {
+  --bg: #f7f7f5;
+  --fg: #1d1d1b;
+  --muted: #5f5f5a;
+  --card: #ffffff;
+  --line: #deded8;
+  --accent: #2a5bd7;
+  --error: #b42318;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161615;
+    --fg: #ececea;
+    --muted: #a3a39d;
+    --card: #20201f;
+    --line: #34342f;
+    --accent: #7ea2ff;
+    --error: #ff8a80;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 16px;
+}
+h1 { font-size: 1.25rem; margin: 0; }
+h2 { font-size: 1.05rem; margin: 0 0 8px; }
+main { max-width: 760px; margin: 0 auto; padding: 0 16px 48px; }
+section {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+p { color: var(--muted); margin: 0 0 12px; }
+form { display: grid; gap: 10px; }
+fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 6px; }
+legend { font-weight: 600; margin-bottom: 4px; }
+label { display: block; }
+input[type=password], input[type=email] {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+button {
+  justify-self: start;
+  padding: 9px 16px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+button.link { background: none; color: var(--accent); padding: 0; }
+pre {
+  max-height: 420px;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  background: var(--bg);
+  border-radius: 8px;
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.errors { color: var(--error); padding-left: 18px; }
+p.errors { padding-left: 0; }

@@ -188,7 +188,7 @@ def run_verify(
     bare = strip_notes(plan)
     if bare["backups"]["status"] == "DEGRADED":
         results.append(Result("DEGRADED", "backups", "no separate disk for PBS"))
-    elif bare["backups"]["status"] == "off":
+    elif bare["backups"]["status"] == "disabled":
         results.append(Result("DEGRADED", "backups", "switched off; nothing is backed up"))
     if target is None:
         planned, skipped = probes(plan, model, "unresolved")

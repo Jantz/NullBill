@@ -296,7 +296,7 @@ def _disks(model: dict, facts: dict, errors: _Errors, want_pbs: bool) -> tuple[d
 
 def _backups(planned: dict, pbs: str | None) -> Note:
     if "pbs" not in planned:
-        return Note({"target": None, "status": "off"}, "PBS is switched off (services.pbs.enabled: false); nothing is backed up.")
+        return Note({"target": None, "status": "disabled"}, "PBS is switched off (services.pbs.enabled: false); nothing is backed up.")
     if pbs:
         return Note({"target": f"pbs datastore on {pbs}", "status": "ok"}, "PBS on its own disk.")
     return Note({"target": None, "status": "DEGRADED"}, "No separate disk for PBS; add a blank disk or pin one.")

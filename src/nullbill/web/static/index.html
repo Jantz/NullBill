@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NullBill</title>
+<link rel="stylesheet" href="/style.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<header>
+  <h1>NullBill</h1>
+  <button id="logout" class="link" hidden>Sign out</button>
+</header>
+<main>
+  <section id="login" hidden>
+    <h2>Sign in</h2>
+    <p id="login-hint"></p>
+    <form id="login-form">
+      <input id="secret" type="password" autocomplete="current-password" required>
+      <button type="submit">Sign in</button>
+    </form>
+  </section>
+
+  <section id="password" hidden>
+    <h2>1. Choose a password</h2>
+    <p>From now on you sign in with this password instead of the setup code. Use at least 12 characters and keep it in your password manager.</p>
+    <form id="password-form">
+      <input id="new-password" type="password" autocomplete="new-password" minlength="12" required>
+      <button type="submit">Save password</button>
+    </form>
+  </section>
+
+  <div id="setup" hidden>
+    <section>
+      <h2>2. Look at the hardware</h2>
+      <p>NullBill reads the CPU, memory, disks and GPU of this server. It changes nothing.</p>
+      <button data-action="probe">Probe the server</button>
+      <span id="probed"></span>
+    </section>
+
+    <section>
+      <h2>3. Choose what to run</h2>
+      <form id="choices-form">
+        <fieldset id="workloads"></fieldset>
+        <label><input type="checkbox" id="backups"> Nightly backups (needs a second disk to survive a disk failure)</label>
+        <label>Your Tailscale login (email)
+          <input id="owner-login" type="email" required>
+        </label>
+        <button type="submit">Save and plan</button>
+      </form>
+    </section>
+
+    <section>
+      <h2>4. Check the plan</h2>
+      <p id="plan-hint">Probe the server and save your choices to see what NullBill will build.</p>
+      <ul id="plan-errors" class="errors"></ul>
+      <details id="plan-details"><summary>Plan</summary><pre id="plan"></pre></details>
+    </section>
+
+    <section>
+      <h2>5. Build it</h2>
+      <p>Each step can be run again safely. If one fails, fix the cause and press the button again.</p>
+      <button data-action="apply">Run setup</button>
+      <button data-action="verify" class="secondary">Run checks</button>
+    </section>
+
+    <section id="job-section" hidden>
+      <h2 id="job-title"></h2>
+      <pre id="job-log"></pre>
+    </section>
+  </div>
+  <p id="error" class="errors" role="alert"></p>
+</main>
+</body>
+</html>

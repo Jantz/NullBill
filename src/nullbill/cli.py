@@ -84,6 +84,13 @@ def cmd_verify(_args: argparse.Namespace) -> int:
     return 1 if counts["FAIL"] else 0
 
 
+def cmd_web(args: argparse.Namespace) -> int:
+    from nullbill.web.server import serve
+
+    serve(nullbill_home(), args.listen)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="nullbill")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -97,6 +104,9 @@ def main(argv: list[str] | None = None) -> int:
     apply.set_defaults(func=cmd_apply)
     verify = sub.add_parser("verify", help="probe allowed and denied flows from each zone and the LAN; exits 1 on FAIL")
     verify.set_defaults(func=cmd_verify)
+    web = sub.add_parser("web", help="serve the setup and status page over HTTPS")
+    web.add_argument("--listen", default="0.0.0.0:8443", help="address:port (default 0.0.0.0:8443)")
+    web.set_defaults(func=cmd_web)
     args = parser.parse_args(argv)
     try:
         refuse_on_pve_host()
