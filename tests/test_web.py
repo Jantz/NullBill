@@ -8,6 +8,7 @@ import stat
 import sys
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 
 import pytest
@@ -260,3 +261,58 @@ def test_alert_settings_wait_for_a_running_job(site, tmp_path):
     ping = "https://hc-ping.com/0f4b3c9e-0000-4000-8000-000000000000"
     assert client.call("/api/alerts", {"healthchecks_url": ping}) == (400, {"error": "wait until the running job finishes"})
     app.jobs[job["id"]].process.kill()
+
+
+def test_status_reads_prometheus_on_the_monitoring_guest(site):
+    app, client = site
+    sign_in(app, client)
+    assert client.call("/api/status") == (200, {"monitoring": "not planned"})
+    (app.home / "plan.yaml").write_text("guests:\n  monitoring:\n    ip: 10.42.1.14\n")
+    asked = []
+
+    def fetch(url):
+        asked.append(url)
+        if url.endswith("/alerts"):
+            alerts = [
+                {"state": "firing", "labels": {"alertname": "Watchdog", "severity": "none"}},
+                {
+                    "state": "firing",
+                    "labels": {"alertname": "RebootRequired", "severity": "warn"},
+                    "annotations": {"summary": "pve needs a reboot"},
+                },
+                {"state": "pending", "labels": {"alertname": "DiskAlmostFull", "severity": "page"}},
+                {
+                    "state": "firing",
+                    "labels": {"alertname": "TargetDown", "severity": "page"},
+                    "annotations": {"summary": "forgejo is down"},
+                },
+            ]
+            return {"data": {"alerts": alerts}}
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)["query"][0]
+        results = {
+            "up": [{"metric": {"instance": "forgejo:9100"}, "value": [0, "0"]}, {"metric": {"instance": "pbs:9100"}, "value": [0, "1"]}],
+            "node_reboot_required == 1": [{"metric": {"instance": "pve:9100"}, "value": [0, "1"]}],
+        }
+        return {"data": {"result": results.get(query, [])}}
+
+    app.fetch = fetch
+    status, data = client.call("/api/status")
+    assert status == 200 and data == {
+        "monitoring": "ok",
+        "alerts": [
+            {"name": "TargetDown", "severity": "page", "summary": "forgejo is down"},
+            {"name": "RebootRequired", "severity": "warn", "summary": "pve needs a reboot"},
+        ],
+        "targets": 2,
+        "down": ["forgejo:9100"],
+        "security_waiting": [],
+        "reboot_waiting": ["pve:9100"],
+    }
+    assert all(url.startswith("http://10.42.1.14:9090/api/v1/") for url in asked)
+
+    def unreachable(url):
+        raise OSError("no route to host")
+
+    app.fetch = unreachable
+    assert client.call("/api/status")[1] == {"monitoring": "unreachable", "error": "no route to host"}
+    assert Client(client.port, app.home / "web" / "cert.pem").call("/api/status")[0] == 401

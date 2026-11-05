@@ -21,6 +21,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -69,6 +70,11 @@ def post(url: str, body: str = "", headers: dict | None = None) -> None:
         response.read()
 
 
+def fetch_json(url: str) -> dict:
+    with urllib.request.urlopen(url, timeout=5) as response:
+        return json.load(response)
+
+
 def ntfy_topic() -> str:
     return "nullbill-" + secrets.token_urlsafe(18)
 
@@ -112,6 +118,7 @@ class App:
     # The secrets file, opened afresh for each use so apply's writes show.
     codec: Callable[[Path], Codec] = Sops
     send: Callable[..., None] = post
+    fetch: Callable[[str], dict] = fetch_json
 
     # Files under NULLBILL_HOME.
     @property
@@ -165,6 +172,43 @@ class App:
         # No job runs before a password exists, so nothing else writes the
         # secrets file now.
         Secrets(self.codec(self.home)).ensure("ntfy_topic", ntfy_topic)
+
+    # Status, from Prometheus on the monitoring guest.
+    def status(self) -> dict:
+        path = self.home / "plan.yaml"
+        plan = yaml.safe_load(path.read_text()) if path.exists() else None
+        monitoring = ((plan or {}).get("guests") or {}).get("monitoring")
+        if not monitoring:
+            return {"monitoring": "not planned"}
+        api = f"http://{monitoring['ip']}:9090/api/v1/"
+
+        def query(expr: str) -> list[dict]:
+            return self.fetch(api + "query?" + urllib.parse.urlencode({"query": expr}))["data"]["result"]
+
+        def instances(expr: str) -> list[str]:
+            return sorted(r["metric"].get("instance", "?") for r in query(expr))
+
+        try:
+            alerts = [
+                {
+                    "name": a["labels"]["alertname"],
+                    "severity": a["labels"].get("severity", ""),
+                    "summary": a.get("annotations", {}).get("summary", ""),
+                }
+                for a in self.fetch(api + "alerts")["data"]["alerts"]
+                if a.get("state") == "firing" and a["labels"].get("alertname") != "Watchdog"
+            ]
+            up = query("up")
+            return {
+                "monitoring": "ok",
+                "alerts": sorted(alerts, key=lambda a: (a["severity"] != "page", a["name"])),
+                "targets": len(up),
+                "down": sorted(r["metric"].get("instance", "?") for r in up if r["value"][1] == "0"),
+                "security_waiting": instances('sum by (instance) (apt_upgrades_pending{origin=~".*-security.*"}) > 0'),
+                "reboot_waiting": instances("node_reboot_required == 1"),
+            }
+        except (OSError, ValueError, KeyError) as exc:
+            return {"monitoring": "unreachable", "error": str(exc)[:200]}
 
     # Alerts.
     def alerts(self) -> dict:
@@ -350,6 +394,8 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 return self.json(200, app.state(authed))
             if not authed:
                 return self.json(401, {"error": "sign in first"})
+            if path == "/api/status":
+                return self.json(200, app.status())
             match = re.fullmatch(r"/api/jobs/([0-9T]+-[a-z]+)", path)
             if match and match[1] in app.jobs:
                 offset = int(dict(p.split("=", 1) for p in query.split("&") if "=" in p).get("offset", "0") or 0)

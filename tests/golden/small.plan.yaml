@@ -203,6 +203,7 @@ flows:
   - role:owner -> monitoring tcp/3000
   - zone:* -> monitoring tcp/3100
   - service:operator -> monitoring tcp/9090
+  - service:nullbill -> monitoring tcp/9090
   - service:monitoring -> monitoring tcp/9100
   - host -> pbs tcp/8007
   - role:owner -> pbs tcp/8007

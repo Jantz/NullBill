@@ -10,6 +10,7 @@ const LABELS = {
 
 const $ = (id) => document.getElementById(id);
 let polling = null;
+let statusTimer = null;
 
 async function api(path, body) {
   const options = body === undefined ? {} : {
@@ -57,12 +58,41 @@ function renderAlerts(alerts) {
   $("healthchecks-url").value = alerts ? alerts.healthchecks_url : "";
 }
 
+function li(text, cls) {
+  return Object.assign(document.createElement("li"), {textContent: text, className: cls || ""});
+}
+
+async function refreshStatus() {
+  const s = await api("/api/status");
+  const alerts = $("status-alerts");
+  const facts = $("status-facts");
+  alerts.replaceChildren();
+  facts.replaceChildren();
+  if (s.monitoring === "not planned") {
+    $("status-summary").textContent = "Monitoring starts once the server is built.";
+    return;
+  }
+  if (s.monitoring !== "ok") {
+    $("status-summary").textContent = "Cannot reach monitoring. If the server was just built, wait a minute.";
+    return;
+  }
+  $("status-summary").textContent = s.alerts.length
+    ? `${s.alerts.length} alert${s.alerts.length > 1 ? "s" : ""} need attention.`
+    : "All clear.";
+  alerts.replaceChildren(...s.alerts.map((a) => li(a.summary || a.name, a.severity === "page" ? "page" : "warn")));
+  facts.append(li(`${s.targets - s.down.length} of ${s.targets} systems answering` +
+    (s.down.length ? `; down: ${s.down.join(", ")}` : "")));
+  if (s.security_waiting.length) facts.append(li(`Security updates waiting on ${s.security_waiting.join(", ")}`));
+  if (s.reboot_waiting.length) facts.append(li(`Reboot needed to finish updates: ${s.reboot_waiting.join(", ")}`));
+}
+
 async function refresh() {
   showError("");
   const state = await api("/api/state");
   show("logout", state.auth);
   show("login", !state.auth);
   if (!state.auth) {
+    clearInterval(statusTimer);
     $("login-hint").textContent = state.has_password
       ? "Enter your password."
       : "Enter the setup code the installer printed in the Proxmox shell.";
@@ -80,6 +110,9 @@ async function refresh() {
   $("owner-login").value = state.choices.owner_login;
   renderPlan(state.plan);
   renderAlerts(state.alerts);
+  clearInterval(statusTimer);
+  refreshStatus().catch(showError);
+  statusTimer = setInterval(() => refreshStatus().catch(() => {}), 30000);
   if (state.job) follow(state.job.id, state.job);
 }
 

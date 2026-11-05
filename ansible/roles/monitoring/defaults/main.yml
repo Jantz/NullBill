@@ -10,7 +10,8 @@ monitoring_grafana_repo_signer_sha256: 3d4029689bc7e4444ec00abafa07f21e9c812b41f
 monitoring_grafana_version: 13.2.4
 monitoring_loki_version: 3.7.8
 
-# All addresses: the guest firewall limits 9090 to the operator.
+# All addresses: the guest firewall limits 9090 to the operator and the
+# NullBill page.
 monitoring_prometheus_listen: "0.0.0.0:9090"
 
 # Loki itself, on localhost. Other guests reach it through nginx on 3100

@@ -60,6 +60,7 @@ OUT ACCEPT -dest +nb-svc-router -p tcp -dport 53 # to router
 OUT ACCEPT -dest +nb-svc-egress-proxy -p tcp -dport 3128 # to egress-proxy
 OUT ACCEPT -dest +nb-svc-step-ca -p tcp -dport 443 # to step-ca
 OUT ACCEPT -dest +nb-svc-monitoring -p tcp -dport 3100 # to monitoring
+OUT ACCEPT -dest +nb-svc-monitoring -p tcp -dport 9090 # to monitoring
 OUT ACCEPT -dest 10.42.1.254 -p tcp -dport 8006 # to the PVE host
 OUT ACCEPT -dest 10.42.1.254 -p tcp -dport 22 # to the PVE host
 ===== firewall/2010.fw
@@ -168,6 +169,7 @@ policy_out: DROP
 IN ACCEPT -source +nb-svc-vpn -p tcp -dport 3000 # role:owner
 IN ACCEPT -source +nb-zones -p tcp -dport 3100 # zone:*
 IN ACCEPT -source +nb-svc-operator -p tcp -dport 9090 # service:operator
+IN ACCEPT -source +nb-svc-nullbill -p tcp -dport 9090 # service:nullbill
 IN ACCEPT -source +nb-svc-monitoring -p tcp -dport 9100 # service:monitoring
 OUT ACCEPT -dest +nb-svc-router -p udp -dport 53 # to router
 OUT ACCEPT -dest +nb-svc-router -p tcp -dport 53 # to router
@@ -703,6 +705,7 @@ table inet nullbill {
         ip saddr { 10.42.6.11 } ip daddr { 10.42.1.14 } tcp dport 3000 accept # role:owner to monitoring
         ip saddr { 10.42.0.0/16 } ip daddr { 10.42.1.14 } tcp dport 3100 accept # zone:* to monitoring
         ip saddr { 10.42.1.16 } ip daddr { 10.42.1.14 } tcp dport 9090 accept # service:operator to monitoring
+        ip saddr { 10.42.1.2 } ip daddr { 10.42.1.14 } tcp dport 9090 accept # service:nullbill to monitoring
         ip saddr { 10.42.1.14 } ip daddr { 10.42.1.14 } tcp dport 9100 accept # service:monitoring to monitoring
         ip saddr { 10.42.1.254 } ip daddr { 10.42.1.15 } tcp dport 8007 accept # host to pbs
         ip saddr { 10.42.6.11 } ip daddr { 10.42.1.15 } tcp dport 8007 accept # role:owner to pbs

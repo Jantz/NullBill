@@ -18,10 +18,20 @@ scrape_configs:
   - job_name: node
     static_configs:
       - targets: {{ monitoring_node_targets | to_json }}
+    # forgejo.nullbill.internal:9100 shows as "forgejo" in alerts and on the page.
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: "([^.:]+)[.:].*"
+        target_label: instance
 {% if monitoring_host_target %}
   - job_name: host
     static_configs:
       - targets: {{ [monitoring_host_target] | to_json }}
+    # forgejo.nullbill.internal:9100 shows as "forgejo" in alerts and on the page.
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: "([^.:]+)[.:].*"
+        target_label: instance
 {% endif %}
   - job_name: tls
     metrics_path: /probe

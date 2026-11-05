@@ -146,7 +146,8 @@ services:
     ports:
       - {port: 3000, proto: tcp, from: ["role:owner"]}
       - {port: 3100, proto: tcp, from: ["zone:*"]}
-      - {port: 9090, proto: tcp, from: ["service:operator"]}
+      # The operator's agent, and the status view on the NullBill page.
+      - {port: 9090, proto: tcp, from: ["service:operator", "service:nullbill"]}
   pbs:
     id: 15
     kind: vm

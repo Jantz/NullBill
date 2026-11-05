@@ -20,6 +20,8 @@ json.dump({
     "monitoring_ntfy_url": "http://127.0.0.1:8099/nullbill-topic",
     "monitoring_healthchecks_url": "http://127.0.0.1:8099/ping/check",
     "monitoring_watchdog_interval": "1m",
+    # Nothing answers there; the scrape still names the instance.
+    "monitoring_node_targets": ["nothing-here.nullbill.internal:9100"],
 }, open(sys.argv[1], "w"))
 PY
 converge monitoring.yml -e monitoring_manage_services=false -e "@$vars"
@@ -79,6 +81,14 @@ curl -fsS http://127.0.0.1:9090/api/v1/rules | grep -q CertificateExpiresSoon ||
 # The operator queries it from another guest; the guest firewall limits who.
 curl -fsS "http://$(hostname -i | cut -d' ' -f1):9090/-/ready" >/dev/null || fail "prometheus answers on the guest address"
 pass "prometheus is up on the guest address with the rules loaded"
+
+for _ in $(seq 60); do
+  curl -fsS -G http://127.0.0.1:9090/api/v1/query --data-urlencode 'query=up{job="node"}' | grep -q '"instance":"nothing-here"' && break
+  sleep 1
+done
+curl -fsS -G http://127.0.0.1:9090/api/v1/query --data-urlencode 'query=up{job="node"}' | grep -q '"instance":"nothing-here"' ||
+  fail "a node target is named by its guest"
+pass "node targets are named by their guest in alerts"
 
 wait_for http://127.0.0.1:9093/-/ready || { cat /tmp/alertmanager.log; fail "alertmanager ready"; }
 received() { # received PATH: wait until the stand-in got a POST to PATH
