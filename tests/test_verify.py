@@ -102,9 +102,13 @@ def test_firewall_down_and_unreachable_guest_fail(facts):
     results = run_verify(plan, model, "root@pve.example.internal", broken, lambda h, p: "timeout", lambda n: PUBLIC)
     by = statuses(results)
     assert by["FAIL"][0].name == "pve-firewall is running"
-    probe_fails = [r for r in by["FAIL"][1:] if not r.name.startswith("agent token")]
-    assert all(r.detail.startswith("probe did not run") for r in probe_fails)
-    assert all("ssh: connect" in r.detail for r in by["FAIL"] if r.name.startswith("agent token"))
+    probe_names = {p.name for p in probes(plan, model, PUBLIC)[0]}
+    probe_fails = [r for r in by["FAIL"][1:] if r.name in probe_names]
+    assert probe_fails and all(r.detail.startswith("probe did not run") for r in probe_fails)
+    # Token and service checks run in guests too, and say why they failed.
+    others = [r for r in by["FAIL"][1:] if r.name not in probe_names and not r.name.startswith(("forgejo has", "restore"))]
+    assert {r.name.split()[0] for r in others} >= {"agent", "dispatcher", "forgejo", "runner"}
+    assert all("ssh: connect" in r.detail for r in others), [r for r in others if "ssh: connect" not in r.detail]
     assert [r.name for r in by["DEGRADED"]] == ["backups"]
 
 

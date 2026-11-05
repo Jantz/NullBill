@@ -11,9 +11,10 @@ Reference: https://pve.proxmox.com/pve-docs/chapter-pveum.html
 """
 
 import json
-import shlex
 
+from nullbill import ci
 from nullbill.probe import Runner
+from nullbill.pveapi import audit, caller
 from nullbill.render import strip_notes
 from nullbill.results import Result
 
@@ -38,35 +39,29 @@ CA_FILE = "/etc/nullbill/agent/pve-root-ca.pem"
 DENIED_SNAPSHOT = "nb-verify-denied"
 
 
-def _api(host_ip: str, method: str, path: str, data: str = "") -> str:
-    """Shell for one API call as the agent; prints the status, then the body."""
-    url = shlex.quote(f"https://{host_ip}:8006/api2/json{path}")
-    body = f"--data {shlex.quote(data)} " if data else ""
-    return (
-        "set -e; f=$(mktemp); trap 'rm -f \"$f\"' EXIT; "
-        f"curl -sS -m 10 -o \"$f\" -w '%{{http_code}}\\n' --cacert {CA_FILE} "
-        f'-H "Authorization: PVEAPIToken=$(cat {TOKEN_FILE})" -X {method} {body}{url}; cat "$f"'
-    )
-
-
-def _privileges(body: str, path: str) -> set[str]:
-    return set(json.loads(body or "{}").get("data", {}).get(path, {}))
+def expectations(plan: dict) -> list[tuple[str, str, set[str]]]:
+    """(label, ACL path, the privileges beyond Audit the agent must hold)."""
+    out = []
+    for name, guest in plan["guests"].items():
+        managed = bool(guest.get("agent_managed"))
+        if guest["kind"] == "vm-pool":
+            # The template is in no pool; its clones are in the CI pool.
+            out.append((f"agent token cannot change the {name} template", f"/vms/{guest['template_vmid']}", set()))
+            if managed:
+                out.append((f"agent token may power-manage and snapshot {name} clones, nothing else", f"/pool/{ci.POOL}", set(PRIVILEGES)))
+            continue
+        label = f"agent token may power-manage and snapshot {name}, nothing else" if managed else f"agent token cannot change {name}"
+        out.append((label, f"/vms/{guest['vmid']}", set(PRIVILEGES) if managed else set()))
+    out.append(("agent token cannot change the host", "/", set()))
+    return out
 
 
 def skipped(plan_with_notes: dict, reason: str) -> list[Result]:
     plan = strip_notes(plan_with_notes)
     if "operator" not in plan["guests"]:
         return []
-    names = [_label(n, g) for n, g in plan["guests"].items()]
-    return [
-        Result("SKIP", n, reason) for n in [*names, "agent token cannot change the host", "agent token is refused a snapshot of router"]
-    ]
-
-
-def _label(name: str, guest: dict) -> str:
-    if guest.get("agent_managed"):
-        return f"agent token may power-manage and snapshot {name}, nothing else"
-    return f"agent token cannot change {name}"
+    names = [label for label, _, _ in expectations(plan)]
+    return [Result("SKIP", n, reason) for n in [*names, "agent token is refused a snapshot of router"]]
 
 
 def check(plan_with_notes: dict, target: str, run: Runner) -> list[Result]:
@@ -74,40 +69,11 @@ def check(plan_with_notes: dict, target: str, run: Runner) -> list[Result]:
     operator = plan["guests"].get("operator")
     if operator is None:
         return []
-    host_ip = plan["zones"]["mgmt"]["host_ip"]
-
-    def api(method: str, path: str, data: str = "") -> tuple[str, str]:
-        command = f"pct exec {operator['vmid']} -- bash -c {shlex.quote(_api(host_ip, method, path, data))}"
-        rc, out, err = run(target, command)
-        if rc != 0:
-            return "error", (err or out).strip()[:120]
-        status, _, body = out.partition("\n")
-        return status.strip(), body
-
-    results = []
-    for name, guest in plan["guests"].items():
-        vmid = guest.get("vmid") or guest["template_vmid"]
-        path = f"/vms/{vmid}"
-        status, body = api("GET", f"/access/permissions?path={path}")
-        label = _label(name, guest)
-        if status != "200":
-            results.append(Result("FAIL", label, f"permissions query: {status} {body[:80]}"))
-            continue
-        changes = {p for p in _privileges(body, path) if not p.endswith(".Audit")}
-        want = set(PRIVILEGES) if guest.get("agent_managed") else set()
-        results.append(
-            Result("PASS", label) if changes == want else Result("FAIL", label, f"holds {', '.join(sorted(changes)) or 'nothing'}")
-        )
-    status, body = api("GET", "/access/permissions?path=/")
-    label = "agent token cannot change the host"
-    if status != "200":
-        results.append(Result("FAIL", label, f"permissions query: {status} {body[:80]}"))
-    else:
-        changes = {p for p in _privileges(body, "/") if not p.endswith(".Audit")}
-        results.append(Result("FAIL", label, ", ".join(sorted(changes))) if changes else Result("PASS", label))
+    api = caller(plan, target, run, operator["vmid"], TOKEN_FILE, CA_FILE)
+    results = [audit(api, label, path, want) for label, path, want in expectations(plan)]
     # One real attempt outside the pool. PVE checks the ACL before it acts,
     # so a correct host changes nothing.
-    status, body = api("GET", "/nodes")
+    status, body = api("GET", "/nodes", "")
     nodes = [n["node"] for n in json.loads(body or "{}").get("data", [])] if status == "200" else []
     router = plan["guests"].get("router")
     label = "agent token is refused a snapshot of router"

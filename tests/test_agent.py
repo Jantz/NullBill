@@ -109,7 +109,7 @@ def test_a_grant_outside_the_pool_fails(facts):
     pbs = plan["guests"]["pbs"]["vmid"]
     _, results = _agent_results(facts, extra={f"/vms/{pbs}": {"VM.PowerMgmt"}, "/": {"Sys.Modify"}})
     assert results["agent token cannot change pbs"] == ("FAIL", "holds VM.PowerMgmt")
-    assert results["agent token cannot change the host"] == ("FAIL", "Sys.Modify")
+    assert results["agent token cannot change the host"] == ("FAIL", "holds Sys.Modify")
 
 
 def test_extra_privilege_inside_the_pool_fails(facts):
@@ -130,7 +130,7 @@ def test_api_call_runs_in_bash(tmp_path):
     """The generated shell against a stand-in curl that checks its arguments."""
     import subprocess
 
-    from nullbill.agent import _api
+    from nullbill.pveapi import _api
 
     bindir = tmp_path / "bin"
     bindir.mkdir()
@@ -144,6 +144,6 @@ def test_api_call_runs_in_bash(tmp_path):
     curl.chmod(0o755)
     token = tmp_path / "token"
     token.write_text("nb-agent@pve!operator=s3cret")
-    command = _api("10.42.1.254", "POST", "/nodes/pve/qemu/2001/snapshot", "snapname=x").replace(agent.TOKEN_FILE, str(token))
+    command = _api("10.42.1.254", "POST", "/nodes/pve/qemu/2001/snapshot", "snapname=x", str(token), agent.CA_FILE)
     done = subprocess.run(["bash", "-c", command], capture_output=True, text=True, env={"PATH": f"{bindir}:/usr/bin:/bin"})
     assert (done.returncode, done.stdout) == (0, '403\n{"data":null}\n'), done.stderr

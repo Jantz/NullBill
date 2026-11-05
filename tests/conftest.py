@@ -55,6 +55,7 @@ def backup_host(plan: dict, age_h: float = 3, encrypted: bool = True, hostname: 
         for g in guests.values()
     ]
     api = agent_api(plan)
+    services = service_answers(plan)
     storage = {"server": "10.42.1.15", "datastore": backups.DATASTORE, "username": backups.TOKEN_ID, "fingerprint": "aa:bb"}
 
     def run(target, command):
@@ -65,32 +66,70 @@ def backup_host(plan: dict, age_h: float = 3, encrypted: bool = True, hostname: 
         if "proxmox-backup-client restore" in command:
             vmid = int(re.search(r"ct/(\d+)/", command)[1])
             return 0, (hostname or by_vmid[vmid]) + "\n", ""
+        if command in services:
+            return 0, services[command], ""
         return api(target, command)
 
     return run
 
 
-def agent_api(plan: dict, extra: dict[str, set] | None = None, snapshot_status: str = "403"):
+def service_answers(plan: dict, wrong: str = "") -> dict[str, str]:
+    """What a correct host prints for verify's Forgejo and dispatcher checks;
+    the check labelled `wrong` gets a wrong answer."""
+    import shlex
+
+    from nullbill import ci, forge
+    from nullbill.render import strip_notes
+
+    bare = strip_notes(plan)
+    checks = [(label, guest, cmd, want) for label, guest, cmd, want in forge._checks(bare)] if forge.enabled(bare) else []
+    if ci.enabled(bare):
+        checks += [(label, "runner-dispatcher", cmd, want) for label, cmd, want in ci._service_checks(bare)]
+    return {
+        f"pct exec {bare['guests'][guest]['vmid']} -- bash -c {shlex.quote(cmd)}": ("nope" if label == wrong else want) + "\n"
+        for label, guest, cmd, want in checks
+    }
+
+
+def agent_api(
+    plan: dict, extra: dict[str, set] | None = None, snapshot_status: str = "403", dispatcher_extra: dict[str, set] | None = None
+):
     """A runner answering the agent's API calls like a correctly set up host:
     PVEAuditor everywhere, the agent role on pool guests. `extra` adds
-    privileges per path to model a mistake."""
-    from nullbill import agent
+    privileges per path to model a mistake; the dispatcher's token answers
+    from its own grants, plus `dispatcher_extra`."""
+    from nullbill import agent, ci
     from nullbill.render import strip_notes
 
     bare = strip_notes(plan)
     auditor = {"VM.Audit", "Sys.Audit", "Datastore.Audit", "Pool.Audit"}
     grants = {"/": set(auditor)}
     for g in bare["guests"].values():
-        vmid = g.get("vmid") or g["template_vmid"]
-        grants[f"/vms/{vmid}"] = auditor | (set(agent.PRIVILEGES) if g.get("agent_managed") else set())
+        managed = set(agent.PRIVILEGES) if g.get("agent_managed") else set()
+        if g["kind"] == "vm-pool":
+            grants[f"/vms/{g['template_vmid']}"] = set(auditor)
+            grants[f"/pool/{ci.POOL}"] = auditor | managed
+        else:
+            grants[f"/vms/{g['vmid']}"] = auditor | managed
     for path, privs in (extra or {}).items():
         grants[path] = grants.get(path, set()) | privs
+
+    # The dispatcher's token: its own roles only, no PVEAuditor.
+    dispatcher = {
+        f"/pool/{ci.POOL}": set(ci.PRIVILEGES),
+        f"/storage/{bare['disk']['storage']}": {"Datastore.AllocateSpace", "Datastore.Audit"},
+    }
+    for g in ci.pools(bare).values():
+        dispatcher[f"/vms/{g['template_vmid']}"] = set(ci.SOURCE_PRIVILEGES)
+    for path, privs in (dispatcher_extra or {}).items():
+        dispatcher[path] = dispatcher.get(path, set()) | privs
 
     def run(target, command):
         url = re.search(r"api2/json([^';\s]+)", command)[1]
         if url.startswith("/access/permissions?path="):
             path = url.partition("=")[2]
-            return 0, "200\n" + json.dumps({"data": {path: {p: 1 for p in grants.get(path, set())}}}), ""
+            held = dispatcher if ci.TOKEN_FILE in command else grants
+            return 0, "200\n" + json.dumps({"data": {path: {p: 1 for p in held.get(path, set())}}}), ""
         if url == "/nodes":
             return 0, "200\n" + json.dumps({"data": [{"node": "pve"}]}), ""
         if url.endswith("/snapshot"):

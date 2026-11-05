@@ -35,6 +35,7 @@ names and reaches the host over SSH; it never runs on the host. Only `probe`,
 - `src/nullbill/ci.py`: the runner dispatcher's PVE identity. Pool services' golden templates sit in no pool (VM.Clone only); clones go into the `nb-ci` pool at `clone_vmids`, which the dispatcher's token may create, start, stop, set the SMBIOS serial of and destroy. apply bakes each template, so OpenTofu ignores its `template` flag.
 - `src/nullbill/tofu.py`: OpenTofu JSON for bridges, images and guests (bpg/proxmox); `tools/check-tofu` runs `tofu validate` with the pinned provider in a container and checks that state is encrypted.
 - `src/nullbill/verify.py`: allowed and denied flows probed from one container per zone and from the LAN; SKIP when nothing can run, never PASS.
+- `src/nullbill/pveapi.py`: API calls from inside a guest with the token it holds, and `audit`, which passes only when a token holds exactly the expected privileges. `agent.py` and `ci.py` audit their tokens with it; `forge.py` checks Forgejo (HTTPS, no sign-up, nothing anonymous, TLS to Postgres) from inside its guests.
 - `src/nullbill/artifacts.py`: `apply --dry-run` output, one `build/<machine>/` per target.
 - `tools/check`: every check CI runs. Run it before pushing. In a TLS-intercepting sandbox set `EXTRA_CA_FILE` to the proxy CA bundle.
 

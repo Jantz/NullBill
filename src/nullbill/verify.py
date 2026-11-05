@@ -13,7 +13,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from nullbill import agent, backups
+from nullbill import agent, backups, ci, forge
 from nullbill.errors import NullBillError
 from nullbill.flows import HOST, HOST_PORTS, resolve_flows
 from nullbill.probe import Runner
@@ -195,6 +195,8 @@ def run_verify(
             + [Result("SKIP", f"LAN is refused the PVE host tcp/{port}", reason) for port in HOST_PORTS]
             + backups.skipped(plan, reason)
             + agent.skipped(plan, reason)
+            + forge.skipped(plan, reason)
+            + ci.skipped(plan, reason)
         )
     name = model["verify"]["public_name"]
     try:
@@ -214,4 +216,6 @@ def run_verify(
     results += _lan(target.rpartition("@")[2], connect)
     results += backups.check(plan, target, run, now)
     results += agent.check(plan, target, run)
+    results += forge.check(plan, target, run)
+    results += ci.check(plan, target, run)
     return results

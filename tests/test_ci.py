@@ -87,3 +87,66 @@ def test_dispatcher_reaches_the_api_forgejo_and_build_reaches_it(facts):
         "workspace (build) reaches runner-dispatcher tcp/8443",
     ):
         assert expected in names, expected
+
+
+def _checked(facts, cls="mid", wrong="", dispatcher_extra=None):
+    from conftest import agent_api, service_answers
+
+    from nullbill import forge
+
+    plan, _ = planned(facts, cls)
+    services = service_answers(plan, wrong)
+    api = agent_api(plan, dispatcher_extra=dispatcher_extra)
+
+    def run(target, command):
+        return (0, services[command], "") if command in services else api(target, command)
+
+    results = ci.check(plan, "root@pve.example.internal", run) + forge.check(plan, "root@pve.example.internal", run)
+    return strip_notes(plan), {r.name: (r.status, r.detail) for r in results}
+
+
+def test_correct_dispatcher_and_forgejo_pass(facts):
+    plan, results = _checked(facts)
+    assert {s for s, _ in results.values()} == {"PASS"}
+    for name in (
+        "runner dispatcher is running",
+        "runner dispatcher refuses an unknown nonce over TLS",
+        f"dispatcher token may create, run and destroy VMs in {ci.POOL} only",
+        "dispatcher token may clone the linux-runner template, nothing else",
+        "dispatcher token cannot change router",
+        "dispatcher token cannot change the host",
+        "forgejo is healthy over HTTPS with its step-ca certificate",
+        "forgejo refuses sign-up",
+        "forgejo reaches postgres over TLS only",
+    ):
+        assert name in results, name
+
+
+def test_dispatcher_grant_beyond_its_pool_fails(facts):
+    plan = strip_notes(planned(facts, "mid")[0])
+    router, template = plan["guests"]["router"]["vmid"], plan["guests"]["linux-runner"]["template_vmid"]
+    _, results = _checked(facts, dispatcher_extra={f"/vms/{router}": {"VM.PowerMgmt"}, f"/vms/{template}": {"VM.Allocate"}})
+    assert results["dispatcher token cannot change router"] == ("FAIL", "holds VM.PowerMgmt")
+    assert results["dispatcher token may clone the linux-runner template, nothing else"] == ("FAIL", "holds VM.Allocate, VM.Clone")
+
+
+def test_open_sign_up_fails(facts):
+    _, results = _checked(facts, wrong="forgejo refuses sign-up")
+    assert results["forgejo refuses sign-up"] == ("FAIL", "nope")
+
+
+def test_agent_reaches_runner_clones_through_the_ci_pool(facts):
+    from conftest import agent_api
+
+    plan, _ = planned(facts, "mid")
+    results = {r.name: r.status for r in agent.check(plan, "root@pve.example.internal", agent_api(plan))}
+    assert results["agent token may power-manage and snapshot linux-runner clones, nothing else"] == "PASS"
+    assert results["agent token cannot change the linux-runner template"] == "PASS"
+
+
+def test_without_target_the_new_checks_skip(facts):
+    from nullbill.verify import run_verify
+
+    plan, model = planned(facts, "mid")
+    names = {r.name for r in run_verify(plan, model, None, None, None, None) if r.status == "SKIP"}
+    assert {"forgejo refuses sign-up", "runner dispatcher is running", "dispatcher token cannot change the host"} <= names
