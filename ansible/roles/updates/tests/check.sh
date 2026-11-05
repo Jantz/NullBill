@@ -7,12 +7,11 @@ set -euo pipefail
 source /usr/local/lib/role-check.sh
 
 converge updates.yml -e updates_manage_services=false
-# The lists are fresh now; with the stamp the apt module reads saying so,
-# a run with a proxy nobody answers on only places the setting.
-touch /var/lib/apt/periodic/update-success-stamp
-ansible-playbook -i localhost, -c local -e updates_manage_services=false -e updates_apt_proxy=http://192.0.2.10:3128 /ansible/updates.yml >/tmp/proxy.log 2>&1 || { cat /tmp/proxy.log; fail "run with a proxy"; }
+# Nobody answers on this proxy, so run only the proxy tasks with it.
+only_proxy=(ansible-playbook -i "localhost," -c local --tags updates_proxy -e updates_manage_services=false /ansible/updates.yml)
+"${only_proxy[@]}" -e updates_apt_proxy=http://192.0.2.10:3128 >/tmp/proxy.log 2>&1 || { cat /tmp/proxy.log; fail "run with a proxy"; }
 grep -q 'Acquire::https::Proxy "http://192.0.2.10:3128";' /etc/apt/apt.conf.d/30nullbill-proxy || fail "apt proxy set"
-ansible-playbook -i localhost, -c local -e updates_manage_services=false /ansible/updates.yml >/tmp/direct.log 2>&1 || { cat /tmp/direct.log; fail "run without a proxy"; }
+"${only_proxy[@]}" >/tmp/direct.log 2>&1 || { cat /tmp/direct.log; fail "run without a proxy"; }
 test ! -e /etc/apt/apt.conf.d/30nullbill-proxy || fail "apt proxy removed in a direct zone"
 pass "apt goes through the proxy where the zone asks for it, directly elsewhere"
 

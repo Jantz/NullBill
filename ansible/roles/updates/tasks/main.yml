@@ -7,12 +7,14 @@
       Acquire::http::Proxy "{{ updates_apt_proxy }}";
       Acquire::https::Proxy "{{ updates_apt_proxy }}";
   when: updates_apt_proxy | length > 0
+  tags: [updates_proxy]
 
 - name: No proxy where the guest reaches the mirrors directly
   ansible.builtin.file:
     path: /etc/apt/apt.conf.d/30nullbill-proxy
     state: absent
   when: updates_apt_proxy | length == 0
+  tags: [updates_proxy]
 
 # Debian's collector exports pending updates by origin, the package lists'
 # age and whether a reboot is required (apt_info.py).
@@ -21,7 +23,6 @@
     name: [unattended-upgrades, prometheus-node-exporter, prometheus-node-exporter-collectors]
     install_recommends: false
     update_cache: true
-    cache_valid_time: 3600
 
 - name: needrestart
   ansible.builtin.apt:
