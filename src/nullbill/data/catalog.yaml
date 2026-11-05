@@ -195,7 +195,11 @@ services:
     workload: linux-ci
     agent_managed: true
     description: One golden-VM clone per CI job.
+    runs_on: [linux]
     floor: {cores: 2, memory_mib: 2048, disk_gib: 32}
+    ports:
+      # apply bakes the golden image over SSH through the host.
+      - {port: 22, proto: tcp, from: ["host"]}
     grow: 2
   workspace:
     id: 19
@@ -265,6 +269,8 @@ proxy:
     - proxy.golang.org
     - sum.golang.org
     - .github.com
+    - code.forgejo.org      # Forgejo Runner releases
+    - data.forgejo.org      # Forgejo Actions' default action mirror
     - .githubusercontent.com
     - .docker.io
     - production.cloudflare.docker.com

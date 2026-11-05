@@ -152,6 +152,8 @@ guests:
     template_vmid: 2030
     # Clones take DHCP leases from this range.
     clone_range: 10.42.3.128/26
+    # The golden image's reserved lease while apply bakes it.
+    template_ip: 10.42.3.129
     # The dispatcher clones one per queued job into these.
     clone_vmids: 6000-6000
     agent_managed: true
@@ -221,6 +223,7 @@ flows:
   - zone:build -> runner-dispatcher tcp/8443
   - service:monitoring -> runner-dispatcher tcp/8443
   - service:monitoring -> runner-dispatcher tcp/9100
+  - host -> linux-runner tcp/22
   - service:operator -> linux-runner tcp/22
   - role:default -> workspace tcp/22
   - role:owner -> workspace tcp/22

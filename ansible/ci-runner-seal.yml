@@ -1,0 +1,19 @@
+# The last step of baking a golden image: forget what makes this VM one
+# machine, so each clone boots as a new one with its own machine-id (and so
+# its own DHCP client id), SSH host keys and cloud-init instance. apply then
+# shuts the VM down and converts it to a template.
+- name: Seal the golden image
+  hosts: all
+  become: false
+  tasks:
+    - name: Forget the cloud-init instance and its logs
+      ansible.builtin.command: cloud-init clean --logs
+      changed_when: true
+
+    - name: No SSH host keys; cloud-init makes new ones on each clone
+      ansible.builtin.shell: rm -f /etc/ssh/ssh_host_*
+      changed_when: true
+
+    - name: Empty machine-id; systemd makes a new one on each clone's first boot
+      ansible.builtin.shell: truncate -s 0 /etc/machine-id && rm -f /var/lib/dbus/machine-id /var/lib/systemd/random-seed
+      changed_when: true

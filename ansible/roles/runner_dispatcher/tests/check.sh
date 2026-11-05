@@ -121,3 +121,14 @@ code=$(curl -sS -o /dev/null -w '%{http_code}' --cacert /tmp/pki/ca.crt "https:/
 test "$code" = 404 || fail "a used nonce was served again ($code)"
 grep -q "$serial" /tmp/dispatcher.log && fail "the dispatcher logged a nonce"
 pass "a nonce is served once and never logged"
+
+# apply seals the golden image last, so each clone boots as a new machine.
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cloud-init >/dev/null 2>&1
+ssh-keygen -A
+mkdir -p /var/lib/cloud/instance
+echo 0123456789abcdef0123456789abcdef >/etc/machine-id
+ansible-playbook -i localhost, -c local /ansible/ci-runner-seal.yml >/tmp/seal.log 2>&1 || { cat /tmp/seal.log; fail "seal"; }
+{ test -e /etc/machine-id && test ! -s /etc/machine-id; } || fail "machine-id kept"
+compgen -G '/etc/ssh/ssh_host_*' >/dev/null && fail "SSH host keys kept"
+test ! -e /var/lib/cloud/instance || fail "cloud-init instance kept"
+pass "a sealed image keeps no machine-id, SSH host keys or cloud-init instance for clones to share"

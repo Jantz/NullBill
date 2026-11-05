@@ -41,6 +41,7 @@ class FakeReach:
         self.fail_playbook = fail_playbook
         self.fail_local = fail_local
         self.fresh = True
+        self.templates = set()
 
     def host(self, command, stdin=None):
         self.calls.append(("host", command))
@@ -67,6 +68,13 @@ class FakeReach:
             return 0, answers[command], ""
         if command.startswith("systemctl "):
             return 0, "", ""
+        if command.startswith("qm config "):
+            return 0, "template: 1\n" if command.split()[2] in self.templates else "name: x\n", ""
+        if command.startswith("qm shutdown "):
+            self.templates.add(command.split()[2])
+            return 0, "", ""
+        if command.startswith(("qm status ", "timeout 600 bash -c ")):
+            return 0, "", ""
         if command.startswith("pct exec "):
             return self.guest(shlex.split(command)[2], shlex.split(command)[4:])
         return 127, "", f"fake host: unexpected {command}"
@@ -79,6 +87,12 @@ class FakeReach:
             return 0, f"token-for-{argv[5]}\n", ""
         if argv in (["cat", "/etc/grafana/admin-password"], ["cat", "/etc/forgejo/admin-password"]):
             return 0, f"password-of-{vmid}\n", ""
+        if argv == ["cat", "/etc/step-ca/secrets/agent-password"]:
+            return 0, "agent-password\n", ""
+        if argv == ["cat", "/etc/step-ca/certs/ssh_user_ca_key.pub"]:
+            return 0, "ecdsa-sha2-nistp256 AAAAuserca\n", ""
+        if argv[:5] == ["/usr/local/sbin/nb-forgejo", "admin", "user", "generate-access-token", "--username"]:
+            return 0, f"forgejo-token-{argv[7]}\n", ""
         return 127, "", f"fake guest {vmid}: unexpected {argv}"
 
     def local(self, argv, cwd, env, capture=False):
@@ -293,6 +307,89 @@ def test_shipper_certificates_are_kept_until_they_near_expiry(ctx):
     renewed = apply.shipper_cert(c, "logs", "operator")
     assert renewed != first and (c.home / "shipper-ca" / "ca.crt").read_text() == ca
     assert (c.home / "shipper-ca").stat().st_mode & 0o777 == 0o700
+
+
+def test_ci_stage_bakes_each_golden_image_once_then_runs_the_dispatcher(ctx):
+    c = ctx("small")
+    (c.home / "known_hosts").write_text("10.42.3.129 ssh-ed25519 AAAAold\n10.42.1.1 ssh-ed25519 AAAArouter\n")
+    apply.stage_ci(c)
+    playbooks = [call[1:] for call in c.reach.calls if call[0] == "playbook"]
+    assert [p[0] for p in playbooks] == ["ci-runner.yml", "agent-ssh.yml", "ci-runner-seal.yml", "runner-dispatcher.yml"]
+    # Baked at its reserved lease, through the host, as a new machine.
+    assert playbooks[0][1]["linux-runner"]["ansible_host"] == "10.42.3.129"
+    assert (c.home / "known_hosts").read_text() == "10.42.1.1 ssh-ed25519 AAAArouter\n"
+    runner = playbooks[0][2]
+    assert runner["ci_runner_proxy_url"] == "http://10.42.2.10:3128"
+    assert runner["ci_runner_dispatcher_url"] == "https://runner-dispatcher.nullbill.internal:8443"
+    assert runner["ci_runner_ca_root"].startswith("-----BEGIN CERTIFICATE-----")
+    assert playbooks[1][2] == {"agent_ssh_user_ca_key": "ecdsa-sha2-nistp256 AAAAuserca"}
+    host = [call[1] for call in c.reach.calls if call[0] == "host"]
+    assert host.index("qm status 2030 | grep -q running || qm start 2030") < host.index(
+        "qm shutdown 2030 --timeout 180 && qm template 2030"
+    )
+    dispatcher = playbooks[3][2]
+    token = c.secrets.data["forgejo_dispatcher_token"]
+    assert token.startswith("forgejo-token-dispatcher-") and dispatcher["runner_dispatcher_forgejo_token"] == token
+    assert dispatcher["runner_dispatcher_pve_url"] == "https://pve.nullbill.internal:8006"
+    assert dispatcher["runner_dispatcher_node"] == "pve"
+    assert dispatcher["runner_dispatcher_pve_token"] == "secret-token"
+    assert dispatcher["runner_dispatcher_pools"] == [
+        {
+            "name": "linux-runner",
+            "template": 2030,
+            "vmids": [6000, 6000],
+            "labels": ["linux"],
+            "runner_labels": ["linux:host"],
+            "max_job_seconds": 21600,
+        }
+    ]
+
+    # Again: the template is kept and so is the Forgejo token.
+    c.reach.calls.clear()
+    apply.stage_ci(c)
+    assert [call[1] for call in c.reach.calls if call[0] == "playbook"] == ["runner-dispatcher.yml"]
+    assert c.secrets.data["forgejo_dispatcher_token"] == token
+    assert "ci: linux-runner's golden image is baked" in c.log
+
+
+def test_agents_stage_waits_for_a_credential(ctx):
+    c = ctx("small")
+    apply.stage_agents(c)
+    assert not [call for call in c.reach.calls if call[0] == "playbook"]
+    assert any("paste one on the page" in line for line in c.log)
+
+
+@pytest.mark.parametrize("stored", ["anthropic_api_key", "claude_oauth_token"])
+def test_agents_stage_signs_in_the_operator_and_opens_agent_guests(ctx, stored):
+    c = ctx("small")
+    c.secrets.set(stored, "sk-ant-credential")
+    apply.stage_agents(c)
+    playbooks = [call[1:] for call in c.reach.calls if call[0] == "playbook"]
+    assert [(p[0], next(iter(p[1]))) for p in playbooks] == [("operator.yml", "operator"), ("agent-ssh.yml", "workspace")]
+    operator = playbooks[0][2]
+    kinds = {"anthropic_api_key": "operator_anthropic_api_key", "claude_oauth_token": "operator_claude_oauth_token"}
+    assert operator[kinds[stored]] == "sk-ant-credential" and not [
+        v for k, v in operator.items() if k in kinds.values() and k != kinds[stored] and v
+    ]
+    assert operator["operator_proxy_url"] == "http://10.42.2.10:3128"
+    assert operator["operator_pve_token"] == "secret-token"
+    assert operator["operator_step_password"] == "agent-password"
+    assert operator["operator_ca_url"] == "https://step-ca.nullbill.internal"
+    assert playbooks[1][2] == {"agent_ssh_user_ca_key": "ecdsa-sha2-nistp256 AAAAuserca"}
+
+
+def test_logs_stage_gives_each_shipper_its_own_certificate(ctx):
+    c = ctx("small")
+    apply.stage_logs(c)
+    playbooks = [call[1:] for call in c.reach.calls if call[0] == "playbook"]
+    names = [next(iter(p[1])) for p in playbooks]
+    assert names == ["router", "pbs", "operator", "workspace"]
+    certs = {p[2]["log_shipper_cert"] for p in playbooks}
+    assert len(certs) == 4
+    workspace = playbooks[3][2]
+    assert workspace["log_shipper_url"] == "https://monitoring.nullbill.internal:3100/loki/api/v1/push"
+    assert workspace["log_shipper_host"] == "workspace"
+    assert workspace["log_shipper_key"] == (c.home / "shipper-ca" / "workspace.key").read_text()
 
 
 def test_host_stage_rewrites_only_what_changed(ctx):

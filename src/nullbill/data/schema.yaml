@@ -83,6 +83,8 @@ $defs:
       gpu: {type: boolean}
       floor: {$ref: "#/$defs/size"}
       grow: {type: integer, minimum: 1}
+      # vm-pool: the labels a CI job names in runs-on to land on this pool.
+      runs_on: {type: array, minItems: 1, uniqueItems: true, items: {$ref: "#/$defs/name"}}
       ports: {type: array, items: {$ref: "#/$defs/port"}}
 
   gpu_pin:

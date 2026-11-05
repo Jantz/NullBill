@@ -38,7 +38,9 @@ def test_proxy_zones_resolve_internal_names_only(facts):
     assert re.findall(r"^interface=(\S+)", internal, re.M) == ["nb-mgmt", "nb-build", "nb-inference", "nb-windows"]
     assert re.findall(r"^interface=(\S+)", external, re.M) == ["nb-services", "nb-access"]
     # Pool clones take their address from the internal instance.
-    assert "dhcp-range=10.42.3.129,10.42.3.190" in internal
+    assert "dhcp-range=10.42.3.130,10.42.3.190" in internal
+    # The golden image keeps one address while apply bakes it; clones get new MACs.
+    assert "dhcp-host=02:4e:42:00:03:1e,10.42.3.129 # linux-runner golden image" in internal
 
 
 def test_router_links_are_unique_and_short(facts):

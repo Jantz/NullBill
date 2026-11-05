@@ -39,9 +39,12 @@ STORAGE_ROLE = "PVEDatastoreUser"
 BRIDGE_ROLE = "PVESDNUser"
 
 # Clone VMIDs: vmid_base + CLONE_OFFSET + 100 * service id + n. A pool can
-# hold no more clones than its zone's DHCP range (.129-.190) has leases.
+# hold no more clones than its zone's DHCP range (.130-.190) has leases.
+# .129, inside the pool's range so the same flows reach it, is reserved
+# for the golden image's MAC while apply bakes it; clones get new MACs.
 CLONE_OFFSET = 1000
-MAX_CLONES = 62
+MAX_CLONES = 61
+TEMPLATE_HOST = 129
 
 
 def pools(plan: dict) -> dict[str, dict]:

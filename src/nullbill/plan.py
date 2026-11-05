@@ -413,6 +413,9 @@ def build_plan(model: dict, facts: dict) -> dict:
             entry["count"] = counts[name]
             entry["template_vmid"] = vmid_base + svc["id"]
             entry["clone_range"] = Note(_host(zones[svc["zone"]], POOL_RANGE), "Clones take DHCP leases from this range.")
+            entry["template_ip"] = Note(
+                _host(zones[svc["zone"]], ci.TEMPLATE_HOST), "The golden image's reserved lease while apply bakes it."
+            )
             entry["clone_vmids"] = Note(
                 ci.clone_vmids(vmid_base, svc["id"], counts[name].value), "The dispatcher clones one per queued job into these."
             )

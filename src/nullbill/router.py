@@ -98,7 +98,9 @@ def _dnsmasq(plan: dict, model: dict, zones: list[str], external: bool) -> str:
         if guest["kind"] == "vm-pool" and guest["zone"] in zones:
             subnet = plan["zones"][guest["zone"]]["subnet"]
             base = subnet.rsplit(".", 1)[0]
-            lines.append(f"dhcp-range={base}.129,{base}.190,255.255.255.0,1h # {name} clones\n")
+            lines.append(f"dhcp-range={base}.130,{base}.190,255.255.255.0,1h # {name} clones\n")
+            template_mac = mac(model["zones"][guest["zone"]]["index"], model["services"][name]["id"])
+            lines.append(f"dhcp-host={template_mac},{guest['template_ip']} # {name} golden image\n")
     return "".join(lines)
 
 

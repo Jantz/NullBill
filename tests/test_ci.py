@@ -68,8 +68,8 @@ def test_no_dispatcher_without_a_pool(facts):
 
 
 def test_clones_cannot_outnumber_the_dhcp_range(facts):
-    with pytest.raises(NullBillError, match="linux-runner: 63 clones; its zone's DHCP range has 62 leases"):
-        planned(facts, "large", {"overrides": {"linux-runner": {"count": 63}}})
+    with pytest.raises(NullBillError, match="linux-runner: 62 clones; its zone's DHCP range has 61 leases"):
+        planned(facts, "large", {"overrides": {"linux-runner": {"count": 62}}})
 
 
 def test_dispatcher_reaches_the_api_forgejo_and_build_reaches_it(facts):

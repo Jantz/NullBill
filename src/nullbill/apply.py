@@ -95,7 +95,8 @@ def connection(ctx: Context, name: str | None) -> dict:
             "proxmox_vmid": guest["vmid"],
             "ansible_python_interpreter": "/usr/bin/python3",
         }
-    address = guest["ips"][guest["zone"]] if "ips" in guest else guest["ip"]
+    # A pool is reached at its golden image's reserved lease while apply bakes it.
+    address = guest["ips"][guest["zone"]] if "ips" in guest else guest.get("ip") or guest["template_ip"]
     # VM host keys are new on first boot; pin each on first sight in a file
     # of NullBill's own, not the owner's known_hosts.
     known = shlex.quote(str(ctx.home / "known_hosts"))
@@ -442,7 +443,6 @@ def tls_targets(ctx: Context) -> list[str]:
 def monitoring_vars(ctx: Context) -> dict:
     guests = ctx.bare["guests"]
     topic = ctx.secrets.data.get("ntfy_topic")
-    proxy = f"http://{guests[PROXY]['ip']}:{proxy_port(ctx.model)}"
     return {
         "monitoring_node_targets": [f"{fqdn(ctx, n)}:9100" for n, g in guests.items() if node_exporter_guest(g)],
         "monitoring_host_target": f"pve.{ctx.bare['domain']}:9100",
@@ -452,7 +452,7 @@ def monitoring_vars(ctx: Context) -> dict:
         "monitoring_shipper_ca": shipper_ca(ctx, "monitoring"),
         "monitoring_ntfy_url": NTFY + topic if topic else "",
         "monitoring_healthchecks_url": ctx.secrets.data.get("healthchecks_url", ""),
-        "monitoring_https_proxy": proxy if ctx.bare["zones"][guests["monitoring"]["zone"]]["egress"] == "proxy" else "",
+        "monitoring_https_proxy": proxy_url(ctx, "monitoring"),
     }
 
 
@@ -483,6 +483,161 @@ def stage_forgejo(ctx: Context) -> None:
     ctx.secrets.set("forgejo_admin_password", password)
 
 
+def ssh_user_ca(ctx: Context, stage: str) -> str:
+    return guest_out(ctx, stage, "step-ca", ["cat", f"{STEP}/certs/ssh_user_ca_key.pub"]).strip()
+
+
+def linux_pools(ctx: Context) -> dict[str, dict]:
+    """Pools the dispatcher serves; Windows pools wait on their own image (#22)."""
+    return {n: g for n, g in ctx.bare["guests"].items() if g["kind"] == "vm-pool" and g["zone"] != "windows"}
+
+
+def forget_host_key(ctx: Context, address: str) -> None:
+    """A golden image is a new machine each time it is baked."""
+    known = ctx.home / "known_hosts"
+    if known.exists():
+        lines = known.read_text().splitlines(keepends=True)
+        known.write_text("".join(line for line in lines if line.split(" ", 1)[0] != address))
+
+
+def bake(ctx: Context, name: str, guest: dict) -> None:
+    """Boot the pool's template VM, make it a one-job runner, seal it and
+    convert it to a template. A template already converted is kept."""
+    vmid = guest["template_vmid"]
+    if "template: 1" in host_out(ctx, "ci", f"qm config {vmid}"):
+        ctx.say(f"ci: {name}'s golden image is baked")
+        return
+    ctx.say(f"ci: baking {name}'s golden image (VM {vmid})")
+    host_out(ctx, "ci", f"qm status {vmid} | grep -q running || qm start {vmid}")
+    address = guest["template_ip"]
+    wait = f"until (exec 3<>/dev/tcp/{address}/22) 2>/dev/null; do sleep 5; done"
+    host_out(ctx, "ci", f"timeout 600 bash -c {shlex.quote(wait)}")
+    forget_host_key(ctx, address)
+    runner = {
+        "ci_runner_ca_root": ca_root(ctx, "ci"),
+        "ci_runner_dispatcher_url": f"https://{fqdn(ctx, 'runner-dispatcher')}:8443",
+        "ci_runner_proxy_url": proxy_url(ctx, name),
+        "ci_runner_no_proxy": f".{ctx.bare['domain']},localhost,127.0.0.1",
+    }
+    run_playbook(ctx, "ci", "ci-runner.yml", name, runner)
+    if guest.get("agent_managed"):
+        run_playbook(ctx, "ci", "agent-ssh.yml", name, {"agent_ssh_user_ca_key": ssh_user_ca(ctx, "ci")})
+    run_playbook(ctx, "ci", "ci-runner-seal.yml", name)
+    host_out(ctx, "ci", f"qm shutdown {vmid} --timeout 180 && qm template {vmid}")
+    ctx.say(f"ci: {name}'s golden image is a template")
+
+
+def forgejo_token(ctx: Context) -> str:
+    """write:admin, for Forgejo's runner endpoints; made once and kept."""
+
+    def make() -> str:
+        argv = ["/usr/local/sbin/nb-forgejo", "admin", "user", "generate-access-token", "--username", "nullbill-admin"]
+        # A unique name, so a token made again after a lost secrets file never clashes.
+        argv += ["--token-name", f"dispatcher-{os.urandom(4).hex()}", "--scopes", "write:admin", "--raw"]
+        return guest_out(ctx, "ci", "forgejo", argv).strip()
+
+    return ctx.secrets.ensure("forgejo_dispatcher_token", make)
+
+
+def dispatcher_vars(ctx: Context) -> dict:
+    pools = []
+    for name, guest in linux_pools(ctx).items():
+        first, last = (int(v) for v in guest["clone_vmids"].split("-"))
+        labels = ctx.model["services"][name]["runs_on"]
+        pools.append(
+            {
+                "name": name,
+                "template": guest["template_vmid"],
+                "vmids": [first, last],
+                "labels": labels,
+                "runner_labels": [f"{label}:host" for label in labels],
+                "max_job_seconds": 6 * 3600,
+            }
+        )
+    return {
+        "runner_dispatcher_tls_name": fqdn(ctx, "runner-dispatcher"),
+        "runner_dispatcher_forgejo_url": f"https://{fqdn(ctx, 'forgejo')}",
+        "runner_dispatcher_forgejo_token": forgejo_token(ctx),
+        "runner_dispatcher_pve_url": f"https://pve.{ctx.bare['domain']}:8006",
+        "runner_dispatcher_node": host_out(ctx, "ci", "hostname").strip(),
+        "runner_dispatcher_pve_token": tofu_output(ctx, "ci", "dispatcher_token").strip(),
+        "runner_dispatcher_pve_ca": host_out(ctx, "ci", "cat /etc/pve/pve-root-ca.pem"),
+        "runner_dispatcher_pools": pools,
+    }
+
+
+def stage_ci(ctx: Context) -> None:
+    """Each Linux pool's golden image, then the dispatcher that clones it per job."""
+    if not planned(ctx, "runner-dispatcher") or not linux_pools(ctx):
+        return
+    for name, guest in linux_pools(ctx).items():
+        bake(ctx, name, guest)
+    run_playbook(ctx, "ci", "runner-dispatcher.yml", "runner-dispatcher", dispatcher_vars(ctx))
+
+
+def proxy_url(ctx: Context, name: str) -> str:
+    """The egress proxy for a guest in a proxied zone, or "" where egress is direct."""
+    if ctx.bare["zones"][ctx.bare["guests"][name]["zone"]]["egress"] != "proxy":
+        return ""
+    return f"http://{ctx.bare['guests'][PROXY]['ip']}:{proxy_port(ctx.model)}"
+
+
+AGENT_CREDENTIALS = {"anthropic_api_key": "operator_anthropic_api_key", "claude_oauth_token": "operator_claude_oauth_token"}
+
+
+def agent_guests(ctx: Context) -> list[str]:
+    """Agent-managed guests that live on; pool images get agent SSH when baked."""
+    return [n for n, g in ctx.bare["guests"].items() if g.get("agent_managed") and g["kind"] != "vm-pool"]
+
+
+def stage_agents(ctx: Context) -> None:
+    """The operator with the agent CLI and its tokens, and agent SSH on each
+    agent-managed guest."""
+    if not planned(ctx, "operator"):
+        return
+    stored = {var: ctx.secrets.data.get(name, "") for name, var in AGENT_CREDENTIALS.items()}
+    if not any(stored.values()):
+        ctx.say("agents: no API key or subscription token for the agent CLI yet; paste one on the page and run setup again")
+        return
+    variables = {
+        **stored,
+        "operator_proxy_url": proxy_url(ctx, "operator"),
+        "operator_ca_url": f"https://{fqdn(ctx, 'step-ca')}",
+        "operator_pve_token": tofu_output(ctx, "agents", "agent_token").strip(),
+        "operator_pve_ca": host_out(ctx, "agents", "cat /etc/pve/pve-root-ca.pem"),
+        "operator_ca_root": ca_root(ctx, "agents"),
+        "operator_step_password": guest_out(ctx, "agents", "step-ca", ["cat", f"{STEP}/secrets/agent-password"]).strip(),
+    }
+    run_playbook(ctx, "agents", "operator.yml", "operator", variables)
+    key = ssh_user_ca(ctx, "agents")
+    for name in agent_guests(ctx):
+        run_playbook(ctx, "agents", "agent-ssh.yml", name, {"agent_ssh_user_ca_key": key})
+
+
+def shippers(ctx: Context) -> list[str]:
+    """Guests whose agent commands and SSH logins go to Loki: the operator,
+    agent-managed guests, and the VMs that run sshd."""
+    guests = ctx.bare["guests"]
+    vms = [n for n, g in guests.items() if g["kind"] == "vm" and g["zone"] != "windows"]
+    return [n for n in guests if n == "operator" or n in agent_guests(ctx) or n in vms]
+
+
+def stage_logs(ctx: Context) -> None:
+    if not planned(ctx, "monitoring"):
+        return
+    root = ca_root(ctx, "logs")
+    for name in shippers(ctx):
+        cert, key = shipper_cert(ctx, "logs", name)
+        variables = {
+            "log_shipper_url": f"https://{fqdn(ctx, 'monitoring')}:3100/loki/api/v1/push",
+            "log_shipper_host": name,
+            "log_shipper_ca": root,
+            "log_shipper_cert": cert,
+            "log_shipper_key": key,
+        }
+        run_playbook(ctx, "logs", "log-shipper.yml", name, variables)
+
+
 def stage_verify(ctx: Context) -> None:
     results = run_verify(ctx.plan, ctx.model, ctx.target, ctx.run)
     for result in results:
@@ -504,6 +659,9 @@ STAGES: list[Stage] = [
     ("postgres", stage_postgres),
     ("monitoring", stage_monitoring),
     ("forgejo", stage_forgejo),
+    ("ci", stage_ci),
+    ("agents", stage_agents),
+    ("logs", stage_logs),
     ("verify", stage_verify),
 ]
 
