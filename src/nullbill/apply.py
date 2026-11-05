@@ -33,6 +33,9 @@ from nullbill.verify import run_verify
 ANSIBLE = REPO_ROOT / "ansible"
 PCT_CONNECTION = "community.proxmox.proxmox_pct_remote"
 PVE_FIREWALL = "/etc/pve/firewall"
+# Alerts go to a ntfy.sh topic named by a random string NullBill makes (no
+# account needed); the page makes the topic, apply hands it to monitoring.
+NTFY = "https://ntfy.sh/"
 
 
 class Reach(Protocol):
@@ -348,6 +351,137 @@ def stage_ca(ctx: Context) -> None:
         run_playbook(ctx, "ca", "tls-cert.yml", name, variables)
 
 
+def planned(ctx: Context, name: str) -> bool:
+    return name in ctx.bare["guests"]
+
+
+def fqdn(ctx: Context, name: str) -> str:
+    return f"{name}.{ctx.bare['domain']}"
+
+
+def db_name(service: str) -> str:
+    return service.replace("-", "_")
+
+
+def postgres_clients(ctx: Context) -> list[str]:
+    """Planned services the catalog lets reach PostgreSQL: one database each."""
+    sources = [s for p in ctx.model["services"]["postgres"].get("ports", []) if p["port"] == 5432 for s in p["from"]]
+    return [s.removeprefix("service:") for s in sources if s.startswith("service:") and planned(ctx, s.removeprefix("service:"))]
+
+
+def stage_postgres(ctx: Context) -> None:
+    if not planned(ctx, "postgres"):
+        return
+    guests = ctx.bare["guests"]
+    databases = [
+        {"name": db_name(c), "client": guests[c]["ip"], "password": ctx.secrets.ensure(f"postgres_{db_name(c)}")}
+        for c in postgres_clients(ctx)
+    ]
+    variables = {
+        "postgres_listen": [guests["postgres"]["ip"]],
+        "postgres_tls_name": fqdn(ctx, "postgres"),
+        "postgres_databases": databases,
+    }
+    run_playbook(ctx, "postgres", "postgres.yml", "postgres", variables)
+
+
+SHIPPER_CA = "shipper-ca"
+# Renewed by the apply that finds fewer than 30 days left.
+SHIPPER_DAYS = 825
+EC = ["-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes"]
+
+
+def openssl(ctx: Context, stage: str, args: list[str]) -> int:
+    directory = ctx.home / SHIPPER_CA
+    directory.mkdir(mode=0o700, exist_ok=True)
+    rc, _ = ctx.reach.local(["openssl", *args], directory, {}, capture=True)
+    return rc
+
+
+def shipper_ca(ctx: Context, stage: str) -> str:
+    """The CA whose certificates Loki's gate takes pushes from. Its key stays
+    in NULLBILL_HOME, so no guest, and not the agent, can mint one."""
+    crt = ctx.home / SHIPPER_CA / "ca.crt"
+    if not crt.exists():
+        args = ["req", "-x509", *EC, "-days", "3650", "-subj", "/CN=NullBill log shipper CA", "-keyout", "ca.key", "-out", "ca.crt"]
+        if openssl(ctx, stage, args) != 0:
+            raise ApplyError(stage, "openssl could not make the log shipper CA")
+        ctx.say(f"{stage}: made the log shipper CA in {crt.parent}")
+    return crt.read_text()
+
+
+def shipper_cert(ctx: Context, stage: str, name: str) -> tuple[str, str]:
+    """name's push certificate and key, made again when under 30 days remain."""
+    shipper_ca(ctx, stage)
+    directory = ctx.home / SHIPPER_CA
+    crt, key = directory / f"{name}.crt", directory / f"{name}.key"
+    if not crt.exists() or openssl(ctx, stage, ["x509", "-checkend", str(30 * 86400), "-noout", "-in", crt.name]) != 0:
+        steps = (
+            ["req", *EC, "-subj", f"/CN={name}", "-keyout", key.name, "-out", f"{name}.csr"],
+            ["x509", "-req", "-in", f"{name}.csr", "-CA", "ca.crt", "-CAkey", "ca.key", "-CAcreateserial"]
+            + ["-days", str(SHIPPER_DAYS), "-out", crt.name],
+        )
+        for args in steps:
+            if openssl(ctx, stage, args) != 0:
+                raise ApplyError(stage, f"openssl could not make {name}'s log shipper certificate")
+        ctx.say(f"{stage}: made {name}'s log shipper certificate")
+    return crt.read_text(), key.read_text()
+
+
+ROOT_CA = "/etc/nullbill/tls/root_ca.crt"  # tls_cert writes it on every guest it runs on
+
+
+def tls_targets(ctx: Context) -> list[str]:
+    """Endpoints that speak TLS from the first byte, so blackbox can see their
+    certificates renew; PostgreSQL negotiates TLS inside its own protocol."""
+    ports = {"step-ca": 443, "monitoring": 3100, "forgejo": 443, "runner-dispatcher": 8443}
+    return [f"{fqdn(ctx, n)}:{p}" for n, p in ports.items() if planned(ctx, n)]
+
+
+def monitoring_vars(ctx: Context) -> dict:
+    guests = ctx.bare["guests"]
+    topic = ctx.secrets.data.get("ntfy_topic")
+    proxy = f"http://{guests[PROXY]['ip']}:{proxy_port(ctx.model)}"
+    return {
+        "monitoring_node_targets": [f"{fqdn(ctx, n)}:9100" for n, g in guests.items() if node_exporter_guest(g)],
+        "monitoring_host_target": f"pve.{ctx.bare['domain']}:9100",
+        "monitoring_tls_targets": tls_targets(ctx),
+        "monitoring_ca_file": ROOT_CA,
+        "monitoring_tls_name": fqdn(ctx, "monitoring"),
+        "monitoring_shipper_ca": shipper_ca(ctx, "monitoring"),
+        "monitoring_ntfy_url": NTFY + topic if topic else "",
+        "monitoring_healthchecks_url": ctx.secrets.data.get("healthchecks_url", ""),
+        "monitoring_https_proxy": proxy if ctx.bare["zones"][guests["monitoring"]["zone"]]["egress"] == "proxy" else "",
+    }
+
+
+def stage_monitoring(ctx: Context) -> None:
+    if not planned(ctx, "monitoring"):
+        return
+    variables = monitoring_vars(ctx)
+    if not variables["monitoring_ntfy_url"]:
+        ctx.say("monitoring: no ntfy topic yet, so alerts stay on the server; set a password on the page to make one")
+    run_playbook(ctx, "monitoring", "monitoring.yml", "monitoring", variables)
+    # The role makes it once on the guest; keep it with the owner's secrets.
+    password = guest_out(ctx, "monitoring", "monitoring", ["cat", "/etc/grafana/admin-password"]).strip()
+    ctx.secrets.set("grafana_admin_password", password)
+
+
+def stage_forgejo(ctx: Context) -> None:
+    if not planned(ctx, "forgejo"):
+        return
+    variables = {
+        "forgejo_domain": fqdn(ctx, "forgejo"),
+        "forgejo_db_host": fqdn(ctx, "postgres"),
+        "forgejo_db_password": ctx.secrets.ensure("postgres_forgejo"),
+        "forgejo_admin_email": f"admin@{ctx.bare['domain']}",
+    }
+    run_playbook(ctx, "forgejo", "forgejo.yml", "forgejo", variables)
+    # Changed at first login; kept so the owner has it for that login.
+    password = guest_out(ctx, "forgejo", "forgejo", ["cat", "/etc/forgejo/admin-password"]).strip()
+    ctx.secrets.set("forgejo_admin_password", password)
+
+
 def stage_verify(ctx: Context) -> None:
     results = run_verify(ctx.plan, ctx.model, ctx.target, ctx.run)
     for result in results:
@@ -366,6 +500,9 @@ STAGES: list[Stage] = [
     ("proxy", stage_proxy),
     ("updates", stage_updates),
     ("ca", stage_ca),
+    ("postgres", stage_postgres),
+    ("monitoring", stage_monitoring),
+    ("forgejo", stage_forgejo),
     ("verify", stage_verify),
 ]
 

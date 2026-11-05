@@ -12,7 +12,7 @@ tests:
       - series: 'node_filesystem_size_bytes{instance="pbs:9100",mountpoint="/",fstype="ext4"}'
         values: "100x20"
       - series: 'probe_ssl_earliest_cert_expiry{job="tls",instance="forgejo:443"}'
-        values: "86400x70"
+        values: "21000x70"
       - series: 'probe_success{job="tls",instance="forgejo:443"}'
         values: "0x15"
       - series: 'node_boot_time_seconds{job="host",instance="pve.nullbill.internal:9100"}'
@@ -41,11 +41,14 @@ tests:
         exp_alerts:
           - exp_labels: {severity: page, instance: "pbs:9100", mountpoint: /, fstype: ext4}
             exp_annotations: {summary: "pbs:9100 / has under 10% free"}
-      - eval_time: 61m
+      - eval_time: 29m
+        alertname: CertificateExpiresSoon
+        exp_alerts: []
+      - eval_time: 31m
         alertname: CertificateExpiresSoon
         exp_alerts:
           - exp_labels: {severity: page, job: tls, instance: "forgejo:443"}
-            exp_annotations: {summary: "certificate on forgejo:443 expires within 14 days"}
+            exp_annotations: {summary: "certificate on forgejo:443 expires within 6 hours; its renewal has stopped"}
       - eval_time: 11m
         alertname: CertificateProbeFailing
         exp_alerts:

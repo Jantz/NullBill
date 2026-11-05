@@ -294,10 +294,12 @@ flows:
   - zone:build -> forgejo tcp/443
   - zone:windows -> forgejo tcp/443
   - service:runner-dispatcher -> forgejo tcp/443
+  - service:monitoring -> forgejo tcp/443
   - role:owner -> forgejo tcp/22
   - role:default -> forgejo tcp/22
   - service:monitoring -> forgejo tcp/9100
   - zone:build -> runner-dispatcher tcp/8443
+  - service:monitoring -> runner-dispatcher tcp/8443
   - service:monitoring -> runner-dispatcher tcp/9100
   - service:operator -> linux-runner tcp/22
   - role:default -> workspace tcp/22

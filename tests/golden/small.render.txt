@@ -179,7 +179,9 @@ OUT ACCEPT -dest +nb-svc-step-ca -p tcp -dport 9100 # to step-ca
 OUT ACCEPT -dest +nb-svc-postgres -p tcp -dport 9100 # to postgres
 OUT ACCEPT -dest +nb-svc-pbs -p tcp -dport 9100 # to pbs
 OUT ACCEPT -dest +nb-svc-operator -p tcp -dport 9100 # to operator
+OUT ACCEPT -dest +nb-svc-forgejo -p tcp -dport 443 # to forgejo
 OUT ACCEPT -dest +nb-svc-forgejo -p tcp -dport 9100 # to forgejo
+OUT ACCEPT -dest +nb-svc-runner-dispatcher -p tcp -dport 8443 # to runner-dispatcher
 OUT ACCEPT -dest +nb-svc-runner-dispatcher -p tcp -dport 9100 # to runner-dispatcher
 OUT ACCEPT -dest +nb-svc-workspace -p tcp -dport 9100 # to workspace
 OUT ACCEPT -dest 10.42.1.254 -p tcp -dport 9100 # to the PVE host
@@ -241,6 +243,7 @@ policy_out: DROP
 IN ACCEPT -source +nb-svc-vpn -p tcp -dport 443 # role:owner
 IN ACCEPT -source +nb-zone-build -p tcp -dport 443 # zone:build
 IN ACCEPT -source +nb-svc-runner-dispatcher -p tcp -dport 443 # service:runner-dispatcher
+IN ACCEPT -source +nb-svc-monitoring -p tcp -dport 443 # service:monitoring
 IN ACCEPT -source +nb-svc-vpn -p tcp -dport 22 # role:owner
 IN ACCEPT -source +nb-svc-monitoring -p tcp -dport 9100 # service:monitoring
 OUT ACCEPT -dest +nb-svc-router -p udp -dport 53 # to router
@@ -263,6 +266,7 @@ policy_out: DROP
 
 [RULES]
 IN ACCEPT -source +nb-zone-build -p tcp -dport 8443 # zone:build
+IN ACCEPT -source +nb-svc-monitoring -p tcp -dport 8443 # service:monitoring
 IN ACCEPT -source +nb-svc-monitoring -p tcp -dport 9100 # service:monitoring
 OUT ACCEPT -dest +nb-svc-router -p udp -dport 53 # to router
 OUT ACCEPT -dest +nb-svc-router -p tcp -dport 53 # to router
@@ -567,9 +571,11 @@ table inet nullbill {
         ip saddr { 10.42.6.11 } ip daddr { 10.42.2.17 } tcp dport 443 accept # role:owner to forgejo
         ip saddr { 10.42.3.0/24 } ip daddr { 10.42.2.17 } tcp dport 443 accept # zone:build to forgejo
         ip saddr { 10.42.2.18 } ip daddr { 10.42.2.17 } tcp dport 443 accept # service:runner-dispatcher to forgejo
+        ip saddr { 10.42.1.14 } ip daddr { 10.42.2.17 } tcp dport 443 accept # service:monitoring to forgejo
         ip saddr { 10.42.6.11 } ip daddr { 10.42.2.17 } tcp dport 22 accept # role:owner to forgejo
         ip saddr { 10.42.1.14 } ip daddr { 10.42.2.17 } tcp dport 9100 accept # service:monitoring to forgejo
         ip saddr { 10.42.3.0/24 } ip daddr { 10.42.2.18 } tcp dport 8443 accept # zone:build to runner-dispatcher
+        ip saddr { 10.42.1.14 } ip daddr { 10.42.2.18 } tcp dport 8443 accept # service:monitoring to runner-dispatcher
         ip saddr { 10.42.1.14 } ip daddr { 10.42.2.18 } tcp dport 9100 accept # service:monitoring to runner-dispatcher
         ip saddr { 10.42.1.16 } ip daddr { 10.42.3.128/26 } tcp dport 22 accept # service:operator to linux-runner
         ip saddr { 10.42.6.11 } ip daddr { 10.42.3.19 } tcp dport 22 accept # role:default to workspace

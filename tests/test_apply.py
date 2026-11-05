@@ -40,6 +40,7 @@ class FakeReach:
         self.envs = []
         self.fail_playbook = fail_playbook
         self.fail_local = fail_local
+        self.fresh = True
 
     def host(self, command, stdin=None):
         self.calls.append(("host", command))
@@ -76,12 +77,26 @@ class FakeReach:
             return 0, "-----BEGIN CERTIFICATE-----\nroot\n-----END CERTIFICATE-----\n", ""
         if argv[:5] == ["env", "STEPPATH=/etc/step-ca", "step", "ca", "token"]:
             return 0, f"token-for-{argv[5]}\n", ""
+        if argv in (["cat", "/etc/grafana/admin-password"], ["cat", "/etc/forgejo/admin-password"]):
+            return 0, f"password-of-{vmid}\n", ""
         return 127, "", f"fake guest {vmid}: unexpected {argv}"
 
     def local(self, argv, cwd, env, capture=False):
         self.calls.append(("local", argv, cwd))
         self.envs.append(env)
+        if argv[0] == "openssl":
+            return self.openssl(argv[1:], cwd)
         return (2 if argv[:2] == self.fail_local else 0), ("secret-token" if capture else "")
+
+    def openssl(self, args, cwd):
+        """Writes what -keyout and -out name; -checkend passes while self.fresh."""
+        if "-checkend" in args:
+            return (0 if self.fresh else 1), ""
+        for flag in ("-keyout", "-out"):
+            if flag in args:
+                name = args[args.index(flag) + 1]
+                (cwd / name).write_text(f"{flag[1:]} {name} #{len(self.calls)}\n")
+        return 0, ""
 
     def playbook(self, playbook, hosts, variables):
         self.calls.append(("playbook", playbook, hosts, variables))
@@ -214,6 +229,68 @@ def test_ca_stage_issues_each_tls_service_a_certificate_from_a_one_time_token(ct
     # Tokens are made on the CA guest, by pct exec through the host.
     tokens = [call[1] for call in c.reach.calls if call[0] == "host" and " token " in call[1]]
     assert all(t.startswith("pct exec 2012 -- env STEPPATH=/etc/step-ca step ca token ") for t in tokens) and len(tokens) == 4
+
+
+def playbook_vars(c, playbook):
+    (variables,) = [call[3] for call in c.reach.calls if call[0] == "playbook" and call[1] == playbook]
+    return variables
+
+
+def test_postgres_stage_gives_each_client_its_database_and_a_kept_password(ctx):
+    c = ctx("small")
+    apply.stage_postgres(c)
+    variables = playbook_vars(c, "postgres.yml")
+    password = c.secrets.data["postgres_forgejo"]
+    assert variables == {
+        "postgres_listen": ["10.42.2.13"],
+        "postgres_tls_name": "postgres.nullbill.internal",
+        "postgres_databases": [{"name": "forgejo", "client": "10.42.2.17", "password": password}],
+    }
+    apply.stage_forgejo(c)
+    assert playbook_vars(c, "forgejo.yml")["forgejo_db_password"] == password
+    assert c.secrets.data["forgejo_admin_password"] == "password-of-2017"
+
+
+def test_monitoring_stage_watches_every_guest_and_alerts_the_owner(ctx):
+    c = ctx("small")
+    c.secrets.set("ntfy_topic", "nullbill-topic")
+    c.secrets.set("healthchecks_url", "https://hc-ping.com/example-check")
+    apply.stage_monitoring(c)
+    variables = playbook_vars(c, "monitoring.yml")
+    nodes = variables["monitoring_node_targets"]
+    assert "forgejo.nullbill.internal:9100" in nodes and "nullbill.nullbill.internal:9100" in nodes
+    assert not [n for n in nodes if n.startswith("linux-runner")]
+    assert variables["monitoring_host_target"] == "pve.nullbill.internal:9100"
+    assert variables["monitoring_tls_targets"] == [
+        "step-ca.nullbill.internal:443",
+        "monitoring.nullbill.internal:3100",
+        "forgejo.nullbill.internal:443",
+        "runner-dispatcher.nullbill.internal:8443",
+    ]
+    assert variables["monitoring_ca_file"] == "/etc/nullbill/tls/root_ca.crt"
+    assert variables["monitoring_ntfy_url"] == "https://ntfy.sh/nullbill-topic"
+    assert variables["monitoring_healthchecks_url"] == "https://hc-ping.com/example-check"
+    assert variables["monitoring_https_proxy"] == "http://10.42.2.10:3128"
+    assert variables["monitoring_shipper_ca"] == (c.home / "shipper-ca" / "ca.crt").read_text()
+    assert c.secrets.data["grafana_admin_password"] == "password-of-2014"
+
+
+def test_monitoring_stage_runs_without_a_topic_and_says_so(ctx):
+    c = ctx("small")
+    apply.stage_monitoring(c)
+    assert playbook_vars(c, "monitoring.yml")["monitoring_ntfy_url"] == ""
+    assert any("no ntfy topic yet" in line for line in c.log)
+
+
+def test_shipper_certificates_are_kept_until_they_near_expiry(ctx):
+    c = ctx("small")
+    first = apply.shipper_cert(c, "logs", "operator")
+    ca = (c.home / "shipper-ca" / "ca.crt").read_text()
+    assert apply.shipper_cert(c, "logs", "operator") == first
+    c.reach.fresh = False
+    renewed = apply.shipper_cert(c, "logs", "operator")
+    assert renewed != first and (c.home / "shipper-ca" / "ca.crt").read_text() == ca
+    assert (c.home / "shipper-ca").stat().st_mode & 0o777 == 0o700
 
 
 def test_host_stage_rewrites_only_what_changed(ctx):

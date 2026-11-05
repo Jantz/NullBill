@@ -175,7 +175,8 @@ services:
     workload: core
     floor: {cores: 1, memory_mib: 1024, disk_gib: 32}
     ports:
-      - {port: 443, proto: tcp, from: ["role:owner", "role:default", "zone:build", "zone:windows", "service:runner-dispatcher"]}
+      # monitoring: blackbox watches the certificate renew.
+      - {port: 443, proto: tcp, from: ["role:owner", "role:default", "zone:build", "zone:windows", "service:runner-dispatcher", "service:monitoring"]}
       - {port: 22, proto: tcp, from: ["role:owner", "role:default"]}
   runner-dispatcher:
     id: 18
@@ -186,7 +187,7 @@ services:
     floor: {cores: 1, memory_mib: 256, disk_gib: 4}
     ports:
       # Each clone fetches its one-time runner registration here at boot.
-      - {port: 8443, proto: tcp, from: ["zone:build"]}
+      - {port: 8443, proto: tcp, from: ["zone:build", "service:monitoring"]}
   linux-runner:
     id: 30
     kind: vm-pool

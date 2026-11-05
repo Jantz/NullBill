@@ -30,6 +30,7 @@ from pathlib import Path
 
 import yaml
 
+from nullbill.apply import NTFY
 from nullbill.cli import plan_text
 from nullbill.errors import NullBillError
 from nullbill.model import build_model
@@ -41,9 +42,7 @@ LOCKOUT_FAILURES = 10
 LOCKOUT_S = 300
 WORKLOADS = ["agents", "linux-ci", "inference", "windows-ci", "windows-dev"]
 ACTIONS = {"probe", "apply", "verify"}
-# Alerts go to a ntfy.sh topic named by a random string NullBill makes (no
-# account needed), and an optional Healthchecks.io check notices silence.
-NTFY = "https://ntfy.sh/"
+# An optional Healthchecks.io check notices silence; alerts go to NTFY.
 HEALTHCHECKS = re.compile(r"https://hc-ping\.com/[A-Za-z0-9_-]{8,}(/[a-z0-9_-]+)?")
 STATIC = {"/": ("index.html", "text/html"), "/app.js": ("app.js", "text/javascript"), "/style.css": ("style.css", "text/css")}
 SECURITY_HEADERS = {
