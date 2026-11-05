@@ -5,6 +5,16 @@ set -euo pipefail
 # shellcheck source=tools/role-check/role-check.sh
 source /usr/local/lib/role-check.sh
 
+# What tls_cert leaves behind, from a throwaway CA instead of step-ca.
+test_pki /tmp/pki postgres.nullbill.internal
+apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql-common >/dev/null 2>&1
+getent group postgres >/dev/null || groupadd -r postgres
+install -d -m 0755 /etc/nullbill/tls
+install -m 0644 /tmp/pki/loki.crt /etc/nullbill/tls/postgres.nullbill.internal.crt
+install -m 0640 -g postgres /tmp/pki/loki.key /etc/nullbill/tls/postgres.nullbill.internal.key
+install -m 0644 /tmp/pki/ca.crt /etc/nullbill/tls/root_ca.crt
+echo "127.0.0.1 postgres.nullbill.internal" >>/etc/hosts
+
 cat >/tmp/vars.yml <<'YAML'
 postgres_manage_services: false
 postgres_databases:
@@ -13,9 +23,10 @@ YAML
 converge postgres.yml -e @/tmp/vars.yml
 
 export PGPASSWORD="it's a test"
-psql "host=127.0.0.1 dbname=forgejo user=forgejo sslmode=require" -tAc "SELECT current_user" | grep -qx forgejo \
+verified="host=postgres.nullbill.internal hostaddr=127.0.0.1 dbname=forgejo user=forgejo sslmode=verify-full sslrootcert=/etc/nullbill/tls/root_ca.crt"
+psql "$verified" -tAc "SELECT current_user" | grep -qx forgejo \
   || fail "client login over TLS"
-pass "forgejo logs in to its database over TLS"
+pass "forgejo logs in to its database over TLS, verifying the server's certificate"
 
 psql "host=127.0.0.1 dbname=forgejo user=forgejo sslmode=disable" -tAc "SELECT 1" >/dev/null 2>&1 \
   && fail "plaintext login accepted"

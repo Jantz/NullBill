@@ -7,4 +7,7 @@ postgres_listen: []
 # flows into postgres; apply supplies the password from sops.
 postgres_databases: []
 #  - {name: forgejo, client: 10.42.2.17, password: "..."}
+# The certificate the tls_cert role keeps renewed (group postgres), so
+# clients connect with sslmode=verify-full against step-ca's root.
+postgres_tls_name: postgres.nullbill.internal
 postgres_manage_services: true

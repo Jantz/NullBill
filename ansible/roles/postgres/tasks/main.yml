@@ -3,6 +3,16 @@
     name: "postgresql-{{ postgres_version }}"
     update_cache: true
 
+- name: Certificate from the tls_cert role
+  ansible.builtin.stat:
+    path: "/etc/nullbill/tls/{{ postgres_tls_name }}.key"
+  register: postgres_tls_key
+
+- name: The certificate is in place
+  ansible.builtin.assert:
+    that: postgres_tls_key.stat.exists and postgres_tls_key.stat.gr_name == "postgres"
+    fail_msg: "run tls-cert.yml for {{ postgres_tls_name }} with tls_cert_group=postgres first"
+
 - name: Server settings
   ansible.builtin.template:
     src: nullbill.conf.j2

@@ -1,8 +1,17 @@
-- name: Certificates from apply are set
+- name: The shipper CA is set
   ansible.builtin.assert:
-    that: lookup('ansible.builtin.vars', item) | length > 0
-    fail_msg: "{{ item }} is empty; apply issues it"
-  loop: [monitoring_loki_tls_cert, monitoring_loki_tls_key, monitoring_shipper_ca]
+    that: monitoring_shipper_ca | length > 0
+    fail_msg: monitoring_shipper_ca is empty; apply makes it in NULLBILL_HOME
+
+- name: Certificate from the tls_cert role
+  ansible.builtin.stat:
+    path: "/etc/nullbill/tls/{{ monitoring_tls_name }}.key"
+  register: monitoring_tls_key
+
+- name: The certificate is in place
+  ansible.builtin.assert:
+    that: monitoring_tls_key.stat.exists
+    fail_msg: "run tls-cert.yml for {{ monitoring_tls_name }} with tls_cert_group=www-data first"
 
 - name: Prometheus, blackbox exporter, promtool and nginx from Debian
   ansible.builtin.apt:
@@ -127,18 +136,11 @@
     state: directory
     mode: "0750"
 
-- name: nginx certificates for the Loki gate
+- name: Shipper CA for the Loki gate
   ansible.builtin.copy:
-    dest: "/etc/nginx/nullbill/{{ item.file }}"
-    content: "{{ item.value | trim }}\n"
-    mode: "{{ item.mode }}"
-  loop:
-    - {file: loki.crt, value: "{{ monitoring_loki_tls_cert }}", mode: "0644"}
-    - {file: loki.key, value: "{{ monitoring_loki_tls_key }}", mode: "0600"}
-    - {file: shipper-ca.crt, value: "{{ monitoring_shipper_ca }}", mode: "0644"}
-  loop_control:
-    label: "{{ item.file }}"
-  no_log: true
+    dest: /etc/nginx/nullbill/shipper-ca.crt
+    content: "{{ monitoring_shipper_ca | trim }}\n"
+    mode: "0644"
   notify: Reload nginx
 
 - name: No default nginx site

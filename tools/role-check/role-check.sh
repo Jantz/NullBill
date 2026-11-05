@@ -39,11 +39,11 @@ stop_journald() {
 }
 
 # Throwaway PKI for checks of the Loki gate, written to $1:
-# ca.crt (stands in for step-ca) with loki.crt/loki.key for
-# monitoring.nullbill.internal; shipper-ca.crt with shipper.crt/shipper.key;
+# ca.crt (stands in for step-ca) with loki.crt/loki.key for $2 (default
+# monitoring.nullbill.internal); shipper-ca.crt with shipper.crt/shipper.key;
 # rogue.crt/rogue.key from a CA nobody trusts.
 test_pki() {
-  local d=$1
+  local d=$1 server=${2:-monitoring.nullbill.internal}
   mkdir -p "$d"
   (
     cd "$d" || exit 1
@@ -57,7 +57,7 @@ test_pki() {
       openssl x509 -req -in "$1.csr" -CA "$2.crt" -CAkey "$2.key" -CAcreateserial -days 2 \
         ${4:+-extfile <(printf 'subjectAltName=%s\n' "$4")} -out "$1.crt" 2>/dev/null
     }
-    leaf loki ca monitoring.nullbill.internal "DNS:monitoring.nullbill.internal"
+    leaf loki ca "$server" "DNS:$server"
     leaf shipper shipper-ca test.shipper
     leaf rogue rogue-ca test.shipper
   )

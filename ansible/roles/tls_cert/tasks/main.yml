@@ -1,0 +1,94 @@
+- name: Name and CA root are set
+  ansible.builtin.assert:
+    that:
+      - tls_cert_name is match('^[a-z0-9][a-z0-9.-]*$')
+      - tls_cert_ca_root | length > 0
+
+- name: Smallstep repository
+  ansible.builtin.include_role:
+    name: step_ca
+    tasks_from: repo
+
+- name: step-cli
+  ansible.builtin.apt:
+    name: "step-cli={{ step_cli_version }}"
+    update_cache: true
+  vars:
+    step_cli_version: 0.30.1-1
+
+- name: Certificate directory
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop: [/etc/nullbill/tls, /etc/nullbill/tls/step]
+
+- name: step-ca root
+  ansible.builtin.copy:
+    dest: /etc/nullbill/tls/root_ca.crt
+    content: "{{ tls_cert_ca_root | trim }}\n"
+    mode: "0644"
+
+- name: Is there a certificate already
+  ansible.builtin.stat:
+    path: "/etc/nullbill/tls/{{ tls_cert_name }}.crt"
+  register: tls_cert_existing
+
+- name: A token for the first certificate
+  ansible.builtin.assert:
+    that: tls_cert_token | length > 0
+    fail_msg: "no certificate for {{ tls_cert_name }} yet and no tls_cert_token; apply makes one"
+  when: not tls_cert_existing.stat.exists
+
+# The token names the subject and SANs; the guest cannot ask for others.
+- name: First certificate from the one-time token
+  ansible.builtin.command:
+    argv:
+      - step
+      - ca
+      - certificate
+      - "{{ tls_cert_name }}"
+      - "/etc/nullbill/tls/{{ tls_cert_name }}.crt"
+      - "/etc/nullbill/tls/{{ tls_cert_name }}.key"
+      - --token
+      - "{{ tls_cert_token }}"
+      - --ca-url
+      - "{{ tls_cert_ca_url }}"
+      - --root
+      - /etc/nullbill/tls/root_ca.crt
+    creates: "/etc/nullbill/tls/{{ tls_cert_name }}.crt"
+  environment:
+    STEPPATH: /etc/nullbill/tls/step
+  no_log: true
+  notify: Restart renewer
+
+- name: Certificate readable by all, key by the service's group only
+  ansible.builtin.file:
+    path: "/etc/nullbill/tls/{{ item.file }}"
+    owner: root
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {file: "{{ tls_cert_name }}.crt", group: root, mode: "0644"}
+    - {file: "{{ tls_cert_name }}.key", group: "{{ tls_cert_group }}", mode: "0640"}
+
+- name: What runs after each renewal
+  ansible.builtin.template:
+    src: nb-cert-renewed.j2
+    dest: "/usr/local/sbin/nb-cert-renewed-{{ tls_cert_name }}"
+    mode: "0755"
+
+- name: Renewer unit
+  ansible.builtin.template:
+    src: nb-cert-renew.service.j2
+    dest: "/etc/systemd/system/nb-cert-renew-{{ tls_cert_name }}.service"
+    mode: "0644"
+  notify: Restart renewer
+
+- name: Run the renewer
+  ansible.builtin.systemd_service:
+    name: "nb-cert-renew-{{ tls_cert_name }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: tls_cert_manage_services | bool

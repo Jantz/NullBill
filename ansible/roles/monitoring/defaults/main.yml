@@ -18,11 +18,10 @@ monitoring_prometheus_listen: "0.0.0.0:9090"
 # certificate from monitoring_shipper_ca may push, and nobody may delete.
 monitoring_loki_internal_port: 3101
 monitoring_loki_port: 3100
-# PEM strings apply fills in: nginx's certificate and key from step-ca, and
-# the shipper CA whose key stays on the controller, so no guest (and not the
-# agent) can mint a push certificate.
-monitoring_loki_tls_cert: ""
-monitoring_loki_tls_key: ""
+# nginx's certificate, kept renewed by the tls_cert role (group www-data).
+monitoring_tls_name: monitoring.nullbill.internal
+# PEM: the shipper CA, whose key stays on the controller, so no guest (and
+# not the agent) can mint a push certificate.
 monitoring_shipper_ca: ""
 
 monitoring_manage_services: true

@@ -6,12 +6,15 @@ set -euo pipefail
 source /usr/local/lib/role-check.sh
 
 test_pki /tmp/pki
+# What tls_cert leaves behind, from a throwaway CA instead of step-ca.
+install -d -m 0755 /etc/nullbill/tls
+install -m 0644 /tmp/pki/loki.crt /etc/nullbill/tls/monitoring.nullbill.internal.crt
+install -m 0640 /tmp/pki/loki.key /etc/nullbill/tls/monitoring.nullbill.internal.key
 vars=$(mktemp)
 python3 - "$vars" <<'PY'
 import json, sys
 read = lambda f: open(f"/tmp/pki/{f}").read()
-json.dump({"monitoring_loki_tls_cert": read("loki.crt"), "monitoring_loki_tls_key": read("loki.key"),
-           "monitoring_shipper_ca": read("shipper-ca.crt")}, open(sys.argv[1], "w"))
+json.dump({"monitoring_shipper_ca": read("shipper-ca.crt")}, open(sys.argv[1], "w"))
 PY
 converge monitoring.yml -e monitoring_manage_services=false -e "@$vars"
 

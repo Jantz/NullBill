@@ -1,0 +1,6 @@
+- name: Restart renewer
+  ansible.builtin.systemd_service:
+    name: "nb-cert-renew-{{ tls_cert_name }}"
+    state: restarted
+    daemon_reload: true
+  when: tls_cert_manage_services | bool

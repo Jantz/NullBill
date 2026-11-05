@@ -1,0 +1,8 @@
+# A certificate from step-ca on a guest, renewed before it expires. Service
+# roles read it from /etc/nullbill/tls/<name>.crt and .key; apply runs this
+# first with a one-time token it creates on the controller.
+- name: TLS certificate from step-ca
+  hosts: all
+  become: false
+  roles:
+    - tls_cert

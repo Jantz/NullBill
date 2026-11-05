@@ -2,8 +2,8 @@
 server {
     listen {{ monitoring_loki_port }} ssl;
     server_name _;
-    ssl_certificate /etc/nginx/nullbill/loki.crt;
-    ssl_certificate_key /etc/nginx/nullbill/loki.key;
+    ssl_certificate /etc/nullbill/tls/{{ monitoring_tls_name }}.crt;
+    ssl_certificate_key /etc/nullbill/tls/{{ monitoring_tls_name }}.key;
     ssl_protocols TLSv1.2 TLSv1.3;
     # Shippers present a certificate; readers need none.
     ssl_client_certificate /etc/nginx/nullbill/shipper-ca.crt;
