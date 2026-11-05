@@ -22,7 +22,7 @@ acl from_step-ca src 10.42.1.12/32
 acl allowed_step-ca dstdomain -n packages.smallstep.com
 http_access allow from_step-ca allowed_step-ca
 acl from_monitoring src 10.42.1.14/32
-acl allowed_monitoring dstdomain -n apt.grafana.com
+acl allowed_monitoring dstdomain -n apt.grafana.com ntfy.sh hc-ping.com
 http_access allow from_monitoring allowed_monitoring
 acl from_operator src 10.42.1.16/32
 acl allowed_operator dstdomain -n api.anthropic.com packages.smallstep.com

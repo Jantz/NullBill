@@ -132,9 +132,9 @@ services:
     kind: lxc
     zone: mgmt
     workload: core
-    description: Prometheus, Grafana and Loki.
-    # Grafana's apt repository (ansible/roles/monitoring).
-    proxy_allow: [apt.grafana.com]
+    description: Prometheus, Alertmanager, Grafana and Loki. Sends alerts to the owner's ntfy topic and pings Healthchecks.io.
+    # Grafana's apt repository, and where alerts go (ansible/roles/monitoring).
+    proxy_allow: [apt.grafana.com, ntfy.sh, hc-ping.com]
     floor: {cores: 1, memory_mib: 1536, disk_gib: 32}
     ports:
       - {port: 3000, proto: tcp, from: ["role:owner"]}

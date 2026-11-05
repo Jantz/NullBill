@@ -104,7 +104,9 @@ answered items move to the decisions list at the bottom.
   successful run and reboots needed; Prometheus alerts when security
   updates wait two days, no run succeeds for three, package lists go stale
   for two, upgrades are switched off, or a reboot waits three days. All in
-  `ansible/roles/updates`. Pool clones live for one job; keeping their
+  `ansible/roles/updates`. Alerts reach your ntfy topic with high priority
+  for "page" alerts and normal priority for "warn" ones. Pool clones live
+  for one job; keeping their
   golden images fresh is part of image baking (#22).
 
 ## Decisions

@@ -34,6 +34,28 @@ else:
 """
 
 
+class MemoryCodec:
+    def __init__(self):
+        self.data = {}
+
+    def load(self):
+        return dict(self.data)
+
+    def save(self, data):
+        self.data = dict(data)
+
+
+class Sent(list):
+    """Stands in for the network: records each send, fails on demand."""
+
+    fail = False
+
+    def __call__(self, url, body="", headers=None):
+        if self.fail:
+            raise OSError("network unreachable")
+        self.append((url, body, headers))
+
+
 class Client:
     def __init__(self, port: int, cert):
         self.port = port
@@ -68,7 +90,8 @@ def site(tmp_path, monkeypatch):
     (home / "install.json").write_text(json.dumps({"host": "192.0.2.10", "node": "pve", "vmid": 2002}))
     script = tmp_path / "fake_nullbill.py"
     script.write_text(FAKE_PROBE.format(tests=str(Path(__file__).parent)))
-    app = web.App(home, command=[sys.executable, str(script)])
+    codec = MemoryCodec()
+    app = web.App(home, command=[sys.executable, str(script)], codec=lambda _: codec, send=Sent())
     app.ensure_setup_code()
     cert, key = web.ensure_certificate(home)
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), web.make_handler(app))
@@ -188,4 +211,44 @@ def test_one_job_at_a_time(site, tmp_path):
     app.command = [sys.executable, str(slow)]
     job = client.call("/api/jobs", {"action": "verify"})[1]
     assert client.call("/api/jobs", {"action": "verify"}) == (400, {"error": "another job is still running"})
+    app.jobs[job["id"]].process.kill()
+
+
+def test_alerts_topic_is_made_with_the_password_and_tested(site):
+    app, client = site
+    sign_in(app, client)
+    alerts = client.call("/api/state")[1]["alerts"]
+    assert alerts["ntfy_url"].startswith("https://ntfy.sh/nullbill-") and len(alerts["ntfy_url"]) > 40
+    assert alerts["healthchecks_url"] == ""
+    bad = client.call("/api/alerts", {"healthchecks_url": "https://example.com/ping"})
+    assert bad[0] == 400 and "hc-ping.com" in bad[1]["error"]
+    ping = "https://hc-ping.com/0f4b3c9e-0000-4000-8000-000000000000"
+    status, data = client.call("/api/alerts", {"healthchecks_url": ping})
+    assert status == 200 and data["alerts"] == {"ntfy_url": alerts["ntfy_url"], "healthchecks_url": ping}
+    assert client.call("/api/alerts/test", {}) == (200, {"ok": True, "sent": ["ntfy", "Healthchecks.io"]})
+    (ntfy, body, headers), (hc, _, _) = app.send
+    assert (ntfy, hc) == (alerts["ntfy_url"], ping)
+    assert headers["Title"] == "NullBill: test alert" and "reach this device" in body
+    # Clearing the URL stops the ping; the topic stays.
+    client.call("/api/alerts", {"healthchecks_url": ""})
+    assert client.call("/api/state")[1]["alerts"] == {"ntfy_url": alerts["ntfy_url"], "healthchecks_url": ""}
+
+
+def test_a_failed_test_alert_says_so(site):
+    app, client = site
+    sign_in(app, client)
+    app.send.fail = True
+    status, data = client.call("/api/alerts/test", {})
+    assert status == 400 and "network unreachable" in data["error"]
+
+
+def test_alert_settings_wait_for_a_running_job(site, tmp_path):
+    app, client = site
+    sign_in(app, client)
+    slow = tmp_path / "slow.py"
+    slow.write_text("import time; time.sleep(5)\n")
+    app.command = [sys.executable, str(slow)]
+    job = client.call("/api/jobs", {"action": "verify"})[1]
+    ping = "https://hc-ping.com/0f4b3c9e-0000-4000-8000-000000000000"
+    assert client.call("/api/alerts", {"healthchecks_url": ping}) == (400, {"error": "wait until the running job finishes"})
     app.jobs[job["id"]].process.kill()

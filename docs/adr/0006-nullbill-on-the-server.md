@@ -78,13 +78,16 @@ links to the PVE UI, Grafana and Forgejo.
 
 **Alerts.** These need no open port and work from a residential IP:
 
-- ntfy.sh, the free public server, with the ntfy phone app. Grafana sends
-  to a random topic the wizard generates. Alerts say what failed and never
-  include secrets or names.
-- Healthchecks.io, free plan. NullBill pings it every 5 minutes. When the
-  server is down or offline, for example after a power cut, Healthchecks
-  alerts through ntfy or email, which a server that is off cannot do for
-  itself.
+- ntfy.sh, the free public server, with the ntfy phone app. Prometheus's
+  Alertmanager sends each alert through a small relay on the monitoring
+  guest to a random topic NullBill makes when the owner sets a password.
+  The page shows the topic and sends a test. Alerts say what failed and
+  never include secrets.
+- Healthchecks.io, free plan, optional. An always-firing Watchdog alert
+  pings it every 5 minutes. When the server is down or offline, for
+  example after a power cut, Healthchecks alerts through its own channels,
+  which a server that is off cannot do for itself. When the host starts
+  again, a HostStarted alert says so.
 
 **Agents.**
 

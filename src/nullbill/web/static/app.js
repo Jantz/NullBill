@@ -52,6 +52,11 @@ function renderPlan(plan) {
   $("plan-hint").hidden = Boolean(plan.text || plan.errors.length);
 }
 
+function renderAlerts(alerts) {
+  $("ntfy-topic").textContent = alerts && alerts.ntfy_url ? alerts.ntfy_url.replace("https://", "") : "";
+  $("healthchecks-url").value = alerts ? alerts.healthchecks_url : "";
+}
+
 async function refresh() {
   showError("");
   const state = await api("/api/state");
@@ -73,6 +78,7 @@ async function refresh() {
   $("backups").checked = state.choices.backups;
   $("owner-login").value = state.choices.owner_login;
   renderPlan(state.plan);
+  renderAlerts(state.alerts);
   if (state.job) follow(state.job.id, state.job);
 }
 
@@ -121,6 +127,20 @@ document.addEventListener("DOMContentLoaded", () => {
       const result = await api("/api/choices", {workloads, backups: $("backups").checked, owner_login: $("owner-login").value});
       renderPlan(result.plan);
       $("plan-details").open = true;
+    } catch (error) { showError(error); }
+  });
+  $("alerts-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const result = await api("/api/alerts", {healthchecks_url: $("healthchecks-url").value});
+      renderAlerts(result.alerts);
+      $("alerts-result").textContent = "Saved.";
+    } catch (error) { showError(error); }
+  });
+  $("test-alerts").addEventListener("click", async () => {
+    try {
+      const result = await api("/api/alerts/test", {});
+      $("alerts-result").textContent = `Sent to ${result.sent.join(" and ")}.`;
     } catch (error) { showError(error); }
   });
   for (const button of document.querySelectorAll("button[data-action]")) {

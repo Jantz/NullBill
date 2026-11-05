@@ -17,3 +17,11 @@
 - name: Reload nginx
   ansible.builtin.systemd_service: {name: nginx, state: reloaded}
   when: monitoring_manage_services | bool
+
+- name: Restart alertmanager
+  ansible.builtin.systemd_service: {name: prometheus-alertmanager, state: restarted}
+  when: monitoring_manage_services | bool
+
+- name: Restart alert relay
+  ansible.builtin.systemd_service: {name: nb-alert-relay, state: restarted, daemon_reload: true}
+  when: monitoring_manage_services | bool
