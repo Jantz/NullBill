@@ -4,8 +4,14 @@ pbs_signer_url: https://enterprise.proxmox.com/debian/proxmox-release-bookworm.g
 pbs_signer_sha512: 7da6fe34168adc6e479327ba517796d4702fa2f8b4f0a9833f5ea6e6b48f6507a6da403a274fe201595edc86a84463d50383d07f64bdde2e3658108db7d6dc87
 
 pbs_datastore: backups
-# apply mounts the pinned disk here before the role runs.
 pbs_datastore_path: /mnt/datastore/backups
+# The datastore's own disk (apply passes backups.DISK_PATH). Blank, it gets
+# an ext4 filesystem labelled pbs_disk_label; holding anything else, the role
+# stops. Empty: the datastore is a plain directory, as in the container check.
+pbs_disk: ""
+pbs_disk_label: nb-backups
+# The egress proxy, for the release key; apt already uses it (updates role).
+pbs_proxy_url: ""
 
 # The PVE host backs up with this token. DatastoreBackup lets it write
 # and read its own snapshots but not delete them, so a compromised host

@@ -36,7 +36,24 @@ EOF
 chmod +x /usr/local/sbin/pbs-start
 args=(-e pbs_manage_services=false -e pbs_start_command=/usr/local/sbin/pbs-start)
 
+# The datastore disk: an image file stands in, since mkfs and blkid take
+# files too. Mounting needs an init, so the datastore stays a directory here.
+truncate -s 64M /var/tmp/foreign.img
+mkfs.ext4 -q -L data /var/tmp/foreign.img
+if ansible-playbook -i localhost, -c local "${args[@]}" -e pbs_disk=/var/tmp/foreign.img /ansible/pbs.yml >/tmp/foreign.log 2>&1; then
+  fail "a disk with someone else's filesystem was taken"
+fi
+grep -q "holds TYPE=ext4 but not the ext4 filesystem labelled nb-backups" /tmp/foreign.log || { cat /tmp/foreign.log; fail "refusal message"; }
+blkid -p -o export /var/tmp/foreign.img | grep -qx LABEL=data || fail "the refused disk was changed"
+pass "a datastore disk holding another filesystem is refused and left as it is"
+
+truncate -s 64M /var/tmp/datastore.img
+args+=(-e pbs_disk=/var/tmp/datastore.img)
 converge pbs.yml "${args[@]}"
+blkid -p -o export /var/tmp/datastore.img | grep -qx LABEL=nb-backups || fail "blank disk not formatted"
+grep -qx "What=/var/tmp/datastore.img" /etc/systemd/system/mnt-datastore-backups.mount || fail "mount unit"
+grep -qx "RequiresMountsFor=/mnt/datastore/backups" /etc/systemd/system/proxmox-backup-proxy.service.d/nullbill-datastore.conf || fail "PBS does not wait for the mount"
+pass "a blank datastore disk is formatted once and mounted at boot, before PBS starts"
 
 test ! -e /etc/apt/sources.list.d/pbs-enterprise.list || fail "enterprise repository left in place"
 if ! apt-get update >/tmp/apt.log 2>&1 || grep -Eq '^(Err|W):' /tmp/apt.log; then

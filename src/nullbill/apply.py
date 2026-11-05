@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
+from nullbill import backups
 from nullbill.artifacts import write_build
 from nullbill.errors import NullBillError
 from nullbill.flows import mac
@@ -41,8 +42,8 @@ NTFY = "https://ntfy.sh/"
 
 
 class Reach(Protocol):
-    def host(self, command: str, stdin: str | None = None) -> tuple[int, str, str]:
-        """Run a shell command on the PVE host as target.ssh."""
+    def host(self, command: str, stdin: str | None = None, timeout: int = 900) -> tuple[int, str, str]:
+        """Run a shell command on the PVE host as target.ssh, for at most timeout seconds."""
 
     def playbook(self, playbook: str, hosts: dict[str, dict], variables: dict) -> int:
         """Run ansible/<playbook> against `hosts` (name -> host vars)."""
@@ -173,8 +174,8 @@ TOKEN_ID = "root@pam!nullbill"
 ROUTES_UNIT = "nullbill-routes.service"
 
 
-def host_out(ctx: Context, stage: str, command: str) -> str:
-    rc, out, err = ctx.reach.host(command)
+def host_out(ctx: Context, stage: str, command: str, timeout: int = 900) -> str:
+    rc, out, err = ctx.reach.host(command, timeout=timeout)
     if rc != 0:
         raise ApplyError(stage, f"{command.split()[0]} on the host: {(err.strip() or f'exit {rc}')[:200]}")
     return out
@@ -198,14 +199,18 @@ def api_token(ctx: Context) -> str:
     return token
 
 
+def windows_iso(ctx: Context, stage: str) -> None:
+    if "windows_iso" in json.loads(ctx.files["tofu/main.tf.json"])["variable"] and not os.environ.get("TF_VAR_windows_iso"):
+        raise ApplyError(stage, "Windows guests are planned but no Windows ISO is set; turn off the Windows workloads for now")
+
+
 def tofu_env(ctx: Context, stage: str = "tofu") -> dict[str, str]:
     """What OpenTofu needs, all through the environment: nothing is written
     in build/ or the state directory in plaintext."""
     _, host = split_target(ctx.target)
     variables = json.loads(ctx.files["tofu/main.tf.json"])["variable"]
     install = json.loads((ctx.home / "install.json").read_text()) if (ctx.home / "install.json").exists() else {}
-    if "windows_iso" in variables and not os.environ.get("TF_VAR_windows_iso"):
-        raise ApplyError(stage, "Windows guests are planned but no Windows ISO is set; turn off the Windows workloads for now")
+    windows_iso(ctx, stage)
     keys = [line for line in host_out(ctx, stage, "cat /root/.ssh/authorized_keys").splitlines() if line.startswith("ssh-")]
     ca = ctx.home / "pve-root-ca.pem"
     ca.write_text(host_out(ctx, stage, "cat /etc/pve/pve-root-ca.pem"))
@@ -224,24 +229,52 @@ def tofu_env(ctx: Context, stage: str = "tofu") -> dict[str, str]:
         "TF_VAR_state_passphrase": ctx.secrets.ensure("tofu_state_passphrase"),
         "TF_IN_AUTOMATION": "1",
     }
+    # Set by the backups stage once PBS answers; until then the storage and
+    # the nightly job wait (tofu.WHEN_PBS_READY).
+    for name in PBS_VARS:
+        if name in variables and name in ctx.secrets.data:
+            env[f"TF_VAR_{name}"] = ctx.secrets.data[name]
     return env
+
+
+# The first backup of every guest, from the controller's side of one SSH call.
+FIRST_BACKUP_S = 3 * 3600
+PBS_VARS = ("pbs_fingerprint", "pbs_token_secret", "pbs_encryption_key")
+
+
+def run_tofu(ctx: Context, stage: str, init: bool) -> None:
+    work = ctx.home / "tofu"
+    env = tofu_env(ctx, stage)
+    # init fetches the provider from the registry, so it keeps the system CAs.
+    init_env = {k: v for k, v in env.items() if k != "SSL_CERT_FILE"}
+    steps = [(["tofu", "init", "-input=false", "-no-color"], init_env)] if init else []
+    steps.append((["tofu", "apply", "-auto-approve", "-input=false", "-no-color"], env))
+    for argv, extra in steps:
+        ctx.say(f"{stage}: {' '.join(argv[:2])}")
+        rc, _ = ctx.reach.local(argv, work, extra)
+        if rc != 0:
+            raise ApplyError(stage, f"{' '.join(argv[:2])} failed (exit {rc})")
+
+
+def backup_disk(ctx: Context) -> None:
+    """The disk the plan pins for PBS, as the LVM storage the pbs VM's
+    datastore disk is made on; before OpenTofu makes that VM."""
+    if not backups.enabled(ctx.plan):
+        return
+    disk_id, _ = backups.disk(ctx.plan)
+    wipe = "1" if ctx.model.get("disks", {}).get(disk_id, {}).get("wipe") else "0"
+    out = host_out(ctx, "tofu", shlex.join(["/usr/local/sbin/nb-backup-disk", disk_id, wipe])).strip()
+    if out == "made":
+        ctx.say(f"tofu: {disk_id} is now the {backups.DISK_STORAGE} storage for PBS")
 
 
 def stage_tofu(ctx: Context) -> None:
     work = ctx.home / "tofu"
     work.mkdir(mode=0o700, exist_ok=True)
     (work / "main.tf.json").write_text(ctx.files["tofu/main.tf.json"])
-    env = tofu_env(ctx)
-    # init fetches the provider from the registry, so it keeps the system CAs.
-    init_env = {k: v for k, v in env.items() if k != "SSL_CERT_FILE"}
-    for argv, extra in (
-        (["tofu", "init", "-input=false", "-no-color"], init_env),
-        (["tofu", "apply", "-auto-approve", "-input=false", "-no-color"], env),
-    ):
-        ctx.say(f"tofu: {' '.join(argv[:2])}")
-        rc, _ = ctx.reach.local(argv, work, extra)
-        if rc != 0:
-            raise ApplyError("tofu", f"{' '.join(argv[:2])} failed (exit {rc})")
+    windows_iso(ctx, "tofu")
+    backup_disk(ctx)
+    run_tofu(ctx, "tofu", init=True)
     # The host reaches the zones through the router, not its LAN gateway.
     host_files(ctx, "tofu", "/etc/systemd/system", {ROUTES_UNIT: routes_unit(ctx)})
     host_out(ctx, "tofu", f"systemctl daemon-reload && systemctl enable -q {ROUTES_UNIT} && systemctl restart {ROUTES_UNIT}")
@@ -665,6 +698,63 @@ def stage_logs(ctx: Context) -> None:
         run_playbook(ctx, "logs", "log-shipper.yml", name, variables)
 
 
+def vm_out(ctx: Context, stage: str, name: str, command: str) -> str:
+    """Run a command on a VM as nullbill over SSH, through the host as
+    Ansible reaches it, and return its output."""
+    conn = connection(ctx, name)
+    argv = ["ssh", "-o", "BatchMode=yes", *shlex.split(conn["ansible_ssh_common_args"]), f"nullbill@{conn['ansible_host']}", command]
+    rc, out = ctx.reach.local(argv, ctx.home, {}, capture=True)
+    if rc != 0:
+        raise ApplyError(stage, f"{name}: {command.split()[0]} {command.split()[1]} failed (exit {rc})")
+    return out
+
+
+def encryption_key(ctx: Context) -> str:
+    """The key the host encrypts backups with, made on the host by PVE's own
+    client and kept in secrets, so a copy outlives the host. A key the host
+    already holds is kept rather than replaced."""
+    held = f"{backups.PRIV_DIR}/{backups.STORAGE}.enc"
+    make = (
+        f"if [ -s {held} ]; then cat {held}; else d=$(mktemp -d) && "
+        'proxmox-backup-client key create --kdf none "$d/key.json" >/dev/null && cat "$d/key.json"; rc=$?; rm -rf "$d"; exit $rc; fi'
+    )
+
+    def new() -> str:
+        ctx.say("backups: made the backup encryption key; keep a paper copy (docs/runbooks/pbs-encryption-key.md)")
+        return host_out(ctx, "backups", f"bash -c {shlex.quote(make)}").strip()
+
+    return ctx.secrets.ensure("pbs_encryption_key", new)
+
+
+def stage_backups(ctx: Context) -> None:
+    """PBS on its own disk, then the host's PBS storage and nightly job,
+    which OpenTofu adds once it has PBS's fingerprint and token."""
+    if not backups.enabled(ctx.plan):
+        return
+    variables = {"pbs_disk": backups.DISK_PATH, "pbs_proxy_url": proxy_url(ctx, "pbs")}
+    run_playbook(ctx, "backups", "pbs.yml", "pbs", variables)
+    token = json.loads(vm_out(ctx, "backups", "pbs", "sudo cat /root/nullbill/pbs-token.json"))["value"]
+    info = vm_out(ctx, "backups", "pbs", "sudo proxmox-backup-manager cert info")
+    fingerprint = next((line.split(": ", 1)[1].strip() for line in info.splitlines() if line.startswith("Fingerprint (sha256):")), "")
+    if not fingerprint:
+        raise ApplyError("backups", "pbs: no certificate fingerprint in proxmox-backup-manager cert info")
+    before = {name: ctx.secrets.data.get(name) for name in PBS_VARS}
+    encryption_key(ctx)
+    ctx.secrets.set("pbs_fingerprint", fingerprint)
+    ctx.secrets.set("pbs_token_secret", token)
+    if any(ctx.secrets.data.get(name) != value for name, value in before.items()):
+        run_tofu(ctx, "backups", init=False)
+    # A guest without a backup yet gets one now, so verify can check age and
+    # restore from the first run on, not only after the first night.
+    listing = json.loads(host_out(ctx, "backups", backups.LIST) or "[]")
+    missing = backups.unbacked(ctx.plan, listing)
+    if missing:
+        ctx.say(f"backups: first backup of {len(missing)} guests now; this can take a while")
+        argv = ["vzdump", *map(str, missing), "--storage", backups.STORAGE, "--mode", "snapshot", "--notes-template", "{{guestname}}"]
+        host_out(ctx, "backups", shlex.join(argv), timeout=FIRST_BACKUP_S)
+    ctx.say(f"backups: nightly at {backups.SCHEDULE} to {backups.STORAGE}, encrypted on the host")
+
+
 def stage_vpn(ctx: Context) -> None:
     """Tailscale on the vpn guest as the tagged subnet router. It logs in once
     with the owner's one-time auth key; until then it waits, logged out."""
@@ -714,6 +804,7 @@ STAGES: list[Stage] = [
     ("ci", stage_ci),
     ("agents", stage_agents),
     ("logs", stage_logs),
+    ("backups", stage_backups),
     ("vpn", stage_vpn),
     ("verify", stage_verify),
 ]
@@ -738,9 +829,9 @@ class SshReach:
         # management with them, since their stand-ins have no init.
         self.extra = extra or {}
 
-    def host(self, command: str, stdin: str | None = None) -> tuple[int, str, str]:
+    def host(self, command: str, stdin: str | None = None, timeout: int = 900) -> tuple[int, str, str]:
         argv = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", self.target, command]
-        proc = subprocess.run(argv, input=stdin, capture_output=True, text=True, timeout=900)
+        proc = subprocess.run(argv, input=stdin, capture_output=True, text=True, timeout=timeout)
         return proc.returncode, proc.stdout, proc.stderr
 
     def local(self, argv: list[str], cwd: Path, env: dict[str, str], capture: bool = False) -> tuple[int, str]:

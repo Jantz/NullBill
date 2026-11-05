@@ -7,7 +7,7 @@ COPY extra-ca.crt /tmp/extra-ca.crt
 RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod +x /usr/sbin/policy-rc.d \
  && apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ansible-core python3-apt openssh-server ca-certificates curl \
+      ansible-core python3-apt openssh-server ca-certificates curl lvm2 e2fsprogs \
  && cat /tmp/extra-ca.crt >> /etc/ssl/certs/ca-certificates.crt \
  && curl -fsSLo /etc/apt/trusted.gpg.d/proxmox-release-bookworm.gpg \
       https://enterprise.proxmox.com/debian/proxmox-release-bookworm.gpg \

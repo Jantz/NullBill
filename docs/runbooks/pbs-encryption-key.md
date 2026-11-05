@@ -3,12 +3,15 @@
 The PVE host encrypts every backup before it reaches PBS. Without the key,
 the backups cannot be read by anyone, including you. PVE keeps it in
 `/etc/pve/priv/storage/nb-pbs.enc`, so losing the host's disk loses that copy.
-apply is to create the key on the controller and keep it in `$NULLBILL_HOME`
-(issue #16), which makes a second copy. Keep a third offline.
+apply's backups stage makes the key once with PVE's own client and keeps it
+as `pbs_encryption_key` in `$NULLBILL_HOME/secrets.sops.yaml`. That copy is
+on the nullbill container, which lives on the same host and whose own
+backups need this key, so it does not help when the host is gone. Keep a
+copy offline.
 
 Reference: <https://pbs.proxmox.com/docs/backup-client.html#encryption>
 
-You do this yourself, once, after the first nightly backup:
+You do this yourself, once, after the first setup run with backups:
 
 1. Print a paper copy on the host and keep it offline, never in the repo:
 

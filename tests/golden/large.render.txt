@@ -2139,6 +2139,16 @@ WantedBy=multi-user.target
             "file_id": "${proxmox_download_file.debian_cloud.id}",
             "discard": "on",
             "iothread": true
+          },
+          {
+            "datastore_id": "nb-pbs-disk",
+            "interface": "virtio1",
+            "size": 3725,
+            "serial": "nb-backups",
+            "file_format": "raw",
+            "discard": "on",
+            "iothread": true,
+            "backup": false
           }
         ],
         "initialization": {
@@ -2164,7 +2174,10 @@ WantedBy=multi-user.target
         },
         "depends_on": [
           "proxmox_network_linux_bridge.vmbr101"
-        ]
+        ],
+        "lifecycle": {
+          "prevent_destroy": true
+        }
       },
       "linux-runner": {
         "node_name": "${var.node_name}",

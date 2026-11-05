@@ -106,6 +106,13 @@
     dest: /usr/local/sbin/nb-pve-api-cert
     mode: "0755"
 
+# apply runs it before OpenTofu when the plan gives PBS a disk of its own.
+- name: Backup disk script
+  ansible.builtin.copy:
+    src: nb-backup-disk
+    dest: /usr/local/sbin/nb-backup-disk
+    mode: "0755"
+
 - name: Is PVE installed
   ansible.builtin.stat:
     path: /usr/bin/pvenode

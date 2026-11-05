@@ -4,7 +4,7 @@ import shlex
 import pytest
 from conftest import fixture_config
 
-from nullbill import apply
+from nullbill import apply, backups
 from nullbill.apply import ApplyError, Context, connection, run_apply
 from nullbill.artifacts import render_all
 from nullbill.errors import NullBillError
@@ -46,8 +46,12 @@ class FakeReach:
         self.nets = {0: "name=eth0,bridge=vmbr0,hwaddr=02:4E:42:00:00:99,ip=dhcp,type=veth"}
         self.nullbill = []
         self.tailnet = "NeedsLogin"
+        self.backup_disk = None
+        self.pbs_fingerprint = "aa:bb:cc"
+        self.backed_up = set()
+        self.timeouts = []
 
-    def host(self, command, stdin=None):
+    def host(self, command, stdin=None, timeout=900):
         self.calls.append(("host", command))
         if "if cmp -s" in command:
             path = command.split('if cmp -s "$t" ')[1].split(";")[0]
@@ -84,6 +88,18 @@ class FakeReach:
             return 0, "", ""
         if command.startswith(("qm status ", "timeout 600 bash -c ")):
             return 0, "", ""
+        if command.startswith("/usr/local/sbin/nb-backup-disk "):
+            made = self.backup_disk is None
+            self.backup_disk = shlex.split(command)[1:]
+            return 0, "made\n" if made else "kept\n", ""
+        if command.startswith("pvesh get /nodes/localhost/storage/nb-pbs/content "):
+            return 0, json.dumps([{"vmid": v} for v in sorted(self.backed_up)]), ""
+        if command.startswith("vzdump "):
+            self.timeouts.append(timeout)
+            self.backed_up |= {int(a) for a in shlex.split(command)[1:] if a.isdigit()}
+            return 0, "", ""
+        if "proxmox-backup-client key create --kdf none" in command:
+            return 0, json.dumps({"kdf": None, "data": f"key-{len(self.calls)}"}) + "\n", ""
         if command.startswith("pct exec "):
             return self.guest(shlex.split(command)[2], shlex.split(command)[4:])
         return 127, "", f"fake host: unexpected {command}"
@@ -114,7 +130,19 @@ class FakeReach:
         self.envs.append(env)
         if argv[0] == "openssl":
             return self.openssl(argv[1:], cwd)
+        if argv[0] == "ssh":
+            return self.vm(argv[-2], argv[-1])
         return (2 if argv[:2] == self.fail_local else 0), ("secret-token" if capture else "")
+
+    def vm(self, login, command):
+        """VMs, reached over SSH from the controller: PBS answers for its token."""
+        if login != "nullbill@10.42.1.15":
+            return 255, ""
+        answers = {
+            "sudo cat /root/nullbill/pbs-token.json": '{"tokenid": "nb-pve@pbs!pve", "value": "pbs-token-secret"}',
+            "sudo proxmox-backup-manager cert info": f"Subject: CN=pbs\nFingerprint (sha256): {self.pbs_fingerprint}\n",
+        }
+        return (0, answers[command]) if command in answers else (255, "")
 
     def openssl(self, args, cwd):
         """Writes what -keyout and -out name; -checkend passes while self.fresh."""
@@ -408,6 +436,73 @@ def test_logs_stage_gives_each_shipper_its_own_certificate(ctx):
     assert workspace["log_shipper_url"] == "https://monitoring.nullbill.internal:3100/loki/api/v1/push"
     assert workspace["log_shipper_host"] == "workspace"
     assert workspace["log_shipper_key"] == (c.home / "shipper-ca" / "workspace.key").read_text()
+
+
+def test_tofu_stage_makes_the_backup_disk_before_tofu_and_respects_wipe(ctx, monkeypatch):
+    monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
+    c = ctx("mid")
+    apply.stage_tofu(c)
+    assert c.reach.backup_disk == ["ata-SYNTHETIC_HDD_0002", "0"]
+    disk = next(i for i, call in enumerate(c.reach.calls) if "nb-backup-disk" in call[1])
+    first_tofu = next(i for i, call in enumerate(c.reach.calls) if call[0] == "local" and call[1][0] == "tofu")
+    assert disk < first_tofu
+    assert "tofu: ata-SYNTHETIC_HDD_0002 is now the nb-pbs-disk storage for PBS" in c.log
+    c.model["disks"] = {"ata-SYNTHETIC_HDD_0002": {"use": "pbs", "wipe": True}}
+    apply.stage_tofu(c)
+    assert c.reach.backup_disk == ["ata-SYNTHETIC_HDD_0002", "1"]
+    # Without a disk of its own there is no PBS storage to make.
+    s = ctx("small")
+    apply.stage_tofu(s)
+    assert s.reach.backup_disk is None
+
+
+def test_backups_stage_hands_tofu_the_pbs_token_fingerprint_and_a_kept_key(ctx, monkeypatch):
+    monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
+    c = ctx("mid")
+    apply.stage_backups(c)
+    playbooks = [call for call in c.reach.calls if call[0] == "playbook"]
+    assert [(p[1], list(p[2])) for p in playbooks] == [("pbs.yml", ["pbs"])]
+    assert playbooks[0][3] == {"pbs_disk": "/dev/disk/by-id/virtio-nb-backups", "pbs_proxy_url": "http://10.42.2.10:3128"}
+    ssh = [call[1] for call in c.reach.calls if call[0] == "local" and call[1][0] == "ssh"]
+    assert all(f"ProxyJump={TARGET}" in argv and argv[-2] == "nullbill@10.42.1.15" for argv in ssh)
+    assert c.secrets.data["pbs_token_secret"] == "pbs-token-secret"
+    assert c.secrets.data["pbs_fingerprint"] == "aa:bb:cc"
+    key = c.secrets.data["pbs_encryption_key"]
+    assert json.loads(key)["kdf"] is None
+    assert any("paper copy" in line for line in c.log)
+    local = [call for call in c.reach.calls if call[0] == "local"]
+    applies = [env for env, call in zip(c.reach.envs, local, strict=True) if call[1][:2] == ["tofu", "apply"]]
+    assert len(applies) == 1
+    env = applies[0]
+    passed = (env["TF_VAR_pbs_fingerprint"], env["TF_VAR_pbs_token_secret"], env["TF_VAR_pbs_encryption_key"])
+    assert passed == ("aa:bb:cc", "pbs-token-secret", key)
+
+    # Each guest the job covers is backed up once, right away, with time to spare.
+    vzdump = [call[1] for call in c.reach.calls if call[0] == "host" and call[1].startswith("vzdump ")]
+    assert len(vzdump) == 1 and " --storage nb-pbs --mode snapshot " in vzdump[0]
+    assert c.reach.backed_up == {g["vmid"] for g in backups.guests(c.plan).values()}
+    assert c.reach.timeouts == [apply.FIRST_BACKUP_S]
+
+    # Nothing new: no second tofu run or backup, and the key stays.
+    c.reach.calls.clear()
+    apply.stage_backups(c)
+    assert not [call for call in c.reach.calls if call[0] == "local" and call[1][0] == "tofu"]
+    assert not [call for call in c.reach.calls if call[0] == "host" and call[1].startswith("vzdump ")]
+    assert c.secrets.data["pbs_encryption_key"] == key
+    # A new PBS certificate reaches the host's storage.
+    c.reach.pbs_fingerprint = "dd:ee:ff"
+    apply.stage_backups(c)
+    assert [call for call in c.reach.calls if call[0] == "local" and call[1][:2] == ["tofu", "apply"]]
+    # The tofu stage passes what the backups stage learned, so the storage stays.
+    c.reach.envs.clear()
+    apply.stage_tofu(c)
+    assert c.reach.envs[-1]["TF_VAR_pbs_fingerprint"] == "dd:ee:ff"
+
+
+def test_backups_stage_does_nothing_without_a_backup_disk(ctx):
+    c = ctx("small")
+    apply.stage_backups(c)
+    assert c.reach.calls == []
 
 
 def test_vpn_stage_waits_for_a_key_then_logs_in_once_and_forgets_it(ctx):

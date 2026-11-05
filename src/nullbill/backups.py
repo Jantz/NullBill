@@ -25,12 +25,36 @@ MAX_AGE_H = 26
 # PVE keeps the storage's token secret (.pw) and encryption key (.enc) here.
 PRIV_DIR = "/etc/pve/priv/storage"
 
+# The disk the plan pins for PBS becomes an LVM volume group and a PVE
+# storage of this name on the host (nb-backup-disk); the pbs VM's datastore
+# disk lives there, and the VM finds it by its serial.
+DISK_STORAGE = "nb-pbs-disk"
+DISK_SERIAL = "nb-backups"
+DISK_PATH = f"/dev/disk/by-id/virtio-{DISK_SERIAL}"
+
 Clock = Callable[[], float]
 
 
 def enabled(plan: dict) -> bool:
     """PBS storage and the job exist only when PBS has a disk of its own."""
     return strip_notes(plan)["backups"]["status"] == "ok"
+
+
+def disk(plan: dict) -> tuple[str, int]:
+    """The pinned disk's id and the size of the datastore disk made on it:
+    a GiB less than the disk, for LVM's metadata."""
+    bare = strip_notes(plan)
+    disk_id = next(d for d, v in bare["disks"].items() if v["use"] == "pbs")
+    return disk_id, bare["disks"][disk_id]["size_gib"] - 1
+
+
+LIST = f"pvesh get /nodes/localhost/storage/{STORAGE}/content --content backup --output-format json"
+
+
+def unbacked(plan: dict, entries: list[dict]) -> list[int]:
+    """VMIDs of covered guests with no backup on the storage at all."""
+    have = {int(e.get("vmid", -1)) for e in entries}
+    return [g["vmid"] for g in guests(plan).values() if g["vmid"] not in have]
 
 
 def guests(plan: dict) -> dict[str, dict]:
@@ -67,7 +91,7 @@ def skipped(plan: dict, reason: str) -> list[Result]:
 def check(plan: dict, target: str, run: Runner, now: Clock) -> list[Result]:
     if not enabled(plan):
         return []
-    rc, out, err = run(target, f"pvesh get /nodes/localhost/storage/{STORAGE}/content --content backup --output-format json")
+    rc, out, err = run(target, LIST)
     if rc != 0:
         return [Result("FAIL", f"PBS storage {STORAGE} lists backups", (err or out).strip()[:120])]
     entries = json.loads(out or "[]")

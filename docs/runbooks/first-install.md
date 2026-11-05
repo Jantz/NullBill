@@ -42,8 +42,10 @@ the button again. Every stage can be run again safely.
    vpn stage waits and the rest still runs.
 8. **Run setup**. The log shows each stage: render, host, tofu, router,
    proxy, updates, ca, postgres, monitoring, forgejo, ci, agents, logs,
-   vpn, verify. The first run downloads images and packages and takes a while;
-   tofu and ci are the longest.
+   backups, vpn, verify. The first run downloads images and packages and
+   takes a while; tofu, ci and the first backup are the longest.
+9. With backups: make the paper copy of the backup encryption key, as
+   [pbs-encryption-key.md](pbs-encryption-key.md) describes.
 
 ## If a stage fails
 
@@ -55,6 +57,5 @@ the log carries addresses on your network and guest names, not secrets.
 
 - Closing the LAN: it keeps Proxmox's own web UI and SSH until you have
   reached them over Tailscale (#9).
-- Backups to PBS: the PBS disk is not attached by apply yet (#16).
 - Re-baking the CI image on a schedule (OPEN_QUESTIONS 9).
 - Shipping the host's own SSH logins to Loki; guests' are shipped.

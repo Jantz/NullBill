@@ -9,4 +9,5 @@ trap 'rm -rf "$ctx"' EXIT
 cp tools/host-check/Dockerfile tools/host-check/check.sh "$ctx/"
 cat "${EXTRA_CA_FILE:-/dev/null}" > "$ctx/extra-ca.crt"
 docker build -q -t nullbill-host-check "$ctx" >/dev/null
-docker run --rm -v "$PWD/ansible:/ansible:ro" nullbill-host-check
+# Privileged for a loop device, which stands in for the backup disk.
+docker run --rm --privileged -v "$PWD/ansible:/ansible:ro" nullbill-host-check

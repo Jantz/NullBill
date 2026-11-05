@@ -215,6 +215,23 @@ def _vm(name: str, guest: dict, plan: dict, model: dict, storage: str) -> dict:
             },
         }
     vm["depends_on"] = [_bridge_ref(b) for b in bridges]
+    if name == "pbs" and backups.enabled(plan):
+        vm["disk"].append(
+            {
+                "datastore_id": backups.DISK_STORAGE,
+                "interface": "virtio1",
+                "size": backups.disk(plan)[1],
+                "serial": backups.DISK_SERIAL,
+                "file_format": "raw",
+                "discard": "on",
+                "iothread": True,
+                # The datastore: never hand it to a backup of its own.
+                "backup": False,
+            }
+        )
+        # Destroying the VM would destroy the datastore disk with it, and
+        # every backup on it; a change that needs a new VM stops tofu instead.
+        vm["lifecycle"] = {"prevent_destroy": True}
     if pool:
         vm["lifecycle"] = {"ignore_changes": ["template"]}
         # In no pool: the dispatcher may clone it, nobody may start or change it.
@@ -230,7 +247,7 @@ def _in_agent_pool(resource: dict, guest: dict) -> dict:
 
 
 # PVE checks the PBS connection when the storage is added, so the storage and
-# the job wait until apply has configured PBS and set these variables (#16).
+# the job wait until apply's backups stage has configured PBS and set these.
 WHEN_PBS_READY = '${var.pbs_fingerprint == "" ? 0 : 1}'
 
 
@@ -244,8 +261,8 @@ def _backup_resources(plan: dict) -> dict:
         "username": backups.TOKEN_ID,
         "password": "${var.pbs_token_secret}",
         "fingerprint": "${var.pbs_fingerprint}",
-        # Encrypted on the host before upload. The key is made on the
-        # controller (issue #16), so a copy survives the host.
+        # Encrypted on the host before upload. apply keeps a copy of the key
+        # in the controller's secrets, so it survives the host.
         "encryption_key": "${var.pbs_encryption_key}",
         "content": ["backup"],
         # The token cannot delete; retention runs on PBS, so PVE must not try.

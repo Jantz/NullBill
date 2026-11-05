@@ -79,5 +79,39 @@ done
 grep -q "^nb_pve_api_cert_expiry_timestamp_seconds [0-9]" /var/lib/prometheus/node-exporter/nullbill-pve-api.prom || fail "API certificate metric"
 echo "ok   the PVE API certificate names the mgmt name and address besides PVE's own, from PVE's CA"
 
+# The backup disk: a loop device with a filesystem on it, real LVM without
+# udev, and a pvesm that records what it is asked to add.
+cat >/etc/lvm/lvmlocal.conf <<'CONF'
+activation { udev_sync = 0 udev_rules = 0 }
+devices { obtain_device_list_from_udev = 0 }
+CONF
+truncate -s 256M /tmp/backup.img
+loop=$(losetup -f --show /tmp/backup.img)
+cleanup() { vgremove -qq -f nb-pbs-disk >/dev/null 2>&1 || true; losetup -d "$loop"; }
+trap cleanup EXIT
+mkdir -p /tmp/by-id
+ln -s "$loop" /tmp/by-id/ata-SYNTHETIC_HDD_0002
+mkfs.ext4 -q "$loop"
+cat >/usr/sbin/pvesm <<'SH'
+#!/bin/sh
+case "$1" in
+  status) test -e "/tmp/pvesm-$3" ;;
+  add) echo "$*" >>/tmp/pvesm.log && touch "/tmp/pvesm-$3" ;;
+  *) exit 2 ;;
+esac
+SH
+chmod +x /usr/sbin/pvesm
+disk() { NB_DISK_DIR=/tmp/by-id /usr/local/sbin/nb-backup-disk ata-SYNTHETIC_HDD_0002 "$1"; }
+if disk 0 >/tmp/disk.log 2>&1; then fail "backup disk with a filesystem taken without wipe"; fi
+grep -q "carries ext4; set wipe: true" /tmp/disk.log || { cat /tmp/disk.log; fail "refusal names the signature"; }
+blkid -p "$loop" | grep -q ext4 || fail "a refused disk was changed"
+echo "ok   a backup disk with a filesystem is refused without wipe and left as it was"
+[ "$(disk 1)" = made ] || fail "backup disk not made"
+vgs --noheadings -o pv_name nb-pbs-disk | grep -q "$loop" || fail "volume group not on the disk"
+grep -qx "add lvm nb-pbs-disk --vgname nb-pbs-disk --content images" /tmp/pvesm.log || fail "storage not added"
+[ "$(disk 0)" = kept ] || fail "second run did not keep the disk"
+[ "$(wc -l </tmp/pvesm.log)" = 1 ] || fail "storage added twice"
+echo "ok   with wipe it becomes the nb-pbs-disk volume group and PVE storage, kept on the next run"
+
 test -s /etc/audit/rules.d/50-nullbill.rules || fail "audit rules"
 echo "ok   audit rules installed (loading them needs a kernel; not checked here)"

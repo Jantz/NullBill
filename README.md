@@ -12,7 +12,7 @@ choice and the plan lists it.
 **Status.** Every part has been built and tested against stand-ins:
 containers that play the Proxmox host, the guests and the services. None of
 it has run on real hardware yet. The [first install](docs/runbooks/first-install.md)
-is that first run. Backups are not wired in yet ([below](#not-done-yet)).
+is that first run.
 
 ## What you get
 
@@ -110,6 +110,7 @@ It runs these stages in order and stops at the first one that fails.
 | ci | Builds the CI runner image, then the service that gives each job its own copy. |
 | agents | The agent's container and CLI, and its SSH access to the guests it may manage. |
 | logs | Sends agent commands and SSH logins to Loki. |
+| backups | With a second disk: Proxmox Backup Server on it, a first backup of every guest, then one each night, encrypted before it leaves Proxmox. |
 | vpn | Joins your Tailscale network, once you paste an auth key. |
 | verify | Checks every allowed and forbidden connection. |
 
@@ -134,8 +135,6 @@ It runs these stages in order and stops at the first one that fails.
 - **Closing the home network** to Proxmox's own web UI and SSH once you
   reach everything over Tailscale (#9). Until then Proxmox keeps its usual
   access there.
-- **Backups** to Proxmox Backup Server: the role exists, apply does not
-  attach the backup disk yet.
 - Rebuilding the CI image on a schedule, and Windows and local AI models.
 
 [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) lists the decisions still open, and
