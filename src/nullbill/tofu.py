@@ -142,13 +142,13 @@ def _container(name: str, guest: dict, plan: dict, model: dict, storage: str) ->
     return _in_agent_pool(container, guest)
 
 
-def _nic(bridge: str, address: str) -> dict:
+def _nic(bridge: str, address: str, model: str = "virtio") -> dict:
     # network_device is an attribute in JSON syntax, so every field is spelled
     # out; the rest are the provider's defaults.
     return {
         "bridge": bridge,
         "mac_address": address,
-        "model": "virtio",
+        "model": model,
         "firewall": True,
         "enabled": True,
         "disconnected": False,
@@ -178,8 +178,12 @@ def _vm(name: str, guest: dict, plan: dict, model: dict, storage: str) -> dict:
         "cpu": {"cores": guest["cores"], "type": "x86-64-v2-AES"},
         "memory": {"dedicated": guest["memory_mib"]},
         "scsi_hardware": "virtio-scsi-single",
-        # The guest agent is not in the base images, so tofu must not wait for it.
-        "agent": {"enabled": False},
+        # apply's updates stage installs qemu-guest-agent in every Linux VM
+        # (and the CI bake in golden images), so PVE can freeze file systems
+        # for backups and shut down cleanly. tofu does not wait for it to
+        # report addresses: the addresses are in the plan. Windows's agent
+        # comes with the VirtIO drivers, which its VMs do without.
+        "agent": {"enabled": not windows, "trim": not windows, "wait_for_ip": {"disabled": True}},
     }
     if not pool:
         vm["startup"] = _startup(name)
@@ -192,7 +196,8 @@ def _vm(name: str, guest: dict, plan: dict, model: dict, storage: str) -> dict:
         ip_config += [{"ipv4": {"address": f"{z['gateway']}/{z['subnet'].split('/')[1]}"}} for z in plan["zones"].values()]
         bridges = [z["bridge"] for z in plan["zones"].values()]
     else:
-        vm["network_device"] = [_nic(plan["zones"][zone]["bridge"], mac(index, svc["id"]))]
+        # Windows has no VirtIO drivers of its own; Intel's e1000e it has.
+        vm["network_device"] = [_nic(plan["zones"][zone]["bridge"], mac(index, svc["id"]), "e1000e" if windows else "virtio")]
         ip_config = [_ipv4(plan, zone, None if pool else guest["ip"])]
         bridges = [plan["zones"][zone]["bridge"]]
     if windows:
@@ -203,7 +208,10 @@ def _vm(name: str, guest: dict, plan: dict, model: dict, storage: str) -> dict:
             "efi_disk": {"datastore_id": storage, "type": "4m", "pre_enrolled_keys": True},
             "tpm_state": {"datastore_id": storage, "version": "v2.0"},
             "cdrom": {"file_id": "${var.windows_iso}", "interface": "ide2"},
-            "disk": [{"datastore_id": storage, "interface": "scsi0", "size": guest["disk_gib"], "discard": "on", "iothread": True}],
+            # SATA and e1000e, which Windows drives with its own drivers: the
+            # provider allows one CD-ROM, so the VirtIO driver ISO cannot sit
+            # beside the installer.
+            "disk": [{"datastore_id": storage, "interface": "sata0", "size": guest["disk_gib"], "discard": "on", "ssd": True}],
         }
     else:
         vm |= {
@@ -232,6 +240,12 @@ def _vm(name: str, guest: dict, plan: dict, model: dict, storage: str) -> dict:
             },
         }
     vm["depends_on"] = [_bridge_ref(b) for b in bridges]
+    gpus = _passed_gpus(plan, name)
+    if gpus:
+        # A mapping, not a raw PCI address: the API token may attach mapped
+        # devices, raw ones only root@pam's password can.
+        vm["hostpci"] = [{"device": f"hostpci{n}", "mapping": _mapping_name(pci), "pcie": True} for n, pci in enumerate(gpus)]
+        vm["depends_on"] += [f"{MAPPING}.{_mapping_name(pci).replace('-', '_')}" for pci in gpus]
     if name == "pbs" and backups.enabled(plan):
         vm["disk"].append(
             {
@@ -254,6 +268,32 @@ def _vm(name: str, guest: dict, plan: dict, model: dict, storage: str) -> dict:
         # In no pool: the dispatcher may clone it, nobody may start or change it.
         return vm
     return _in_agent_pool(vm, guest)
+
+
+MAPPING = "proxmox_hardware_mapping_pci"
+
+
+def _passed_gpus(plan: dict, name: str) -> list[str]:
+    return sorted(pci for pci, gpu in plan["gpus"].items() if gpu["owner"] == f"vm:{name}")
+
+
+def _mapping_name(pci: str) -> str:
+    """nb-gpu-0000-01-00 for 0000:01:00.0."""
+    return "nb-gpu-" + pci.rsplit(".", 1)[0].replace(":", "-")
+
+
+def _mappings(plan: dict) -> dict:
+    """A PVE PCI mapping per GPU passed to a VM. Its path is the slot
+    without the function, as PVE's "All Functions": a GPU's audio function
+    goes with it (the plan refuses other devices in its IOMMU group)."""
+    mappings = {}
+    for pci, gpu in sorted(plan["gpus"].items()):
+        if not gpu["owner"].startswith("vm:"):
+            continue
+        name = _mapping_name(pci)
+        entry = {"id": gpu["pci_id"], "node": NODE, "path": pci.rsplit(".", 1)[0], "iommu_group": gpu["iommu_group"]}
+        mappings[name.replace("-", "_")] = {"name": name, "comment": f"nullbill: {gpu['name']} for {gpu['owner'][3:]}", "map": [entry]}
+    return mappings
 
 
 def _in_agent_pool(resource: dict, guest: dict) -> dict:
@@ -431,6 +471,8 @@ def render_tofu(plan_with_notes: dict, model: dict) -> dict[str, str]:
     }
     if backups.enabled(plan):
         config["resource"] |= _backup_resources(plan)
+    if _mappings(plan):
+        config["resource"][MAPPING] = _mappings(plan)
     # apply installs each token in its container; neither reaches a file on
     # the controller.
     config["output"] = {"agent_token": {"value": "${proxmox_user_token.agent.value}", "sensitive": True}}

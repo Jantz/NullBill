@@ -1933,7 +1933,11 @@ WantedBy=multi-user.target
         },
         "scsi_hardware": "virtio-scsi-single",
         "agent": {
-          "enabled": false
+          "enabled": true,
+          "trim": true,
+          "wait_for_ip": {
+            "disabled": true
+          }
         },
         "startup": {
           "order": 1
@@ -2123,7 +2127,11 @@ WantedBy=multi-user.target
         },
         "scsi_hardware": "virtio-scsi-single",
         "agent": {
-          "enabled": false
+          "enabled": true,
+          "trim": true,
+          "wait_for_ip": {
+            "disabled": true
+          }
         },
         "startup": {
           "order": 10
@@ -2220,7 +2228,11 @@ WantedBy=multi-user.target
         },
         "scsi_hardware": "virtio-scsi-single",
         "agent": {
-          "enabled": false
+          "enabled": true,
+          "trim": true,
+          "wait_for_ip": {
+            "disabled": true
+          }
         },
         "network_device": [
           {
@@ -2305,13 +2317,17 @@ WantedBy=multi-user.target
         },
         "scsi_hardware": "virtio-scsi-single",
         "agent": {
-          "enabled": false
+          "enabled": false,
+          "trim": false,
+          "wait_for_ip": {
+            "disabled": true
+          }
         },
         "network_device": [
           {
             "bridge": "vmbr105",
             "mac_address": "02:4e:42:00:05:1f",
-            "model": "virtio",
+            "model": "e1000e",
             "firewall": true,
             "enabled": true,
             "disconnected": false,
@@ -2342,10 +2358,10 @@ WantedBy=multi-user.target
         "disk": [
           {
             "datastore_id": "local-lvm",
-            "interface": "scsi0",
+            "interface": "sata0",
             "size": 64,
             "discard": "on",
-            "iothread": true
+            "ssd": true
           }
         ],
         "depends_on": [
@@ -2377,7 +2393,11 @@ WantedBy=multi-user.target
         },
         "scsi_hardware": "virtio-scsi-single",
         "agent": {
-          "enabled": false
+          "enabled": false,
+          "trim": false,
+          "wait_for_ip": {
+            "disabled": true
+          }
         },
         "startup": {
           "order": 10
@@ -2386,7 +2406,7 @@ WantedBy=multi-user.target
           {
             "bridge": "vmbr105",
             "mac_address": "02:4e:42:00:05:16",
-            "model": "virtio",
+            "model": "e1000e",
             "firewall": true,
             "enabled": true,
             "disconnected": false,
@@ -2417,10 +2437,10 @@ WantedBy=multi-user.target
         "disk": [
           {
             "datastore_id": "local-lvm",
-            "interface": "scsi0",
+            "interface": "sata0",
             "size": 96,
             "discard": "on",
-            "iothread": true
+            "ssd": true
           }
         ],
         "depends_on": [

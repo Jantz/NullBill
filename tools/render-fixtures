@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Render apply's build directory for every fixture class into OUT/<class>.
+"""Render apply's build directory for every fixture class into OUT/<class>,
+and the large class with a GPU passed to a VM into OUT/large-gpu-vm.
 
 Used by the container checks, which parse the rendered files with the real
 tools. Run from the repo root with the package installed.
@@ -17,8 +18,10 @@ from nullbill.plan import build_plan  # noqa: E402
 from nullbill.probe import parse  # noqa: E402
 
 out = Path(sys.argv[1])
-for cls in CLASSES:
-    model = build_model(fixture_config(cls))
-    facts = parse(write_raw(out / "raw" / cls, cls))
-    write_build(render_all(build_plan(model, facts), model), out / cls)
-    print(cls)
+variants = [(cls, cls, fixture_config(cls)) for cls in CLASSES]
+variants.append(("large-gpu-vm", "large", {**fixture_config("large"), "gpus": {"0000:65:00.0": {"owner": "vm:windows-dev"}}}))
+for name, cls, config in variants:
+    model = build_model(config)
+    facts = parse(write_raw(out / "raw" / name, cls))
+    write_build(render_all(build_plan(model, facts), model), out / name)
+    print(name)

@@ -157,7 +157,7 @@ def _storage(text: str) -> list[dict]:
 
 GPU_CLASSES = {"0300", "0302", "0380"}
 VENDORS = {"10de": "nvidia", "1002": "amd", "8086": "intel"}
-LSPCI_LINE = re.compile(r"^(?P<addr>\S+) .*?\[(?P<cls>[0-9a-f]{4})\]: (?P<name>.+) \[(?P<ven>[0-9a-f]{4}):[0-9a-f]{4}\]")
+LSPCI_LINE = re.compile(r"^(?P<addr>\S+) .*?\[(?P<cls>[0-9a-f]{4})\]: (?P<name>.+) \[(?P<ven>[0-9a-f]{4}):(?P<dev>[0-9a-f]{4})\]")
 
 
 def _iommu(text: str | None) -> dict[str, int]:
@@ -194,6 +194,8 @@ def _gpus(lspci_text: str, iommu_text: str | None, nvidia_text: str | None) -> l
             {
                 "pci": addr,
                 "vendor": VENDORS.get(m["ven"], m["ven"]),
+                # Vendor and device ID, as a PVE PCI mapping names the device.
+                "id": f"{m['ven']}:{m['dev']}",
                 "name": re.sub(r" \[[0-9a-f]{4}\]$", "", m["name"]),
                 # Bus 00 holds integrated graphics; those are left to the host.
                 "integrated": addr.split(":")[1] == "00",

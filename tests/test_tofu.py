@@ -91,6 +91,34 @@ def test_windows_iso_variable_only_with_windows(facts):
     assert "windows_iso" in rendered(facts, "mid")[0]["variable"]
 
 
+def test_windows_vms_use_inbox_drivers_and_linux_vms_the_guest_agent(facts):
+    config, plan, _ = rendered(facts, "mid")
+    vms = config["resource"]["proxmox_virtual_environment_vm"]
+    for name, vm in vms.items():
+        if plan["guests"][name]["zone"] == "windows":
+            assert vm["cdrom"] == {"file_id": "${var.windows_iso}", "interface": "ide2"}
+            assert [d["interface"] for d in vm["disk"]] == ["sata0"]
+            assert [n["model"] for n in vm["network_device"]] == ["e1000e"]
+            assert vm["agent"]["enabled"] is False
+        else:
+            assert vm["agent"] == {"enabled": True, "trim": True, "wait_for_ip": {"disabled": True}}
+
+
+def test_a_gpu_passed_to_a_vm_goes_through_a_pci_mapping(facts):
+    model = build_model({**fixture_config("large"), "gpus": {"0000:65:00.0": {"owner": "vm:windows-dev"}}})
+    plan = build_plan(model, facts("large"))
+    config = json.loads(render_tofu(plan, model)["main.tf.json"])
+    gpu = strip_notes(plan)["gpus"]["0000:65:00.0"]
+    (mapping,) = config["resource"]["proxmox_hardware_mapping_pci"].values()
+    assert mapping["name"] == "nb-gpu-0000-65-00"
+    assert mapping["map"] == [{"id": gpu["pci_id"], "node": "${var.node_name}", "path": "0000:65:00", "iommu_group": gpu["iommu_group"]}]
+    vm = config["resource"]["proxmox_virtual_environment_vm"]["windows-dev"]
+    assert vm["hostpci"] == [{"device": "hostpci0", "mapping": "nb-gpu-0000-65-00", "pcie": True}]
+    assert "proxmox_hardware_mapping_pci.nb_gpu_0000_65_00" in vm["depends_on"]
+    # Host-shared GPUs get no mapping, and no other VM a device.
+    assert [n for n, v in config["resource"]["proxmox_virtual_environment_vm"].items() if "hostpci" in v] == ["windows-dev"]
+
+
 def test_state_and_plans_are_encrypted(facts):
     config, _, _ = rendered(facts, "small")
     encryption = config["terraform"]["encryption"]

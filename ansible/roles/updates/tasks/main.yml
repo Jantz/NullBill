@@ -24,6 +24,21 @@
     install_recommends: false
     update_cache: true
 
+# PVE freezes a VM's file systems through it for consistent backups and
+# shuts the VM down through it. Its unit starts once PVE gives the VM the
+# agent's virtio port (tofu.py enables it for Linux VMs).
+- name: QEMU guest agent in a VM
+  ansible.builtin.apt:
+    name: qemu-guest-agent
+    install_recommends: false
+  when: updates_guest_agent | bool
+
+- name: QEMU guest agent running
+  ansible.builtin.systemd_service:
+    name: qemu-guest-agent
+    state: started
+  when: updates_guest_agent | bool and updates_manage_services | bool
+
 - name: needrestart
   ansible.builtin.apt:
     name: needrestart

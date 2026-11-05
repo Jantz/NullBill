@@ -17,7 +17,8 @@
 
 - name: Tools jobs and the runner need
   ansible.builtin.apt:
-    name: [git, curl, ca-certificates, nodejs]
+    # qemu-guest-agent: the golden image's VM config has the agent on (tofu.py).
+    name: [git, curl, ca-certificates, nodejs, qemu-guest-agent]
     update_cache: true
 
 # Clones live for one job and take no updates themselves; the image they

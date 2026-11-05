@@ -267,7 +267,8 @@ def api_token(ctx: Context) -> str:
 
 
 def windows_iso(ctx: Context, stage: str) -> None:
-    if "windows_iso" in json.loads(ctx.files["tofu/main.tf.json"])["variable"] and not os.environ.get("TF_VAR_windows_iso"):
+    variables = json.loads(ctx.files["tofu/main.tf.json"])["variable"]
+    if "windows_iso" in variables and not os.environ.get("TF_VAR_windows_iso"):
         raise ApplyError(stage, "Windows guests are planned but no Windows ISO is set; turn off the Windows workloads for now")
 
 
@@ -433,6 +434,7 @@ def update_guests(ctx: Context) -> dict[str, dict]:
             "updates_apt_proxy": proxy if proxied else "",
             "updates_auto_reboot": name not in owner_reboots,
             "updates_reboot_time": ctx.bare["updates"]["reboot_at"],
+            "updates_guest_agent": guest["kind"] == "vm",
         }
     return guests
 

@@ -18,3 +18,5 @@ updates_restart_services: true
 # empty where the guest reaches the mirrors directly.
 updates_apt_proxy: ""
 updates_manage_services: true
+# True in VMs, whose PVE config has the guest agent on; containers need none.
+updates_guest_agent: false

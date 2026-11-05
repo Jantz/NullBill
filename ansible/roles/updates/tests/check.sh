@@ -15,6 +15,11 @@ grep -q 'Acquire::https::Proxy "http://192.0.2.10:3128";' /etc/apt/apt.conf.d/30
 test ! -e /etc/apt/apt.conf.d/30nullbill-proxy || fail "apt proxy removed in a direct zone"
 pass "apt goes through the proxy where the zone asks for it, directly elsewhere"
 
+dpkg -s qemu-guest-agent >/dev/null 2>&1 && fail "no guest agent in a container"
+converge updates.yml -e updates_manage_services=false -e updates_guest_agent=true
+dpkg -s qemu-guest-agent >/dev/null 2>&1 || fail "guest agent installed in a VM"
+pass "the QEMU guest agent goes into VMs only"
+
 origins=$(unattended-upgrade --dry-run --debug 2>&1 | grep "Allowed origins are:")
 [[ $origins == "Allowed origins are: origin=Debian,codename=bookworm-security,label=Debian-Security, origin=Debian,codename=bookworm,label=Debian" ]] || fail "unattended origins: $origins"
 apt-config dump Unattended-Upgrade::Automatic-Reboot | grep -qx 'Unattended-Upgrade::Automatic-Reboot "true";' || fail "guests reboot after updates"

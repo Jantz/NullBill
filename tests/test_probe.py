@@ -25,6 +25,7 @@ def test_mid_gpu_and_blank_disk(facts):
     assert gpu == {
         "pci": "0000:01:00.0",
         "vendor": "nvidia",
+        "id": "10de:0001",
         "name": "NVIDIA Corporation Synthetic GPU 24G",
         "integrated": False,
         "vram_mib": 24564,

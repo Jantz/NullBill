@@ -1571,7 +1571,11 @@ WantedBy=multi-user.target
         },
         "scsi_hardware": "virtio-scsi-single",
         "agent": {
-          "enabled": false
+          "enabled": true,
+          "trim": true,
+          "wait_for_ip": {
+            "disabled": true
+          }
         },
         "startup": {
           "order": 1
@@ -1723,7 +1727,11 @@ WantedBy=multi-user.target
         },
         "scsi_hardware": "virtio-scsi-single",
         "agent": {
-          "enabled": false
+          "enabled": true,
+          "trim": true,
+          "wait_for_ip": {
+            "disabled": true
+          }
         },
         "startup": {
           "order": 10
@@ -1807,7 +1815,11 @@ WantedBy=multi-user.target
         },
         "scsi_hardware": "virtio-scsi-single",
         "agent": {
-          "enabled": false
+          "enabled": true,
+          "trim": true,
+          "wait_for_ip": {
+            "disabled": true
+          }
         },
         "network_device": [
           {
