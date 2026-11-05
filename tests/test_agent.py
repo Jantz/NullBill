@@ -128,6 +128,59 @@ def test_accepted_snapshot_outside_the_pool_fails(facts):
     assert status == "FAIL" and "delete snapshot nb-verify-denied" in detail
 
 
+def test_agent_ssh_reaches_the_pool_not_the_router_and_lands_in_loki(facts):
+    _, results = _agent_results(facts)
+    assert results["agent reaches workspace over SSH as agent"] == ("PASS", "")
+    assert results["agent SSH to router is refused"] == ("PASS", "")
+    assert results["the agent's command on workspace is in Loki under its uid"] == ("PASS", "uid 1001")
+
+
+def test_a_command_under_another_uid_in_loki_fails(facts):
+    _, results = _agent_results(facts, loki_uids="0 1001")
+    status, detail = results["the agent's command on workspace is in Loki under its uid"]
+    assert status == "FAIL" and "uid labels 0 1001" in detail
+
+
+def test_agent_checks_skip_until_the_operator_is_set_up(facts):
+    plan, results = _agent_results(facts, operator_ready=False)
+    assert {s for s, _ in results.values()} == {"SKIP"}
+    assert set(results) == {r.name for r in agent.skipped(plan, "x")}
+    assert "agent SSH to router is refused" in results
+
+
+def test_loki_query_finds_the_marker_and_prints_its_uids():
+    """The script verify runs on the monitoring guest, against a stand-in Loki."""
+    import http.server
+    import subprocess
+    import threading
+    import urllib.parse
+
+    asked = []
+
+    class Loki(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            asked.append(urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query))
+            streams = [{"stream": {"job": "commands", "host": "workspace", "uid": "1001"}, "values": [["1", "ssh: echo m"]]}]
+            body = json.dumps({"status": "success", "data": {"resultType": "streams", "result": streams}}).encode()
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Loki)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        script = agent.LOKI_QUERY % ("workspace", "nb-verify-00ff", f"http://127.0.0.1:{server.server_port}")
+        done = subprocess.run(["python3", "-c", script], capture_output=True, text=True, timeout=30)
+    finally:
+        server.shutdown()
+    assert (done.returncode, done.stdout) == (0, "1001\n"), done.stderr
+    assert asked[0]["query"] == ['{job="commands",host="workspace"} |= "nb-verify-00ff"']
+    assert asked[0]["since"] == ["15m"]
+
+
 def test_api_call_runs_in_bash(tmp_path):
     """The generated shell against a stand-in curl that checks its arguments."""
     import subprocess

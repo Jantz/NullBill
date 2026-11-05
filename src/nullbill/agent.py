@@ -11,6 +11,8 @@ Reference: https://pve.proxmox.com/pve-docs/chapter-pveum.html
 """
 
 import json
+import secrets
+import shlex
 
 from nullbill import ci
 from nullbill.probe import Runner
@@ -56,19 +58,97 @@ def expectations(plan: dict) -> list[tuple[str, str, set[str]]]:
     return out
 
 
+# Loki's own port on the monitoring guest, behind the gate (the monitoring
+# role's monitoring_loki_internal_port); verify asks it from inside.
+LOKI = "http://127.0.0.1:3101"
+# Polls Loki for the command verify ran as the agent and prints the uid
+# labels of the streams that hold it; the shipper pushes within seconds.
+LOKI_QUERY = """
+import json, sys, time, urllib.parse, urllib.request
+query = '{job="commands",host="%s"} |= "%s"'
+url = "%s/loki/api/v1/query_range?" + urllib.parse.urlencode({"query": query, "since": "15m", "limit": "20"})
+for _ in range(30):
+    found = json.load(urllib.request.urlopen(url, timeout=5))["data"]["result"]
+    if found:
+        print(" ".join(sorted({s["stream"].get("uid", "") for s in found})))
+        sys.exit(0)
+    time.sleep(2)
+sys.exit(1)
+"""
+
+
+def ssh_guest(plan: dict) -> str | None:
+    """The agent-managed guest verify reaches over agent SSH."""
+    return next((n for n, g in plan["guests"].items() if g.get("agent_managed") and g["kind"] != "vm-pool"), None)
+
+
+def _labels(plan: dict) -> list[str]:
+    names = [label for label, _, _ in expectations(plan)] + ["agent token is refused a snapshot of router"]
+    guest = ssh_guest(plan)
+    if guest:
+        names += [f"agent reaches {guest} over SSH as agent", "agent SSH to router is refused"]
+        if "monitoring" in plan["guests"]:
+            names.append(f"the agent's command on {guest} is in Loki under its uid")
+    return names
+
+
 def skipped(plan_with_notes: dict, reason: str) -> list[Result]:
     plan = strip_notes(plan_with_notes)
     if "operator" not in plan["guests"]:
         return []
-    names = [label for label, _, _ in expectations(plan)]
-    return [Result("SKIP", n, reason) for n in [*names, "agent token is refused a snapshot of router"]]
+    return [Result("SKIP", n, reason) for n in _labels(plan)]
 
 
-def check(plan_with_notes: dict, target: str, run: Runner) -> list[Result]:
+def _as_agent(vmid: int, command: str) -> str:
+    return f"pct exec {vmid} -- runuser -l agent -c {shlex.quote(command)}"
+
+
+def ssh_check(plan: dict, target: str, run: Runner, marker: str) -> list[Result]:
+    """nb-ssh from the operator as the agent: it reaches an agent-managed
+    guest as `agent`, not the router, and the command lands in Loki under
+    the uid that ran it."""
+    guest = ssh_guest(plan)
+    if guest is None:
+        return []
+    operator = plan["guests"]["operator"]["vmid"]
+    domain = plan["domain"]
+    nb_ssh = "nb-ssh -o ConnectTimeout=10"
+    results = []
+    label = f"agent reaches {guest} over SSH as agent"
+    rc, out, err = run(target, _as_agent(operator, f"{nb_ssh} {guest}.{domain} 'echo {marker} && id -un && id -u'"))
+    words = out.split()
+    uid = words[2] if rc == 0 and words[:2] == [marker, "agent"] and len(words) == 3 else None
+    results.append(Result("PASS", label) if uid else Result("FAIL", label, (err or out).strip()[:120] or f"exit {rc}"))
+    label = "agent SSH to router is refused"
+    rc, out, err = run(target, _as_agent(operator, f"{nb_ssh} router.{domain} 'echo {marker}'"))
+    results.append(Result("PASS", label) if rc != 0 and marker not in out else Result("FAIL", label, "router ran the agent's command"))
+    if "monitoring" not in plan["guests"]:
+        return results
+    label = f"the agent's command on {guest} is in Loki under its uid"
+    if uid is None:
+        results.append(Result("SKIP", label, "the agent's SSH command did not run"))
+        return results
+    script = LOKI_QUERY % (guest, marker, LOKI)
+    rc, out, err = run(target, shlex.join(["pct", "exec", str(plan["guests"]["monitoring"]["vmid"]), "--", "python3", "-c", script]))
+    if rc != 0:
+        results.append(Result("FAIL", label, (err.strip() or "not found in 60 s")[:120]))
+    elif out.split() != [uid]:
+        results.append(Result("FAIL", label, f"uid labels {out.strip() or 'none'}, agent is {uid}"))
+    else:
+        results.append(Result("PASS", label, f"uid {uid}"))
+    return results
+
+
+def check(plan_with_notes: dict, target: str, run: Runner, marker: str | None = None) -> list[Result]:
     plan = strip_notes(plan_with_notes)
     operator = plan["guests"].get("operator")
     if operator is None:
         return []
+    # apply sets the operator up only once the owner gave the agent CLI a
+    # credential; until then there is no token to check.
+    rc, out, _ = run(target, f"pct exec {operator['vmid']} -- sh -c 'test -s {TOKEN_FILE} || echo unset'")
+    if rc == 0 and out.strip() == "unset":
+        return skipped(plan, "the operator is not set up yet; paste the agent's key on the page and run setup")
     api = caller(plan, target, run, operator["vmid"], TOKEN_FILE, CA_FILE)
     results = [audit(api, label, path, want) for label, path, want in expectations(plan)]
     # One real attempt outside the pool. PVE checks the ACL before it acts,
@@ -87,4 +167,4 @@ def check(plan_with_notes: dict, target: str, run: Runner) -> list[Result]:
         results.append(Result("FAIL", label, f"PVE accepted it: delete snapshot {DENIED_SNAPSHOT} on {router['vmid']}"))
     else:
         results.append(Result("FAIL", label, f"{status} {body[:80]}"))
-    return results
+    return results + ssh_check(plan, target, run, marker or f"nb-verify-{secrets.token_hex(4)}")

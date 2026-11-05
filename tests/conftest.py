@@ -72,7 +72,12 @@ def service_answers(plan: dict, wrong: str = "") -> dict[str, str]:
 
 
 def agent_api(
-    plan: dict, extra: dict[str, set] | None = None, snapshot_status: str = "403", dispatcher_extra: dict[str, set] | None = None
+    plan: dict,
+    extra: dict[str, set] | None = None,
+    snapshot_status: str = "403",
+    dispatcher_extra: dict[str, set] | None = None,
+    operator_ready: bool = True,
+    loki_uids: str = "1001",
 ):
     """A runner answering the agent's API calls like a correctly set up host:
     PVEAuditor everywhere, the agent role on pool guests. `extra` adds
@@ -104,7 +109,20 @@ def agent_api(
     for path, privs in (dispatcher_extra or {}).items():
         dispatcher[path] = dispatcher.get(path, set()) | privs
 
+    managed = next((n for n, g in bare["guests"].items() if g.get("agent_managed") and g["kind"] != "vm-pool"), None)
+
     def run(target, command):
+        # The operator is set up, nb-ssh reaches the managed guest as agent
+        # (uid 1001) and not the router, and Loki holds the command.
+        if "test -s /etc/nullbill/agent/pve-token || echo unset" in command:
+            return 0, "" if operator_ready else "unset\n", ""
+        marker = re.search(r"nb-verify-[0-9a-f]+", command)
+        if " runuser -l agent -c " in command and f" {managed}.{bare['domain']} " in command:
+            return 0, f"{marker[0]}\nagent\n1001\n", ""
+        if " runuser -l agent -c " in command:
+            return 255, "", "ssh: connect to host port 22: Connection timed out\n"
+        if "loki/api/v1/query_range" in command:
+            return 0, loki_uids + "\n", ""
         url = re.search(r"api2/json([^';\s]+)", command)[1]
         if url.startswith("/access/permissions?path="):
             path = url.partition("=")[2]
