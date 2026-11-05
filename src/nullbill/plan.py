@@ -48,6 +48,8 @@ def _check_refs(model: dict, errors: _Errors) -> None:
             errors.append(f"services.{name}.zone: zone {svc['zone']!r} does not exist")
         elif svc.get("agent_managed") and svc["zone"] in AGENT_FREE_ZONES:
             errors.append(f"services.{name}.agent_managed: {svc['zone']} guests stay out of the agent's reach")
+        elif svc.get("proxy_allow") and (model["zones"][svc["zone"]]["egress"] != "proxy" or svc["kind"] == "vm-pool" or svc.get("attach")):
+            errors.append(f"services.{name}.proxy_allow: only a single-address guest in an egress: proxy zone can have its own allow-list")
         for port in svc.get("ports", []):
             for ref in port["from"]:
                 check(ref, f"services.{name}.ports")

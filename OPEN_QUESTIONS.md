@@ -26,6 +26,10 @@ answered items move to the decisions list at the bottom.
    full disks and failed logins need somewhere to go. Recommendation: a
    self-hosted ntfy in the services zone with its phone app, which costs
    nothing; or name an email address and SMTP relay you already use.
+8. **Agent CLI and its key.** The operator runs Claude Code, pinned by
+   checksum, with a model API key you supply (docs/adr/0002-agent-cli.md).
+   Running it spends API credit. Recommendation: approve the ADR, and create
+   a key with a monthly spend limit when you first start the agent.
 
 ## Defaults picked for cosmetic choices
 

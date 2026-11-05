@@ -22,6 +22,20 @@ def _clients(plan: dict, model: dict) -> list[str]:
     return sorted(cidrs)
 
 
+def _own_lists(plan: dict, model: dict) -> list[str]:
+    """One acl pair per guest with a proxy_allow of its own, such as the
+    operator's model API, so other guests in its zone cannot use it."""
+    lines = []
+    for name, svc in model["services"].items():
+        if svc.get("proxy_allow") and name in plan["guests"]:
+            lines += [
+                f"acl from_{name} src {plan['guests'][name]['ip']}/32\n",
+                f"acl allowed_{name} dstdomain -n {' '.join(svc['proxy_allow'])}\n",
+                f"http_access allow from_{name} allowed_{name}\n",
+            ]
+    return lines
+
+
 def render_proxy(plan_with_notes: dict, model: dict) -> dict[str, str]:
     """Return {path on egress-proxy: content}; empty when it is not planned."""
     plan = strip_notes(plan_with_notes)
@@ -43,6 +57,7 @@ def render_proxy(plan_with_notes: dict, model: dict) -> dict[str, str]:
         "http_access deny CONNECT !SSL_ports\n",
         "http_access deny private\n",
         "http_access allow allowed\n",
+        *_own_lists(plan, model),
         "http_access deny all\n\n",
         "# Forward only: keep nothing and drop the client address header.\n",
         "cache deny all\n",

@@ -1,0 +1,12 @@
+{
+  "apiKeyHelper": "cat /etc/nullbill/agent/anthropic-api-key",
+  "env": {
+{% if operator_proxy_url %}
+    "HTTPS_PROXY": "{{ operator_proxy_url }}",
+    "HTTP_PROXY": "{{ operator_proxy_url }}",
+    "NO_PROXY": "localhost,127.0.0.1,.nullbill.internal,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16",
+{% endif %}
+    "DISABLE_AUTOUPDATER": "1",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
+  }
+}

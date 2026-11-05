@@ -25,6 +25,7 @@ names and reaches the host over SSH; it never runs on the host. Only `probe`,
 - `ansible/`: host baseline (key-only SSH, auditd, no-subscription repo, security-only upgrades); `tools/check-host` runs it twice in a Debian 12 container and checks the result. `docs/runbooks/` holds steps the owner does by hand. Guest roles carry `tests/check.sh`, which `tools/check-roles` runs in a Debian 12 container.
 - `ansible/roles/pbs`: Proxmox Backup Server with a backup-only token for the host; its check backs up with client-side encryption, restores, and rebuilds over a kept datastore.
 - `ansible/roles/step_ca` also runs the `agent` provisioner: SSH user certificates for principal `agent` only, at most 1 h, no X.509. `ansible/roles/agent_ssh` makes agent-managed guests accept those for the unprivileged `agent` user and never for root.
+- `ansible/roles/operator`: the agent user, its secrets (root-owned, agent-readable), the pinned agent CLI with root-owned managed settings, and `nb-ssh` for agent-managed guests. Its check logs in end to end through the real CA.
 - `src/nullbill/backups.py`: the PBS storage and nightly job the OpenTofu render adds, and verify's backup-age and restore checks.
 - `src/nullbill/agent.py`: the runtime agent's PVE pool, role and token; `agent_managed` services join the pool and get SSH from the operator (model.py).
 - `src/nullbill/tofu.py`: OpenTofu JSON for bridges, images and guests (bpg/proxmox); `tools/check-tofu` runs `tofu validate` with the pinned provider in a container and checks that state is encrypted.

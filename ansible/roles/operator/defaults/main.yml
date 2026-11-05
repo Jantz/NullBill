@@ -1,0 +1,26 @@
+operator_agent_user: agent
+
+# egress-proxy's URL from the plan, e.g. http://10.42.1.10:3128. The agent
+# CLI and apt reach the internet only through it.
+operator_proxy_url: ""
+
+# step-ca for the agent's SSH certificates.
+operator_ca_url: https://step-ca.nullbill.internal
+operator_ssh_cert_lifetime: 30m
+
+# Secrets apply copies from $NULLBILL_HOME; the role refuses to run
+# without them. Only root and the agent user can read them.
+operator_pve_token: ""         # nb-agent@pve!operator=<secret>
+operator_pve_ca: ""            # PVE's root CA, PEM (/etc/pve/pve-root-ca.pem)
+operator_ca_root: ""           # step-ca's root certificate, PEM
+operator_step_password: ""     # step-ca's secrets/agent-password
+operator_anthropic_api_key: "" # the model API key for the agent CLI
+
+# The agent CLI (docs/adr/0002-agent-cli.md): Claude Code's native Linux
+# binary from its npm platform package, pinned by checksum.
+operator_claude_code_version: 2.1.311
+operator_claude_code_url: "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-{{ operator_claude_code_version }}.tgz"
+operator_claude_code_sha512: 764d6554cb7b9fe36562e70a33b74ba7f3dfacadf6a5aff8a0a42469c7dace54a3f2b1be8641faef09c39da146f46b366a5dce8caf0f4d51e06765861d7a1652
+
+# From ansible/roles/step_ca, for step-cli.
+step_cli_version: 0.30.1-1

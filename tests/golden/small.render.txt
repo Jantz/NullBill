@@ -15,6 +15,15 @@ http_access deny !Safe_ports
 http_access deny CONNECT !SSL_ports
 http_access deny private
 http_access allow allowed
+acl from_step-ca src 10.42.1.12/32
+acl allowed_step-ca dstdomain -n packages.smallstep.com
+http_access allow from_step-ca allowed_step-ca
+acl from_monitoring src 10.42.1.14/32
+acl allowed_monitoring dstdomain -n apt.grafana.com
+http_access allow from_monitoring allowed_monitoring
+acl from_operator src 10.42.1.16/32
+acl allowed_operator dstdomain -n api.anthropic.com packages.smallstep.com
+http_access allow from_operator allowed_operator
 http_access deny all
 
 # Forward only: keep nothing and drop the client address header.

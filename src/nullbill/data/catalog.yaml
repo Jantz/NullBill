@@ -96,6 +96,8 @@ services:
     zone: mgmt
     workload: core
     floor: {cores: 1, memory_mib: 256, disk_gib: 2}
+    # Smallstep's apt repository (ansible/roles/step_ca).
+    proxy_allow: [packages.smallstep.com]
     ports:
       - {port: 443, proto: tcp, from: ["zone:*"]}
   postgres:
@@ -112,6 +114,8 @@ services:
     zone: mgmt
     workload: core
     description: Prometheus, Grafana and Loki.
+    # Grafana's apt repository (ansible/roles/monitoring).
+    proxy_allow: [apt.grafana.com]
     floor: {cores: 1, memory_mib: 1536, disk_gib: 32}
     ports:
       - {port: 3000, proto: tcp, from: ["role:owner"]}
@@ -132,6 +136,9 @@ services:
     zone: mgmt
     workload: core
     description: Holds the agent CLI and token. Owner only. Reaches the PVE API, CA, Loki, Prometheus and SSH on agent-managed guests.
+    # The agent CLI's model API (docs/adr/0002-agent-cli.md) and step-cli's
+    # apt repository, for this guest only.
+    proxy_allow: [api.anthropic.com, packages.smallstep.com]
     floor: {cores: 1, memory_mib: 512, disk_gib: 8}
   forgejo:
     id: 17

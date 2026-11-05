@@ -74,6 +74,9 @@ $defs:
       # In the pool the agent's PVE token may power-manage and snapshot,
       # and reachable by SSH from the operator. Never in mgmt or access.
       agent_managed: {type: boolean}
+      # Names egress-proxy forwards for this guest only, on top of
+      # proxy.allow. Only for fixed-address guests in egress: proxy zones.
+      proxy_allow: {type: array, uniqueItems: true, items: {$ref: "#/$defs/domain_pattern"}}
       gpu: {type: boolean}
       floor: {$ref: "#/$defs/size"}
       grow: {type: integer, minimum: 1}

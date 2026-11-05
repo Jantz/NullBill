@@ -57,7 +57,8 @@ def test_squid_admits_proxy_zones_only(facts):
     clients = re.search(r"^acl clients src (.+)$", conf, re.M)[1].split()
     assert clients == ["10.42.1.0/24", "10.42.3.0/24", "10.42.4.0/24", "10.42.5.0/24"]
     access = re.findall(r"^http_access .+$", conf, re.M)
-    assert access[-2:] == ["http_access allow allowed", "http_access deny all"]
+    assert access[-1] == "http_access deny all"
+    assert "http_access allow allowed" in access
     assert access.index("http_access deny private") < access.index("http_access allow allowed")
 
 
@@ -71,3 +72,24 @@ def test_verify_name_must_be_on_the_allow_list(facts):
     with pytest.raises(NullBillError) as exc:
         planned(facts, "small", proxy={"allow": [".example.org"]})
     assert exc.value.messages == ["verify.public_name: deb.debian.org is not on proxy.allow, so verify could not prove the proxy works"]
+
+
+def test_operator_alone_reaches_the_model_api(facts):
+    plan, model = planned(facts, "mid")
+    conf = render_proxy(plan, model)["etc/squid/squid.conf"]
+    operator = strip_notes(plan)["guests"]["operator"]["ip"]
+    assert f"acl from_operator src {operator}/32\n" in conf
+    assert "acl allowed_operator dstdomain -n api.anthropic.com packages.smallstep.com\n" in conf
+    assert "api.anthropic.com" not in re.search(r"^acl allowed dstdomain .+$", conf, re.M)[0]
+    access = re.findall(r"^http_access .+$", conf, re.M)
+    assert access.index("http_access deny private") < access.index("http_access allow from_operator allowed_operator")
+    assert access[-1] == "http_access deny all"
+
+
+@pytest.mark.parametrize("service", ["forgejo", "linux-runner"])
+def test_own_allow_list_needs_a_fixed_address_behind_the_proxy(facts, service):
+    with pytest.raises(NullBillError) as exc:
+        planned(facts, "mid", services={service: {"proxy_allow": ["api.example.org"]}})
+    assert exc.value.messages == [
+        f"services.{service}.proxy_allow: only a single-address guest in an egress: proxy zone can have its own allow-list"
+    ]
