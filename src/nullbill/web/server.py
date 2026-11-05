@@ -5,8 +5,9 @@ self-signed certificate until the CA exists. Until the owner sets a
 password, the one-time setup code install.sh printed is the only way in.
 
 Long work (probe, apply, verify) runs as a `nullbill` subprocess whose
-output goes to $NULLBILL_HOME/jobs/<id>.log, so a page reload or a restart
-of this server loses nothing.
+output goes to $NULLBILL_HOME/jobs/<id>.log. It keeps running when this
+server restarts (an update restarting it, say), and the restarted server
+shows it again.
 """
 
 import hashlib
@@ -111,6 +112,12 @@ def check_password(password: str, stored: dict) -> bool:
     return hmac.compare_digest(digest.hex(), stored["scrypt"])
 
 
+# A job runs under sh, which writes its exit code next to its log, so a job
+# outlives a restart of this server (the unit's KillMode=process) and the
+# restarted server finds it again (App.load_jobs).
+JOB_WRAPPER = '"$@"; echo $? > "$0.tmp" && mv "$0.tmp" "$0"'
+
+
 @dataclass
 class Job:
     id: str
@@ -121,10 +128,36 @@ class Job:
     process: subprocess.Popen | None = None
     rc: int | None = None
 
+    @property
+    def rc_file(self) -> Path:
+        return self.log.with_suffix(".rc")
+
+    @property
+    def meta_file(self) -> Path:
+        return self.log.with_suffix(".json")
+
+    def alive(self) -> bool:
+        """For a job an earlier server started: is its sh still running?"""
+        try:
+            pid = json.loads(self.meta_file.read_text())["pid"]
+            return str(self.rc_file) in Path(f"/proc/{pid}/cmdline").read_bytes().decode(errors="replace")
+        except (OSError, ValueError, KeyError):
+            return False
+
     def state(self) -> str:
-        if self.process is not None and self.rc is None:
-            self.rc = self.process.poll()
-        return "running" if self.rc is None else ("done" if self.rc == 0 else "failed")
+        if self.rc is None and self.rc_file.exists():
+            text = self.rc_file.read_text().strip()
+            self.rc = int(text) if text.lstrip("-").isdigit() else 1
+        if self.rc is None:
+            if self.process is not None:
+                ended = self.process.poll()
+                if ended is not None and not self.rc_file.exists():
+                    self.rc = ended or 1  # killed before sh could write its code
+            elif not self.alive():
+                self.rc = -1  # an earlier server's job that ended unrecorded
+        if self.rc is None:
+            return "running"
+        return "done" if self.rc == 0 else "failed"
 
 
 @dataclass
@@ -420,10 +453,24 @@ class App:
             env = os.environ | {"NULLBILL_HOME": str(self.home), "PYTHONUNBUFFERED": "1", "ANSIBLE_FORCE_COLOR": "0"}
             fd = os.open(job.log, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "w") as out:
-                argv = [*self.command, *args]
+                argv = ["sh", "-c", JOB_WRAPPER, str(job.rc_file), *self.command, *args]
                 job.process = subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, env=env, stdin=subprocess.DEVNULL)
+            meta = {"action": action, "args": args, "started": job.started, "pid": job.process.pid}
+            _write_private(job.meta_file, json.dumps(meta))
             self.jobs[job_id] = job
             return job
+
+    def load_jobs(self) -> None:
+        """Jobs an earlier server started, finished or still running."""
+        for meta_file in sorted((self.home / "jobs").glob("*.json")):
+            try:
+                meta = json.loads(meta_file.read_text())
+            except ValueError:
+                continue
+            job_id = meta_file.stem
+            log = meta_file.with_suffix(".log")
+            if job_id not in self.jobs and log.exists():
+                self.jobs[job_id] = Job(job_id, meta["action"], meta["args"], log, meta["started"])
 
     def rebake_due(self, now: float) -> bool:
         """Sunday's 03:00 hour, once a week, after a first apply made the CI pools."""
@@ -642,6 +689,7 @@ def fingerprint(cert: Path) -> str:
 def serve(home: Path, listen: str) -> None:
     host, _, port = listen.rpartition(":")
     app = App(home)
+    app.load_jobs()
     app.ensure_setup_code()
     cert, key = ensure_certificate(home)
     server = http.server.ThreadingHTTPServer((host or "0.0.0.0", int(port)), make_handler(app))

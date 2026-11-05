@@ -442,3 +442,30 @@ def test_the_runtime_agent_may_run_verify_and_read_its_output_only(site):
     assert agent.call("/api/state")[1] == {"auth": False, "has_password": True}
     assert agent.call("/api/jobs", {"action": "apply"})[0] == 401
     assert agent.call("/api/agent/apply", {})[0] == 401
+
+
+def test_a_job_outlives_a_restart_of_the_page_and_shows_again(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir(mode=0o700)
+    slow = [sys.executable, "-c", "import sys, time; time.sleep(float(sys.argv[-1]) if sys.argv[-1][0].isdigit() else 0); print('ran')"]
+    first = web.App(home, command=slow)
+    done = first.start("verify")
+    while done.state() == "running":
+        time.sleep(0.05)
+    running = first.start("apply", stage="2")
+    # A new server, as after a restart: it finds both jobs from their files.
+    again = web.App(home, command=slow)
+    again.load_jobs()
+    assert again.jobs[done.id].state() == "done" and again.jobs[done.id].args == ["verify"]
+    assert again.jobs[running.id].state() == "running"
+    with pytest.raises(web.NullBillError, match="still running"):
+        again.start("verify")
+    while again.jobs[running.id].state() == "running":
+        time.sleep(0.05)
+    assert again.jobs[running.id].rc == 0 and "ran" in again.job_view(again.jobs[running.id])["text"]
+    running.process.wait()
+    # A job whose process is gone without a recorded exit code shows as failed.
+    (home / "jobs" / f"{done.id}.rc").unlink()
+    lost = web.App(home, command=slow)
+    lost.load_jobs()
+    assert lost.jobs[done.id].state() == "failed"

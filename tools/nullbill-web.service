@@ -8,6 +8,10 @@ Environment=NULLBILL_HOME=/var/lib/nullbill
 Environment=PATH=/opt/nullbill/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=/opt/nullbill/venv/bin/nullbill web --listen 0.0.0.0:8443
 Restart=on-failure
+# A restart (needrestart after a security update, install.sh) stops the
+# server only; a running apply or verify carries on and the new server
+# finds it again.
+KillMode=process
 RestartSec=5
 UMask=0077
 NoNewPrivileges=yes
