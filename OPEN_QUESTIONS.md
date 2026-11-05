@@ -30,6 +30,12 @@ answered items move to the decisions list at the bottom.
    checksum, with a model API key you supply (docs/adr/0002-agent-cli.md).
    Running it spends API credit. Recommendation: approve the ADR, and create
    a key with a monthly spend limit when you first start the agent.
+9. **apply's tools.** apply would reach containers through the host with
+   `pct exec` (Ansible collection `community.proxmox`, with paramiko), and
+   keep secrets in a sops file encrypted with an age key in
+   `NULLBILL_HOME` (docs/adr/0005-apply.md). All free and open source.
+   Recommendation: approve the ADR; until you answer I build apply this
+   way, since nothing runs on a host before your go.
 
 ## Defaults picked for cosmetic choices
 
