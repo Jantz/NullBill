@@ -3,39 +3,16 @@
 Each question has a recommendation. Answer in chat or edit this file;
 answered items move to the decisions list at the bottom.
 
-1. **Test target.** What can NullBill test on: a nested PVE VM, or a spare box
-   reset by snapshot? Recommendation: a nested PVE VM on a machine you name,
-   with a clean snapshot to roll back to.
-2. **Hardware class of the real server.** small (no GPU), mid (1 GPU) or
-   large (several)? Which GPU and VRAM? Recommendation: tell me the class and
-   GPU model only, no serials.
-3. **Controller.** Which machine runs `nullbill`? Recommendation: your PC
-   (Linux, or WSL on Windows); never the PVE host.
-4. **NULLBILL_HOME.** Does the directory exist on the controller, in your
-   backup set, with a `denylist.txt` of your names, hostnames, domains and
-   serials? Recommendation: `~/nullbill-home`, included in backups, created
-   before your first push from that machine.
-5. **Tailscale Personal.** Its free plan is for personal, non-commercial use.
-   Is this server personal and non-commercial? Recommendation: confirm, or I
-   draft an ADR for Headscale instead.
-6. **Guest floors.** The sizes in `catalog.yaml` are starting values I chose,
-   not measurements. Recommendation: accept them for M1; replace them with
-   measured values once a test target exists.
-
-7. **Alert channel.** Alerts for failed backups, expiring certificates,
-   full disks and failed logins need somewhere to go. Recommendation: a
-   self-hosted ntfy in the services zone with its phone app, which costs
-   nothing; or name an email address and SMTP relay you already use.
-8. **Agent CLI and its key.** The operator runs Claude Code, pinned by
-   checksum, with a model API key you supply (docs/adr/0002-agent-cli.md).
-   Running it spends API credit. Recommendation: approve the ADR, and create
-   a key with a monthly spend limit when you first start the agent.
-9. **apply's tools.** apply would reach containers through the host with
-   `pct exec` (Ansible collection `community.proxmox`, with paramiko), and
-   keep secrets in a sops file encrypted with an age key in
-   `NULLBILL_HOME` (docs/adr/0005-apply.md). All free and open source.
-   Recommendation: approve the ADR; until you answer I build apply this
-   way, since nothing runs on a host before your go.
+1. **Second disk.** PBS needs its own disk to survive a system disk
+   failure. Is there a second drive, any size? Recommendation: an old HDD or
+   SSD of at least the system disk's used size; without one the plan says
+   DEGRADED and backups only guard against mistakes. Backups can also be
+   switched off.
+2. **Accounts.** Tailscale (free) and, for the offline alert,
+   Healthchecks.io (free) need sign-ups by you during setup; ntfy needs only
+   its phone app. Recommendation: sign up when the wizard asks.
+3. **Design records.** ADRs 0001 to 0006 are proposed; you asked me to
+   decide, so they stand unless you object.
 
 ## Defaults picked for cosmetic choices
 
@@ -99,6 +76,24 @@ answered items move to the decisions list at the bottom.
 - Plan output: YAML with a comment above each decision.
 
 ## Decisions
+
+- Server: i9-9900K, 16 GB, RTX 4070 12 GB, mid class (owner, 2026-11-05).
+- First real test on that server once the owner has access; until then
+  everything is tested against stand-ins (owner, 2026-11-05).
+- NullBill runs in a container on the server and is used from a web page
+  over Tailscale; a guided setup builds the rest (owner, 2026-11-05;
+  docs/adr/0006-nullbill-on-the-server.md).
+- Tailscale's free plan fits: personal, non-commercial (owner, 2026-11-05).
+- Guest floors in `catalog.yaml` accepted until measured (owner, 2026-11-05).
+- Alerts: free, no open port, survive IP changes and power cuts: ntfy.sh
+  and a Healthchecks.io ping (owner asked, 2026-11-05; ADR 0006).
+- Agent CLI: API key or Claude subscription token (owner, 2026-11-05).
+- Tools for apply and the design records: Claude decides (owner,
+  2026-11-05).
+- Windows (M6): later; the owner cannot supply an ISO yet (2026-11-05).
+- 16 GB now: install without Windows and local models, add them after a
+  RAM upgrade. Local models, Windows and backups are options; services can
+  be added later without reinstalling (owner, 2026-11-05).
 
 - Licence: Apache-2.0 (owner, 2026-11-04).
 - Commits: owner's GitHub noreply author, no Claude attribution (owner, 2026-11-04).
