@@ -70,10 +70,11 @@ NullBill needs Proxmox VE 9; version 8 reached its end of life in 2026-08.
    ping URL if you made one, press **Save**, then **Send a test alert**.
 6. **Coding agent**: paste the key or token. A subscription token lasts a
    year; make a new one and paste it here before then.
-7. **Reach it from anywhere** (optional): paste the policy into Tailscale and
-   a one-time auth key here, as [vpn.md](vpn.md) describes. Without a key the
-   vpn stage waits and the rest still runs.
-8. **Run setup**. The log shows each stage: render, host, tofu, router,
+7. **Reach it from anywhere** (optional): paste a Tailscale OAuth client,
+   run setup once so it puts the policy in place, then paste a one-time auth
+   key, as [vpn.md](vpn.md) describes. Without them the vpn stage waits and
+   the rest still runs.
+8. **Run setup**. The log shows each stage: render, tailnet, host, tofu, router,
    proxy, updates, ca, postgres, monitoring, forgejo, ci, agents, logs,
    backups, vpn, verify. The first run downloads images and packages and
    takes a while; tofu, ci and the first backup are the longest.

@@ -7,7 +7,7 @@ Guidance for Claude sessions working in this repository.
 NullBill turns a spare x86 machine running Proxmox VE into a self-hosted dev
 server from one declarative config. `nullbill` runs on a controller the owner
 names and reaches the host over SSH; it never runs on the host. Only `probe`,
-`plan`, `apply` (stages so far: render, host, tofu, router, proxy, updates, ca, postgres, monitoring, forgejo, ci, agents, logs, backups, vpn, verify) and
+`plan`, `apply` (stages so far: render, tailnet, host, tofu, router, proxy, updates, ca, postgres, monitoring, forgejo, ci, agents, logs, backups, vpn, verify) and
 `verify` exist.
 
 ## Layout
@@ -24,6 +24,7 @@ names and reaches the host over SSH; it never runs on the host. Only `probe`,
 - `src/nullbill/router.py`, `src/nullbill/proxy.py`: router (nftables, dnsmasq, interfaces) and Squid files; `tools/check-guests` checks them with Debian 12's nft, dnsmasq, ifupdown and squid.
 - `src/nullbill/lan.py`: closing the LAN to 8006 and 22 (#9). `apply --close-lan` (host stage only) arms a 15-minute systemd-run timer on the host that restores `/root/nullbill/cluster-lan-open.fw`, then installs the closed cluster.fw; `--confirm-lan` stops the timer, and the page runs it only for a request from the vpn guest's address. State in `$NULLBILL_HOME/lan.json`; while closing or closed the controller reaches the host at its mgmt address, verify checks the LAN address (DEGRADED while open), and once closed the page refuses clients outside the network base.
 - `src/nullbill/tailnet.py`: Tailscale policy from people and roles, the only per-person gate; plan fails past the free-plan limits in `catalog.yaml`. `routes` are the zones the vpn guest advertises.
+- `src/nullbill/tailscale.py`: Tailscale's API with the owner's OAuth client (`tailscale_client_id`/`_secret` in secrets, pasted on the page). apply's tailnet stage, before the host stage, counts tagged devices, has Tailscale validate and test the rendered policy, pushes it with the read ETag and reads it back; any failure stops apply. The vpn stage runs only once that policy is in place. `NULLBILL_TAILSCALE_API` points it at a stand-in.
 - `ansible/roles/vpn`: pinned Tailscale in userspace networking (no tun in the container); logs in once with the owner's one-time auth key (`tailscale_auth_key`, pasted on the page, dropped by apply after login), then keeps routes and name with `tailscale set`.
 - `ansible/`: host baseline (key-only SSH, auditd, no-subscription repo, security-only upgrades); `tools/check-host` runs it twice in a Debian 13 container (PVE 9's base; PVE 8 is past its end of life and refused) and checks the result. `docs/runbooks/` holds steps the owner does by hand. Guest roles carry `tests/check.sh`, which `tools/check-roles` runs in a Debian 12 container, or Debian 13 for the roles in its `trixie_roles` (pbs: PBS 4 needs Debian 13, so the pbs VM boots catalog.yaml's `debian-13-cloud`).
 - `ansible/roles/router`: places `build/router` on the router VM, each nft and dnsmasq file checked before it replaces the old one; reboots when interface names change. Its check uses `tests/files`, which `tests/test_role_check_files.py` keeps equal to the small render.

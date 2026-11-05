@@ -22,10 +22,9 @@ Reference: <https://tailscale.com/kb/1337/policy-syntax>
 3. Run `nullbill apply --dry-run` and open `build/tailnet/policy.json`.
    Check that the new login appears in the group for their role and
    nowhere else.
-4. Until apply pushes the policy (issue #5): paste `policy.json` into the
-   Tailscale admin console under **Access controls**. Tailscale runs the
-   policy's own tests before it saves; a failing test means the file and
-   the plan disagree, so stop and look.
+4. Run `nullbill apply --stage tailnet` (or setup on the page). It pushes
+   the policy; Tailscale runs the policy's own tests first, and a failing
+   test stops apply with the test it names, so stop and look.
 5. Invite the person to the tailnet from the admin console. They reach only
    what their role allows the moment they join.
 

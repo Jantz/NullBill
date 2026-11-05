@@ -96,12 +96,22 @@
       <h2>7. Reach it from anywhere</h2>
       <p>Optional. Your server joins your free <a href="https://tailscale.com/" rel="noopener noreferrer" target="_blank">Tailscale</a> network, so this page and your guests are reachable from your own devices wherever you are. Until then everything stays on your local network.</p>
       <ol>
-        <li>Sign in to the Tailscale admin console with the login you gave in step 3. Under <b>Access controls</b>, replace the policy with the one below and save. It lets you, and nobody else, reach the server.</li>
-        <li>Under <b>Settings, Keys</b>, press <b>Generate auth key</b>. Leave <b>Reusable</b> and <b>Ephemeral</b> off, turn on <b>Pre-approved</b> and <b>Tags</b> with <code>tag:nb-vpn</code>, and press <b>Generate key</b>.</li>
-        <li>Paste the key here and run setup. The server uses it once to join, then forgets it.</li>
+        <li>Sign in to the Tailscale admin console with the login you gave in step 3. Under <b>Settings, Trust credentials</b>, add an <b>OAuth client</b> with the scope <b>Policy file</b> set to write, and the scopes the console adds to it. Paste its client ID and secret below. Setup uses it to put the policy below in place each run, and stops if Tailscale refuses it; the policy lets you, and nobody else, reach the server.</li>
+        <li>Run setup once, so the policy, which defines the tag <code>tag:nb-vpn</code>, is in place. Then under <b>Settings, Keys</b>, press <b>Generate auth key</b>. Leave <b>Reusable</b> and <b>Ephemeral</b> off, turn on <b>Pre-approved</b> and <b>Tags</b> with <code>tag:nb-vpn</code>, and press <b>Generate key</b>.</li>
+        <li>Paste the key here and run setup again. The server uses it once to join, then forgets it.</li>
       </ol>
       <p id="tailnet-hint">The policy appears once the plan is ready.</p>
       <details id="tailnet-details" hidden><summary>Tailscale policy</summary><pre id="tailnet-policy"></pre></details>
+      <form id="tailscale-client-form">
+        <label>OAuth client ID
+          <input id="tailscale-client-id" autocomplete="off">
+        </label>
+        <label>OAuth client secret
+          <input id="tailscale-client-secret" type="password" autocomplete="off" placeholder="tskey-client-...">
+        </label>
+        <button type="submit">Save</button>
+        <span id="tailscale-client-result"></span>
+      </form>
       <form id="vpn-form">
         <label>Tailscale auth key
           <input id="tailscale-key" type="password" autocomplete="off" placeholder="tskey-auth-...">

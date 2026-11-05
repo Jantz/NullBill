@@ -66,6 +66,8 @@ AGENT_TOKEN = "web/agent-token.sha256"
 AGENT_ACTIONS = {"verify"}
 # A Tailscale auth key logs the vpn guest in once; apply forgets it after.
 TAILSCALE_KEY = re.compile(r"tskey-auth-[A-Za-z0-9-]{8,200}")
+TAILSCALE_CLIENT_ID = re.compile(r"[A-Za-z0-9]{6,64}")
+TAILSCALE_CLIENT_SECRET = re.compile(r"tskey-client-[A-Za-z0-9-]{8,200}")
 STATIC = {"/": ("index.html", "text/html"), "/app.js": ("app.js", "text/javascript"), "/style.css": ("style.css", "text/css")}
 SECURITY_HEADERS = {
     "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'",
@@ -332,6 +334,23 @@ class App:
                 raise NullBillError("wait until the running job finishes")
             Secrets(self.codec(self.home)).set("tailscale_auth_key", value)
 
+    # The OAuth client apply pushes the tailnet policy with: whether one is
+    # saved, never the values.
+    def tailscale_client(self) -> bool:
+        data = Secrets(self.codec(self.home)).data
+        return bool(data.get("tailscale_client_id") and data.get("tailscale_client_secret"))
+
+    def save_tailscale_client(self, body: dict) -> None:
+        client_id, secret = (str(body.get(k, "")).strip() for k in ("client_id", "secret"))
+        if not TAILSCALE_CLIENT_ID.fullmatch(client_id) or not TAILSCALE_CLIENT_SECRET.fullmatch(secret):
+            raise NullBillError("paste the client ID and the secret (tskey-client-...) Tailscale shows once you generate the OAuth client")
+        with self.lock:
+            if any(job.state() == "running" for job in self.jobs.values()):
+                raise NullBillError("wait until the running job finishes")
+            store = Secrets(self.codec(self.home))
+            store.data |= {"tailscale_client_id": client_id, "tailscale_client_secret": secret}
+            store.codec.save(store.data)
+
     # Config and plan.
     def config(self) -> dict | None:
         path = self.home / "config.yaml"
@@ -524,6 +543,7 @@ class App:
             "alerts": self.alerts() if has_password else None,
             "agent_credential": self.agent_credential(),
             "tailscale_key": self.tailscale_key(),
+            "tailscale_client": self.tailscale_client(),
             "lan": {"state": lan.state(self.home), "via_vpn": self.via_vpn(client), "minutes": lan.REVERT_AFTER_S // 60},
             "job": self.job_view(latest) | {"text": ""} if latest else None,
         }
@@ -649,6 +669,9 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 if self.path == "/api/agent":
                     app.save_agent_credential(body)
                     return self.json(200, {"ok": True, "agent_credential": app.agent_credential()})
+                if self.path == "/api/tailscale-client":
+                    app.save_tailscale_client(body)
+                    return self.json(200, {"ok": True, "tailscale_client": app.tailscale_client()})
                 if self.path == "/api/vpn":
                     app.save_tailscale_key(body)
                     return self.json(200, {"ok": True, "tailscale_key": app.tailscale_key()})

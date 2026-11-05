@@ -65,6 +65,12 @@ function renderAgent(kind) {
   $("agent-result").textContent = kind ? `A ${kind} is saved.` : "Nothing saved yet.";
 }
 
+function renderTailscaleClient(saved) {
+  $("tailscale-client-result").textContent = saved
+    ? "Saved; each setup run puts the policy in place with it."
+    : "None saved. Until one is, the server stays off Tailscale.";
+}
+
 function renderVpn(waiting) {
   $("vpn-result").textContent = waiting
     ? "A key is saved; the next setup run uses it."
@@ -139,6 +145,7 @@ async function refresh() {
   renderPlan(state.plan);
   renderAlerts(state.alerts);
   renderAgent(state.agent_credential);
+  renderTailscaleClient(state.tailscale_client);
   renderVpn(state.tailscale_key);
   renderLan(state.lan);
   clearInterval(statusTimer);
@@ -208,6 +215,16 @@ document.addEventListener("DOMContentLoaded", () => {
       const result = await api("/api/agent", {credential: $("agent-credential").value});
       $("agent-credential").value = "";
       renderAgent(result.agent_credential);
+    } catch (error) { showError(error); }
+  });
+  $("tailscale-client-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const result = await api("/api/tailscale-client",
+        {client_id: $("tailscale-client-id").value, secret: $("tailscale-client-secret").value});
+      $("tailscale-client-id").value = "";
+      $("tailscale-client-secret").value = "";
+      renderTailscaleClient(result.tailscale_client);
     } catch (error) { showError(error); }
   });
   $("vpn-form").addEventListener("submit", async (event) => {

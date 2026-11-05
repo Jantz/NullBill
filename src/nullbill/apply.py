@@ -34,6 +34,7 @@ from nullbill.proxy import PROXY, proxy_port
 from nullbill.render import strip_notes
 from nullbill.secretfile import Secrets
 from nullbill.tailnet import TAG, routes
+from nullbill.tailscale import Tailnet, TailscaleError
 from nullbill.verify import run_verify
 
 ANSIBLE = REPO_ROOT / "ansible"
@@ -935,10 +936,66 @@ def stage_backups(ctx: Context) -> None:
     ctx.say(f"backups: nightly at {backups.SCHEDULE} to {backups.STORAGE}, encrypted on the host")
 
 
+TAILSCALE_CLIENT = ("tailscale_client_id", "tailscale_client_secret")
+
+
+def tailnet_api(ctx: Context) -> Tailnet | None:
+    """The owner's Tailscale OAuth client, or None until one is pasted."""
+    client_id, secret = (ctx.secrets.data.get(name, "") for name in TAILSCALE_CLIENT)
+    return Tailnet(client_id, secret) if client_id and secret else None
+
+
+def push_policy(ctx: Context, stage: str) -> bool:
+    """Make the tailnet's policy the rendered one, or stop apply. False while
+    no OAuth client is saved. Tailscale runs the policy's tests before it
+    takes it; the policy read back must equal the rendered one."""
+    api = tailnet_api(ctx)
+    if api is None:
+        return False
+    want = json.loads(ctx.files["tailnet/policy.json"])
+    limit = ctx.model["tailnet"]["free_limits"]["tagged_devices"]
+    try:
+        devices = api.devices()
+        tagged = [d for d in devices if d.get("tags")]
+        # The vpn guest counts once it has joined; until then it is about to.
+        count = len(tagged) + (0 if any(TAG in d["tags"] for d in tagged) else 1)
+        if count > limit:
+            raise ApplyError(
+                stage, f"the tailnet would have {count} tagged devices with the vpn guest; Tailscale's free plan allows {limit}"
+            )
+        live, etag = api.policy()
+        if live == want:
+            ctx.say(f"{stage}: the tailnet policy is in place ({count} of {limit} tagged devices)")
+            return True
+        api.validate(want)
+        api.set_policy(want, etag)
+        back, _ = api.policy()
+    except TailscaleError as error:
+        raise ApplyError(stage, str(error)) from error
+    if back != want:
+        raise ApplyError(stage, "the tailnet policy read back differs from the rendered one; check the admin console's Access controls")
+    ctx.say(f"{stage}: pushed the tailnet policy; Tailscale ran its tests ({count} of {limit} tagged devices)")
+    return True
+
+
+def stage_tailnet(ctx: Context) -> None:
+    """Before anything on the host changes: the tailnet's policy, so nobody
+    reaches more than the plan grants once the vpn guest is in."""
+    if not planned(ctx, "vpn"):
+        return
+    if not push_policy(ctx, "tailnet"):
+        ctx.say("tailnet: no Tailscale OAuth client saved; the vpn guest stays off the tailnet until one is pasted on the page")
+
+
 def stage_vpn(ctx: Context) -> None:
     """Tailscale on the vpn guest as the tagged subnet router. It logs in once
-    with the owner's one-time auth key; until then it waits, logged out."""
+    with the owner's one-time auth key; until then it waits, logged out. It
+    runs only once the tailnet's policy is the rendered one: Tailscale's
+    default policy lets every device reach every route."""
     if not planned(ctx, "vpn"):
+        return
+    if not push_policy(ctx, "vpn"):
+        ctx.say("vpn: waiting for a Tailscale OAuth client; paste one on the page and run setup again")
         return
     variables = {
         "vpn_routes": routes(ctx.plan, ctx.model),
@@ -973,6 +1030,7 @@ def stage_verify(ctx: Context) -> None:
 Stage = tuple[str, Callable[[Context], None]]
 STAGES: list[Stage] = [
     ("render", stage_render),
+    ("tailnet", stage_tailnet),
     ("host", stage_host),
     ("tofu", stage_tofu),
     ("router", stage_router),

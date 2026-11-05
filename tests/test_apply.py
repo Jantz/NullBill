@@ -611,9 +611,109 @@ def test_backups_stage_does_nothing_without_a_backup_disk(ctx):
     assert c.reach.calls == []
 
 
-def test_vpn_stage_waits_for_a_key_then_logs_in_once_and_forgets_it(ctx):
+class FakeTailnet:
+    """Tailscale's API: one policy, its ETag, the devices on the tailnet."""
+
+    def __init__(self, client_id="", client_secret=""):
+        self.credential = (client_id, client_secret)
+        self.live = {"acls": [{"action": "accept", "src": ["*"], "dst": ["*:*"]}]}
+        self.etag = "e0"
+        self.devices_list = [{"id": "1", "tags": []}]
+        self.refuse = None  # a validate error message
+        self.mangle = False  # store something other than what was pushed
+        self.pushes = []
+
+    def devices(self):
+        return self.devices_list
+
+    def policy(self):
+        return json.loads(json.dumps(self.live)), self.etag
+
+    def validate(self, policy):
+        if self.refuse:
+            raise apply.TailscaleError(f"Tailscale refused the policy: {self.refuse}")
+
+    def set_policy(self, policy, etag):
+        assert etag == self.etag
+        self.pushes.append(policy)
+        self.live = dict(policy, extra=True) if self.mangle else policy
+        self.etag = f"e{len(self.pushes)}"
+
+
+@pytest.fixture
+def tailnet(monkeypatch):
+    fake = FakeTailnet()
+
+    def make(client_id, client_secret):
+        fake.credential = (client_id, client_secret)
+        return fake
+
+    monkeypatch.setattr(apply, "Tailnet", make)
+    return fake
+
+
+def with_client(c):
+    c.secrets.set("tailscale_client_id", "kExampleCNTRL")
+    c.secrets.set("tailscale_client_secret", "tskey-client-kExampleCNTRL-secret")
+    return c
+
+
+def test_tailnet_stage_waits_for_an_oauth_client_and_then_pushes_the_policy(ctx, tailnet):
     c = ctx("small")
+    apply.stage_tailnet(c)
+    assert c.log == ["tailnet: no Tailscale OAuth client saved; the vpn guest stays off the tailnet until one is pasted on the page"]
+    assert tailnet.pushes == [] and c.reach.calls == []
+
+    with_client(c)
+    apply.stage_tailnet(c)
+    want = json.loads(c.files["tailnet/policy.json"])
+    assert tailnet.credential == ("kExampleCNTRL", "tskey-client-kExampleCNTRL-secret")
+    assert tailnet.pushes == [want] and tailnet.live == want
+    assert c.log[-1] == "tailnet: pushed the tailnet policy; Tailscale ran its tests (1 of 50 tagged devices)"
+    # In place: not pushed again.
+    apply.stage_tailnet(c)
+    assert len(tailnet.pushes) == 1 and c.log[-1] == "tailnet: the tailnet policy is in place (1 of 50 tagged devices)"
+    assert c.reach.calls == []
+
+
+def test_tailnet_stage_stops_apply_before_the_host_when_tailscale_refuses(ctx, tailnet):
+    c = with_client(ctx("small"))
+    tailnet.refuse = "test(s) failed | member@example.internal: address 10.42.1.254:22: want: Drop, got: Accept"
+    with pytest.raises(ApplyError, match="apply stopped at tailnet: Tailscale refused the policy: test.s. failed"):
+        run_apply(c)
+    assert tailnet.pushes == [] and c.reach.calls == []
+
+
+def test_tailnet_policy_read_back_must_match(ctx, tailnet):
+    c = with_client(ctx("small"))
+    tailnet.mangle = True
+    with pytest.raises(ApplyError, match="read back differs"):
+        apply.stage_tailnet(c)
+
+
+def test_tagged_devices_are_counted_from_the_tailnet(ctx, tailnet):
+    c = with_client(ctx("small"))
+    tailnet.devices_list = [{"id": str(n), "tags": ["tag:other"]} for n in range(50)]
+    with pytest.raises(ApplyError, match="51 tagged devices with the vpn guest; Tailscale's free plan allows 50"):
+        apply.stage_tailnet(c)
+    assert tailnet.pushes == []
+    # The vpn guest already on it counts once.
+    tailnet.devices_list[0]["tags"] = ["tag:nb-vpn"]
+    apply.stage_tailnet(c)
+    assert c.log[-1].endswith("(50 of 50 tagged devices)")
+
+
+def test_vpn_stage_waits_for_the_policy_then_a_key_then_logs_in_once_and_forgets_it(ctx, tailnet):
+    c = ctx("small")
+    c.secrets.set("tailscale_auth_key", "tskey-auth-example")
     apply.stage_vpn(c)
+    # Tailscale's default policy lets everyone reach every route: no login before ours.
+    assert c.reach.calls == [] and c.log[-1].startswith("vpn: waiting for a Tailscale OAuth client")
+    c.secrets.drop("tailscale_auth_key")
+
+    with_client(c)
+    apply.stage_vpn(c)
+    assert tailnet.live == json.loads(c.files["tailnet/policy.json"])
     (_, playbook, hosts, variables), _ = c.reach.calls
     assert (playbook, hosts) == ("vpn.yml", {"vpn": connection(c, "vpn")})
     assert variables["vpn_tag"] == "tag:nb-vpn" and variables["vpn_auth_key"] == ""
@@ -837,9 +937,9 @@ def test_windows_needs_an_iso_before_tofu(ctx, monkeypatch):
     assert [call for call in c.reach.calls if call[0] == "local"] == []
 
 
-def test_a_full_apply_runs_every_stage_against_the_stand_ins(ctx, monkeypatch):
+def test_a_full_apply_runs_every_stage_against_the_stand_ins(ctx, monkeypatch, tailnet):
     monkeypatch.setattr(apply, "run_verify", lambda *a, **kw: [Result("PASS", "everything")])
-    c = ctx("small")
+    c = with_client(ctx("small"))
     c.secrets.set("ntfy_topic", "nullbill-topic")
     c.secrets.set("claude_oauth_token", "sk-ant-oat01-token")
     (c.home / "web").mkdir()

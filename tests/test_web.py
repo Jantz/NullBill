@@ -278,6 +278,20 @@ def test_tailscale_key_waits_for_setup_and_is_never_shown(site):
     assert key not in json.dumps(client.call("/api/state")[1])
 
 
+def test_tailscale_oauth_client_is_kept_and_never_shown(site):
+    app, client = site
+    sign_in(app, client)
+    assert client.call("/api/state")[1]["tailscale_client"] is False
+    bad = client.call("/api/tailscale-client", {"client_id": "kExampleCNTRL", "secret": "tskey-auth-" + "e" * 30})
+    assert bad[0] == 400 and "tskey-client-" in bad[1]["error"]
+    secret = "tskey-client-kExampleCNTRL-" + "f" * 30
+    answer = client.call("/api/tailscale-client", {"client_id": " kExampleCNTRL ", "secret": f"{secret}\n"})
+    assert answer == (200, {"ok": True, "tailscale_client": True})
+    stored = app.codec(app.home).load()
+    assert (stored["tailscale_client_id"], stored["tailscale_client_secret"]) == ("kExampleCNTRL", secret)
+    assert secret not in json.dumps(client.call("/api/state")[1])
+
+
 def test_a_failed_test_alert_says_so(site):
     app, client = site
     sign_in(app, client)
