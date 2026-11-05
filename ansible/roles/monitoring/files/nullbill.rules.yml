@@ -3,6 +3,20 @@
 groups:
   - name: nullbill
     rules:
+      # Always firing. Its repeats ping Healthchecks.io, which tells the
+      # owner when they stop: power cut, lost uplink or dead monitoring.
+      - alert: Watchdog
+        expr: vector(1)
+        labels: {severity: none}
+        annotations:
+          summary: "NullBill monitoring is alive"
+      # After a power cut the host starts by itself (guests follow in boot
+      # order); say so, since Healthchecks.io only reports the outage.
+      - alert: HostStarted
+        expr: time() - node_boot_time_seconds{job="host"} < 1800
+        labels: {severity: warn}
+        annotations:
+          summary: "The PVE host started {{ $value | humanizeDuration }} ago, after a power cut or a reboot"
       - alert: TargetDown
         expr: up == 0
         for: 5m

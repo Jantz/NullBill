@@ -24,4 +24,19 @@ monitoring_tls_name: monitoring.nullbill.internal
 # not the agent) can mint a push certificate.
 monitoring_shipper_ca: ""
 
+# Where alerts go (nb-alert-relay). apply sets both from NULLBILL_HOME's
+# secrets: the ntfy topic URL it made, and the Healthchecks.io ping URL the
+# owner pasted, if any. Empty means that channel stays silent.
+monitoring_ntfy_url: ""
+monitoring_healthchecks_url: ""
+# The egress proxy the relay's sends leave through; empty for none.
+monitoring_https_proxy: ""
+# On localhost; 9095 is Loki's gRPC port.
+monitoring_relay_port: 9097
+# How often Watchdog pings Healthchecks.io; give its check a 10 minute
+# period and a 10 minute grace.
+monitoring_watchdog_interval: 5m
+# The PVE host's node_exporter (host:9100), scraped as job "host".
+monitoring_host_target: ""
+
 monitoring_manage_services: true

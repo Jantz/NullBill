@@ -1,0 +1,10 @@
+# The on-site screen: cage (a Wayland kiosk compositor) runs Chromium on the
+# host's first console, showing the NullBill page and nothing else.
+console_enabled: false
+# The page as the host reaches it (the nullbill container's mgmt address).
+console_url: ""
+# base64 SHA-256 of the page certificate's public key. Chromium accepts that
+# key and no other self-signed one, so nothing can sit in between.
+console_page_spki: ""
+console_user: nb-console
+console_manage_services: true

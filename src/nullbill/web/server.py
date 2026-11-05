@@ -21,6 +21,8 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
@@ -30,6 +32,7 @@ import yaml
 from nullbill.cli import plan_text
 from nullbill.errors import NullBillError
 from nullbill.model import build_model
+from nullbill.secretfile import Codec, Secrets, Sops
 
 SESSION_S = 12 * 3600
 MIN_PASSWORD = 12
@@ -37,6 +40,10 @@ LOCKOUT_FAILURES = 10
 LOCKOUT_S = 300
 WORKLOADS = ["agents", "linux-ci", "inference", "windows-ci", "windows-dev"]
 ACTIONS = {"probe", "apply", "verify"}
+# Alerts go to a ntfy.sh topic named by a random string NullBill makes (no
+# account needed), and an optional Healthchecks.io check notices silence.
+NTFY = "https://ntfy.sh/"
+HEALTHCHECKS = re.compile(r"https://hc-ping\.com/[A-Za-z0-9_-]{8,}(/[a-z0-9_-]+)?")
 STATIC = {"/": ("index.html", "text/html"), "/app.js": ("app.js", "text/javascript"), "/style.css": ("style.css", "text/css")}
 SECURITY_HEADERS = {
     "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'",
@@ -54,6 +61,16 @@ def _write_private(path: Path, text: str) -> None:
     with os.fdopen(fd, "w") as f:
         f.write(text)
     tmp.replace(path)
+
+
+def post(url: str, body: str = "", headers: dict | None = None) -> None:
+    request = urllib.request.Request(url, data=body.encode(), headers=headers or {}, method="POST")
+    with urllib.request.urlopen(request, timeout=15) as response:
+        response.read()
+
+
+def ntfy_topic() -> str:
+    return "nullbill-" + secrets.token_urlsafe(18)
 
 
 def hash_password(password: str, salt: bytes | None = None) -> dict:
@@ -92,6 +109,9 @@ class App:
     failures: list[float] = field(default_factory=list)
     jobs: dict[str, Job] = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock)
+    # The secrets file, opened afresh for each use so apply's writes show.
+    codec: Callable[[Path], Codec] = Sops
+    send: Callable[..., None] = post
 
     # Files under NULLBILL_HOME.
     @property
@@ -142,6 +162,46 @@ class App:
             raise NullBillError(f"the password needs at least {MIN_PASSWORD} characters")
         _write_private(self.owner_file, json.dumps(hash_password(password)))
         self.code_file.unlink(missing_ok=True)
+        # No job runs before a password exists, so nothing else writes the
+        # secrets file now.
+        Secrets(self.codec(self.home)).ensure("ntfy_topic", ntfy_topic)
+
+    # Alerts.
+    def alerts(self) -> dict:
+        data = Secrets(self.codec(self.home)).data
+        topic = data.get("ntfy_topic")
+        return {"ntfy_url": NTFY + topic if topic else None, "healthchecks_url": data.get("healthchecks_url", "")}
+
+    def save_alerts(self, body: dict) -> None:
+        url = str(body.get("healthchecks_url", "")).strip()
+        if url and not HEALTHCHECKS.fullmatch(url):
+            raise NullBillError("paste the ping URL from your Healthchecks.io check, like https://hc-ping.com/<uuid>")
+        with self.lock:
+            if any(job.state() == "running" for job in self.jobs.values()):
+                raise NullBillError("wait until the running job finishes")
+            store = Secrets(self.codec(self.home))
+            if url:
+                store.set("healthchecks_url", url)
+            elif "healthchecks_url" in store.data:
+                del store.data["healthchecks_url"]
+                store.codec.save(store.data)
+
+    def test_alerts(self) -> list[str]:
+        """Send one ntfy message and one Healthchecks.io ping; name what was sent."""
+        alerts = self.alerts()
+        if not alerts["ntfy_url"]:
+            raise NullBillError("set a password first; that makes the ntfy topic")
+        sent = []
+        try:
+            title = {"Title": "NullBill: test alert", "Tags": "white_check_mark"}
+            self.send(alerts["ntfy_url"], "Alerts from your server reach this device.", title)
+            sent.append("ntfy")
+            if alerts["healthchecks_url"]:
+                self.send(alerts["healthchecks_url"])
+                sent.append("Healthchecks.io")
+        except OSError as exc:
+            raise NullBillError(f"sending failed after {sent or 'nothing'}: {exc}") from exc
+        return sent
 
     # Config and plan.
     def config(self) -> dict | None:
@@ -154,6 +214,7 @@ class App:
         return {
             "workloads": config.get("intent", {}).get("workloads", ["agents", "linux-ci"]),
             "backups": config.get("services", {}).get("pbs", {}).get("enabled", True),
+            "console": config.get("host", {}).get("console", {}).get("enabled", False),
             "owner_login": owner,
         }
 
@@ -179,6 +240,15 @@ class App:
             services["pbs"] = {**services.get("pbs", {}), "enabled": False}
         if not services:
             del config["services"]
+        host = config.setdefault("host", {})
+        if body.get("console"):
+            host["console"] = {**host.get("console", {}), "enabled": True}
+        else:
+            host.get("console", {}).pop("enabled", None)
+            if host.get("console") == {}:
+                del host["console"]
+        if not host:
+            del config["host"]
         build_model(config)  # validates against the schema before anything is written
         _write_private(self.home / "config.yaml", yaml.safe_dump(config, sort_keys=False))
 
@@ -239,6 +309,7 @@ class App:
             "choices": self.choices(),
             "workloads": WORKLOADS,
             "plan": self.plan(),
+            "alerts": self.alerts() if has_password else None,
             "job": self.job_view(latest) | {"text": ""} if latest else None,
         }
 
@@ -313,6 +384,11 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 if self.path == "/api/choices":
                     app.save_choices(body)
                     return self.json(200, {"ok": True, "plan": app.plan()})
+                if self.path == "/api/alerts":
+                    app.save_alerts(body)
+                    return self.json(200, {"ok": True, "alerts": app.alerts()})
+                if self.path == "/api/alerts/test":
+                    return self.json(200, {"ok": True, "sent": app.test_alerts()})
                 if self.path == "/api/jobs":
                     stage = body.get("stage")
                     job = app.start(str(body.get("action")), str(stage) if stage else None)

@@ -15,7 +15,22 @@ tests:
         values: "86400x70"
       - series: 'probe_success{job="tls",instance="forgejo:443"}'
         values: "0x15"
+      - series: 'node_boot_time_seconds{job="host",instance="pve.nullbill.internal:9100"}'
+        values: "0x60"
     alert_rule_test:
+      - eval_time: 1m
+        alertname: Watchdog
+        exp_alerts:
+          - exp_labels: {severity: none}
+            exp_annotations: {summary: "NullBill monitoring is alive"}
+      - eval_time: 10m
+        alertname: HostStarted
+        exp_alerts:
+          - exp_labels: {severity: warn, job: host, instance: "pve.nullbill.internal:9100"}
+            exp_annotations: {summary: "The PVE host started 10m 0s ago, after a power cut or a reboot"}
+      - eval_time: 40m
+        alertname: HostStarted
+        exp_alerts: []
       - eval_time: 6m
         alertname: TargetDown
         exp_alerts:

@@ -168,6 +168,23 @@ def test_updates_stage_sets_up_every_linux_guest_once(ctx):
     assert hosts["forgejo"]["ansible_connection"] == "community.proxmox.proxmox_pct_remote"
 
 
+def test_host_stage_switches_the_on_site_screen_off_by_default(ctx):
+    c = ctx("small")
+    apply.stage_host(c)
+    console = [call for call in c.reach.calls if call[:2] == ("playbook", "console.yml")]
+    assert console == [("playbook", "console.yml", {"pve": connection(c, None)}, {"console_enabled": False})]
+
+
+def test_host_stage_points_the_on_site_screen_at_the_page_with_its_key(ctx):
+    c = ctx("small")
+    c.model["host"]["console"]["enabled"] = True
+    apply.stage_host(c)
+    (variables,) = [call[3] for call in c.reach.calls if call[:2] == ("playbook", "console.yml")]
+    assert variables == {"console_enabled": True, "console_url": "https://10.42.1.2:8443/", "console_page_spki": "secret-token"}
+    (spki,) = [call for call in c.reach.calls if call[0] == "local"]
+    assert spki[1][:3] == ["sh", "-c", apply.SPKI] and spki[1][4] == str(c.home / "web" / "cert.pem")
+
+
 def test_host_stage_rewrites_only_what_changed(ctx):
     c = ctx()
     apply.stage_host(c)

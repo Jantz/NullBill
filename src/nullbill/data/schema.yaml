@@ -136,6 +136,12 @@ $defs:
           properties:
             memory_mib: {type: integer, minimum: 1024}
             below_mib: {type: integer, minimum: 1024}
+        console:
+          type: object
+          additionalProperties: false
+          properties:
+            enabled: {type: boolean}
+            memory_mib: {type: integer, minimum: 256}
         # Ports on the PVE host itself. Role sources arrive through the VPN.
         ports: {type: array, items: {$ref: "#/$defs/port"}}
     zones: {type: object, propertyNames: {$ref: "#/$defs/name"}, additionalProperties: {$ref: "#/$defs/zone"}}

@@ -141,6 +141,25 @@ def stage_host(ctx: Context) -> None:
     if not ctx.close_lan:
         files["cluster.fw"] = open_variant
     host_files(ctx, "host", PVE_FIREWALL, files)
+    run_playbook(ctx, "host", "console.yml", None, console_vars(ctx))
+
+
+SPKI = 'openssl x509 -in "$1" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64'
+
+
+def console_vars(ctx: Context) -> dict:
+    """The on-site screen: on or off, and the page it shows with its key pinned."""
+    if not ctx.model["host"]["console"]["enabled"]:
+        return {"console_enabled": False}
+    cert = ctx.home / "web" / "cert.pem"
+    rc, out = ctx.reach.local(["sh", "-c", SPKI, "sh", str(cert)], ctx.home, dict(os.environ), capture=True)
+    if rc != 0 or not out.strip():
+        raise ApplyError("host", f"cannot read the page's key from {cert} (exit {rc}); is `nullbill web` set up?")
+    return {
+        "console_enabled": True,
+        "console_url": f"https://{ctx.bare['guests']['nullbill']['ip']}:8443/",
+        "console_page_spki": out.strip(),
+    }
 
 
 TOKEN_ID = "root@pam!nullbill"

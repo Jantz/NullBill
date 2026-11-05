@@ -23,6 +23,12 @@ host:
   reserve_small:
     memory_mib: 3072
     below_mib: 24576
+  # The on-site screen (ansible/roles/console): a kiosk browser on the host's
+  # monitor showing the NullBill page. Off by default; it costs the host
+  # about memory_mib.
+  console:
+    enabled: false
+    memory_mib: 512
   # The operator holds the agent's API token, so it reaches the API only.
   ports:
     # The runner dispatcher's token may only clone runners (ci.py).
@@ -94,7 +100,8 @@ services:
     proxy_allow: [registry.opentofu.org, galaxy.ansible.com]
     floor: {cores: 1, memory_mib: 768, disk_gib: 8}
     ports:
-      - {port: 8443, proto: tcp, from: ["role:owner"]}
+      # host: the on-site screen's browser runs there.
+      - {port: 8443, proto: tcp, from: ["role:owner", "host"]}
   egress-proxy:
     id: 10
     kind: lxc
@@ -132,9 +139,9 @@ services:
     kind: lxc
     zone: mgmt
     workload: core
-    description: Prometheus, Grafana and Loki.
-    # Grafana's apt repository (ansible/roles/monitoring).
-    proxy_allow: [apt.grafana.com]
+    description: Prometheus, Alertmanager, Grafana and Loki. Sends alerts to the owner's ntfy topic and pings Healthchecks.io.
+    # Grafana's apt repository, and where alerts go (ansible/roles/monitoring).
+    proxy_allow: [apt.grafana.com, ntfy.sh, hc-ping.com]
     floor: {cores: 1, memory_mib: 1536, disk_gib: 32}
     ports:
       - {port: 3000, proto: tcp, from: ["role:owner"]}

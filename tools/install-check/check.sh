@@ -33,3 +33,14 @@ grep -q "exists; keeping it" /tmp/second.log || fail "a second run keeps the con
 grep -q "^Setup code: $code$" /tmp/second.log || fail "the setup code survives a re-run"
 [ "$(grep -c '^create' /var/log/fake-pct.log)" = 1 ] || fail "a second run creates nothing"
 echo "ok   a second run keeps the container, key and setup code"
+
+# Signing in and choosing a password makes the ntfy topic in the sops file.
+jar=$(mktemp)
+api() { curl -fsSk -b "$jar" -c "$jar" -H 'X-NullBill: 1' -H 'Content-Type: application/json' "$url$1" ${2:+-d "$2"}; }
+api /api/login "{\"secret\": \"$code\"}" >/dev/null || fail "sign in with the setup code"
+api /api/password '{"password": "correct horse battery"}' >/dev/null || { in_ct tail /var/log/nullbill-web.log; fail "choose a password"; }
+topic=$(api /api/state | grep -o '"ntfy_url": "[^"]*"' | cut -d'"' -f4)
+[[ $topic =~ ^https://ntfy\.sh/nullbill-[A-Za-z0-9_-]{24}$ ]] || fail "the page shows an ntfy topic: $topic"
+in_ct grep -q '^ntfy_topic: ENC\[' /var/lib/nullbill/secrets.sops.yaml || fail "the topic is stored encrypted"
+[ "$(in_ct stat -c %a /var/lib/nullbill/secrets.sops.yaml)" = 600 ] || fail "the secrets file is private"
+echo "ok   a password makes the alert topic, kept encrypted in the secrets file"

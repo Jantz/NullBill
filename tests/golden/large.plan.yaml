@@ -10,6 +10,9 @@ host:
   guests_mib: 100352
   # Not assigned to any guest.
   unallocated_mib: 153169
+  # Off. host.console.enabled shows the NullBill page on a monitor plugged into the server.
+  console:
+    enabled: false
 disk:
   storage: local-lvm
   # Includes one golden template per pool.
@@ -264,6 +267,7 @@ flows:
   - role:owner -> router tcp/22
   - service:monitoring -> router tcp/9100
   - role:owner -> nullbill tcp/8443
+  - host -> nullbill tcp/8443
   - service:monitoring -> nullbill tcp/9100
   - zone:mgmt -> egress-proxy tcp/3128
   - zone:build -> egress-proxy tcp/3128

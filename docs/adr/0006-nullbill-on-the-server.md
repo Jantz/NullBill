@@ -78,13 +78,29 @@ links to the PVE UI, Grafana and Forgejo.
 
 **Alerts.** These need no open port and work from a residential IP:
 
-- ntfy.sh, the free public server, with the ntfy phone app. Grafana sends
-  to a random topic the wizard generates. Alerts say what failed and never
-  include secrets or names.
-- Healthchecks.io, free plan. NullBill pings it every 5 minutes. When the
-  server is down or offline, for example after a power cut, Healthchecks
-  alerts through ntfy or email, which a server that is off cannot do for
-  itself.
+- ntfy.sh, the free public server, with the ntfy phone app. Prometheus's
+  Alertmanager sends each alert through a small relay on the monitoring
+  guest to a random topic NullBill makes when the owner sets a password.
+  The page shows the topic and sends a test. Alerts say what failed and
+  never include secrets.
+- Healthchecks.io, free plan, optional. An always-firing Watchdog alert
+  pings it every 5 minutes. When the server is down or offline, for
+  example after a power cut, Healthchecks alerts through its own channels,
+  which a server that is off cannot do for itself. When the host starts
+  again, a HostStarted alert says so.
+
+**On-site screen (optional, owner 2026-11-05).** When `host.console` is
+on, the host runs cage, a Wayland kiosk compositor, with Chromium on tty1,
+showing the NullBill page and nothing else: a managed browser policy blocks
+every other address, DevTools, downloads and printing. Chromium pins the
+page certificate's key, so the self-signed certificate is trusted and no
+other. The keyboard and mouse use the same page and password as remote
+access. Ctrl+Alt+F2 still reaches PVE's own text console as the way in when
+everything else is broken. It costs about 512 MiB of host memory, so it is
+off by default; the plan adds that to the host reserve and fails when every
+GPU is passed through to a VM. The alternative of a VM with a passed-through
+GPU would take the GPU and more memory; a full desktop on the host would
+add far more packages to the one machine that must not break.
 
 **Agents.**
 

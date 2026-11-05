@@ -49,7 +49,7 @@ form { display: grid; gap: 10px; }
 fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 6px; }
 legend { font-weight: 600; margin-bottom: 4px; }
 label { display: block; }
-input[type=password], input[type=email] {
+input[type=password], input[type=email], input[type=url] {
   width: 100%;
   padding: 10px;
   border: 1px solid var(--line);

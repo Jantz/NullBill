@@ -44,6 +44,7 @@
       <form id="choices-form">
         <fieldset id="workloads"></fieldset>
         <label><input type="checkbox" id="backups"> Nightly backups (needs a second disk to survive a disk failure)</label>
+        <label><input type="checkbox" id="console"> On-site screen: show this page on a monitor plugged into the server, with its keyboard and mouse (uses about 512 MB of memory)</label>
         <label>Your Tailscale login (email)
           <input id="owner-login" type="email" required>
         </label>
@@ -59,7 +60,21 @@
     </section>
 
     <section>
-      <h2>5. Build it</h2>
+      <h2>5. Get alerts on your phone</h2>
+      <p>Install the free <a href="https://ntfy.sh/" rel="noopener noreferrer" target="_blank">ntfy</a> app and subscribe to this topic. It needs no account. Anyone who knows the topic can read your alerts, so keep it to yourself.</p>
+      <p><code id="ntfy-topic"></code></p>
+      <form id="alerts-form">
+        <label>Optional: a <a href="https://healthchecks.io/" rel="noopener noreferrer" target="_blank">Healthchecks.io</a> ping URL. Make a free check with a 10 minute period and 10 minute grace. It tells you when the server goes silent, for example in a power cut.
+          <input id="healthchecks-url" type="url" placeholder="https://hc-ping.com/...">
+        </label>
+        <button type="submit">Save</button>
+        <button type="button" id="test-alerts" class="secondary">Send a test alert</button>
+        <span id="alerts-result"></span>
+      </form>
+    </section>
+
+    <section>
+      <h2>6. Build it</h2>
       <p>Each step can be run again safely. If one fails, fix the cause and press the button again.</p>
       <button data-action="apply">Run setup</button>
       <button data-action="verify" class="secondary">Run checks</button>

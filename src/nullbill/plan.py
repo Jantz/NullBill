@@ -252,7 +252,26 @@ def _reserve(model: dict, facts: dict) -> tuple[int, str]:
         # PVE's installer caps the ARC at 10% of memory.
         mib += facts["memory_mib"] // 10
         why += " Includes ZFS's cache, 10% of memory."
+    if host["console"]["enabled"]:
+        mib += host["console"]["memory_mib"]
+        why += " Includes the on-site screen."
     return mib, why
+
+
+def _console(model: dict, facts: dict, gpus: dict, errors: _Errors) -> Any:
+    """The on-site screen: a kiosk on the host's display, if one is left to it."""
+    if not model["host"]["console"]["enabled"]:
+        return Note({"enabled": False}, "Off. host.console.enabled shows the NullBill page on a monitor plugged into the server.")
+    integrated = [g["name"] for g in facts["gpus"] if g["integrated"]]
+    shared = [entry.value["name"] for entry in gpus.values() if entry.value["owner"] == "host-shared"]
+    if not integrated and not shared:
+        errors.append("host.console: every GPU is passed through to a VM, so nothing is left to drive a screen")
+        return None
+    screen = integrated[0] if integrated else shared[0]
+    return Note(
+        {"enabled": True, "screen": screen},
+        "Plug the monitor, keyboard and mouse into the server; this GPU drives the screen. Ctrl+Alt+F2 opens the PVE text console.",
+    )
 
 
 def _disks(model: dict, facts: dict, errors: _Errors, want_pbs: bool) -> tuple[dict, str | None]:
@@ -382,6 +401,9 @@ def build_plan(model: dict, facts: dict) -> dict:
     disk_section, pbs = _disks(model, facts, errors, want_pbs="pbs" in planned)
     errors.raise_if_any()
 
+    console = _console(model, facts, gpu_section, errors)
+    errors.raise_if_any()
+
     zones = _zones(model, planned)
     guests = {}
     vmid_base = model["network"]["vmid_base"]
@@ -411,7 +433,7 @@ def build_plan(model: dict, facts: dict) -> dict:
     host_class = "small" if n_gpus == 0 else "mid" if n_gpus == 1 else "large"
     plan: dict[str, Any] = {
         "class": Note(host_class, "Follows the discrete GPU count: none, one, several."),
-        "host": {"threads": facts["cpu"]["threads"], **capacity["memory"]},
+        "host": {"threads": facts["cpu"]["threads"], **capacity["memory"], "console": console},
         "disk": capacity["disk"],
         "domain": model["network"]["domain"],
         "zones": Note(zones, "Uplink-less bridges; the router guest routes between them."),

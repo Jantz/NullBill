@@ -14,7 +14,13 @@ vars=$(mktemp)
 python3 - "$vars" <<'PY'
 import json, sys
 read = lambda f: open(f"/tmp/pki/{f}").read()
-json.dump({"monitoring_shipper_ca": read("shipper-ca.crt")}, open(sys.argv[1], "w"))
+json.dump({
+    "monitoring_shipper_ca": read("shipper-ca.crt"),
+    # A stand-in for ntfy.sh and Healthchecks.io, started below.
+    "monitoring_ntfy_url": "http://127.0.0.1:8099/nullbill-topic",
+    "monitoring_healthchecks_url": "http://127.0.0.1:8099/ping/check",
+    "monitoring_watchdog_interval": "1m",
+}, open(sys.argv[1], "w"))
 PY
 converge monitoring.yml -e monitoring_manage_services=false -e "@$vars"
 
@@ -22,12 +28,42 @@ converge monitoring.yml -e monitoring_manage_services=false -e "@$vars"
   || { cat /tmp/rules.log; fail "alert rule unit tests"; }
 pass "every alert fires on the series it is meant for"
 
+test "$(stat -c %a /etc/nullbill/alert-relay.json)" = 600 || fail "alert relay configuration is root only"
+amtool check-config /etc/prometheus/alertmanager.yml >/dev/null || fail "alertmanager configuration"
+
+# The stand-in records each POST it gets: path, then the ntfy headers, body.
+cat >/tmp/receiver.py <<'PY'
+import json
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+class H(BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get("Content-Length", 0))).decode()
+        keep = {k: self.headers[k] for k in ("Title", "Priority", "Tags") if k in self.headers}
+        with open("/tmp/received.jsonl", "a") as f:
+            f.write(json.dumps({"path": self.path, "headers": keep, "body": body}) + "\n")
+        self.send_response(200)
+        self.end_headers()
+
+HTTPServer(("127.0.0.1", 8099), H).serve_forever()
+PY
+python3 /tmp/receiver.py >/tmp/receiver.log 2>&1 &
+
 # No init in the container: start each daemon the way its unit does.
 # shellcheck disable=SC1091 # written by the role
 . /etc/default/prometheus
 # shellcheck disable=SC2086 # ARGS is a flag list, as in the unit
 setpriv --reuid=prometheus --regid=prometheus --init-groups prometheus \
   --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/tmp/prom $ARGS >/tmp/prometheus.log 2>&1 &
+# shellcheck disable=SC1091 # written by the role
+. /etc/default/prometheus-alertmanager
+# shellcheck disable=SC2086 # ARGS is a flag list, as in the unit
+setpriv --reuid=prometheus --regid=prometheus --init-groups prometheus-alertmanager \
+  --config.file=/etc/prometheus/alertmanager.yml --storage.path=/tmp/am $ARGS >/tmp/alertmanager.log 2>&1 &
+# As the unit does: a copy of the configuration only the relay can read.
+install -d -m 0700 -o nobody /tmp/creds
+install -m 0400 -o nobody /etc/nullbill/alert-relay.json /tmp/creds/config
+setpriv --reuid=nobody --regid=nogroup --clear-groups /usr/local/bin/nb-alert-relay /tmp/creds/config >/tmp/relay.log 2>&1 &
 setpriv --reuid=loki --regid=nogroup --init-groups loki -config.file=/etc/loki/config.yml >/tmp/loki.log 2>&1 &
 nginx
 setpriv --reuid=grafana --regid=grafana --init-groups grafana server --homepath=/usr/share/grafana \
@@ -43,6 +79,27 @@ curl -fsS http://127.0.0.1:9090/api/v1/rules | grep -q CertificateExpiresSoon ||
 # The operator queries it from another guest; the guest firewall limits who.
 curl -fsS "http://$(hostname -i | cut -d' ' -f1):9090/-/ready" >/dev/null || fail "prometheus answers on the guest address"
 pass "prometheus is up on the guest address with the rules loaded"
+
+wait_for http://127.0.0.1:9093/-/ready || { cat /tmp/alertmanager.log; fail "alertmanager ready"; }
+received() { # received PATH: wait until the stand-in got a POST to PATH
+  for _ in $(seq 90); do grep -qF "\"path\": \"$1\"" /tmp/received.jsonl 2>/dev/null && return 0; sleep 1; done
+  return 1
+}
+received /ping/check || { tail /tmp/alertmanager.log /tmp/relay.log; fail "Watchdog pings Healthchecks.io"; }
+pass "Watchdog reaches Healthchecks.io through Alertmanager and the relay"
+curl -fsS -H 'Content-Type: application/json' http://127.0.0.1:9093/api/v2/alerts -d \
+  '[{"labels": {"alertname": "SecurityUpdatesPending", "instance": "forgejo:9100", "severity": "page"}, "annotations": {"summary": "forgejo:9100 has had security updates waiting"}}]' \
+  || fail "post an alert to alertmanager"
+received /nullbill-topic || { tail /tmp/alertmanager.log /tmp/relay.log; fail "a paging alert reaches ntfy"; }
+python3 - <<'PY' || fail "the ntfy message carries title, priority and summary"
+import json
+sent = [json.loads(line) for line in open("/tmp/received.jsonl")]
+msg = next(m for m in sent if m["path"] == "/nullbill-topic")
+assert msg["headers"] == {"Title": "NullBill: SecurityUpdatesPending", "Priority": "high", "Tags": "warning"}, msg
+assert msg["body"] == "forgejo:9100 has had security updates waiting", msg
+PY
+if curl -fsS -m 3 "http://$(hostname -i | cut -d' ' -f1):9093/-/ready" >/dev/null 2>&1; then fail "alertmanager answers on the guest address"; fi
+pass "a paging alert reaches the owner's ntfy topic with high priority; alertmanager is local"
 
 wait_for http://127.0.0.1:3101/ready || { tail -20 /tmp/loki.log; fail "loki ready"; }
 echo "127.0.0.1 monitoring.nullbill.internal" >>/etc/hosts

@@ -220,3 +220,21 @@ def test_small_hosts_keep_less_for_pve_and_zfs_adds_its_cache(facts):
     assert plan["host"]["reserve_mib"] == 3072 + small["memory_mib"] // 10
     mid = strip_notes(plan_for(facts("mid"), fixture_config("mid")))
     assert mid["host"]["reserve_mib"] == 4096
+
+
+def test_on_site_screen_costs_host_memory_and_needs_a_gpu_left_to_the_host(facts):
+    small = facts("small")
+    config = {**fixture_config("small"), "host": {"console": {"enabled": True}}}
+    plan = plan_for(small, config)
+    assert plan["host"]["reserve_mib"].value == 3072 + 512
+    integrated = next(g["name"] for g in small["gpus"] if g["integrated"])
+    assert plan["host"]["console"].value == {"enabled": True, "screen": integrated}
+    assert strip_notes(plan_for(small, fixture_config("small")))["host"]["console"] == {"enabled": False}
+    # Every GPU passed through to a VM leaves nothing to drive the screen.
+    large = facts("large")
+    large["gpus"] = [g for g in large["gpus"] if not g["integrated"]]
+    base = fixture_config("large")
+    workloads = [w for w in base["intent"]["workloads"] if w != "inference"]
+    gpus = {g["pci"]: {"owner": "vm:windows-dev"} for g in large["gpus"]}
+    config = {**base, "intent": {"workloads": workloads}, "gpus": gpus, "host": {"console": {"enabled": True}}}
+    assert "host.console: every GPU is passed through to a VM, so nothing is left to drive a screen" in errors_of(large, config)
