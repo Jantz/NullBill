@@ -106,12 +106,17 @@
     dest: /usr/local/sbin/nb-pve-api-cert
     mode: "0755"
 
+- name: Is PVE installed
+  ansible.builtin.stat:
+    path: /usr/bin/pvenode
+  register: host_baseline_pvenode
+
 - name: API certificate that also names the mgmt address
   ansible.builtin.command:
     argv: [/usr/local/sbin/nb-pve-api-cert, "{{ host_baseline_api_name }}", "{{ host_baseline_api_address }}"]
   register: host_baseline_api_cert
   changed_when: host_baseline_api_cert.stdout == "issued"
-  when: host_baseline_api_name | length > 0
+  when: host_baseline_api_name | length > 0 and host_baseline_pvenode.stat.exists
 
 - name: Run auditd
   ansible.builtin.service:

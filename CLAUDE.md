@@ -7,7 +7,7 @@ Guidance for Claude sessions working in this repository.
 NullBill turns a spare x86 machine running Proxmox VE into a self-hosted dev
 server from one declarative config. `nullbill` runs on a controller the owner
 names and reaches the host over SSH; it never runs on the host. Only `probe`,
-`plan`, `apply` (stages so far: render, host, tofu, router, proxy, updates, verify; the rest is #22) and
+`plan`, `apply` (stages so far: render, host, tofu, router, proxy, updates, ca, postgres, monitoring, forgejo, ci, agents, logs, verify; backups and the VPN are #22) and
 `verify` exist.
 
 ## Layout

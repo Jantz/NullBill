@@ -35,13 +35,13 @@ openssl req -newkey rsa:2048 -nodes -subj "/CN=$node.example.internal" \
 openssl x509 -req -in /tmp/node.csr -CA /etc/pve/pve-root-ca.pem -CAkey /etc/pve/priv/pve-root-ca.key -CAcreateserial \
   -CAserial /etc/pve/priv/pve-root-ca.srl -days 730 -out "/etc/pve/nodes/$node/pve-ssl.pem" \
   -extfile <(echo "subjectAltName=IP:127.0.0.1,IP:::1,DNS:localhost,IP:192.0.2.10,DNS:$node,DNS:$node.example.internal") 2>/dev/null
-cat >/usr/local/bin/pvenode <<'SH'
+cat >/usr/bin/pvenode <<'SH'
 #!/bin/sh
 [ "$1 $2" = "cert set" ] || exit 2
 cp "$3" "/etc/pve/nodes/$(hostname)/pveproxy-ssl.pem"
 cp "$4" "/etc/pve/nodes/$(hostname)/pveproxy-ssl.key"
 SH
-chmod +x /usr/local/bin/pvenode
+chmod +x /usr/bin/pvenode
 echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExampleExample test" >/root/.ssh/authorized_keys
 echo "deb https://enterprise.proxmox.com/debian/pve bookworm pve-enterprise" >/etc/apt/sources.list.d/pve-enterprise.list
 echo "deb https://enterprise.proxmox.com/debian/ceph-quincy bookworm enterprise" >/etc/apt/sources.list.d/ceph.list

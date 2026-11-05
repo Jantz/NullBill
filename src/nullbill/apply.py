@@ -22,6 +22,7 @@ from typing import Protocol
 
 from nullbill.artifacts import write_build
 from nullbill.errors import NullBillError
+from nullbill.flows import mac
 from nullbill.home import REPO_ROOT
 from nullbill.model import node_exporter_guest
 from nullbill.probe import Runner
@@ -241,14 +242,39 @@ def stage_tofu(ctx: Context) -> None:
         if rc != 0:
             raise ApplyError("tofu", f"{' '.join(argv[:2])} failed (exit {rc})")
     # The host reaches the zones through the router, not its LAN gateway.
+    host_files(ctx, "tofu", "/etc/systemd/system", {ROUTES_UNIT: routes_unit(ctx)})
+    host_out(ctx, "tofu", f"systemctl daemon-reload && systemctl enable -q {ROUTES_UNIT} && systemctl restart {ROUTES_UNIT}")
+    mgmt_leg(ctx)
+
+
+def routes_unit(ctx: Context) -> str:
     route = f"{ctx.model['network']['base']} via {ctx.bare['zones']['mgmt']['gateway']}"
-    unit = (
+    return (
         "[Unit]\nDescription=NullBill zone route via the router\nAfter=network-online.target\nWants=network-online.target\n\n"
         f"[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/sbin/ip route replace {route}\n\n"
         "[Install]\nWantedBy=multi-user.target\n"
     )
-    host_files(ctx, "tofu", "/etc/systemd/system", {ROUTES_UNIT: unit})
-    host_out(ctx, "tofu", f"systemctl daemon-reload && systemctl enable -q {ROUTES_UNIT} && systemctl restart {ROUTES_UNIT}")
+
+
+def mgmt_leg(ctx: Context) -> None:
+    """install.sh gives the nullbill container a LAN leg only. Its mgmt leg
+    (net1, behind the PVE firewall) reaches monitoring for the status view
+    and serves the page to the on-site screen and over the VPN; its LAN
+    default route stays, and the zones route through the router."""
+    guest = ctx.bare["guests"]["nullbill"]
+    vmid, ip = guest["vmid"], guest["ip"]
+    mgmt = ctx.bare["zones"]["mgmt"]
+    config = host_out(ctx, "tofu", f"pct config {vmid}")
+    if "hostname: nullbill" not in config:
+        raise ApplyError("tofu", f"container {vmid} is not NullBill's; the plan expects install.sh's container there")
+    hwaddr = mac(ctx.model["zones"]["mgmt"]["index"], ctx.model["services"]["nullbill"]["id"])
+    want = f"name=eth1,bridge={mgmt['bridge']},firewall=1,hwaddr={hwaddr},ip={ip}/{mgmt['subnet'].split('/')[1]},type=veth"
+    current = next((line.split(": ", 1)[1] for line in config.splitlines() if line.startswith("net1: ")), "")
+    if set(current.lower().split(",")) != set(want.lower().split(",")):
+        host_out(ctx, "tofu", f"pct set {vmid} --net1 {shlex.quote(want)}")
+        ctx.say(f"tofu: gave the nullbill container its mgmt leg at {ip}")
+    install = f"cat > /etc/systemd/system/{ROUTES_UNIT} && systemctl daemon-reload && systemctl enable -q {ROUTES_UNIT}"
+    guest_out(ctx, "tofu", "nullbill", ["sh", "-c", f"{install} && systemctl restart {ROUTES_UNIT}"], stdin=routes_unit(ctx))
 
 
 def tofu_output(ctx: Context, stage: str, name: str) -> str:

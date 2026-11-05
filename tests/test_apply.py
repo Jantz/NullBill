@@ -42,6 +42,8 @@ class FakeReach:
         self.fail_local = fail_local
         self.fresh = True
         self.templates = set()
+        self.nets = {0: "name=eth0,bridge=vmbr0,hwaddr=02:4E:42:00:00:99,ip=dhcp,type=veth"}
+        self.nullbill = []
 
     def host(self, command, stdin=None):
         self.calls.append(("host", command))
@@ -68,6 +70,11 @@ class FakeReach:
             return 0, answers[command], ""
         if command.startswith("systemctl "):
             return 0, "", ""
+        if command.startswith("pct config "):
+            return 0, "hostname: nullbill\n" + "".join(f"net{n}: {v}\n" for n, v in sorted(self.nets.items())), ""
+        if command.startswith("pct set 2002 --net1 "):
+            self.nets[1] = shlex.split(command)[4]
+            return 0, "", ""
         if command.startswith("qm config "):
             return 0, "template: 1\n" if command.split()[2] in self.templates else "name: x\n", ""
         if command.startswith("qm shutdown "):
@@ -81,6 +88,9 @@ class FakeReach:
 
     def guest(self, vmid, argv):
         """Containers, reached with pct exec: step-ca answers for its CA."""
+        if vmid == "2002" and argv[:2] == ["sh", "-c"]:
+            self.nullbill.append(argv[2])
+            return 0, "", ""
         if argv == ["cat", "/etc/step-ca/certs/root_ca.crt"]:
             return 0, "-----BEGIN CERTIFICATE-----\nroot\n-----END CERTIFICATE-----\n", ""
         if argv[:5] == ["env", "STEPPATH=/etc/step-ca", "step", "ca", "token"]:
@@ -469,6 +479,19 @@ def test_tofu_stage_runs_init_and_apply_with_everything_in_the_environment(ctx):
     assert "ExecStart=/sbin/ip route replace 10.42.0.0/16 via 10.42.1.1" in unit
 
 
+def test_tofu_stage_gives_the_nullbill_container_its_mgmt_leg_once(ctx):
+    c = ctx("small")
+    apply.stage_tofu(c)
+    assert c.reach.nets[1] == "name=eth1,bridge=vmbr101,firewall=1,hwaddr=02:4e:42:00:01:02,ip=10.42.1.2/24,type=veth"
+    assert c.reach.nets[0].startswith("name=eth0,bridge=vmbr0,")
+    assert "systemctl restart nullbill-routes.service" in c.reach.nullbill[0]
+    # PVE prints the MAC in capitals; the leg is kept.
+    c.reach.nets[1] = c.reach.nets[1].replace("02:4e:42:00:01:02", "02:4E:42:00:01:02")
+    c.reach.calls.clear()
+    apply.stage_tofu(c)
+    assert not [call for call in c.reach.calls if call[0] == "host" and call[1].startswith("pct set")]
+
+
 def test_tofu_token_is_kept_and_remade_when_the_host_lost_it(ctx):
     c = ctx("small")
     first = apply.api_token(c)
@@ -492,3 +515,40 @@ def test_windows_needs_an_iso_before_tofu(ctx, monkeypatch):
     with pytest.raises(ApplyError, match="no Windows ISO"):
         apply.stage_tofu(c)
     assert [call for call in c.reach.calls if call[0] == "local"] == []
+
+
+def test_a_full_apply_runs_every_stage_against_the_stand_ins(ctx, monkeypatch):
+    monkeypatch.setattr(apply, "run_verify", lambda *a: [Result("PASS", "everything")])
+    c = ctx("small")
+    c.secrets.set("ntfy_topic", "nullbill-topic")
+    c.secrets.set("claude_oauth_token", "sk-ant-oat01-token")
+    (c.home / "web").mkdir()
+    run_apply(c)
+    ran = [call[1] for call in c.reach.calls if call[0] == "playbook"]
+    for playbook in (
+        "host-baseline.yml",
+        "console.yml",
+        "router.yml",
+        "egress-proxy.yml",
+        "updates.yml",
+        "step-ca.yml",
+        "tls-cert.yml",
+        "postgres.yml",
+        "monitoring.yml",
+        "forgejo.yml",
+        "ci-runner.yml",
+        "ci-runner-seal.yml",
+        "runner-dispatcher.yml",
+        "operator.yml",
+        "agent-ssh.yml",
+        "log-shipper.yml",
+    ):
+        assert playbook in ran, playbook
+    assert ran.index("forgejo.yml") < ran.index("runner-dispatcher.yml") and ran.index("postgres.yml") < ran.index("forgejo.yml")
+    assert c.log[-1] == "PASS     everything"
+    # Again: nothing is baked or made twice.
+    secrets = dict(c.secrets.data)
+    c.reach.calls.clear()
+    run_apply(c)
+    assert "ci-runner.yml" not in [call[1] for call in c.reach.calls if call[0] == "playbook"]
+    assert c.secrets.data == secrets
