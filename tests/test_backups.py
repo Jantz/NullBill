@@ -14,6 +14,7 @@ from nullbill.model import build_model
 from nullbill.plan import build_plan
 from nullbill.render import strip_notes
 from nullbill.tofu import render_tofu
+from nullbill.verify import run_verify
 
 ROLE_DEFAULTS = Path(__file__).parents[1] / "ansible/roles/pbs/defaults/main.yml"
 TARGET = "root@pve.example.internal"
@@ -133,3 +134,18 @@ def test_restore_command_runs_in_bash(tmp_path, monkeypatch):
     env = {"PATH": f"{bindir}:/usr/bin:/bin"}
     done = subprocess.run(["bash", "-c", command], capture_output=True, text=True, env=env)
     assert (done.returncode, done.stdout) == (0, "forgejo\n"), done.stderr
+
+
+def test_backups_can_be_switched_off(facts):
+    config = fixture_config("mid") | {"services": {"pbs": {"enabled": False}}}
+    model = build_model(config)
+    plan = strip_notes(build_plan(model, facts("mid")))
+    assert "pbs" not in plan["guests"]
+    assert plan["backups"] == {"target": None, "status": "off"}
+    assert "pbs" not in {d["use"] for d in plan["disks"].values()}
+    assert not backups.enabled(plan)
+    config = json.loads(render_tofu(plan, model)["main.tf.json"])
+    assert "proxmox_storage_pbs" not in config["resource"]
+    assert not any(v.startswith("pbs_") for v in config["variable"])
+    results = run_verify(plan, model, None, lambda *a: (1, "", ""))
+    assert results[0].line() == "DEGRADED backups: switched off; nothing is backed up"

@@ -238,7 +238,7 @@ def _size(model: dict, planned: dict, facts: dict, errors: _Errors) -> tuple[dic
     return sizes, pool_counts, {"memory": memory, "disk": disk_section}
 
 
-def _disks(model: dict, facts: dict, errors: _Errors) -> tuple[dict, str | None]:
+def _disks(model: dict, facts: dict, errors: _Errors, want_pbs: bool) -> tuple[dict, str | None]:
     pins = model.get("disks", {})
     for disk_id in sorted(set(pins) - {d["id"] for d in facts["disks"]}):
         errors.append(f"disks.{disk_id}: no such disk in the probe")
@@ -256,6 +256,8 @@ def _disks(model: dict, facts: dict, errors: _Errors) -> tuple[dict, str | None]
             errors.append(f"disks.{disk['id']}: no /dev/disk/by-id name; refusing to plan an unstable disk name")
         if pin and pin["use"] == "ignore":
             section[disk["id"]] = Note({**base, "use": "ignore"}, "Pinned: left alone.")
+        elif pin and pin["use"] == "pbs" and not want_pbs:
+            errors.append(f"disks.{disk['id']}: pinned for PBS, but PBS is switched off")
         elif pin and pin["use"] == "pbs":
             if disk["signatures"] and not pin.get("wipe"):
                 errors.append(f"disks.{disk['id']}: carries {', '.join(disk['signatures'])}; set wipe: true to let apply format it")
@@ -267,12 +269,20 @@ def _disks(model: dict, facts: dict, errors: _Errors) -> tuple[dict, str | None]
         elif disk["signatures"]:
             why = "Carries signatures; only an explicit pin with wipe: true changes that."
             section[disk["id"]] = Note({**base, "use": "untouched"}, why)
-        elif pbs is None and "pbs" not in {p["use"] for p in pins.values()}:
+        elif want_pbs and pbs is None and "pbs" not in {p["use"] for p in pins.values()}:
             pbs = disk["id"]
             section[disk["id"]] = Note({**base, "use": "pbs"}, "Blank, so it becomes the PBS datastore.")
         else:
             section[disk["id"]] = Note({**base, "use": "unused"}, "Blank and not needed.")
     return section, pbs
+
+
+def _backups(planned: dict, pbs: str | None) -> Note:
+    if "pbs" not in planned:
+        return Note({"target": None, "status": "off"}, "PBS is switched off (services.pbs.enabled: false); nothing is backed up.")
+    if pbs:
+        return Note({"target": f"pbs datastore on {pbs}", "status": "ok"}, "PBS on its own disk.")
+    return Note({"target": None, "status": "DEGRADED"}, "No separate disk for PBS; add a blank disk or pin one.")
 
 
 def _flows(model: dict, planned: dict, zones: set[str]) -> list[str]:
@@ -337,7 +347,7 @@ def build_plan(model: dict, facts: dict) -> dict:
         errors.append("intent asks for inference, but no host-shared GPU budgets VRAM to it")
     engine = _engine(model, inference_gpus) if "inference" in planned else None
     sizes, counts, capacity = _size(model, planned, facts, errors)
-    disk_section, pbs = _disks(model, facts, errors)
+    disk_section, pbs = _disks(model, facts, errors, want_pbs="pbs" in planned)
     errors.raise_if_any()
 
     zones = _zones(model, planned)
@@ -375,11 +385,7 @@ def build_plan(model: dict, facts: dict) -> dict:
         "gpus": gpu_section or Note({}, "No discrete GPU."),
         "inference": {"engine": engine} if engine else Note({}, "Not planned."),
         "disks": disk_section,
-        "backups": (
-            Note({"target": f"pbs datastore on {pbs}", "status": "ok"}, "PBS on its own disk.")
-            if pbs
-            else Note({"target": None, "status": "DEGRADED"}, "No separate disk for PBS; add a blank disk or pin one.")
-        ),
+        "backups": _backups(planned, pbs),
         "flows": Note(_flows(model, planned, set(zones)), "Allowed flows; everything else is denied."),
         "people": {name: p["role"] for name, p in model["people"].items()},
     }
