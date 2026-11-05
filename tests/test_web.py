@@ -348,3 +348,33 @@ def test_status_reads_prometheus_on_the_monitoring_guest(site):
     app.fetch = unreachable
     assert client.call("/api/status")[1] == {"monitoring": "unreachable", "error": "no route to host"}
     assert Client(client.port, app.home / "web" / "cert.pem").call("/api/status")[0] == 401
+
+
+def test_closing_the_lan_needs_the_page_over_tailscale_and_then_shuts_the_lan_out(site, monkeypatch):
+    from nullbill import lan
+
+    app, client = site
+    sign_in(app, client)
+    vpn = {"address": "10.42.6.11"}
+    monkeypatch.setattr(app, "network", lambda: ("10.42.0.0/16", vpn["address"]))
+    state = client.call("/api/state")[1]["lan"]
+    assert state == {"state": "open", "via_vpn": False, "minutes": 15}
+    status, job = client.call("/api/jobs", {"action": "close-lan"})
+    assert status == 200 and job["args"] == ["apply", "--close-lan"]
+    assert wait(client, job["id"])["state"] == "done"
+    # Keep it closed counts only from the vpn guest's address.
+    lan.write(app.home, lan.CLOSING, 0)
+    status, data = client.call("/api/jobs", {"action": "keep-lan-closed"})
+    assert status == 400 and "opened over Tailscale" in data["error"]
+    vpn["address"] = "127.0.0.1"  # the test client stands in for the vpn guest
+    assert client.call("/api/state")[1]["lan"]["via_vpn"] is True
+    status, job = client.call("/api/jobs", {"action": "keep-lan-closed"})
+    assert status == 200 and job["args"] == ["apply", "--confirm-lan"]
+    wait(client, job["id"])
+    # Closed: a client outside the NullBill network gets nothing, not even the page.
+    lan.write(app.home, lan.CLOSED)
+    status, body = client.call("/")
+    assert status == 403 and "open it over Tailscale" in body
+    assert client.call("/api/login", {"secret": "x"})[0] == 403
+    monkeypatch.setattr(app, "network", lambda: ("127.0.0.0/8", "127.0.0.1"))
+    assert client.call("/api/state")[1]["lan"]["state"] == "closed"

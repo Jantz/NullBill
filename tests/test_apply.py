@@ -4,7 +4,7 @@ import shlex
 import pytest
 from conftest import fixture_config
 
-from nullbill import apply, backups
+from nullbill import apply, backups, lan
 from nullbill.apply import ApplyError, Context, connection, run_apply
 from nullbill.artifacts import render_all
 from nullbill.errors import NullBillError
@@ -49,6 +49,7 @@ class FakeReach:
         self.backup_disk = None
         self.pbs_fingerprint = "aa:bb:cc"
         self.backed_up = set()
+        self.revert = None  # the LAN revert timer: None, "armed" or "gone"
         self.timeouts = []
 
     def host(self, command, stdin=None, timeout=900):
@@ -74,7 +75,17 @@ class FakeReach:
         }
         if command in answers:
             return 0, answers[command], ""
-        if command.startswith("systemctl "):
+        if command == lan.ARMED:
+            return 0, ("armed" if self.revert == "armed" else "gone") + "\n", ""
+        if command == lan.arm_command():
+            self.revert = "armed"
+            return 0, "", ""
+        if command.startswith(lan.DISARM):
+            self.revert = None
+            return 0, "", ""
+        if command == "cat /etc/ssh/ssh_host_ed25519_key.pub":
+            return 0, "ssh-ed25519 AAAAhostkey root@pve\n", ""
+        if command.startswith(("systemctl ", "mkdir -p ")):
             return 0, "", ""
         if command.startswith("pct config "):
             return 0, "hostname: nullbill\n" + "".join(f"net{n}: {v}\n" for n, v in sorted(self.nets.items())), ""
@@ -214,6 +225,8 @@ def test_host_stage_runs_the_baseline_then_installs_the_lan_open_firewall(ctx):
     assert reach.calls[0][2] == {"pve": connection(c, None)}
     expected = {f"/etc/pve/firewall/{rel.removeprefix('firewall/')}" for rel in c.files if rel.startswith("firewall/")}
     expected.discard("/etc/pve/firewall/cluster-lan-open.fw")
+    # The open variant, kept on the host for the timer that undoes a close.
+    expected.add(lan.SAVED_OPEN)
     assert set(reach.files) == expected
     assert reach.files["/etc/pve/firewall/cluster.fw"] == c.files["firewall/cluster-lan-open.fw"]
     assert reach.files["/etc/pve/firewall/2017.fw"] == c.files["firewall/2017.fw"]
@@ -547,14 +560,63 @@ def test_host_stage_rewrites_only_what_changed(ctx):
     assert written and not [line for line in c.log if "wrote" in line]
 
 
-def test_close_lan_installs_the_closed_cluster_firewall(ctx):
+def test_close_lan_arms_the_undo_before_closing_and_stays_closed_once_kept(ctx, tmp_path):
     reach = FakeReach()
+    known = tmp_path / "ssh" / "known_hosts"
     apply.stage_host(ctx(reach=reach))
-    c = ctx(reach=reach, close_lan=True)
+    assert lan.state(tmp_path) == lan.OPEN and reach.revert is None
+    c = ctx(reach=reach, close_lan=True, known_hosts=known)
     apply.stage_host(c)
-    assert reach.files["/etc/pve/firewall/cluster.fw"] == c.files["firewall/cluster.fw"]
-    assert "[IPSET management]" in reach.files["/etc/pve/firewall/cluster.fw"]
-    assert "wrote /etc/pve/firewall/cluster.fw" in "\n".join(c.log)
+    cluster = "/etc/pve/firewall/cluster.fw"
+    assert reach.files[cluster] == c.files["firewall/cluster.fw"]
+    assert "[IPSET management]" in reach.files[cluster]
+    assert reach.files[lan.SAVED_OPEN] == c.files["firewall/cluster-lan-open.fw"]
+    host = [call[1] for call in reach.calls if call[0] == "host"]
+    arm = host.index(lan.arm_command())
+    closing = max(i for i, cmd in enumerate(host) if "/etc/pve/firewall/cluster.fw" in cmd)
+    assert arm < closing, "the undo must be armed before the LAN closes"
+    # The controller can reach the host at its mgmt address from now on.
+    assert known.read_text() == "10.42.1.254 ssh-ed25519 AAAAhostkey\n"
+    assert lan.state(tmp_path) == lan.CLOSING
+    assert "open https://10.42.1.2:8443 over Tailscale" in "\n".join(c.log)
+    # Another run, without --close-lan, keeps it closed while the timer runs.
+    again = ctx(reach=reach)
+    apply.stage_host(again)
+    assert reach.files[cluster] == c.files["firewall/cluster.fw"]
+    # Kept closed: the timer stops, and later runs keep it closed.
+    apply.confirm_lan(again)
+    assert reach.revert is None and lan.state(tmp_path) == lan.CLOSED
+    apply.stage_host(ctx(reach=reach))
+    assert reach.files[cluster] == c.files["firewall/cluster.fw"]
+    # --open-lan gives the LAN its access back.
+    apply.stage_host(ctx(reach=reach, open_lan=True))
+    assert reach.files[cluster] == c.files["firewall/cluster-lan-open.fw"]
+    assert lan.state(tmp_path) == lan.OPEN
+
+
+def test_a_close_nobody_keeps_is_undone_and_the_controller_follows(ctx, tmp_path):
+    reach = FakeReach()
+    apply.stage_host(ctx(reach=reach, close_lan=True, known_hosts=tmp_path / "known_hosts"))
+    reach.revert = "gone"  # the host restored the open file by itself
+    with pytest.raises(NullBillError, match="too late"):
+        apply.confirm_lan(ctx(reach=reach))
+    assert lan.state(tmp_path) == lan.OPEN
+    c = ctx(reach=reach)
+    apply.stage_host(c)
+    assert reach.files["/etc/pve/firewall/cluster.fw"] == c.files["firewall/cluster-lan-open.fw"]
+
+
+def test_confirm_needs_a_close_first(ctx):
+    with pytest.raises(NullBillError, match="not being closed"):
+        apply.confirm_lan(ctx())
+
+
+def test_verify_reports_an_open_lan_as_degraded_not_failed(ctx, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(apply, "run_verify", lambda *a, **kw: seen.update(kw) or [Result("PASS", "x")])
+    c = ctx()
+    apply.stage_verify(c)
+    assert seen == {"lan_state": "open", "lan_host": "pve.example.internal"}
 
 
 def test_a_failed_playbook_stops_apply_before_later_stages(ctx):
@@ -566,7 +628,7 @@ def test_a_failed_playbook_stops_apply_before_later_stages(ctx):
 
 
 def test_verify_stage_fails_on_any_fail(ctx, monkeypatch):
-    monkeypatch.setattr(apply, "run_verify", lambda *a: [Result("PASS", "a"), Result("FAIL", "b", "closed")])
+    monkeypatch.setattr(apply, "run_verify", lambda *a, **kw: [Result("PASS", "a"), Result("FAIL", "b", "closed")])
     c = ctx()
     with pytest.raises(ApplyError, match="apply stopped at verify: 1 checks failed"):
         run_apply(c, only="verify")
@@ -654,7 +716,7 @@ def test_windows_needs_an_iso_before_tofu(ctx, monkeypatch):
 
 
 def test_a_full_apply_runs_every_stage_against_the_stand_ins(ctx, monkeypatch):
-    monkeypatch.setattr(apply, "run_verify", lambda *a: [Result("PASS", "everything")])
+    monkeypatch.setattr(apply, "run_verify", lambda *a, **kw: [Result("PASS", "everything")])
     c = ctx("small")
     c.secrets.set("ntfy_topic", "nullbill-topic")
     c.secrets.set("claude_oauth_token", "sk-ant-oat01-token")

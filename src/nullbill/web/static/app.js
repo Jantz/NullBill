@@ -71,6 +71,21 @@ function renderVpn(waiting) {
     : "No key waiting. Once the server has joined, it needs none.";
 }
 
+const LAN = {
+  open: "Open: Proxmox answers on your home network.",
+  closing: "Closing: press Keep it closed on this page opened over Tailscale, or it opens again by itself.",
+  closed: "Closed: Proxmox answers only over Tailscale.",
+};
+
+function renderLan(state) {
+  $("lan-status").textContent = LAN[state.state] + (state.state === "closing" && !state.via_vpn
+    ? " This page is not open over Tailscale right now." : "");
+  $("lan-minutes").textContent = state.minutes;
+  show("lan-close", state.state === "open");
+  show("lan-keep", state.state === "closing");
+  show("lan-open", state.state !== "open");
+}
+
 function li(text, cls) {
   return Object.assign(document.createElement("li"), {textContent: text, className: cls || ""});
 }
@@ -125,6 +140,7 @@ async function refresh() {
   renderAlerts(state.alerts);
   renderAgent(state.agent_credential);
   renderVpn(state.tailscale_key);
+  renderLan(state.lan);
   clearInterval(statusTimer);
   refreshStatus().catch(showError);
   statusTimer = setInterval(() => refreshStatus().catch(() => {}), 30000);
@@ -145,7 +161,7 @@ function follow(id, first) {
     log.scrollTop = log.scrollHeight;
     if (job.state !== "running") {
       clearInterval(polling);
-      if (job.action === "probe") refresh();
+      if (job.action === "probe" || job.action.endsWith("-lan") || job.action === "keep-lan-closed") refresh();
     }
   };
   tick().catch(showError);

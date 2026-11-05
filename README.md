@@ -132,9 +132,6 @@ It runs these stages in order and stops at the first one that fails.
 
 ## Not done yet
 
-- **Closing the home network** to Proxmox's own web UI and SSH once you
-  reach everything over Tailscale (#9). Until then Proxmox keeps its usual
-  access there.
 - Rebuilding the CI image on a schedule, and Windows and local AI models.
 
 [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) lists the decisions still open, and

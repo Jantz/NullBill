@@ -37,8 +37,29 @@ NullBill network only.
 - Joined, but nothing answers: check that the device accepts routes and
   that the admin console lists the routes on the `nullbill` machine.
 
-## After it works
+## Close the home network
 
 Proxmox's own web UI and SSH stay open on your home network until you close
-them (#9). Do that only after you have reached the page and the Proxmox UI
-over Tailscale from outside your home network.
+them. Do it once Tailscale works:
+
+1. On a device on Tailscale, open the page at the address the vpn stage
+   printed and press **Close the home network** under step 9.
+2. Within 15 minutes, open `https://<mgmt address>:8006` (the PVE host's
+   address in the plan's `mgmt` zone, `.254`) over Tailscale to check
+   Proxmox answers, then press **Keep it closed** on the page you opened
+   over Tailscale. The page accepts that press only when it arrives through
+   the vpn guest, which is what proves the way in works.
+3. If you do not, the host puts the open firewall back by itself after 15
+   minutes, and the next setup run notices.
+
+Once closed, the page answers only from inside the NullBill network: over
+Tailscale and on the on-site screen. **Open it again** on the page gives
+the home network its access back. If Tailscale is down, press it on the
+on-site screen. Without one, sign in at the host's own keyboard and run:
+
+```sh
+pct exec <nullbill vmid> -- env NULLBILL_HOME=/var/lib/nullbill /opt/nullbill/venv/bin/nullbill apply --open-lan
+```
+
+The nullbill container's VMID is in the plan (`guests.nullbill.vmid`) and
+in `pct list`.

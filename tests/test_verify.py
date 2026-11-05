@@ -72,6 +72,25 @@ def test_open_host_fails_every_denial(facts):
     assert not any(" reaches " in name for name in failed)
 
 
+def test_lan_open_before_the_owner_closes_it_is_degraded_and_checked_at_the_lan_address(facts):
+    plan, model = setup(facts)
+    asked = []
+
+    def connect(host, port):
+        asked.append(host)
+        return "open"
+
+    target = "root@10.42.1.254"
+    results = run_verify(plan, model, target, firewall(plan, model), connect, lambda n: PUBLIC, lan_state="open", lan_host="192.0.2.10")
+    by = statuses(results)
+    assert not [r for r in by["FAIL"] if r.name.startswith("LAN")] and asked == []
+    assert "LAN is refused the PVE host" in [r.name for r in by["DEGRADED"]]
+    # Closed or closing: probed at the LAN address, not the mgmt one apply uses.
+    results = run_verify(plan, model, target, firewall(plan, model), connect, lambda n: PUBLIC, lan_state="closing", lan_host="192.0.2.10")
+    assert asked == ["192.0.2.10", "192.0.2.10"]
+    assert "LAN is refused the PVE host tcp/22" in {r.name for r in statuses(results)["FAIL"]}
+
+
 def test_refused_is_not_dropped(facts):
     plan, model = setup(facts)
     run = firewall(plan, model)

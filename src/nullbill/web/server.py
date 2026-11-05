@@ -30,6 +30,7 @@ from pathlib import Path
 
 import yaml
 
+from nullbill import lan
 from nullbill.apply import NTFY
 from nullbill.cli import plan_text
 from nullbill.errors import NullBillError
@@ -43,6 +44,8 @@ LOCKOUT_FAILURES = 10
 LOCKOUT_S = 300
 WORKLOADS = ["agents", "linux-ci", "inference", "windows-ci", "windows-dev"]
 ACTIONS = {"probe", "apply", "verify"}
+# Closing the LAN to Proxmox (nullbill/lan.py), run as apply's host stage.
+LAN_ACTIONS = {"close-lan": ["apply", "--close-lan"], "keep-lan-closed": ["apply", "--confirm-lan"], "open-lan": ["apply", "--open-lan"]}
 # An optional Healthchecks.io check notices silence; alerts go to NTFY.
 HEALTHCHECKS = re.compile(r"https://hc-ping\.com/[A-Za-z0-9_-]{8,}(/[a-z0-9_-]+)?")
 # The agent CLI signs in with an Anthropic API key or a Claude subscription
@@ -347,9 +350,32 @@ class App:
         policy = render_tailnet(yaml.safe_load(text), model)["policy.json"]
         return {"text": text, "errors": [], "tailnet_policy": policy}
 
+    # The LAN. Its addresses come from the plan, so nothing is known before one.
+    def network(self) -> tuple[str | None, str | None]:
+        """(the NullBill network, the vpn guest's address)."""
+        path = self.home / "plan.yaml"
+        config = self.config()
+        if config is None or not path.exists():
+            return None, None
+        plan = yaml.safe_load(path.read_text()) or {}
+        return build_model(config)["network"]["base"], plan.get("guests", {}).get("vpn", {}).get("ip")
+
+    def refused(self, client: str) -> bool:
+        """Once the LAN is closed, the page answers only inside the NullBill
+        network: over Tailscale, through the vpn guest, or the on-site screen."""
+        if lan.state(self.home) != lan.CLOSED:
+            return False
+        base, _ = self.network()
+        return base is not None and not lan.inside(client, base)
+
+    def via_vpn(self, client: str) -> bool:
+        return client.removeprefix("::ffff:") == self.network()[1]
+
     # Jobs.
-    def start(self, action: str, stage: str | None = None) -> Job:
-        if action not in ACTIONS:
+    def start(self, action: str, stage: str | None = None, client: str = "") -> Job:
+        if action == "keep-lan-closed" and not self.via_vpn(client):
+            raise NullBillError("press Keep it closed on the page opened over Tailscale; that press is what shows Tailscale works")
+        if action not in ACTIONS and action not in LAN_ACTIONS:
             raise NullBillError(f"unknown action {action!r}")
         with self.lock:
             if any(j.state() == "running" for j in self.jobs.values()):
@@ -357,7 +383,7 @@ class App:
             jobs = self.home / "jobs"
             jobs.mkdir(mode=0o700, exist_ok=True)
             job_id = time.strftime("%Y%m%dT%H%M%S") + "-" + action
-            args = [action] + (["--stage", stage] if stage else [])
+            args = LAN_ACTIONS[action] if action in LAN_ACTIONS else [action] + (["--stage", stage] if stage else [])
             job = Job(job_id, action, args, jobs / f"{job_id}.log", time.time())
             env = os.environ | {"NULLBILL_HOME": str(self.home), "PYTHONUNBUFFERED": "1", "ANSIBLE_FORCE_COLOR": "0"}
             fd = os.open(job.log, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -379,7 +405,7 @@ class App:
             "offset": len(data),
         }
 
-    def state(self, authed: bool) -> dict:
+    def state(self, authed: bool, client: str = "") -> dict:
         has_password = self.owner_file.exists()
         if not authed:
             return {"auth": False, "has_password": has_password}
@@ -395,6 +421,7 @@ class App:
             "alerts": self.alerts() if has_password else None,
             "agent_credential": self.agent_credential(),
             "tailscale_key": self.tailscale_key(),
+            "lan": {"state": lan.state(self.home), "via_vpn": self.via_vpn(client), "minutes": lan.REVERT_AFTER_S // 60},
             "job": self.job_view(latest) | {"text": ""} if latest else None,
         }
 
@@ -424,7 +451,18 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                     return value
             return None
 
+        def client(self) -> str:
+            return str(self.client_address[0])
+
+        def closed(self) -> bool:
+            if not app.refused(self.client()):
+                return False
+            self.send(403, b"NullBill is closed to this network; open it over Tailscale.\n", "text/plain; charset=utf-8")
+            return True
+
         def do_GET(self) -> None:  # noqa: N802
+            if self.closed():
+                return
             path, _, query = self.path.partition("?")
             if path in STATIC:
                 name, kind = STATIC[path]
@@ -432,18 +470,20 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 return self.send(200, body, f"{kind}; charset=utf-8")
             authed = app.valid(self.token())
             if path == "/api/state":
-                return self.json(200, app.state(authed))
+                return self.json(200, app.state(authed, self.client()))
             if not authed:
                 return self.json(401, {"error": "sign in first"})
             if path == "/api/status":
                 return self.json(200, app.status())
-            match = re.fullmatch(r"/api/jobs/([0-9T]+-[a-z]+)", path)
+            match = re.fullmatch(r"/api/jobs/([0-9T]+-[a-z-]+)", path)
             if match and match[1] in app.jobs:
                 offset = int(dict(p.split("=", 1) for p in query.split("&") if "=" in p).get("offset", "0") or 0)
                 return self.json(200, app.job_view(app.jobs[match[1]], offset))
             return self.json(404, {"error": "not found"})
 
         def do_POST(self) -> None:  # noqa: N802
+            if self.closed():
+                return
             # A custom header cannot be sent cross-site without a CORS
             # preflight, which this server never grants.
             if self.headers.get("X-NullBill") != "1":
@@ -484,7 +524,7 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                     return self.json(200, {"ok": True, "sent": app.test_alerts()})
                 if self.path == "/api/jobs":
                     stage = body.get("stage")
-                    job = app.start(str(body.get("action")), str(stage) if stage else None)
+                    job = app.start(str(body.get("action")), str(stage) if stage else None, self.client())
                     return self.json(200, app.job_view(job))
                 if self.path == "/api/logout":
                     with app.lock:

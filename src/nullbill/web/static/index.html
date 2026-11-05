@@ -118,6 +118,15 @@
       <button data-action="verify" class="secondary">Run checks</button>
     </section>
 
+    <section>
+      <h2>9. Close the home network</h2>
+      <p>Once you reach this page over Tailscale, close Proxmox's web UI and SSH to your home network, so only Tailscale gets in. If you do not then press <b>Keep it closed</b> on this page opened over Tailscale within <span id="lan-minutes">15</span> minutes, the server opens it again by itself, so a mistake cannot lock you out. Once closed, this page also answers only over Tailscale and on the on-site screen.</p>
+      <p id="lan-status"></p>
+      <button data-action="close-lan" id="lan-close">Close the home network</button>
+      <button data-action="keep-lan-closed" id="lan-keep">Keep it closed</button>
+      <button data-action="open-lan" id="lan-open" class="secondary">Open it again</button>
+    </section>
+
     <section id="job-section" hidden>
       <h2 id="job-title"></h2>
       <pre id="job-log"></pre>

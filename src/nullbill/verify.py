@@ -13,7 +13,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from nullbill import agent, backups, ci, forge
+from nullbill import agent, backups, ci, forge, lan
 from nullbill.errors import NullBillError
 from nullbill.flows import HOST, HOST_PORTS, resolve_flows
 from nullbill.probe import Runner
@@ -183,6 +183,8 @@ def run_verify(
     connect: Connect = tcp_connect,
     resolve: Resolve = resolve_ipv4,
     now: backups.Clock = time.time,
+    lan_state: str = lan.CLOSED,
+    lan_host: str | None = None,
 ) -> list[Result]:
     results: list[Result] = []
     bare = strip_notes(plan)
@@ -218,7 +220,10 @@ def run_verify(
         command = f"pct exec {probe.vmid} -- bash -c {shlex.quote(probe.command)}"
         results.append(_judge(probe, *run(target, command)))
     results += skipped
-    results += _lan(target.rpartition("@")[2], connect)
+    if lan_state == lan.OPEN:
+        results.append(Result("DEGRADED", "LAN is refused the PVE host", "open until you close it over Tailscale (docs/runbooks/vpn.md)"))
+    else:
+        results += _lan(lan_host or target.rpartition("@")[2], connect)
     results += backups.check(plan, target, run, now)
     results += agent.check(plan, target, run)
     results += forge.check(plan, target, run)

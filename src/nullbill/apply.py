@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from nullbill import backups
+from nullbill import backups, lan
 from nullbill.artifacts import write_build
 from nullbill.errors import NullBillError
 from nullbill.flows import mac
@@ -67,6 +67,9 @@ class Context:
     secrets: Secrets
     files: dict[str, str]  # render_all output, by build/ path
     close_lan: bool = False
+    open_lan: bool = False
+    lan_host: str | None = None  # the host's LAN address, which verify checks is closed
+    known_hosts: Path | None = None  # the controller's own, ~/.ssh/known_hosts
     run: Runner | None = None  # verify's runner; the real one is ssh_run
     log: list[str] = field(default_factory=list)
 
@@ -141,15 +144,69 @@ def stage_render(ctx: Context) -> None:
 def stage_host(ctx: Context) -> None:
     api = {"host_baseline_api_name": f"pve.{ctx.bare['domain']}", "host_baseline_api_address": ctx.bare["zones"]["mgmt"]["host_ip"]}
     run_playbook(ctx, "host", "host-baseline.yml", None, api)
+    # Before the firewall: a close in this run ends the LAN path apply came by.
+    run_playbook(ctx, "host", "console.yml", None, console_vars(ctx))
     prefix = "firewall/"
     files = {rel.removeprefix(prefix): text for rel, text in ctx.files.items() if rel.startswith(prefix)}
-    # Until VPN reach is confirmed (#9), the LAN keeps PVE's default access to
-    # 8006 and 22; `apply --close-lan` installs the closed cluster.fw.
     open_variant = files.pop("cluster-lan-open.fw")
-    if not ctx.close_lan:
+    before = lan.state(ctx.home)
+    state = lan_state(ctx, open_variant)
+    if state == lan.OPEN:
         files["cluster.fw"] = open_variant
     host_files(ctx, "host", PVE_FIREWALL, files)
-    run_playbook(ctx, "host", "console.yml", None, console_vars(ctx))
+    if state == lan.CLOSING and before == lan.OPEN:
+        page = f"https://{ctx.bare['guests']['nullbill']['ip']}:8443"
+        minutes = lan.REVERT_AFTER_S // 60
+        ctx.say(f"host: Proxmox is closed to the home network. Within {minutes} minutes, open {page} over Tailscale")
+        ctx.say("host: and press Keep it closed; otherwise the host opens it again by itself.")
+
+
+def trust_mgmt_address(ctx: Context) -> None:
+    """The host's key under its mgmt address too, read over the connection
+    already trusted, so the controller can reach it there once the LAN closes."""
+    key = " ".join(host_out(ctx, "host", "cat /etc/ssh/ssh_host_ed25519_key.pub").split()[:2])
+    line = f"{ctx.bare['zones']['mgmt']['host_ip']} {key}"
+    known = ctx.known_hosts or Path.home() / ".ssh" / "known_hosts"
+    lines = known.read_text().splitlines() if known.exists() else []
+    if line not in lines:
+        known.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        known.write_text("".join(f"{x}\n" for x in [*lines, line]))
+
+
+def lan_state(ctx: Context, open_variant: str) -> str:
+    """Whether the LAN keeps Proxmox access (lan.py), after acting on
+    --open-lan and --close-lan; the open file is kept on the host for the
+    revert timer."""
+    state = lan.state(ctx.home)
+    if state == lan.CLOSING and host_out(ctx, "host", lan.ARMED).strip() == "gone":
+        ctx.say("host: nobody pressed Keep it closed in time, so the host opened the home network again")
+        lan.write(ctx.home, lan.OPEN)
+        state = lan.OPEN
+    host_out(ctx, "host", f"mkdir -p -m 0700 {lan.SAVED_OPEN.rsplit('/', 1)[0]}")
+    host_files(ctx, "host", lan.SAVED_OPEN.rsplit("/", 1)[0], {lan.SAVED_OPEN.rsplit("/", 1)[1]: open_variant})
+    if ctx.open_lan:
+        host_out(ctx, "host", f"{lan.DISARM} 2>/dev/null || true")
+        lan.write(ctx.home, lan.OPEN)
+        ctx.say("host: Proxmox is open to the home network again")
+        return lan.OPEN
+    if ctx.close_lan and state == lan.OPEN:
+        trust_mgmt_address(ctx)
+        host_out(ctx, "host", lan.arm_command())
+        lan.write(ctx.home, lan.CLOSING, lan.deadline())
+        return lan.CLOSING
+    return state
+
+
+def confirm_lan(ctx: Context) -> None:
+    """Keep the LAN closed: stop the revert timer while it still runs."""
+    if lan.state(ctx.home) != lan.CLOSING:
+        raise NullBillError("the home network is not being closed; close it first")
+    if host_out(ctx, "confirm", lan.ARMED).strip() == "gone":
+        lan.write(ctx.home, lan.OPEN)
+        raise NullBillError("too late: the host already opened the home network again; close it once more")
+    host_out(ctx, "confirm", lan.DISARM)
+    lan.write(ctx.home, lan.CLOSED)
+    ctx.say("Proxmox stays closed to the home network; reach it over Tailscale")
 
 
 SPKI = 'openssl x509 -in "$1" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64'
@@ -781,7 +838,8 @@ def stage_vpn(ctx: Context) -> None:
 
 
 def stage_verify(ctx: Context) -> None:
-    results = run_verify(ctx.plan, ctx.model, ctx.target, ctx.run)
+    lan_host = ctx.lan_host or split_target(ctx.target)[1]
+    results = run_verify(ctx.plan, ctx.model, ctx.target, ctx.run, lan_state=lan.state(ctx.home), lan_host=lan_host)
     for result in results:
         ctx.say(result.line())
     failed = [r for r in results if r.status == "FAIL"]

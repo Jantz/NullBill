@@ -5,14 +5,15 @@ import hashlib
 import json
 import sys
 
-from nullbill.apply import STAGES, Context, SshReach, run_apply
+from nullbill import lan
+from nullbill.apply import STAGES, Context, SshReach, confirm_lan, run_apply, split_target
 from nullbill.artifacts import render_all, write_build
 from nullbill.errors import NullBillError
 from nullbill.home import REPO_ROOT, nullbill_home, refuse_on_pve_host
 from nullbill.model import build_model, load_config
 from nullbill.plan import build_plan
 from nullbill.probe import run_probe, ssh_run
-from nullbill.render import render
+from nullbill.render import render, strip_notes
 from nullbill.secretfile import Secrets, Sops
 from nullbill.verify import run_verify
 
@@ -62,21 +63,52 @@ def cmd_apply(args: argparse.Namespace) -> int:
         for rel in files:
             print(f"  {rel}")
         return 0
-    target = load_config(home / "config.yaml").get("target", {}).get("ssh")
-    if not target:
+    configured = load_config(home / "config.yaml").get("target", {}).get("ssh")
+    if not configured:
         raise NullBillError(f"{home / 'config.yaml'}: target.ssh is required for apply")
+    if args.close_lan and args.open_lan:
+        raise NullBillError("--close-lan and --open-lan contradict each other")
+    target = reach_target(home, configured, plan)
     reach = SshReach(target, REPO_ROOT / ".ansible" / "collections")
-    ctx = Context(plan, model, home, target, reach, Secrets(Sops(home)), files, close_lan=args.close_lan, run=ssh_run)
-    run_apply(ctx, only=args.stage)
+    ctx = Context(
+        plan,
+        model,
+        home,
+        target,
+        reach,
+        Secrets(Sops(home)),
+        files,
+        close_lan=args.close_lan,
+        open_lan=args.open_lan,
+        lan_host=split_target(configured)[1],
+        run=ssh_run,
+    )
+    if args.confirm_lan:
+        confirm_lan(ctx)
+        return 0
+    # Changing LAN access is the host stage's work; it ends the LAN path,
+    # so nothing runs after it in the same apply.
+    run_apply(ctx, only="host" if args.close_lan or args.open_lan else args.stage)
     return 0
+
+
+def reach_target(home, configured: str, plan: dict) -> str:
+    """target.ssh, or the host's mgmt address once the LAN is closing or closed."""
+    if lan.state(home) == lan.OPEN:
+        return configured
+    user, _ = split_target(configured)
+    return f"{user}@{strip_notes(plan)['zones']['mgmt']['host_ip']}"
 
 
 def cmd_verify(_args: argparse.Namespace) -> int:
     home = nullbill_home()
     model, facts_bytes = _load(home)
     config = load_config(home / "config.yaml")
-    target = config.get("target", {}).get("ssh")
-    results = run_verify(build_plan(model, json.loads(facts_bytes)), model, target, ssh_run)
+    configured = config.get("target", {}).get("ssh")
+    plan = build_plan(model, json.loads(facts_bytes))
+    target = reach_target(home, configured, plan) if configured else None
+    lan_host = split_target(configured)[1] if configured else None
+    results = run_verify(plan, model, target, ssh_run, lan_state=lan.state(home), lan_host=lan_host)
     for result in results:
         print(result.line())
     counts = {s: sum(r.status == s for r in results) for s in ("PASS", "FAIL", "SKIP", "DEGRADED")}
@@ -100,7 +132,11 @@ def main(argv: list[str] | None = None) -> int:
     apply = sub.add_parser("apply", help=f"bring the host to the plan, stage by stage: {stages}")
     apply.add_argument("--dry-run", action="store_true", help="render into $NULLBILL_HOME/build, change nothing")
     apply.add_argument("--stage", choices=[name for name, _ in STAGES], help="run only this stage")
-    apply.add_argument("--close-lan", action="store_true", help="install the cluster firewall without LAN access to 8006 and 22 (#9)")
+    apply.add_argument(
+        "--close-lan", action="store_true", help="close the LAN to 8006 and 22; reopens by itself unless confirmed over Tailscale"
+    )
+    apply.add_argument("--confirm-lan", action="store_true", help="keep the LAN closed: stop the timer that would reopen it")
+    apply.add_argument("--open-lan", action="store_true", help="give the LAN access to 8006 and 22 again")
     apply.set_defaults(func=cmd_apply)
     verify = sub.add_parser("verify", help="probe allowed and denied flows from each zone and the LAN; exits 1 on FAIL")
     verify.set_defaults(func=cmd_verify)

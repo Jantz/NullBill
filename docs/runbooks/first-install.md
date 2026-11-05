@@ -44,7 +44,10 @@ the button again. Every stage can be run again safely.
    proxy, updates, ca, postgres, monitoring, forgejo, ci, agents, logs,
    backups, vpn, verify. The first run downloads images and packages and
    takes a while; tofu, ci and the first backup are the longest.
-9. With backups: make the paper copy of the backup encryption key, as
+9. Once Tailscale works: **Close the home network**, then **Keep it closed**
+   from the page opened over Tailscale ([vpn.md](vpn.md)). Until then
+   verify reports the open LAN as DEGRADED.
+10. With backups: make the paper copy of the backup encryption key, as
    [pbs-encryption-key.md](pbs-encryption-key.md) describes.
 
 ## If a stage fails
@@ -55,7 +58,5 @@ the log carries addresses on your network and guest names, not secrets.
 
 ## What is not in this run yet
 
-- Closing the LAN: it keeps Proxmox's own web UI and SSH until you have
-  reached them over Tailscale (#9).
 - Re-baking the CI image on a schedule (OPEN_QUESTIONS 9).
 - Shipping the host's own SSH logins to Loki; guests' are shipped.
