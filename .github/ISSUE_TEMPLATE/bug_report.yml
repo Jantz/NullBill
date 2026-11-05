@@ -1,0 +1,26 @@
+name: Something does not work
+description: A stage fails, a check reports FAIL, or a guide step does not match what you see.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please remove anything that identifies your network or you (addresses, hostnames, names) before posting.
+        For a security problem, follow SECURITY.md instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what you saw.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: The last 50 lines of the setup log, or the verify lines that failed.
+      render: text
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Proxmox VE version (pveversion) and the NullBill commit.

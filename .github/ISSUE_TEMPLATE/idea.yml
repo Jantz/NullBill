@@ -1,0 +1,15 @@
+name: Idea or change
+description: Something NullBill should do, or do differently.
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What you need
+      description: The problem to solve, before any solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: How it could work
+      description: Optional. Note anything that would cost money or add a tool.

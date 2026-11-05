@@ -185,4 +185,6 @@ tools/install-hooks   # secret and deny-list checks on commit and push
 tools/check           # everything CI runs (needs docker)
 ```
 
-[`CLAUDE.md`](CLAUDE.md) maps the code. Licensed under Apache-2.0.
+[`CLAUDE.md`](CLAUDE.md) maps the code and
+[`CONTRIBUTING.md`](CONTRIBUTING.md) has the rules for a change. Licensed
+under Apache-2.0.
