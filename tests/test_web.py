@@ -243,6 +243,23 @@ def test_alerts_topic_is_made_with_the_password_and_tested(site):
     assert client.call("/api/state")[1]["alerts"] == {"ntfy_url": alerts["ntfy_url"], "healthchecks_url": ""}
 
 
+def test_agent_credential_is_kept_by_kind_and_never_shown(site):
+    app, client = site
+    sign_in(app, client)
+    assert client.call("/api/state")[1]["agent_credential"] is None
+    bad = client.call("/api/agent", {"credential": "hunter2"})
+    assert bad[0] == 400 and "claude setup-token" in bad[1]["error"]
+    key = "sk-ant-api03-" + "a" * 40
+    assert client.call("/api/agent", {"credential": f" {key}\n"}) == (200, {"ok": True, "agent_credential": "API key"})
+    assert app.codec(app.home).load()["anthropic_api_key"] == key
+    token = "sk-ant-oat01-" + "b" * 40
+    assert client.call("/api/agent", {"credential": token}) == (200, {"ok": True, "agent_credential": "subscription token"})
+    stored = app.codec(app.home).load()
+    assert stored["claude_oauth_token"] == token and "anthropic_api_key" not in stored
+    state = json.dumps(client.call("/api/state")[1])
+    assert token not in state and '"agent_credential": "subscription token"' in state
+
+
 def test_a_failed_test_alert_says_so(site):
     app, client = site
     sign_in(app, client)

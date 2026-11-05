@@ -44,6 +44,9 @@ WORKLOADS = ["agents", "linux-ci", "inference", "windows-ci", "windows-dev"]
 ACTIONS = {"probe", "apply", "verify"}
 # An optional Healthchecks.io check notices silence; alerts go to NTFY.
 HEALTHCHECKS = re.compile(r"https://hc-ping\.com/[A-Za-z0-9_-]{8,}(/[a-z0-9_-]+)?")
+# The agent CLI signs in with an Anthropic API key or a Claude subscription
+# token from `claude setup-token`; each is kept under its own name.
+AGENT_CREDENTIALS = {"sk-ant-api": ("anthropic_api_key", "API key"), "sk-ant-oat": ("claude_oauth_token", "subscription token")}
 STATIC = {"/": ("index.html", "text/html"), "/app.js": ("app.js", "text/javascript"), "/style.css": ("style.css", "text/css")}
 SECURITY_HEADERS = {
     "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'",
@@ -246,6 +249,25 @@ class App:
             raise NullBillError(f"sending failed after {sent or 'nothing'}: {exc}") from exc
         return sent
 
+    # The agent CLI's credential: which kind is stored, never the value.
+    def agent_credential(self) -> str | None:
+        data = Secrets(self.codec(self.home)).data
+        return next((label for name, label in AGENT_CREDENTIALS.values() if data.get(name)), None)
+
+    def save_agent_credential(self, body: dict) -> None:
+        value = str(body.get("credential", "")).strip()
+        kind = next((v for prefix, v in AGENT_CREDENTIALS.items() if value.startswith(prefix)), None)
+        if kind is None or len(value) > 512 or not re.fullmatch(r"[A-Za-z0-9_-]+", value):
+            raise NullBillError("paste an Anthropic API key (sk-ant-api...) or the token `claude setup-token` prints (sk-ant-oat...)")
+        with self.lock:
+            if any(job.state() == "running" for job in self.jobs.values()):
+                raise NullBillError("wait until the running job finishes")
+            store = Secrets(self.codec(self.home))
+            for name, _ in AGENT_CREDENTIALS.values():
+                store.data.pop(name, None)
+            store.data[kind[0]] = value
+            store.codec.save(store.data)
+
     # Config and plan.
     def config(self) -> dict | None:
         path = self.home / "config.yaml"
@@ -353,6 +375,7 @@ class App:
             "workloads": WORKLOADS,
             "plan": self.plan(),
             "alerts": self.alerts() if has_password else None,
+            "agent_credential": self.agent_credential(),
             "job": self.job_view(latest) | {"text": ""} if latest else None,
         }
 
@@ -432,6 +455,9 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 if self.path == "/api/alerts":
                     app.save_alerts(body)
                     return self.json(200, {"ok": True, "alerts": app.alerts()})
+                if self.path == "/api/agent":
+                    app.save_agent_credential(body)
+                    return self.json(200, {"ok": True, "agent_credential": app.agent_credential()})
                 if self.path == "/api/alerts/test":
                     return self.json(200, {"ok": True, "sent": app.test_alerts()})
                 if self.path == "/api/jobs":

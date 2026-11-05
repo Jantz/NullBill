@@ -1,0 +1,2 @@
+# Where the agent CLI's credential is kept, by kind.
+operator_credential_file: "{{ 'anthropic-api-key' if operator_anthropic_api_key else 'claude-oauth-token' }}"

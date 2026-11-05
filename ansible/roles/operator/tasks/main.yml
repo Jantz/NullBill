@@ -6,7 +6,12 @@
   ansible.builtin.assert:
     that: lookup('ansible.builtin.vars', item) | length > 0
     fail_msg: "{{ item }} is empty; apply copies it from NULLBILL_HOME"
-  loop: [operator_pve_token, operator_pve_ca, operator_ca_root, operator_step_password, operator_anthropic_api_key]
+  loop: [operator_pve_token, operator_pve_ca, operator_ca_root, operator_step_password]
+
+- name: One credential for the agent CLI
+  ansible.builtin.assert:
+    that: (operator_anthropic_api_key | length > 0) != (operator_claude_oauth_token | length > 0)
+    fail_msg: set exactly one of operator_anthropic_api_key and operator_claude_oauth_token; apply copies it from NULLBILL_HOME
 
 - name: apt through egress-proxy
   ansible.builtin.copy:
@@ -63,10 +68,15 @@
     - {file: pve-root-ca.pem, value: "{{ operator_pve_ca }}"}
     - {file: ca-root.pem, value: "{{ operator_ca_root }}"}
     - {file: step-password, value: "{{ operator_step_password }}"}
-    - {file: anthropic-api-key, value: "{{ operator_anthropic_api_key }}"}
+    - {file: "{{ operator_credential_file }}", value: "{{ operator_anthropic_api_key or operator_claude_oauth_token }}"}
   loop_control:
     label: "{{ item.file }}"
   no_log: true
+
+- name: No credential of the other kind left behind
+  ansible.builtin.file:
+    path: "/etc/nullbill/agent/{{ 'claude-oauth-token' if operator_anthropic_api_key else 'anthropic-api-key' }}"
+    state: absent
 
 - name: Agent CLI release directory
   ansible.builtin.file:
@@ -90,11 +100,13 @@
     include: [package/claude]
     creates: "/opt/claude-code/{{ operator_claude_code_version }}/package/claude"
 
+# A wrapper, so a subscription token reaches the CLI in its environment.
 - name: Agent CLI on PATH
-  ansible.builtin.file:
-    src: "/opt/claude-code/{{ operator_claude_code_version }}/package/claude"
+  ansible.builtin.template:
+    src: claude.j2
     dest: /usr/local/bin/claude
-    state: link
+    mode: "0755"
+    follow: false
 
 - name: Tool-call recorder the managed settings run before every tool
   ansible.builtin.copy:

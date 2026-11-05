@@ -48,7 +48,8 @@ pass "secrets are root's, readable by the agent user only; the agent has no sudo
 
 want=$(sed -n 's/^operator_claude_code_sha512: //p' /ansible/roles/operator/defaults/main.yml)
 sha512sum /opt/claude-code/*/package.tgz | awk '{print $1}' | grep -qx "$want" || fail "agent CLI checksum"
-head -c 4 "$(readlink -f /usr/local/bin/claude)" | grep -q ELF || fail "agent CLI is not an executable"
+head -c 4 /opt/claude-code/*/package/claude | grep -q ELF || fail "agent CLI is not an executable"
+grep -q "^exec /opt/claude-code/[0-9.]*/package/claude \"\$@\"$" /usr/local/bin/claude || fail "agent CLI wrapper"
 python3 -c 'import json; s = json.load(open("/etc/claude-code/managed-settings.json")); assert s["env"]["DISABLE_AUTOUPDATER"] == "1", s' ||
   fail "managed settings"
 test "$(su agent -c "$(python3 -c 'import json; print(json.load(open("/etc/claude-code/managed-settings.json"))["apiKeyHelper"])')")" = throwaway-key ||
@@ -85,3 +86,19 @@ if su - agent -c 'ssh -i ~/.ssh/nb-agent -o IdentitiesOnly=yes -o BatchMode=yes 
   fail "the agent's certificate logs in as root"
 fi
 pass "nb-ssh logs in to an agent-managed guest as agent with a reused certificate, never as root"
+
+# A Claude subscription token instead of an API key.
+python3 - "$vars" <<'PY'
+import json, sys
+v = json.load(open(sys.argv[1]))
+v["operator_anthropic_api_key"], v["operator_claude_oauth_token"] = "", "throwaway-token"
+json.dump(v, open(sys.argv[1], "w"))
+PY
+ansible-playbook -i localhost, -c local -e "@$vars" /ansible/operator.yml >/tmp/oauth.log 2>&1 || { cat /tmp/oauth.log; fail "operator with a subscription token"; }
+test ! -e /etc/nullbill/agent/anthropic-api-key || fail "the API key was left behind"
+test "$(stat -c '%a %U %G' /etc/nullbill/agent/claude-oauth-token)" = "640 root agent" || fail "token mode"
+python3 -c 'import json, sys; sys.exit("apiKeyHelper" in json.load(open("/etc/claude-code/managed-settings.json")))' ||
+  fail "the key helper stayed with a token"
+sed 's#^exec .*#exec env#' /usr/local/bin/claude >/tmp/claude-env
+su agent -c 'sh /tmp/claude-env' | grep -qx CLAUDE_CODE_OAUTH_TOKEN=throwaway-token || fail "the wrapper does not pass the token"
+pass "with a subscription token instead, the CLI gets it in its environment and no API key is left"

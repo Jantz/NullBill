@@ -14,7 +14,10 @@ operator_pve_token: ""         # nb-agent@pve!operator=<secret>
 operator_pve_ca: ""            # PVE's root CA, PEM (/etc/pve/pve-root-ca.pem)
 operator_ca_root: ""           # step-ca's root certificate, PEM
 operator_step_password: ""     # step-ca's secrets/agent-password
-operator_anthropic_api_key: "" # the model API key for the agent CLI
+# The agent CLI signs in with exactly one of these: an Anthropic API key,
+# or a Claude subscription token from `claude setup-token`.
+operator_anthropic_api_key: ""
+operator_claude_oauth_token: ""
 
 # The agent CLI (docs/adr/0002-agent-cli.md): Claude Code's native Linux
 # binary from its npm platform package, pinned by checksum.

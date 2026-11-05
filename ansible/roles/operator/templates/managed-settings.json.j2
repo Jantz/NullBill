@@ -1,5 +1,7 @@
 {
+{% if operator_anthropic_api_key %}
   "apiKeyHelper": "cat /etc/nullbill/agent/anthropic-api-key",
+{% endif %}
   "allowManagedHooksOnly": true,
   "hooks": {
     "PreToolUse": [

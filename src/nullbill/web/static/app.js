@@ -58,6 +58,10 @@ function renderAlerts(alerts) {
   $("healthchecks-url").value = alerts ? alerts.healthchecks_url : "";
 }
 
+function renderAgent(kind) {
+  $("agent-result").textContent = kind ? `A ${kind} is saved.` : "Nothing saved yet.";
+}
+
 function li(text, cls) {
   return Object.assign(document.createElement("li"), {textContent: text, className: cls || ""});
 }
@@ -110,6 +114,7 @@ async function refresh() {
   $("owner-login").value = state.choices.owner_login;
   renderPlan(state.plan);
   renderAlerts(state.alerts);
+  renderAgent(state.agent_credential);
   clearInterval(statusTimer);
   refreshStatus().catch(showError);
   statusTimer = setInterval(() => refreshStatus().catch(() => {}), 30000);
@@ -169,6 +174,14 @@ document.addEventListener("DOMContentLoaded", () => {
       const result = await api("/api/alerts", {healthchecks_url: $("healthchecks-url").value});
       renderAlerts(result.alerts);
       $("alerts-result").textContent = "Saved.";
+    } catch (error) { showError(error); }
+  });
+  $("agent-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const result = await api("/api/agent", {credential: $("agent-credential").value});
+      $("agent-credential").value = "";
+      renderAgent(result.agent_credential);
     } catch (error) { showError(error); }
   });
   $("test-alerts").addEventListener("click", async () => {

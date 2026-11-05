@@ -81,7 +81,19 @@
     </section>
 
     <section>
-      <h2>6. Build it</h2>
+      <h2>6. Sign in the coding agent</h2>
+      <p>Only needed if you chose coding agents. Paste an Anthropic API key, or run <code>claude setup-token</code> on a computer where you use Claude with your subscription and paste the token it prints. It is kept encrypted on this server and shown to nobody.</p>
+      <form id="agent-form">
+        <label>API key or subscription token
+          <input id="agent-credential" type="password" autocomplete="off" placeholder="sk-ant-...">
+        </label>
+        <button type="submit">Save</button>
+        <span id="agent-result"></span>
+      </form>
+    </section>
+
+    <section>
+      <h2>7. Build it</h2>
       <p>Each step can be run again safely. If one fails, fix the cause and press the button again.</p>
       <button data-action="apply">Run setup</button>
       <button data-action="verify" class="secondary">Run checks</button>
