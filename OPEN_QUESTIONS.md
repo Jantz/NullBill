@@ -80,6 +80,15 @@ answered items move to the decisions list at the bottom.
   guest) sends those and sshd's auth lines to Loki. Only a certificate from
   a shipper CA whose key stays in `NULLBILL_HOME` may push; anyone the
   firewall admits may query; nobody may delete.
+- Forgejo: the v15 LTS line. Sign-up is off and nothing is visible without
+  signing in. Git over SSH uses Forgejo's own server on port 22, so the
+  forgejo guest runs no OpenSSH; reach it with `pct enter` on the host. The
+  first admin is `nullbill-admin`, with a random password in
+  `/etc/forgejo/admin-password` (root only) that must be changed at first
+  login.
+- CI: a job runs on its own throwaway clone, directly as the user `runner`
+  (no Docker), with the label `linux`. A job may run for at most 6 hours.
+  Set both per pool through the dispatcher's pool entries (#22).
 - Inference engine: llama.cpp for one GPU, vLLM for several; pinnable.
 - Plan output: YAML with a comment above each decision.
 
