@@ -89,6 +89,9 @@ class FakeReach:
             return 0, "ssh-ed25519 AAAAhostkey root@pve\n", ""
         if command.startswith(("systemctl ", "mkdir -p ")):
             return 0, "", ""
+        if command.startswith("rm -f "):
+            self.files.pop(command.split()[2], None)
+            return 0, "", ""
         if command.startswith("pct config "):
             return 0, "hostname: nullbill\n" + "".join(f"net{n}: {v}\n" for n, v in sorted(self.nets.items())), ""
         if command.startswith("pct set 2002 --net1 "):
@@ -451,6 +454,27 @@ def test_ci_stage_bakes_each_golden_image_once_then_runs_the_dispatcher(ctx):
     assert time.time() - ci.baked_time(c.reach.files[metric]) < 60
 
 
+def test_a_bake_that_stopped_partway_starts_again_from_a_fresh_vm(ctx):
+    c = ctx("small")
+    c.reach.fail_playbook = "ci-runner-seal.yml"
+    with pytest.raises(ApplyError):
+        apply.stage_ci(c)
+    assert "/root/nullbill/linux-runner.baking" in c.reach.files
+    # Fixed and run again: the sealed, half-baked VM is replaced, then baked.
+    c.reach.fail_playbook = None
+    c.reach.calls.clear()
+    apply.stage_ci(c)
+    tofu = [call[1] for call in c.reach.calls if call[0] == "local" and call[1][:2] == ["tofu", "apply"]]
+    assert tofu == [["tofu", "apply", "-auto-approve", "-input=false", "-no-color", "-replace=proxmox_virtual_environment_vm.linux-runner"]]
+    assert [call[1] for call in c.reach.calls if call[0] == "playbook"][0] == "ci-runner.yml"
+    assert "/root/nullbill/linux-runner.baking" not in c.reach.files
+    assert any("stopped partway" in line for line in c.log)
+    # A clean bake leaves no mark, so the next run replaces nothing.
+    c.reach.calls.clear()
+    apply.stage_ci(c)
+    assert not [call for call in c.reach.calls if call[0] == "local" and call[1][:2] == ["tofu", "apply"]]
+
+
 def test_agents_stage_waits_for_a_credential(ctx):
     c = ctx("small")
     apply.stage_agents(c)
@@ -801,3 +825,12 @@ def test_a_full_apply_runs_every_stage_against_the_stand_ins(ctx, monkeypatch):
     run_apply(c)
     assert "ci-runner.yml" not in [call[1] for call in c.reach.calls if call[0] == "playbook"]
     assert c.secrets.data == secrets
+
+
+def test_a_host_that_stops_answering_fails_the_stage_instead_of_crashing(monkeypatch, tmp_path):
+    def hang(argv, **kwargs):
+        raise apply.subprocess.TimeoutExpired(argv, kwargs["timeout"])
+
+    monkeypatch.setattr(apply.subprocess, "run", hang)
+    reach = apply.SshReach("root@192.0.2.10", tmp_path)
+    assert reach.host("vzdump 2010", timeout=5) == (124, "", "no answer from the host within 5 s")

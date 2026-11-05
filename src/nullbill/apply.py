@@ -643,6 +643,10 @@ def retire(ctx: Context, name: str, guest: dict) -> None:
     run_tofu(ctx, "ci", init=False, replace=(f"proxmox_virtual_environment_vm.{name}",))
 
 
+# Where the host keeps a mark while a golden image is being baked.
+BAKING_DIR = "/root/nullbill"
+
+
 def bake(ctx: Context, name: str, guest: dict) -> None:
     """Boot the pool's template VM, make it a one-job runner, seal it and
     convert it to a template. A template is kept until it is
@@ -656,6 +660,14 @@ def bake(ctx: Context, name: str, guest: dict) -> None:
             return
         ctx.say(f"ci: {name}'s golden image is over {ci.REBAKE_AFTER_S // 86400} days old; baking it again")
         retire(ctx, name, guest)
+    # A bake that stopped partway may have sealed the VM (no SSH host keys)
+    # or left it half set up, so it starts again from a fresh VM.
+    marker = f"{BAKING_DIR}/{name}.baking"
+    if host_out(ctx, "ci", f"cat {marker} 2>/dev/null || true").strip():
+        ctx.say(f"ci: an earlier bake of {name} stopped partway; OpenTofu makes its VM afresh first")
+        run_tofu(ctx, "ci", init=False, replace=(f"proxmox_virtual_environment_vm.{name}",))
+    host_out(ctx, "ci", f"mkdir -p -m 0700 {BAKING_DIR}")
+    host_files(ctx, "ci", BAKING_DIR, {f"{name}.baking": "started\n"})
     ctx.say(f"ci: baking {name}'s golden image (VM {vmid})")
     host_out(ctx, "ci", f"qm status {vmid} | grep -q running || qm start {vmid}")
     address = guest["template_ip"]
@@ -674,6 +686,7 @@ def bake(ctx: Context, name: str, guest: dict) -> None:
     run_playbook(ctx, "ci", "ci-runner-seal.yml", name)
     host_out(ctx, "ci", f"qm shutdown {vmid} --timeout 180 && qm template {vmid}")
     host_files(ctx, "ci", ci.TEXTFILE_DIR, {ci.baked_file(name): ci.baked_metric(name, time.time())})
+    host_out(ctx, "ci", f"rm -f {marker}")
     ctx.say(f"ci: {name}'s golden image is a template")
 
 
@@ -934,8 +947,12 @@ class SshReach:
         self.extra = extra or {}
 
     def host(self, command: str, stdin: str | None = None, timeout: int = 900) -> tuple[int, str, str]:
-        argv = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", self.target, command]
-        proc = subprocess.run(argv, input=stdin, capture_output=True, text=True, timeout=timeout)
+        argv = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=30", self.target, command]
+        try:
+            proc = subprocess.run(argv, input=stdin, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # A stage error like any other, so the run stops with its stage named.
+            return 124, "", f"no answer from the host within {timeout} s"
         return proc.returncode, proc.stdout, proc.stderr
 
     def local(self, argv: list[str], cwd: Path, env: dict[str, str], capture: bool = False) -> tuple[int, str]:
