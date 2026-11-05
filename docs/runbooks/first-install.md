@@ -59,4 +59,3 @@ the log carries addresses on your network and guest names, not secrets.
 ## What is not in this run yet
 
 - Re-baking the CI image on a schedule (OPEN_QUESTIONS 9).
-- Shipping the host's own SSH logins to Loki; guests' are shipped.

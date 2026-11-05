@@ -4,6 +4,18 @@
     fail_msg: "{{ item }} is empty; apply issues it"
   loop: [log_shipper_ca, log_shipper_cert, log_shipper_key]
 
+# unsafe_writes: a container's /etc/hosts is a bind mount that cannot be
+# replaced, only rewritten in place.
+- name: Names the resolver does not know
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^\S+\s+{{ item.key | regex_escape }}(\s|$)'
+    line: "{{ item.value }} {{ item.key }} # nullbill log shipper"
+    unsafe_writes: true
+  loop: "{{ log_shipper_resolve | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
 - name: journalctl and Python
   ansible.builtin.apt:
     name: [systemd, python3]

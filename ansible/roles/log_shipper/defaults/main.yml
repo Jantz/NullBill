@@ -12,4 +12,10 @@ log_shipper_key: ""
 log_shipper_sources:
   - {job: commands, match: [SYSLOG_IDENTIFIER=nb-cmd]}
   - {job: auth, match: [SYSLOG_IDENTIFIER=sshd]}
+  # OpenSSH 9.8 and later (Debian 13, PVE 9) log logins from sshd-session.
+  - {job: auth, match: [SYSLOG_IDENTIFIER=sshd-session]}
+# Names the machine's own resolver does not know, as {name: address}. The
+# PVE host asks the owner's LAN for names, which knows nothing under the
+# NullBill domain, so apply gives it the gate's address here.
+log_shipper_resolve: {}
 log_shipper_manage_services: true

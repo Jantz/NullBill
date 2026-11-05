@@ -444,9 +444,16 @@ def test_logs_stage_gives_each_shipper_its_own_certificate(ctx):
     apply.stage_logs(c)
     playbooks = [call[1:] for call in c.reach.calls if call[0] == "playbook"]
     names = [next(iter(p[1])) for p in playbooks]
-    assert names == ["router", "pbs", "operator", "workspace"]
+    assert names == ["router", "pbs", "operator", "workspace", "pve"]
     certs = {p[2]["log_shipper_cert"] for p in playbooks}
-    assert len(certs) == 4
+    assert len(certs) == 5
+    # The host ships its own SSH logins, and learns the gate's address,
+    # which its LAN resolver cannot give it.
+    host = playbooks[4]
+    assert host[1]["pve"] == apply.connection(c, None)
+    assert host[2]["log_shipper_host"] == "pve"
+    assert host[2]["log_shipper_resolve"] == {"monitoring.nullbill.internal": c.bare["guests"]["monitoring"]["ip"]}
+    assert "log_shipper_resolve" not in playbooks[3][2]
     workspace = playbooks[3][2]
     assert workspace["log_shipper_url"] == "https://monitoring.nullbill.internal:3100/loki/api/v1/push"
     assert workspace["log_shipper_host"] == "workspace"

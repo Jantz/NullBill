@@ -739,19 +739,30 @@ def shippers(ctx: Context) -> list[str]:
     return [n for n in guests if n == "operator" or n in agent_guests(ctx) or n in vms]
 
 
+# The host label and certificate name of the PVE host's own shipper.
+HOST_SHIPPER = "pve"
+
+
 def stage_logs(ctx: Context) -> None:
+    """Agent commands and SSH logins to Loki, from each shipper guest and
+    from the PVE host. The host asks the owner's LAN for names, so it is
+    given the gate's address."""
     if not planned(ctx, "monitoring"):
         return
     root = ca_root(ctx, "logs")
-    for name in shippers(ctx):
-        cert, key = shipper_cert(ctx, "logs", name)
+    gate = fqdn(ctx, "monitoring")
+    for name in [*shippers(ctx), None]:
+        label = name or HOST_SHIPPER
+        cert, key = shipper_cert(ctx, "logs", label)
         variables = {
-            "log_shipper_url": f"https://{fqdn(ctx, 'monitoring')}:3100/loki/api/v1/push",
-            "log_shipper_host": name,
+            "log_shipper_url": f"https://{gate}:3100/loki/api/v1/push",
+            "log_shipper_host": label,
             "log_shipper_ca": root,
             "log_shipper_cert": cert,
             "log_shipper_key": key,
         }
+        if name is None:
+            variables["log_shipper_resolve"] = {gate: ctx.bare["guests"]["monitoring"]["ip"]}
         run_playbook(ctx, "logs", "log-shipper.yml", name, variables)
 
 

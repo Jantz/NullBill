@@ -21,11 +21,12 @@ json.dump({
     "monitoring_shipper_ca": read("shipper-ca.crt"),
     "log_shipper_ca": read("ca.crt"), "log_shipper_cert": read("shipper.crt"), "log_shipper_key": read("shipper.key"),
     "log_shipper_host": "workspace",
+    # As apply sets it on the PVE host, whose resolver knows no NullBill names.
+    "log_shipper_resolve": {"monitoring.nullbill.internal": "127.0.0.1"},
 }, open(sys.argv[1], "w"))
 PY
 ansible-playbook -i localhost, -c local -e monitoring_manage_services=false -e "@$vars" /ansible/monitoring.yml >/tmp/mon.log 2>&1 ||
   { cat /tmp/mon.log; fail "monitoring role"; }
-echo "127.0.0.1 monitoring.nullbill.internal" >>/etc/hosts
 setpriv --reuid=loki --regid=nogroup --init-groups loki -config.file=/etc/loki/config.yml >/tmp/loki.log 2>&1 &
 nginx
 for _ in $(seq 60); do curl -fsS http://127.0.0.1:3101/ready >/dev/null 2>&1 && break; sleep 1; done
@@ -41,6 +42,8 @@ start_journald
 /usr/sbin/sshd # logs to the journal, as on a guest
 
 converge log-shipper.yml -e log_shipper_manage_services=false -e "@$vars"
+[ "$(grep -c ' monitoring.nullbill.internal ' /etc/hosts)" = 1 ] || fail "the gate's name in /etc/hosts once"
+pass "the gate's name is added for a machine whose resolver does not know it"
 
 start_shipper() {
   setpriv --reuid=nb-shipper --regid=nb-shipper --init-groups \
