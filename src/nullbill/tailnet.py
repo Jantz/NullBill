@@ -14,6 +14,11 @@ from nullbill.render import Note, strip_notes
 
 OWNER = "owner"
 TAG = "tag:nb-vpn"
+# A device the owner tags for a remote agent (docs/runbooks/agent-access.md)
+# reaches the page's agent API and nothing else; the page still wants the
+# agent's own token. An agent on the owner's own device goes as the owner.
+AGENT_TAG = "tag:nb-agent"
+PAGE_PORT = 8443
 
 
 def group(role: str) -> str:
@@ -65,11 +70,18 @@ def _grants(plan: dict, model: dict) -> list[dict]:
     return [{"src": [group(role)], "dst": list(dst), "ip": ports} for (role, dst), ports in by_dest.items()]
 
 
+def _page(plan: dict) -> str | None:
+    """The page's address, when remote agents can reach it over the tailnet."""
+    guests = plan["guests"]
+    return guests["nullbill"]["ip"] if "nullbill" in guests and "vpn" in guests else None
+
+
 def _tests(plan: dict, model: dict) -> list[dict]:
     """Assertions Tailscale evaluates on every policy push; a failing one rejects the push."""
     host = plan["zones"]["mgmt"]["host_ip"]
     # A non-owner must be refused the host and the router, both on mgmt.
     denied = [f"{host}:8006", f"{host}:22", f"{plan['zones']['mgmt']['gateway']}:22"]
+    page = _page(plan)
     tests = []
     for role in sorted({p["role"] for p in model["people"].values()}):
         login = next(p["login"] for p in model["people"].values() if p["role"] == role)
@@ -78,6 +90,8 @@ def _tests(plan: dict, model: dict) -> list[dict]:
         if role != OWNER:
             test["deny"] = denied
         tests.append(test)
+    if page:
+        tests.append({"src": AGENT_TAG, "proto": "tcp", "accept": [f"{page}:{PAGE_PORT}"], "deny": denied})
     return tests
 
 
@@ -95,11 +109,17 @@ def render_tailnet(plan_with_notes: dict, model: dict) -> dict[str, str]:
     groups: dict[str, list[str]] = {}
     for person in model["people"].values():
         groups.setdefault(group(person["role"]), []).append(person["login"])
+    page = _page(plan)
+    grants = _grants(plan, model)
+    tag_owners = {TAG: [group(OWNER)]}
+    if page:
+        tag_owners[AGENT_TAG] = [group(OWNER)]
+        grants.append({"src": [AGENT_TAG], "dst": [page], "ip": [f"tcp:{PAGE_PORT}"]})
     policy = {
         "groups": {g: sorted(m) for g, m in sorted(groups.items())},
-        "tagOwners": {TAG: [group(OWNER)]},
+        "tagOwners": tag_owners,
         "autoApprovers": {"routes": {model["network"]["base"]: [TAG]}},
-        "grants": _grants(plan, model),
+        "grants": grants,
         "tests": _tests(plan, model),
     }
     return {"policy.json": json.dumps(policy, indent=2) + "\n"}

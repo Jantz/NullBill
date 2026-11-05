@@ -32,7 +32,7 @@ from pathlib import Path
 import yaml
 
 from nullbill import lan
-from nullbill.apply import NTFY
+from nullbill.apply import NTFY, SPKI
 from nullbill.cli import plan_text
 from nullbill.errors import NullBillError
 from nullbill.model import build_model
@@ -64,6 +64,14 @@ AGENT_CREDENTIALS = {"sk-ant-api": ("anthropic_api_key", "API key"), "sk-ant-oat
 # anything else, read other jobs' logs, or use the owner's API.
 AGENT_TOKEN = "web/agent-token.sha256"
 AGENT_ACTIONS = {"verify"}
+# Remote agents, such as one on the owner's laptop, get the same verify-only
+# API with a token each that the owner makes and revokes on the page. Their
+# requests arrive through the vpn guest, as everything from the tailnet does,
+# and are accepted from its address only. The page keeps each token's
+# SHA-256 here, never the token. Every agent request goes to the journal
+# with the agent's name.
+REMOTE_AGENTS = "web/remote-agents.json"
+REMOTE_AGENT_NAME = re.compile(r"[a-z][a-z0-9-]{0,30}")
 # A Tailscale auth key logs the vpn guest in once; apply forgets it after.
 TAILSCALE_KEY = re.compile(r"tskey-auth-[A-Za-z0-9-]{8,200}")
 TAILSCALE_CLIENT_ID = re.compile(r"[A-Za-z0-9]{6,64}")
@@ -432,18 +440,68 @@ class App:
         base, _ = self.network()
         return base is not None and not lan.inside(client, base)
 
-    def agent_valid(self, authorization: str | None, client: str) -> bool:
-        """A request from the runtime agent: its token, from the operator."""
-        path = self.home / AGENT_TOKEN
-        scheme, _, token = (authorization or "").partition(" ")
-        if scheme != "Bearer" or not token or not path.exists():
-            return False
+    def guest_ip(self, name: str) -> str | None:
         plan = self.home / "plan.yaml"
         loaded = (yaml.safe_load(plan.read_text()) or {}) if plan.exists() else {}
-        operator = ((loaded.get("guests") or {}).get("operator") or {}).get("ip")
-        if operator is None or client.removeprefix("::ffff:") != operator:
-            return False
-        return hmac.compare_digest(hashlib.sha256(token.encode()).hexdigest(), path.read_text().strip())
+        return ((loaded.get("guests") or {}).get(name) or {}).get("ip")
+
+    def agent(self, authorization: str | None, client: str) -> str | None:
+        """Which agent a request is from: "operator" for the runtime agent's
+        token from the operator, "remote:<name>" for a remote agent's token
+        through the vpn guest, else None."""
+        scheme, _, token = (authorization or "").partition(" ")
+        if scheme != "Bearer" or not token:
+            return None
+        digest = hashlib.sha256(token.encode()).hexdigest()
+        client = client.removeprefix("::ffff:")
+        path = self.home / AGENT_TOKEN
+        operator = self.guest_ip("operator")
+        if operator is not None and client == operator and path.exists():
+            if hmac.compare_digest(digest, path.read_text().strip()):
+                return "operator"
+        vpn = self.guest_ip("vpn")
+        if vpn is not None and client == vpn:
+            # Every name is compared, so the time taken does not tell which matched.
+            matched = [name for name, known in self.remote_agents().items() if hmac.compare_digest(digest, known)]
+            if matched:
+                return f"remote:{matched[0]}"
+        return None
+
+    def remote_agents(self) -> dict[str, str]:
+        path = self.home / REMOTE_AGENTS
+        return json.loads(path.read_text()) if path.exists() else {}
+
+    def add_remote_agent(self, body: dict) -> dict:
+        """A new remote agent's token, shown once, with what it needs to reach the page."""
+        name = str(body.get("name", "")).strip()
+        if not REMOTE_AGENT_NAME.fullmatch(name):
+            raise NullBillError("name the agent with lowercase letters, digits and dashes, such as laptop")
+        page = self.guest_ip("nullbill")
+        if page is None or self.guest_ip("vpn") is None:
+            raise NullBillError("remote agents come in over Tailscale; plan the vpn guest and run setup first")
+        token = secrets.token_urlsafe(32)
+        with self.lock:
+            known = self.remote_agents()
+            if name in known:
+                raise NullBillError(f"an agent named {name} exists; revoke it first to make a new token")
+            known[name] = hashlib.sha256(token.encode()).hexdigest()
+            _write_private(self.home / REMOTE_AGENTS, json.dumps(known, indent=2) + "\n")
+        print(f"nullbill-web: remote agent {name} added", file=sys.stderr, flush=True)
+        return {"name": name, "token": token, "url": f"https://{page}:8443/", "spki": self.spki()}
+
+    def revoke_remote_agent(self, body: dict) -> None:
+        name = str(body.get("name", ""))
+        with self.lock:
+            known = self.remote_agents()
+            if known.pop(name, None) is None:
+                raise NullBillError(f"no remote agent named {name!r}")
+            _write_private(self.home / REMOTE_AGENTS, json.dumps(known, indent=2) + "\n")
+        print(f"nullbill-web: remote agent {name} revoked", file=sys.stderr, flush=True)
+
+    def spki(self) -> str:
+        cert = self.home / "web" / "cert.pem"
+        done = subprocess.run(["sh", "-c", SPKI, "sh", str(cert)], capture_output=True, text=True, check=False)
+        return done.stdout.strip()
 
     def agent_jobs(self) -> list[dict]:
         listed = sorted(self.jobs.values(), key=lambda j: j.started, reverse=True)
@@ -453,7 +511,7 @@ class App:
         return client.removeprefix("::ffff:") == self.network()[1]
 
     # Jobs.
-    def start(self, action: str, stage: str | None = None, client: str = "") -> Job:
+    def start(self, action: str, stage: str | None = None, client: str = "", by: str = "owner") -> Job:
         if action == "keep-lan-closed" and not self.via_vpn(client):
             raise NullBillError("press Keep it closed on the page opened over Tailscale; that press is what shows Tailscale works")
         fixed = LAN_ACTIONS | SCHEDULED
@@ -474,7 +532,7 @@ class App:
             with os.fdopen(fd, "w") as out:
                 argv = ["sh", "-c", JOB_WRAPPER, str(job.rc_file), *self.command, *args]
                 job.process = subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, env=env, stdin=subprocess.DEVNULL)
-            meta = {"action": action, "args": args, "started": job.started, "pid": job.process.pid}
+            meta = {"action": action, "args": args, "started": job.started, "pid": job.process.pid, "by": by}
             _write_private(job.meta_file, json.dumps(meta))
             self.jobs[job_id] = job
             return job
@@ -544,6 +602,7 @@ class App:
             "agent_credential": self.agent_credential(),
             "tailscale_key": self.tailscale_key(),
             "tailscale_client": self.tailscale_client(),
+            "remote_agents": sorted(self.remote_agents()),
             "lan": {"state": lan.state(self.home), "via_vpn": self.via_vpn(client), "minutes": lan.REVERT_AFTER_S // 60},
             "job": self.job_view(latest) | {"text": ""} if latest else None,
         }
@@ -609,11 +668,14 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 return self.json(200, app.job_view(app.jobs[match[1]], offset(query)))
             return self.json(404, {"error": "not found"})
 
-        def agent_authed(self) -> bool:
-            if app.agent_valid(self.headers.get("Authorization"), self.client()):
-                return True
-            self.json(401, {"error": "not the runtime agent"})
-            return False
+        def agent_authed(self) -> str | None:
+            """The agent's name, logged with the request, or None after a 401."""
+            agent = app.agent(self.headers.get("Authorization"), self.client())
+            path = self.path.partition("?")[0]
+            print(f"nullbill-web: agent {agent or 'refused'} from {self.client()}: {self.command} {path}", file=sys.stderr, flush=True)
+            if agent is None:
+                self.json(401, {"error": "not the runtime agent"})
+            return agent
 
         def agent_get(self, path: str, query: str) -> None:
             if not self.agent_authed():
@@ -641,10 +703,11 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
             except ValueError:
                 return self.json(400, {"error": "body is not JSON"})
             if self.path == "/api/agent/verify":
-                if not self.agent_authed():
+                agent = self.agent_authed()
+                if not agent:
                     return
                 try:
-                    return self.json(200, app.job_view(app.start("verify", client=self.client())))
+                    return self.json(200, app.job_view(app.start("verify", client=self.client(), by=agent)))
                 except NullBillError as exc:
                     return self.json(409, {"error": "; ".join(exc.messages)})
             if self.path == "/api/login":
@@ -669,6 +732,11 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 if self.path == "/api/agent":
                     app.save_agent_credential(body)
                     return self.json(200, {"ok": True, "agent_credential": app.agent_credential()})
+                if self.path == "/api/remote-agents":
+                    return self.json(200, app.add_remote_agent(body))
+                if self.path == "/api/remote-agents/revoke":
+                    app.revoke_remote_agent(body)
+                    return self.json(200, {"ok": True, "remote_agents": sorted(app.remote_agents())})
                 if self.path == "/api/tailscale-client":
                     app.save_tailscale_client(body)
                     return self.json(200, {"ok": True, "tailscale_client": app.tailscale_client()})

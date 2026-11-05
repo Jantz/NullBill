@@ -458,6 +458,50 @@ def test_the_runtime_agent_may_run_verify_and_read_its_output_only(site):
     assert agent.call("/api/agent/apply", {})[0] == 401
 
 
+def test_a_remote_agent_gets_the_same_verify_only_api_through_the_vpn_guest(site, capfd):
+    app, client = site
+    sign_in(app, client)
+    assert client.call("/api/remote-agents", {"name": "laptop"})[0] == 400  # no vpn guest planned
+    # The test client stands in for the vpn guest, through which the tailnet comes.
+    (app.home / "plan.yaml").write_text(
+        "guests:\n  vpn:\n    ip: 127.0.0.1\n  nullbill:\n    ip: 10.42.1.2\n  operator:\n    ip: 10.42.1.16\n"
+    )
+    assert client.call("/api/remote-agents", {"name": "Laptop!"})[0] == 400
+    status, made = client.call("/api/remote-agents", {"name": "laptop"})
+    assert status == 200 and made["url"] == "https://10.42.1.2:8443/" and len(made["spki"]) == 44
+    assert client.call("/api/remote-agents", {"name": "laptop"})[0] == 400
+    stored = (app.home / "web" / "remote-agents.json").read_text()
+    assert made["token"] not in stored and made["token"] not in json.dumps(client.call("/api/state")[1])
+    assert client.call("/api/state")[1]["remote_agents"] == ["laptop"]
+    assert (app.home / "web" / "remote-agents.json").stat().st_mode & 0o777 == 0o600
+
+    agent = Client(client.port, app.home / "web" / "cert.pem")
+    agent.tls = client.tls
+    agent.bearer = made["token"]
+    status, job = agent.call("/api/agent/verify", {})
+    assert status == 200 and job["args"] == ["verify"]
+    while agent.call(f"/api/agent/jobs/{job['id']}")[1]["state"] == "running":
+        time.sleep(0.05)
+    assert json.loads((app.home / "jobs" / f"{job['id']}.json").read_text())["by"] == "remote:laptop"
+    # Verify only, as for the operator.
+    assert agent.call("/api/jobs", {"action": "apply"})[0] == 401
+    assert agent.call("/api/agent/apply", {})[0] == 401
+    assert "nullbill-web: agent remote:laptop from 127.0.0.1: POST /api/agent/verify" in capfd.readouterr().err
+    # The operator's token does not work from the vpn guest, nor a remote one from elsewhere.
+    (app.home / "web" / "agent-token.sha256").write_text(web.hashlib.sha256(b"agent-token").hexdigest() + "\n")
+    agent.bearer = "agent-token"
+    assert agent.call("/api/agent/jobs")[0] == 401
+    agent.bearer = made["token"]
+    (app.home / "plan.yaml").write_text("guests:\n  vpn:\n    ip: 10.42.6.11\n  nullbill:\n    ip: 10.42.1.2\n")
+    assert agent.call("/api/agent/jobs")[0] == 401
+    (app.home / "plan.yaml").write_text("guests:\n  vpn:\n    ip: 127.0.0.1\n  nullbill:\n    ip: 10.42.1.2\n")
+    assert agent.call("/api/agent/jobs")[0] == 200
+    # Revoked: refused at once.
+    assert client.call("/api/remote-agents/revoke", {"name": "laptop"}) == (200, {"ok": True, "remote_agents": []})
+    assert agent.call("/api/agent/jobs")[0] == 401
+    assert "agent refused from 127.0.0.1: GET /api/agent/jobs" in capfd.readouterr().err
+
+
 def test_a_job_outlives_a_restart_of_the_page_and_shows_again(tmp_path):
     home = tmp_path / "home"
     home.mkdir(mode=0o700)

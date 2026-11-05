@@ -35,6 +35,41 @@ For long work, start it inside `tmux` (`tmux new -s agent`, detach with
 Ctrl-b d, `tmux attach -t agent` later) so it keeps running when your SSH
 connection ends.
 
+## Agents on other computers
+
+An agent that runs elsewhere, such as Claude Code on your laptop, gets the
+same API as `nb-page` and nothing more: start `nullbill verify` and read
+verify's output. It cannot start setup, read other jobs or use the page as
+you.
+
+1. On the page under step 7, name it under **Agents on other computers**
+   and press **Make a token**. The page shows `NB_PAGE_URL`, `NB_PAGE_SPKI`
+   and `NB_PAGE_TOKEN` once; give them to the agent (its environment, or a
+   file only it reads). The page keeps the token's SHA-256 only.
+2. The computer needs to be on your tailnet. Signed in as you, it already
+   reaches the page. A computer that is not yours joins with an auth key
+   tagged `tag:nb-agent` (Settings, Keys; Pre-approved, not Reusable). The
+   tailnet policy lets that tag reach the page's port and nothing else,
+   and its tests check that on every push.
+3. The calls, which pin the page's key the way `nb-page` does:
+
+   ```sh
+   page() {
+     curl -sS -k --pinnedpubkey "sha256//$NB_PAGE_SPKI" \
+       -H "Authorization: Bearer $NB_PAGE_TOKEN" -H 'X-NullBill: 1' "$@"
+   }
+   page -X POST -H 'Content-Type: application/json' -d '{}' "${NB_PAGE_URL}api/agent/verify"  # starts verify: {"id": ...}
+   page "${NB_PAGE_URL}api/agent/jobs/<id>?offset=0"  # text, offset, state: running, done or failed
+   page "${NB_PAGE_URL}api/agent/jobs"                # verify jobs and their state
+   ```
+
+The page accepts a remote agent's token only from the vpn guest's address,
+which is where everything from the tailnet arrives, and the operator's
+token only from the operator. Each agent request goes to the nullbill
+container's journal with the agent's name (`journalctl -u nullbill-web |
+grep 'agent remote:'`), and each verify job records who started it (`by`
+in `jobs/<id>.json`). **Revoke** on the page refuses the token at once.
+
 ## Read what it did
 
 In Grafana (`http://monitoring.<your domain>:3000` over the VPN, Explore, Loki) or with

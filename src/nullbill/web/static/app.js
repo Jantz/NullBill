@@ -71,6 +71,25 @@ function renderTailscaleClient(saved) {
     : "None saved. Until one is, the server stays off Tailscale.";
 }
 
+function renderRemoteAgents(names) {
+  const list = $("remote-agents");
+  list.replaceChildren(...names.map((name) => {
+    const item = document.createElement("li");
+    const revoke = document.createElement("button");
+    revoke.type = "button";
+    revoke.className = "link";
+    revoke.textContent = "Revoke";
+    revoke.addEventListener("click", async () => {
+      try {
+        renderRemoteAgents((await api("/api/remote-agents/revoke", {name})).remote_agents);
+        $("remote-agent-token").hidden = true;
+      } catch (error) { showError(error); }
+    });
+    item.append(`${name} `, revoke);
+    return item;
+  }));
+}
+
 function renderVpn(waiting) {
   $("vpn-result").textContent = waiting
     ? "A key is saved; the next setup run uses it."
@@ -147,6 +166,7 @@ async function refresh() {
   renderAgent(state.agent_credential);
   renderTailscaleClient(state.tailscale_client);
   renderVpn(state.tailscale_key);
+  renderRemoteAgents(state.remote_agents);
   renderLan(state.lan);
   clearInterval(statusTimer);
   refreshStatus().catch(showError);
@@ -225,6 +245,21 @@ document.addEventListener("DOMContentLoaded", () => {
       $("tailscale-client-id").value = "";
       $("tailscale-client-secret").value = "";
       renderTailscaleClient(result.tailscale_client);
+    } catch (error) { showError(error); }
+  });
+  $("remote-agent-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const made = await api("/api/remote-agents", {name: $("remote-agent-name").value});
+      $("remote-agent-name").value = "";
+      $("remote-agent-token").textContent = [
+        `Agent ${made.name}: shown once, keep it like a password.`,
+        `NB_PAGE_URL=${made.url}`,
+        `NB_PAGE_SPKI=${made.spki}`,
+        `NB_PAGE_TOKEN=${made.token}`,
+      ].join("\n");
+      $("remote-agent-token").hidden = false;
+      renderRemoteAgents((await api("/api/state")).remote_agents);
     } catch (error) { showError(error); }
   });
   $("vpn-form").addEventListener("submit", async (event) => {

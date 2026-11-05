@@ -119,6 +119,16 @@
         <button type="submit">Save</button>
         <span id="vpn-result"></span>
       </form>
+      <h3>Agents on other computers</h3>
+      <p>A coding agent elsewhere, such as on your laptop, can run the checks and read their output over Tailscale, and nothing else. Name it and the page shows its token once; revoke it here when it is done. An agent on a computer that is not signed in as you needs that computer on your tailnet with an auth key tagged <code>tag:nb-agent</code>, which reaches only this page. See <a href="https://github.com/Jantz/NullBill/blob/main/docs/runbooks/agent-access.md" rel="noopener noreferrer" target="_blank">agent-access.md</a> for the calls.</p>
+      <form id="remote-agent-form">
+        <label>Agent name
+          <input id="remote-agent-name" autocomplete="off" placeholder="laptop">
+        </label>
+        <button type="submit">Make a token</button>
+      </form>
+      <pre id="remote-agent-token" hidden></pre>
+      <ul id="remote-agents"></ul>
     </section>
 
     <section>

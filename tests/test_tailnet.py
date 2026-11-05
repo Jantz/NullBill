@@ -6,6 +6,7 @@ from conftest import fixture_config
 from nullbill.errors import NullBillError
 from nullbill.model import build_model, merge
 from nullbill.plan import build_plan
+from nullbill.render import strip_notes
 from nullbill.tailnet import render_tailnet
 
 
@@ -75,3 +76,15 @@ def test_policy_tests_deny_host_to_default_role(facts):
     assert tests["dev-b@example.internal"]["deny"] == ["10.42.1.254:8006", "10.42.1.254:22", "10.42.1.1:22"]
     assert "10.42.1.254:8006" in tests["owner-a@example.internal"]["accept"]
     assert "deny" not in tests["owner-a@example.internal"]
+
+
+def test_a_remote_agent_tag_reaches_the_page_and_nothing_else(facts):
+    plan, model = build(facts, "small", {})
+    p = json.loads(render_tailnet(plan, model)["policy.json"])
+    assert p["tagOwners"]["tag:nb-agent"] == ["group:nb-owner"]
+    bare = strip_notes(plan)
+    page = bare["guests"]["nullbill"]["ip"]
+    agent = [g for g in p["grants"] if "tag:nb-agent" in g["src"]]
+    assert agent == [{"src": ["tag:nb-agent"], "dst": [page], "ip": ["tcp:8443"]}]
+    (test,) = [t for t in p["tests"] if t["src"] == "tag:nb-agent"]
+    assert test["accept"] == [f"{page}:8443"] and f"{bare['zones']['mgmt']['host_ip']}:22" in test["deny"]

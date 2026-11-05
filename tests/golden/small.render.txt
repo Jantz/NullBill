@@ -716,6 +716,9 @@ WantedBy=multi-user.target
   "tagOwners": {
     "tag:nb-vpn": [
       "group:nb-owner"
+    ],
+    "tag:nb-agent": [
+      "group:nb-owner"
     ]
   },
   "autoApprovers": {
@@ -830,6 +833,17 @@ WantedBy=multi-user.target
         "tcp:8006",
         "tcp:22"
       ]
+    },
+    {
+      "src": [
+        "tag:nb-agent"
+      ],
+      "dst": [
+        "10.42.1.2"
+      ],
+      "ip": [
+        "tcp:8443"
+      ]
     }
   ],
   "tests": [
@@ -846,6 +860,18 @@ WantedBy=multi-user.target
         "10.42.2.17:22",
         "10.42.2.17:443",
         "10.42.3.19:22"
+      ]
+    },
+    {
+      "src": "tag:nb-agent",
+      "proto": "tcp",
+      "accept": [
+        "10.42.1.2:8443"
+      ],
+      "deny": [
+        "10.42.1.254:8006",
+        "10.42.1.254:22",
+        "10.42.1.1:22"
       ]
     }
   ]
