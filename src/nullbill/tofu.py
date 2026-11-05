@@ -208,7 +208,9 @@ def _vm(name: str, guest: dict, plan: dict, model: dict, storage: str) -> dict:
             "initialization": {
                 "datastore_id": storage,
                 "ip_config": ip_config,
-                "dns": _dns(plan, zone),
+                # The router resolves through its uplink's DHCP until its own
+                # dnsmasq runs; every other guest asks the router.
+                **({} if name == "router" else {"dns": _dns(plan, zone)}),
                 "user_account": {"username": "nullbill", "keys": KEYS},
             },
         }

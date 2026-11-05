@@ -1,0 +1,7 @@
+# The router VM: nftables, two dnsmasq instances and its interfaces, all
+# rendered by nullbill into build/router. apply runs this with router_files.
+- name: Zone router
+  hosts: all
+  become: false
+  roles:
+    - router

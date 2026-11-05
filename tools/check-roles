@@ -12,8 +12,9 @@ docker build -q -t nullbill-role-check "$ctx" >/dev/null
 # PBS refuses to run unless /run/proxmox-backup is a tmpfs. Its certificate
 # takes the host's FQDN as CN, limited to 64 bytes, so give the container a
 # short name and drop the runner's DNS search domain.
+# nft -c needs CAP_NET_ADMIN, in the container's own network namespace.
 for check in ansible/roles/*/tests/check.sh; do
   role=$(basename "$(dirname "$(dirname "$check")")")
   echo "$role:"
-  docker run --rm --hostname role-check --dns-search . --tmpfs /run/proxmox-backup -v "$PWD/ansible:/ansible:ro" nullbill-role-check bash "/ansible/roles/$role/tests/check.sh"
+  docker run --rm --cap-add NET_ADMIN --hostname role-check --dns-search . --tmpfs /run/proxmox-backup -v "$PWD/ansible:/ansible:ro" nullbill-role-check bash "/ansible/roles/$role/tests/check.sh"
 done

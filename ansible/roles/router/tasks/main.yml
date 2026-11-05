@@ -1,0 +1,83 @@
+- name: Files from apply
+  ansible.builtin.assert:
+    that:
+      - router_files | length > 0
+      - "'/etc/nftables.conf' in router_files"
+    fail_msg: router_files is empty; run this through nullbill apply
+
+- name: Router packages
+  ansible.builtin.apt:
+    name: [nftables, dnsmasq-base, ifupdown]
+    update_cache: true
+
+# cloud-init configured the first boot's network; from now on the rendered
+# interfaces file does, with names the .link files give each leg.
+- name: Keep cloud-init away from the network
+  ansible.builtin.copy:
+    dest: /etc/cloud/cloud.cfg.d/99-nullbill-network.cfg
+    content: "network: {config: disabled}\n"
+    mode: "0644"
+
+- name: Remove cloud-init's interface file
+  ansible.builtin.file:
+    path: /etc/network/interfaces.d/50-cloud-init
+    state: absent
+  register: router_cloud_init_file
+
+- name: Directories for the rendered files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop: "{{ router_files.keys() | map('dirname') | unique | sort }}"
+
+# nft and dnsmasq check each file before it replaces the old one, so a
+# broken render never lands where a reboot would load it.
+- name: Rendered files
+  ansible.builtin.copy:
+    dest: "{{ item.key }}"
+    content: "{{ item.value }}"
+    mode: "0644"
+    validate: "{{ router_validate.get(item.key, router_validate_dnsmasq if item.key is match('^/etc/nullbill/dnsmasq-.*[.]conf$') else omit) }}"
+  loop: "{{ router_files | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  register: router_placed
+
+- name: Services
+  when: router_manage_services | bool
+  block:
+    - name: Load sysctl settings
+      ansible.builtin.command: sysctl --system
+      when: router_placed.changed
+      changed_when: true
+
+    - name: nftables and both dnsmasq instances
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        enabled: true
+        daemon_reload: true
+      loop: [nftables, nullbill-dnsmasq@internal, nullbill-dnsmasq@external]
+
+    # Interface names come from the .link files, which udev applies at boot,
+    # so a changed network layout takes a reboot; anything else a restart.
+    - name: Reboot into the new interfaces
+      ansible.builtin.reboot:
+        reboot_timeout: 600
+      when: >-
+        router_cloud_init_file.changed or
+        (router_placed.results | selectattr('changed') | map(attribute='item.key')
+         | select('match', '^/etc/(network/interfaces|systemd/network/)') | list | length > 0)
+
+    - name: Load the ruleset and restart dnsmasq after a change
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: restarted
+      loop: [nftables, nullbill-dnsmasq@internal, nullbill-dnsmasq@external]
+      when: router_placed.changed
+
+    - name: Running
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: started
+      loop: [nftables, nullbill-dnsmasq@internal, nullbill-dnsmasq@external]

@@ -80,7 +80,8 @@ services:
     ports:
       - {port: 53, proto: udp, from: ["zone:*"]}
       - {port: 53, proto: tcp, from: ["zone:*"]}
-      - {port: 22, proto: tcp, from: ["role:owner"]}
+      # apply reaches VMs over SSH through the host (ProxyJump).
+      - {port: 22, proto: tcp, from: ["host", "role:owner"]}
   nullbill:
     id: 2
     kind: lxc
@@ -147,6 +148,7 @@ services:
     floor: {cores: 1, memory_mib: 2048, disk_gib: 8}
     ports:
       - {port: 8007, proto: tcp, from: ["host", "role:owner"]}
+      - {port: 22, proto: tcp, from: ["host"]}
   operator:
     id: 16
     kind: lxc

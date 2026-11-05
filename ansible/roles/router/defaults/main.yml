@@ -1,0 +1,4 @@
+# Files from build/router keyed by their path on the router (/etc/...);
+# apply passes them. The role places them and starts what they describe.
+router_files: {}
+router_manage_services: true

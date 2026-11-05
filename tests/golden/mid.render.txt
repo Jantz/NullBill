@@ -180,6 +180,7 @@ policy_out: DROP
 [RULES]
 IN ACCEPT -source +nb-host -p tcp -dport 8007 # host
 IN ACCEPT -source +nb-svc-vpn -p tcp -dport 8007 # role:owner
+IN ACCEPT -source +nb-host -p tcp -dport 22 # host
 OUT ACCEPT -dest +nb-svc-router -p udp -dport 53 # to router
 OUT ACCEPT -dest +nb-svc-router -p tcp -dport 53 # to router
 OUT ACCEPT -dest +nb-svc-egress-proxy -p tcp -dport 3128 # to egress-proxy
@@ -648,6 +649,7 @@ table inet nullbill {
         iifname { "nb-build", "nb-windows" } udp dport 67 accept # DHCP for pool clones
         ip saddr { 10.42.0.0/16 } udp dport 53 accept # zone:*
         ip saddr { 10.42.0.0/16 } tcp dport 53 accept # zone:*
+        ip saddr { 10.42.1.254 } tcp dport 22 accept # host
         ip saddr { 10.42.6.11 } tcp dport 22 accept # role:owner
     }
 
@@ -667,6 +669,7 @@ table inet nullbill {
         ip saddr { 10.42.1.16 } ip daddr { 10.42.1.14 } tcp dport 9090 accept # service:operator to monitoring
         ip saddr { 10.42.1.254 } ip daddr { 10.42.1.15 } tcp dport 8007 accept # host to pbs
         ip saddr { 10.42.6.11 } ip daddr { 10.42.1.15 } tcp dport 8007 accept # role:owner to pbs
+        ip saddr { 10.42.1.254 } ip daddr { 10.42.1.15 } tcp dport 22 accept # host to pbs
         ip saddr { 10.42.6.11 } ip daddr { 10.42.2.17 } tcp dport 443 accept # role:owner to forgejo
         ip saddr { 10.42.3.0/24 } ip daddr { 10.42.2.17 } tcp dport 443 accept # zone:build to forgejo
         ip saddr { 10.42.5.0/24 } ip daddr { 10.42.2.17 } tcp dport 443 accept # zone:windows to forgejo
@@ -1989,12 +1992,6 @@ WantedBy=multi-user.target
               }
             }
           ],
-          "dns": {
-            "domain": "nullbill.internal",
-            "servers": [
-              "10.42.1.1"
-            ]
-          },
           "user_account": {
             "username": "nullbill",
             "keys": "${var.ssh_authorized_keys}"

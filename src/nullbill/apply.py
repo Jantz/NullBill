@@ -232,6 +232,13 @@ def tofu_output(ctx: Context, stage: str, name: str) -> str:
     return out
 
 
+def stage_router(ctx: Context) -> None:
+    """The router VM OpenTofu made: its rendered files, then its services."""
+    prefix = "router/"
+    files = {"/" + rel.removeprefix(prefix): text for rel, text in ctx.files.items() if rel.startswith(prefix)}
+    run_playbook(ctx, "router", "router.yml", "router", {"router_files": files})
+
+
 def stage_verify(ctx: Context) -> None:
     results = run_verify(ctx.plan, ctx.model, ctx.target, ctx.run)
     for result in results:
@@ -246,6 +253,7 @@ STAGES: list[Stage] = [
     ("render", stage_render),
     ("host", stage_host),
     ("tofu", stage_tofu),
+    ("router", stage_router),
     ("verify", stage_verify),
 ]
 

@@ -183,6 +183,7 @@ backups:
 flows:
   - zone:* -> router udp/53
   - zone:* -> router tcp/53
+  - host -> router tcp/22
   - role:owner -> router tcp/22
   - role:owner -> nullbill tcp/8443
   - zone:mgmt -> egress-proxy tcp/3128
@@ -194,6 +195,7 @@ flows:
   - service:operator -> monitoring tcp/9090
   - host -> pbs tcp/8007
   - role:owner -> pbs tcp/8007
+  - host -> pbs tcp/22
   - role:owner -> forgejo tcp/443
   - role:default -> forgejo tcp/443
   - zone:build -> forgejo tcp/443

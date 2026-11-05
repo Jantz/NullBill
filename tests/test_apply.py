@@ -131,6 +131,17 @@ def test_host_stage_runs_the_baseline_then_installs_the_lan_open_firewall(ctx):
     assert reach.files["/etc/pve/firewall/2017.fw"] == c.files["firewall/2017.fw"]
 
 
+def test_router_stage_hands_the_router_its_rendered_files(ctx):
+    c = ctx("small")
+    apply.stage_router(c)
+    (kind, playbook, hosts, variables), *rest = c.reach.calls
+    assert (kind, playbook, rest) == ("playbook", "router.yml", [])
+    assert hosts == {"router": connection(c, "router")}
+    files = variables["router_files"]
+    assert files["/etc/nftables.conf"] == c.files["router/etc/nftables.conf"]
+    assert set(files) == {"/" + rel.removeprefix("router/") for rel in c.files if rel.startswith("router/")}
+
+
 def test_host_stage_rewrites_only_what_changed(ctx):
     c = ctx()
     apply.stage_host(c)

@@ -1,0 +1,4 @@
+# Checks a rendered file must pass before it replaces the one in place.
+router_validate:
+  /etc/nftables.conf: nft -c -f %s
+router_validate_dnsmasq: dnsmasq --test --conf-file=%s
