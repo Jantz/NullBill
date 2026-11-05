@@ -40,6 +40,9 @@ class Reach(Protocol):
     def playbook(self, playbook: str, hosts: dict[str, dict], variables: dict) -> int:
         """Run ansible/<playbook> against `hosts` (name -> host vars)."""
 
+    def local(self, argv: list[str], cwd: Path, env: dict[str, str], capture: bool = False) -> tuple[int, str]:
+        """Run a program on the controller; output goes to the log unless captured."""
+
 
 class ApplyError(NullBillError):
     def __init__(self, stage: str, message: str):
@@ -138,6 +141,97 @@ def stage_host(ctx: Context) -> None:
     host_files(ctx, "host", PVE_FIREWALL, files)
 
 
+TOKEN_ID = "root@pam!nullbill"
+ROUTES_UNIT = "nullbill-routes.service"
+
+
+def host_out(ctx: Context, stage: str, command: str) -> str:
+    rc, out, err = ctx.reach.host(command)
+    if rc != 0:
+        raise ApplyError(stage, f"{command.split()[0]} on the host: {(err.strip() or f'exit {rc}')[:200]}")
+    return out
+
+
+def api_token(ctx: Context) -> str:
+    """OpenTofu's PVE token: root@pam!nullbill, not privilege-separated, kept in
+    the secrets file. Made again if the host no longer has it."""
+    listed = json.loads(host_out(ctx, "tofu", "pveum user token list root@pam --output-format json") or "[]")
+    stored = ctx.secrets.data.get("pve_api_token")
+    if stored and any(t.get("tokenid") == "nullbill" for t in listed):
+        return stored
+    if any(t.get("tokenid") == "nullbill" for t in listed):
+        host_out(ctx, "tofu", "pveum user token remove root@pam nullbill")
+    made = json.loads(
+        host_out(ctx, "tofu", "pveum user token add root@pam nullbill --privsep 0 --comment 'NullBill apply' --output-format json")
+    )
+    token = f"{TOKEN_ID}={made['value']}"
+    ctx.secrets.set("pve_api_token", token)
+    ctx.say("tofu: made PVE API token root@pam!nullbill")
+    return token
+
+
+def tofu_env(ctx: Context, stage: str = "tofu") -> dict[str, str]:
+    """What OpenTofu needs, all through the environment: nothing is written
+    in build/ or the state directory in plaintext."""
+    _, host = split_target(ctx.target)
+    variables = json.loads(ctx.files["tofu/main.tf.json"])["variable"]
+    install = json.loads((ctx.home / "install.json").read_text()) if (ctx.home / "install.json").exists() else {}
+    if "windows_iso" in variables and not os.environ.get("TF_VAR_windows_iso"):
+        raise ApplyError(stage, "Windows guests are planned but no Windows ISO is set; turn off the Windows workloads for now")
+    keys = [line for line in host_out(ctx, stage, "cat /root/.ssh/authorized_keys").splitlines() if line.startswith("ssh-")]
+    ca = ctx.home / "pve-root-ca.pem"
+    ca.write_text(host_out(ctx, stage, "cat /etc/pve/pve-root-ca.pem"))
+    key = Path.home() / ".ssh" / "id_ed25519"
+    env = {
+        "PROXMOX_VE_API_TOKEN": api_token(ctx),
+        # The provider reaches the host over SSH for disk imports.
+        "PROXMOX_VE_SSH_USERNAME": "root",
+        "PROXMOX_VE_SSH_PRIVATE_KEY": key.read_text() if key.exists() else "",
+        # PVE's certificate is signed by its own CA.
+        "SSL_CERT_FILE": str(ca),
+        "TF_VAR_pve_endpoint": f"https://{host}:8006/",
+        "TF_VAR_node_name": host_out(ctx, stage, "hostname").strip(),
+        "TF_VAR_lan_bridge": install.get("bridge", "vmbr0"),
+        "TF_VAR_ssh_authorized_keys": json.dumps(keys),
+        "TF_VAR_state_passphrase": ctx.secrets.ensure("tofu_state_passphrase"),
+        "TF_IN_AUTOMATION": "1",
+    }
+    return env
+
+
+def stage_tofu(ctx: Context) -> None:
+    work = ctx.home / "tofu"
+    work.mkdir(mode=0o700, exist_ok=True)
+    (work / "main.tf.json").write_text(ctx.files["tofu/main.tf.json"])
+    env = tofu_env(ctx)
+    # init fetches the provider from the registry, so it keeps the system CAs.
+    init_env = {k: v for k, v in env.items() if k != "SSL_CERT_FILE"}
+    for argv, extra in (
+        (["tofu", "init", "-input=false", "-no-color"], init_env),
+        (["tofu", "apply", "-auto-approve", "-input=false", "-no-color"], env),
+    ):
+        ctx.say(f"tofu: {' '.join(argv[:2])}")
+        rc, _ = ctx.reach.local(argv, work, extra)
+        if rc != 0:
+            raise ApplyError("tofu", f"{' '.join(argv[:2])} failed (exit {rc})")
+    # The host reaches the zones through the router, not its LAN gateway.
+    route = f"{ctx.model['network']['base']} via {ctx.bare['zones']['mgmt']['gateway']}"
+    unit = (
+        "[Unit]\nDescription=NullBill zone route via the router\nAfter=network-online.target\nWants=network-online.target\n\n"
+        f"[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/sbin/ip route replace {route}\n\n"
+        "[Install]\nWantedBy=multi-user.target\n"
+    )
+    host_files(ctx, "tofu", "/etc/systemd/system", {ROUTES_UNIT: unit})
+    host_out(ctx, "tofu", f"systemctl daemon-reload && systemctl enable -q {ROUTES_UNIT} && systemctl restart {ROUTES_UNIT}")
+
+
+def tofu_output(ctx: Context, stage: str, name: str) -> str:
+    rc, out = ctx.reach.local(["tofu", "output", "-raw", name], ctx.home / "tofu", tofu_env(ctx, stage), capture=True)
+    if rc != 0:
+        raise ApplyError(stage, f"tofu output {name} failed (exit {rc})")
+    return out
+
+
 def stage_verify(ctx: Context) -> None:
     results = run_verify(ctx.plan, ctx.model, ctx.target, ctx.run)
     for result in results:
@@ -151,6 +245,7 @@ Stage = tuple[str, Callable[[Context], None]]
 STAGES: list[Stage] = [
     ("render", stage_render),
     ("host", stage_host),
+    ("tofu", stage_tofu),
     ("verify", stage_verify),
 ]
 
@@ -178,6 +273,13 @@ class SshReach:
         argv = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", self.target, command]
         proc = subprocess.run(argv, input=stdin, capture_output=True, text=True, timeout=900)
         return proc.returncode, proc.stdout, proc.stderr
+
+    def local(self, argv: list[str], cwd: Path, env: dict[str, str], capture: bool = False) -> tuple[int, str]:
+        try:
+            proc = subprocess.run(argv, cwd=cwd, env=os.environ | env, capture_output=capture, text=True, check=False)
+        except FileNotFoundError as exc:
+            raise NullBillError(f"{argv[0]} not found; run tools/setup-controller") from exc
+        return proc.returncode, proc.stdout if capture else ""
 
     def playbook(self, playbook: str, hosts: dict[str, dict], variables: dict) -> int:
         # Secrets reach Ansible through a 0600 file in a private directory that

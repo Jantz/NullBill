@@ -35,10 +35,24 @@ def _bridge_ref(bridge: str) -> str:
 
 
 def _bridges(plan: dict) -> dict:
-    return {
+    bridges = {
         z["bridge"]: {"node_name": NODE, "name": z["bridge"], "comment": f"nullbill zone {name}", "autostart": True}
         for name, z in plan["zones"].items()
     }
+    # The host's own address on mgmt (.254); apply routes the other zones
+    # through the router from there.
+    mgmt = plan["zones"]["mgmt"]
+    bridges[mgmt["bridge"]]["address"] = f"{mgmt['host_ip']}/{mgmt['subnet'].split('/')[1]}"
+    return bridges
+
+
+# After a power cut, guests start in this order; the rest follow.
+BOOT_ORDER = {"router": 1, "step-ca": 2, "postgres": 3}
+LATER = 10
+
+
+def _startup(name: str) -> dict:
+    return {"order": BOOT_ORDER.get(name, LATER)}
 
 
 def _downloads(plan: dict, model: dict) -> dict:
@@ -88,6 +102,7 @@ def _container(name: str, guest: dict, plan: dict, model: dict, storage: str) ->
         "tags": TAGS,
         "unprivileged": True,
         "start_on_boot": True,
+        "startup": _startup(name),
         "started": True,
         # Debian 12's systemd needs nesting in an unprivileged container.
         "features": {"nesting": True},
@@ -149,6 +164,8 @@ def _vm(name: str, guest: dict, plan: dict, model: dict, storage: str) -> dict:
         # The guest agent is not in the base images, so tofu must not wait for it.
         "agent": {"enabled": False},
     }
+    if not pool:
+        vm["startup"] = _startup(name)
     if name == "router":
         legs = [_nic("${var.lan_bridge}", mac(0, svc["id"]))]
         legs += [_nic(z["bridge"], mac(model["zones"][zn]["index"], svc["id"])) for zn, z in plan["zones"].items()]

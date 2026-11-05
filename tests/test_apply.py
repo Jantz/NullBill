@@ -29,20 +29,48 @@ class MemoryCodec:
 
 
 class FakeReach:
-    """Records every call; the PVE host's files live in self.files."""
+    """Records every call; the PVE host's files live in self.files and its
+    API tokens in self.tokens."""
 
-    def __init__(self, fail_playbook=None):
+    def __init__(self, fail_playbook=None, fail_local=None):
         self.calls = []
         self.files = {}
+        self.tokens = []
+        self.envs = []
         self.fail_playbook = fail_playbook
+        self.fail_local = fail_local
 
     def host(self, command, stdin=None):
         self.calls.append(("host", command))
-        path = command.split('if cmp -s "$t" ')[1].split(";")[0]
-        if self.files.get(path) == stdin:
-            return 0, "same\n", ""
-        self.files[path] = stdin
-        return 0, "changed\n", ""
+        if "if cmp -s" in command:
+            path = command.split('if cmp -s "$t" ')[1].split(";")[0]
+            if self.files.get(path) == stdin:
+                return 0, "same\n", ""
+            self.files[path] = stdin
+            return 0, "changed\n", ""
+        if command == "pveum user token list root@pam --output-format json":
+            return 0, json.dumps([{"tokenid": t} for t in self.tokens]), ""
+        if command.startswith("pveum user token add root@pam nullbill"):
+            self.tokens.append("nullbill")
+            return 0, json.dumps({"full-tokenid": "root@pam!nullbill", "value": f"uuid-{len(self.calls)}"}), ""
+        if command == "pveum user token remove root@pam nullbill":
+            self.tokens.remove("nullbill")
+            return 0, "", ""
+        answers = {
+            "cat /root/.ssh/authorized_keys": "ssh-ed25519 AAAAexample nullbill@nullbill\n# comment\n",
+            "cat /etc/pve/pve-root-ca.pem": "-----BEGIN CERTIFICATE-----\nexample\n-----END CERTIFICATE-----\n",
+            "hostname": "pve\n",
+        }
+        if command in answers:
+            return 0, answers[command], ""
+        if command.startswith("systemctl "):
+            return 0, "", ""
+        return 127, "", f"fake host: unexpected {command}"
+
+    def local(self, argv, cwd, env, capture=False):
+        self.calls.append(("local", argv, cwd))
+        self.envs.append(env)
+        return (2 if argv[:2] == self.fail_local else 0), ("secret-token" if capture else "")
 
     def playbook(self, playbook, hosts, variables):
         self.calls.append(("playbook", playbook, hosts, variables))
@@ -155,3 +183,51 @@ def test_secrets_never_reach_build(ctx):
         if path.is_file():
             assert secret not in path.read_text()
     assert secret not in json.dumps(c.files)
+
+
+def test_tofu_stage_runs_init_and_apply_with_everything_in_the_environment(ctx):
+    c = ctx("small")
+    apply.stage_tofu(c)
+    local = [call for call in c.reach.calls if call[0] == "local"]
+    assert [call[1][:2] for call in local] == [["tofu", "init"], ["tofu", "apply"]]
+    assert all(call[2] == c.home / "tofu" for call in local)
+    assert (c.home / "tofu" / "main.tf.json").read_text() == c.files["tofu/main.tf.json"]
+    init_env, env = c.reach.envs
+    assert "SSL_CERT_FILE" not in init_env
+    assert env["SSL_CERT_FILE"] == str(c.home / "pve-root-ca.pem")
+    assert env["PROXMOX_VE_API_TOKEN"].startswith("root@pam!nullbill=uuid-")
+    assert env["PROXMOX_VE_API_TOKEN"] == c.secrets.get("pve_api_token")
+    assert env["TF_VAR_state_passphrase"] == c.secrets.get("tofu_state_passphrase")
+    assert env["TF_VAR_pve_endpoint"] == "https://pve.example.internal:8006/"
+    assert env["TF_VAR_node_name"] == "pve"
+    assert json.loads(env["TF_VAR_ssh_authorized_keys"]) == ["ssh-ed25519 AAAAexample nullbill@nullbill"]
+    # No secret lands in the state directory or build/.
+    for path in (c.home / "tofu").rglob("*"):
+        assert env["PROXMOX_VE_API_TOKEN"] not in path.read_text()
+    unit = c.reach.files["/etc/systemd/system/nullbill-routes.service"]
+    assert "ExecStart=/sbin/ip route replace 10.42.0.0/16 via 10.42.1.1" in unit
+
+
+def test_tofu_token_is_kept_and_remade_when_the_host_lost_it(ctx):
+    c = ctx("small")
+    first = apply.api_token(c)
+    assert apply.api_token(c) == first
+    adds = [call for call in c.reach.calls if call[1].startswith("pveum user token add")]
+    assert len(adds) == 1
+    c.reach.tokens.clear()
+    assert apply.api_token(c) != first
+
+
+def test_tofu_failure_stops_apply(ctx):
+    c = ctx("small", reach=FakeReach(fail_local=["tofu", "apply"]))
+    with pytest.raises(ApplyError, match="apply stopped at tofu: tofu apply failed"):
+        apply.stage_tofu(c)
+    assert "/etc/systemd/system/nullbill-routes.service" not in c.reach.files
+
+
+def test_windows_needs_an_iso_before_tofu(ctx, monkeypatch):
+    monkeypatch.delenv("TF_VAR_windows_iso", raising=False)
+    c = ctx("mid")
+    with pytest.raises(ApplyError, match="no Windows ISO"):
+        apply.stage_tofu(c)
+    assert [call for call in c.reach.calls if call[0] == "local"] == []

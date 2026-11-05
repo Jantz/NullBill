@@ -1082,7 +1082,8 @@ WantedBy=multi-user.target
         "node_name": "${var.node_name}",
         "name": "vmbr101",
         "comment": "nullbill zone mgmt",
-        "autostart": true
+        "autostart": true,
+        "address": "10.42.1.254/24"
       },
       "vmbr102": {
         "node_name": "${var.node_name}",
@@ -1144,6 +1145,9 @@ WantedBy=multi-user.target
         ],
         "unprivileged": true,
         "start_on_boot": true,
+        "startup": {
+          "order": 10
+        },
         "started": true,
         "features": {
           "nesting": true
@@ -1202,6 +1206,9 @@ WantedBy=multi-user.target
         ],
         "unprivileged": true,
         "start_on_boot": true,
+        "startup": {
+          "order": 10
+        },
         "started": true,
         "features": {
           "nesting": true
@@ -1260,6 +1267,9 @@ WantedBy=multi-user.target
         ],
         "unprivileged": true,
         "start_on_boot": true,
+        "startup": {
+          "order": 2
+        },
         "started": true,
         "features": {
           "nesting": true
@@ -1318,6 +1328,9 @@ WantedBy=multi-user.target
         ],
         "unprivileged": true,
         "start_on_boot": true,
+        "startup": {
+          "order": 3
+        },
         "started": true,
         "features": {
           "nesting": true
@@ -1376,6 +1389,9 @@ WantedBy=multi-user.target
         ],
         "unprivileged": true,
         "start_on_boot": true,
+        "startup": {
+          "order": 10
+        },
         "started": true,
         "features": {
           "nesting": true
@@ -1434,6 +1450,9 @@ WantedBy=multi-user.target
         ],
         "unprivileged": true,
         "start_on_boot": true,
+        "startup": {
+          "order": 10
+        },
         "started": true,
         "features": {
           "nesting": true
@@ -1492,6 +1511,9 @@ WantedBy=multi-user.target
         ],
         "unprivileged": true,
         "start_on_boot": true,
+        "startup": {
+          "order": 10
+        },
         "started": true,
         "features": {
           "nesting": true
@@ -1550,6 +1572,9 @@ WantedBy=multi-user.target
         ],
         "unprivileged": true,
         "start_on_boot": true,
+        "startup": {
+          "order": 10
+        },
         "started": true,
         "features": {
           "nesting": true
@@ -1608,6 +1633,9 @@ WantedBy=multi-user.target
         ],
         "unprivileged": true,
         "start_on_boot": true,
+        "startup": {
+          "order": 10
+        },
         "started": true,
         "features": {
           "nesting": true
@@ -1668,6 +1696,9 @@ WantedBy=multi-user.target
         ],
         "unprivileged": true,
         "start_on_boot": true,
+        "startup": {
+          "order": 10
+        },
         "started": true,
         "features": {
           "nesting": true
@@ -1728,6 +1759,9 @@ WantedBy=multi-user.target
         ],
         "unprivileged": true,
         "start_on_boot": true,
+        "startup": {
+          "order": 10
+        },
         "started": true,
         "features": {
           "nesting": true
@@ -1800,6 +1834,9 @@ WantedBy=multi-user.target
         "scsi_hardware": "virtio-scsi-single",
         "agent": {
           "enabled": false
+        },
+        "startup": {
+          "order": 1
         },
         "network_device": [
           {
@@ -1993,6 +2030,9 @@ WantedBy=multi-user.target
         "scsi_hardware": "virtio-scsi-single",
         "agent": {
           "enabled": false
+        },
+        "startup": {
+          "order": 10
         },
         "network_device": [
           {
@@ -2231,6 +2271,9 @@ WantedBy=multi-user.target
         "scsi_hardware": "virtio-scsi-single",
         "agent": {
           "enabled": false
+        },
+        "startup": {
+          "order": 10
         },
         "network_device": [
           {
