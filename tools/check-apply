@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Run apply's real Reach and secrets codec against stand-ins: a controller
+# container with the pinned tools, a PVE host container reached over SSH
+# with a fake pct, and a VM container behind it. Needs docker and network.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+ctx=$(mktemp -d)
+net=nb-apply-check-$$
+cleanup() {
+  docker rm -f "$net-pve" "$net-vm" >/dev/null 2>&1 || true
+  docker network rm "$net" >/dev/null 2>&1 || true
+  rm -rf "$ctx"
+}
+trap cleanup EXIT
+cp tools/apply-check/*.Dockerfile tools/apply-check/fake-pct requirements-apply.txt requirements-dev.txt tools/install-apply-deps "$ctx/"
+cat "${EXTRA_CA_FILE:-/dev/null}" > "$ctx/extra-ca.crt"
+docker build -q -t nullbill-apply-controller -f "$ctx/controller.Dockerfile" "$ctx" >/dev/null
+# A throwaway key for this run only, made where ssh-keygen surely exists.
+docker run --rm nullbill-apply-controller sh -c \
+  'ssh-keygen -q -t ed25519 -N "" -C apply-check -f /tmp/k && cat /tmp/k /tmp/k.pub' >"$ctx/both"
+sed '/^ssh-ed25519 /d' "$ctx/both" >"$ctx/id"
+grep '^ssh-ed25519 ' "$ctx/both" >"$ctx/id.pub"
+chmod 0600 "$ctx/id"
+for image in pve vm; do
+  docker build -q -t "nullbill-apply-$image" -f "$ctx/$image.Dockerfile" "$ctx" >/dev/null
+done
+
+# The plan's addresses: the host on mgmt at .254, the pbs VM at .15.
+docker network create --subnet 10.42.1.0/24 "$net" >/dev/null
+docker run -d --name "$net-pve" --network "$net" --ip 10.42.1.254 nullbill-apply-pve >/dev/null
+docker run -d --name "$net-vm" --network "$net" --ip 10.42.1.15 nullbill-apply-vm >/dev/null
+docker run --rm --network "$net" --ip 10.42.1.100 \
+  -v "$PWD:/repo:ro" -v "$ctx/id:/tmp/id:ro" \
+  -e NULLBILL_HOME=/nb-home -e PYTHONPATH=/repo/src \
+  nullbill-apply-controller bash -c '
+    set -euo pipefail
+    install -d -m 0700 /root/.ssh /nb-home
+    install -m 0600 /tmp/id /root/.ssh/id_ed25519
+    for _ in $(seq 20); do ssh-keyscan -T 2 10.42.1.254 >/root/.ssh/known_hosts 2>/dev/null && [ -s /root/.ssh/known_hosts ] && break; sleep 0.5; done
+    python3 /repo/tools/apply-check/drive.py'

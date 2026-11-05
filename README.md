@@ -12,8 +12,9 @@ against synthetic fixtures, and `nullbill verify` reports SKIP until there
 is a host to probe. The dry run renders the pve-firewall, router,
 egress-proxy, tailnet policy and OpenTofu files; `ansible/` holds the host
 baseline and the step-ca, Postgres, monitoring, PBS, Forgejo and CI runner
-roles. None has run
-on real hardware, and nothing applies changes to a host.
+roles. `nullbill apply` runs its first stages (host baseline, pve-firewall
+files, verify) against stand-ins in `tools/check-apply`; the rest are being
+wired (#22). None has run on real hardware.
 
 ## Use
 
@@ -25,6 +26,7 @@ export NULLBILL_HOME=~/nullbill-home   # private, backed up, outside this repo
 nullbill probe                          # read-only commands over SSH
 nullbill plan                           # writes $NULLBILL_HOME/plan.yaml
 nullbill apply --dry-run                # renders host files into $NULLBILL_HOME/build
+nullbill apply                          # applies stage by stage; see docs/runbooks/controller.md
 nullbill verify                         # PASS/FAIL/SKIP per flow; exits 1 on FAIL
 ```
 

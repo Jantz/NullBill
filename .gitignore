@@ -25,3 +25,4 @@ packer_cache/
 output-*/
 *.iso
 *.qcow2
+.ansible/

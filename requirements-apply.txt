@@ -1,0 +1,4 @@
+# What `nullbill apply` needs on the controller beyond the package itself.
+# tools/install-apply-deps installs these and the pinned Ansible collection.
+ansible-core==2.19.15
+paramiko==3.5.1

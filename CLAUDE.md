@@ -7,7 +7,8 @@ Guidance for Claude sessions working in this repository.
 NullBill turns a spare x86 machine running Proxmox VE into a self-hosted dev
 server from one declarative config. `nullbill` runs on a controller the owner
 names and reaches the host over SSH; it never runs on the host. Only `probe`,
-`plan`, `apply --dry-run` and `verify` exist so far.
+`plan`, `apply` (stages so far: render, host, verify; the rest is #22) and
+`verify` exist.
 
 ## Layout
 
@@ -37,6 +38,7 @@ names and reaches the host over SSH; it never runs on the host. Only `probe`,
 - `src/nullbill/verify.py`: allowed and denied flows probed from one container per zone and from the LAN; SKIP when nothing can run, never PASS.
 - `src/nullbill/pveapi.py`: API calls from inside a guest with the token it holds, and `audit`, which passes only when a token holds exactly the expected privileges. `agent.py` and `ci.py` audit their tokens with it; `forge.py` checks Forgejo (HTTPS, no sign-up, nothing anonymous, TLS to Postgres) from inside its guests.
 - `src/nullbill/artifacts.py`: `apply --dry-run` output, one `build/<machine>/` per target.
+- `src/nullbill/apply.py`: apply's stages, run in order through a `Reach` (ssh to the host, `ansible-playbook` with a temporary 0600 inventory and vars file). Containers via `community.proxmox.proxmox_pct_remote`, VMs as `nullbill` with the host as ProxyJump. `src/nullbill/secretfile.py`: `$NULLBILL_HOME/secrets.sops.yaml` through sops and age, saved as soon as a secret is made. `tools/check-apply` runs the real Reach against a host container (fake `pct`) and a VM container; `tests/test_apply.py` uses a recording Reach.
 - `tools/check`: every check CI runs. Run it before pushing. In a TLS-intercepting sandbox set `EXTRA_CA_FILE` to the proxy CA bundle.
 
 ## Privacy rules (public repo)

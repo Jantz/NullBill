@@ -1,0 +1,10 @@
+#!/bin/sh
+# Stand-in for pct in the apply check: runs `pct exec VMID -- CMD...` here
+# and logs the VMID, so the check can tell which guest a task was meant for.
+if [ "$1" != exec ] || [ "$3" != -- ]; then
+  echo "fake pct: only 'exec VMID -- CMD' is supported" >&2
+  exit 2
+fi
+echo "exec $2" >>/var/log/fake-pct.log
+shift 3
+exec "$@"

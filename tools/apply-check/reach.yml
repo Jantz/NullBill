@@ -1,0 +1,12 @@
+# Writes a marker named after the inventory host, so the apply check can
+# tell that apply reached that machine, and with root rights.
+- name: Reach check
+  hosts: all
+  become: false
+  gather_facts: false
+  tasks:
+    - name: Write the marker
+      ansible.builtin.copy:
+        dest: "/tmp/reached-{{ inventory_hostname }}"
+        content: "{{ inventory_hostname }}\n"
+        mode: "0600"

@@ -55,9 +55,16 @@ def test_apply_dry_run_renders_build(tmp_path, monkeypatch, capsys):
     assert "firewall/cluster.fw" in capsys.readouterr().out
 
 
-def test_apply_without_dry_run_is_refused():
-    with pytest.raises(SystemExit):
-        main(["apply"])
+@pytest.mark.skipif(Path("/etc/pve").exists(), reason="nullbill refuses to run on a PVE host")
+def test_apply_needs_a_target(tmp_path, monkeypatch, capsys):
+    run = tmp_path / "probe" / "run1"
+    (run / "facts.json").parent.mkdir(parents=True)
+    (run / "facts.json").write_text(json.dumps(parse(write_raw(run / "raw", "small"))))
+    (tmp_path / "probe" / "latest").symlink_to("run1")
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump(fixture_config("small")))
+    monkeypatch.setenv("NULLBILL_HOME", str(tmp_path))
+    assert main(["apply"]) == 1
+    assert "target.ssh is required for apply" in capsys.readouterr().err
 
 
 @pytest.mark.skipif(Path("/etc/pve").exists(), reason="nullbill refuses to run on a PVE host")

@@ -5,13 +5,15 @@ import hashlib
 import json
 import sys
 
+from nullbill.apply import STAGES, Context, SshReach, run_apply
 from nullbill.artifacts import render_all, write_build
 from nullbill.errors import NullBillError
-from nullbill.home import nullbill_home, refuse_on_pve_host
+from nullbill.home import REPO_ROOT, nullbill_home, refuse_on_pve_host
 from nullbill.model import build_model, load_config
 from nullbill.plan import build_plan
 from nullbill.probe import run_probe, ssh_run
 from nullbill.render import render
+from nullbill.secretfile import Secrets, Sops
 from nullbill.verify import run_verify
 
 
@@ -48,16 +50,24 @@ def cmd_plan(_args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_apply(_args: argparse.Namespace) -> int:
-    # Only the dry run exists so far: it renders what apply would place on the
-    # host and touches nothing remote.
+def cmd_apply(args: argparse.Namespace) -> int:
     home = nullbill_home()
     model, facts_bytes = _load(home)
-    files = render_all(build_plan(model, json.loads(facts_bytes)), model)
-    write_build(files, home / "build")
-    print(f"rendered {len(files)} files into {home / 'build'}:")
-    for rel in files:
-        print(f"  {rel}")
+    plan = build_plan(model, json.loads(facts_bytes))
+    files = render_all(plan, model)
+    if args.dry_run:
+        # Renders what apply would place on the host and touches nothing remote.
+        write_build(files, home / "build")
+        print(f"rendered {len(files)} files into {home / 'build'}:")
+        for rel in files:
+            print(f"  {rel}")
+        return 0
+    target = load_config(home / "config.yaml").get("target", {}).get("ssh")
+    if not target:
+        raise NullBillError(f"{home / 'config.yaml'}: target.ssh is required for apply")
+    reach = SshReach(target, REPO_ROOT / ".ansible" / "collections")
+    ctx = Context(plan, model, home, target, reach, Secrets(Sops(home)), files, close_lan=args.close_lan, run=ssh_run)
+    run_apply(ctx, only=args.stage)
     return 0
 
 
@@ -79,8 +89,11 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("probe", help="read-only hardware probe of the target over SSH").set_defaults(func=cmd_probe)
     sub.add_parser("plan", help="size a commented plan from the latest probe and config.yaml").set_defaults(func=cmd_plan)
-    apply = sub.add_parser("apply", help="render host artifacts; only --dry-run exists so far")
-    apply.add_argument("--dry-run", action="store_true", required=True, help="render into $NULLBILL_HOME/build, change nothing")
+    stages = ", ".join(name for name, _ in STAGES)
+    apply = sub.add_parser("apply", help=f"bring the host to the plan, stage by stage: {stages}")
+    apply.add_argument("--dry-run", action="store_true", help="render into $NULLBILL_HOME/build, change nothing")
+    apply.add_argument("--stage", choices=[name for name, _ in STAGES], help="run only this stage")
+    apply.add_argument("--close-lan", action="store_true", help="install the cluster firewall without LAN access to 8006 and 22 (#9)")
     apply.set_defaults(func=cmd_apply)
     verify = sub.add_parser("verify", help="probe allowed and denied flows from each zone and the LAN; exits 1 on FAIL")
     verify.set_defaults(func=cmd_verify)

@@ -32,12 +32,14 @@ stage is idempotent, so re-running apply resumes.
 - The host is reached over SSH as `target.ssh`, as `probe` and `verify` do.
 - Containers are reached through the host with `pct exec`, using the
   `community.proxmox.proxmox_pct_remote` connection plugin (collection
-  2.1.0, pinned in `ansible/requirements.yml`, with paramiko). This works
+  2.1.0, checked against its SHA-256 by `tools/install-apply-deps`, with
+  paramiko). This works
   before guest networking or the VPN exists, and for containers without
   sshd.
 - VMs (router, PBS, the golden images) are reached over SSH as `nullbill`
   with the owner's key, jumping through the host (`ProxyJump`), which sits
-  on the mgmt bridge.
+  on the mgmt bridge. Each VM's host key is pinned on first sight in
+  `$NULLBILL_HOME/known_hosts`, kept apart from the owner's own.
 
 **Secrets.**
 - `$NULLBILL_HOME/secrets.sops.yaml` is encrypted with sops, using an age
@@ -63,9 +65,10 @@ stage is idempotent, so re-running apply resumes.
 
 ## Consequences
 
-- The controller needs `sops` and `age` (pinned single binaries), the
-  `community.proxmox` collection and paramiko. `tools/check` installs the
-  same versions for the checks.
+- The controller needs sops 3.13.3 and age 1.3.2 (built with `go install`,
+  which Go's checksum database verifies), ansible-core 2.19 with paramiko
+  (`requirements-apply.txt`) and the `community.proxmox` collection.
+  `tools/check-apply` builds the same versions for its stand-ins.
 - Losing `age.key` loses the secrets. The services keep running, but apply
   has to regenerate every secret. The runbook says to back the key up next
   to the PBS encryption key.

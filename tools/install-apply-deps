@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Install what `nullbill apply` needs on the controller: requirements-apply.txt
+# into the active Python environment, and community.proxmox, checked against
+# its pinned SHA-256, into COLLECTIONS_DIR (default .ansible/collections, which
+# apply reads). sops and age come from docs/runbooks/controller.md.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel 2>/dev/null || dirname "$(dirname "$0")")"
+
+collection=community-proxmox-2.1.0.tar.gz
+sha256=8a8f03e08ee4353564f4ec2c89007837664697c32e76a530b985a5851c71b23b
+url=https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/$collection
+dest=${COLLECTIONS_DIR:-.ansible/collections}
+
+python3 -m pip install -q -r requirements-apply.txt
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+curl -fsSLo "$tmp/$collection" "$url"
+echo "$sha256  $tmp/$collection" | sha256sum -c --quiet
+ansible-galaxy collection install --force -p "$dest" "$tmp/$collection" >/dev/null
+echo "installed $collection into $dest"
