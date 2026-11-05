@@ -85,7 +85,10 @@ def _guest_file(name: str, guest: dict, rules: list[str]) -> str:
     if name == "router":
         note = "# The router forwards for every zone; its nftables ruleset filters.\n"
         return HEADER + note + "[OPTIONS]\nenable: 1\npolicy_in: ACCEPT\npolicy_out: ACCEPT\n"
-    filter_set = _ipset("ipfilter-net0", addresses(guest))
+    # install.sh gives the nullbill container its LAN leg as net0 (no PVE
+    # firewall); its mgmt leg, which apply adds, is net1.
+    nic = "net1" if guest.get("installed") else "net0"
+    filter_set = _ipset(f"ipfilter-{nic}", addresses(guest))
     body = HEADER + "[OPTIONS]\nenable: 1\nipfilter: 1\npolicy_in: DROP\npolicy_out: DROP\n\n" + filter_set + "[RULES]\n"
     return body + "".join(f"{r}\n" for r in rules)
 

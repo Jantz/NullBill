@@ -33,12 +33,14 @@ def test_golden(cls, facts):
 def test_every_guest_defaults_to_deny(facts):
     files = rendered(facts, "mid")
     guest_files = [f for f in files if f.startswith("firewall/") and f.split("/")[-1][0].isdigit()]
-    assert len(guest_files) == 16
+    assert len(guest_files) == 17
     for path in guest_files:
         if path == "firewall/2001.fw":  # router
             continue
         assert "policy_in: DROP\npolicy_out: DROP\n" in files[path], path
         assert "ipfilter: 1" in files[path], path
+    # install.sh's LAN leg is net0; the mgmt leg apply adds is filtered.
+    assert "[IPSET ipfilter-net1]\n10.42.1.2\n" in files["firewall/2002.fw"]
 
 
 def test_forgejo_rules(facts):

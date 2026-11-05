@@ -46,10 +46,13 @@ def _connect_via(proxy: str, port: int, target: str) -> str:
 
 
 def representatives(plan: dict) -> dict[str, str | None]:
-    """The container each zone's checks run from: its lowest-VMID LXC."""
+    """The container each zone's checks run from: its lowest-VMID LXC. Not
+    the nullbill container, which keeps a LAN leg until --close-lan."""
     reps: dict[str, str | None] = {}
     for zone in plan["zones"]:
-        lxcs = sorted((g["vmid"], n) for n, g in plan["guests"].items() if g["zone"] == zone and g["kind"] == "lxc")
+        lxcs = sorted(
+            (g["vmid"], n) for n, g in plan["guests"].items() if g["zone"] == zone and g["kind"] == "lxc" and not g.get("installed")
+        )
         reps[zone] = lxcs[0][1] if lxcs else None
     return reps
 

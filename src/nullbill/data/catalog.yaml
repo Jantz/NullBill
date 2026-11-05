@@ -19,11 +19,15 @@ host:
   reserve:
     cores: 1
     memory_mib: 4096
+  # PVE without ZFS runs in under 2 GiB; a 16 GiB host cannot spare 4.
+  reserve_small:
+    memory_mib: 3072
+    below_mib: 24576
   # The operator holds the agent's API token, so it reaches the API only.
   ports:
     # The runner dispatcher's token may only clone runners (ci.py).
-    - {port: 8006, proto: tcp, from: ["role:owner", "service:operator", "service:runner-dispatcher"]}
-    - {port: 22, proto: tcp, from: ["role:owner"]}
+    - {port: 8006, proto: tcp, from: ["role:owner", "service:nullbill", "service:operator", "service:runner-dispatcher"]}
+    - {port: 22, proto: tcp, from: ["role:owner", "service:nullbill"]}
 
 zones:
   mgmt:
@@ -77,6 +81,18 @@ services:
       - {port: 53, proto: udp, from: ["zone:*"]}
       - {port: 53, proto: tcp, from: ["zone:*"]}
       - {port: 22, proto: tcp, from: ["role:owner"]}
+  nullbill:
+    id: 2
+    kind: lxc
+    zone: mgmt
+    workload: core
+    installed: true
+    description: NullBill itself, made by install.sh. The setup and status page, apply, its state and secrets. Owner only.
+    # What apply fetches: OpenTofu's provider registry and Ansible Galaxy.
+    proxy_allow: [registry.opentofu.org, galaxy.ansible.com]
+    floor: {cores: 1, memory_mib: 768, disk_gib: 8}
+    ports:
+      - {port: 8443, proto: tcp, from: ["role:owner"]}
   egress-proxy:
     id: 10
     kind: lxc

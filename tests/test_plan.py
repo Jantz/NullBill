@@ -86,8 +86,8 @@ def errors_of(facts: dict, config: dict) -> list[str]:
 def test_floors_over_capacity_fail(facts):
     config = {"intent": {"workloads": ["agents", "linux-ci", "windows-ci", "windows-dev"]}}
     messages = errors_of(facts("small"), config)
-    assert messages[0] == "memory: planned guests need 19200 MiB at their floors; the host has 15848 MiB minus a 4096 MiB host reserve"
-    assert messages[1] == "disk: guests need 432 GiB, storage local-lvm has 350 GiB free"
+    assert messages[0] == "memory: planned guests need 19968 MiB at their floors; the host has 15848 MiB minus a 3072 MiB host reserve"
+    assert messages[1] == "disk: guests need 440 GiB, storage local-lvm has 350 GiB free"
 
 
 def test_overrides_are_checked(facts):
@@ -206,3 +206,17 @@ def test_duplicate_zone_index_fails(facts):
 def test_schema_rejects_unknown_keys():
     with pytest.raises(NullBillError, match="Additional properties"):
         build_model({"overrides": {"forgejo": {"ram": 1}}})
+
+
+def test_small_hosts_keep_less_for_pve_and_zfs_adds_its_cache(facts):
+    small = facts("small")
+    plan = strip_notes(plan_for(small, fixture_config("small")))
+    assert plan["host"]["reserve_mib"] == 3072
+    zfs = copy.deepcopy(small)
+    zfs["storage"].append({"name": "local-zfs", "type": "zfspool", "content": ["images"], "avail_gib": 1})
+    # On ZFS, 16 GiB no longer holds agents and Linux CI; core still fits.
+    assert errors_of(zfs, fixture_config("small"))[0].endswith(f"minus a {3072 + small['memory_mib'] // 10} MiB host reserve")
+    plan = strip_notes(plan_for(zfs, {**fixture_config("small"), "intent": {"workloads": []}}))
+    assert plan["host"]["reserve_mib"] == 3072 + small["memory_mib"] // 10
+    mid = strip_notes(plan_for(facts("mid"), fixture_config("mid")))
+    assert mid["host"]["reserve_mib"] == 4096

@@ -64,7 +64,9 @@ def test_operator_reaches_only_the_api_on_the_host(facts):
     files = render_all(plan, model)
     host = files["firewall/host.fw"]
     assert "IN ACCEPT -source +nb-svc-operator -p tcp -dport 8006" in host
-    assert "dport 22" not in host
+    assert "-source +nb-svc-operator -p tcp -dport 22" not in host
+    # Only the nullbill container, which runs apply, reaches the host's SSH.
+    assert "IN ACCEPT -source +nb-svc-nullbill -p tcp -dport 22" in host
     # The management ipset, which opens every PVE port, stays the VPN alone.
     cluster = files["firewall/cluster.fw"]
     vpn = strip_notes(plan)["guests"]["vpn"]["ip"]

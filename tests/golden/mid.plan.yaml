@@ -7,13 +7,13 @@ host:
   host_mib: 64257
   # Left to PVE itself; pin with host.reserve.memory_mib.
   reserve_mib: 4096
-  guests_mib: 46336
+  guests_mib: 47104
   # Not assigned to any guest.
-  unallocated_mib: 13825
+  unallocated_mib: 13057
 disk:
   storage: local-lvm
   # Includes one golden template per pool.
-  needed_gib: 788
+  needed_gib: 796
   free_gib: 800
   # Holds the downloaded container template and cloud image.
   media: local
@@ -68,6 +68,16 @@ guests:
       inference: 10.42.4.1
       windows: 10.42.5.1
       access: 10.42.6.1
+  nullbill:
+    kind: lxc
+    zone: mgmt
+    cores: 1
+    memory_mib: 768
+    disk_gib: 8
+    vmid: 2002
+    ip: 10.42.1.2
+    # Made by install.sh; apply adds its mgmt leg (docs/adr/0006-nullbill-on-the-server.md).
+    installed: true
   egress-proxy:
     kind: lxc
     zone: services
@@ -237,6 +247,7 @@ flows:
   - zone:* -> router udp/53
   - zone:* -> router tcp/53
   - role:owner -> router tcp/22
+  - role:owner -> nullbill tcp/8443
   - zone:mgmt -> egress-proxy tcp/3128
   - zone:build -> egress-proxy tcp/3128
   - zone:inference -> egress-proxy tcp/3128
@@ -265,9 +276,11 @@ flows:
   - role:owner -> model-gateway tcp/4000
   - role:owner -> windows-dev tcp/3389
   - role:owner -> the PVE host tcp/8006
+  - service:nullbill -> the PVE host tcp/8006
   - service:operator -> the PVE host tcp/8006
   - service:runner-dispatcher -> the PVE host tcp/8006
   - role:owner -> the PVE host tcp/22
+  - service:nullbill -> the PVE host tcp/22
 people:
   owner-a: owner
 # Tailscale Personal: free for personal, non-commercial use. One group per role; the vpn guest is the tagged device.

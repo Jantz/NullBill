@@ -39,8 +39,10 @@ def test_guests_match_plan(facts):
     ids = {
         n: r["vm_id"] for kind in ("proxmox_virtual_environment_vm", "proxmox_virtual_environment_container") for n, r in res[kind].items()
     }
-    want = {n: g.get("vmid", g.get("template_vmid")) for n, g in plan["guests"].items()}
+    want = {n: g.get("vmid", g.get("template_vmid")) for n, g in plan["guests"].items() if not g.get("installed")}
     assert ids == want
+    # OpenTofu must never be able to replace the container it runs in.
+    assert "nullbill" in plan["guests"] and "nullbill" not in ids
     forgejo = res["proxmox_virtual_environment_container"]["forgejo"]
     assert forgejo["initialization"]["ip_config"]["ipv4"] == {"address": "10.42.2.17/24", "gateway": "10.42.2.1"}
     assert forgejo["network_interface"][0]["bridge"] == "vmbr102"

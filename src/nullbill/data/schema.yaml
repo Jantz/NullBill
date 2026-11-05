@@ -74,6 +74,9 @@ $defs:
       # In the pool the agent's PVE token may power-manage and snapshot,
       # and reachable by SSH from the operator. Never in mgmt or access.
       agent_managed: {type: boolean}
+      # Made by install.sh, not OpenTofu: the nullbill container itself,
+      # which runs apply (docs/adr/0006-nullbill-on-the-server.md).
+      installed: {type: boolean}
       # Names egress-proxy forwards for this guest only, on top of
       # proxy.allow. Only for fixed-address guests in egress: proxy zones.
       proxy_allow: {type: array, uniqueItems: true, items: {$ref: "#/$defs/domain_pattern"}}
@@ -126,6 +129,13 @@ $defs:
       additionalProperties: false
       properties:
         reserve: {$ref: "#/$defs/size"}
+        # The reserve on hosts with less memory than below_mib.
+        reserve_small:
+          type: object
+          additionalProperties: false
+          properties:
+            memory_mib: {type: integer, minimum: 1024}
+            below_mib: {type: integer, minimum: 1024}
         # Ports on the PVE host itself. Role sources arrive through the VPN.
         ports: {type: array, items: {$ref: "#/$defs/port"}}
     zones: {type: object, propertyNames: {$ref: "#/$defs/name"}, additionalProperties: {$ref: "#/$defs/zone"}}

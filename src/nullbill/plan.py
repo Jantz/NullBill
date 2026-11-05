@@ -177,15 +177,15 @@ def _size(model: dict, planned: dict, facts: dict, errors: _Errors) -> tuple[dic
         if size["cores"] > threads:
             errors.append(f"{name}: needs {size['cores']} cores, the host has {threads} threads")
 
-    reserve = model["host"]["reserve"]
-    available = facts["memory_mib"] - reserve["memory_mib"]
+    reserve_mib, reserve_why = _reserve(model, facts)
+    available = facts["memory_mib"] - reserve_mib
     pools = [n for n in planned if planned[n]["kind"] == "vm-pool"]
     counts = {n: pinned_counts.get(n, 1) for n in pools}
     floor_total = sum(s["memory_mib"] * counts.get(n, 1) for n, s in sizes.items())
     if floor_total > available:
         errors.append(
             f"memory: planned guests need {floor_total} MiB at their floors; "
-            f"the host has {facts['memory_mib']} MiB minus a {reserve['memory_mib']} MiB host reserve"
+            f"the host has {facts['memory_mib']} MiB minus a {reserve_mib} MiB host reserve"
         )
 
     # Memory left after floors grows the pools whose count is not pinned, by
@@ -224,9 +224,9 @@ def _size(model: dict, planned: dict, facts: dict, errors: _Errors) -> tuple[dic
 
     memory = {
         "host_mib": facts["memory_mib"],
-        "reserve_mib": Note(reserve["memory_mib"], "Left to PVE itself; pin with host.reserve.memory_mib."),
+        "reserve_mib": Note(reserve_mib, reserve_why),
         "guests_mib": allocated,
-        "unallocated_mib": Note(facts["memory_mib"] - reserve["memory_mib"] - allocated, "Not assigned to any guest."),
+        "unallocated_mib": Note(facts["memory_mib"] - reserve_mib - allocated, "Not assigned to any guest."),
     }
     disk_section = {
         "storage": storage["name"] if storage else None,
@@ -236,6 +236,23 @@ def _size(model: dict, planned: dict, facts: dict, errors: _Errors) -> tuple[dic
     }
     pool_counts = {n: Note(counts[n], f"Clones, {limits[n]}.") for n in pools}
     return sizes, pool_counts, {"memory": memory, "disk": disk_section}
+
+
+def _reserve(model: dict, facts: dict) -> tuple[int, str]:
+    """Memory left to PVE: less on small hosts, plus ZFS's ARC where ZFS is in use."""
+    host = model["host"]
+    small = host.get("reserve_small")
+    if small and facts["memory_mib"] < small["below_mib"]:
+        mib = small["memory_mib"]
+        why = f"Left to PVE itself on a host under {small['below_mib'] // 1024} GiB; pin with host.reserve_small."
+    else:
+        mib = host["reserve"]["memory_mib"]
+        why = "Left to PVE itself; pin with host.reserve.memory_mib."
+    if any(s["type"] == "zfspool" for s in facts["storage"]):
+        # PVE's installer caps the ARC at 10% of memory.
+        mib += facts["memory_mib"] // 10
+        why += " Includes ZFS's cache, 10% of memory."
+    return mib, why
 
 
 def _disks(model: dict, facts: dict, errors: _Errors, want_pbs: bool) -> tuple[dict, str | None]:
@@ -371,6 +388,8 @@ def build_plan(model: dict, facts: dict) -> dict:
             del entry["ip"]
         if svc.get("agent_managed"):
             entry["agent_managed"] = True
+        if svc.get("installed"):
+            entry["installed"] = Note(True, "Made by install.sh; apply adds its mgmt leg (docs/adr/0006-nullbill-on-the-server.md).")
         guests[name] = entry
 
     n_gpus = len([g for g in facts["gpus"] if not g["integrated"]])
