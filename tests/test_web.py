@@ -63,6 +63,7 @@ class Client:
         self.tls = ssl.create_default_context(cafile=str(cert))
         self.tls.check_hostname = False
         self.cookie = None
+        self.bearer = None
 
     def call(self, path, body=None, header=True):
         conn = http.client.HTTPSConnection("127.0.0.1", self.port, context=self.tls, timeout=30)
@@ -71,6 +72,8 @@ class Client:
             headers["X-NullBill"] = "1"
         if self.cookie:
             headers["Cookie"] = self.cookie
+        if self.bearer:
+            headers["Authorization"] = f"Bearer {self.bearer}"
         if body is None:
             conn.request("GET", path, headers=headers)
         else:
@@ -404,3 +407,38 @@ def test_the_ci_images_are_baked_again_each_sunday_night(site, tmp_path):
     busy.process.wait()
     app.command = command
     assert app.scheduled(next_week + 1800).args == ["apply", "--stage", "ci"]
+
+
+def test_the_runtime_agent_may_run_verify_and_read_its_output_only(site):
+    app, client = site
+    sign_in(app, client)
+    status, owner_job = client.call("/api/jobs", {"action": "probe"})
+    wait(client, owner_job["id"])
+    agent = Client(client.port, app.home / "web" / "cert.pem")
+    agent.tls = client.tls
+    # Nothing until apply has given the operator its token.
+    agent.bearer = "agent-token"
+    assert agent.call("/api/agent/jobs")[0] == 401
+    (app.home / "web" / "agent-token.sha256").write_text(web.hashlib.sha256(b"agent-token").hexdigest() + "\n")
+    # From anywhere but the operator, the token is refused.
+    (app.home / "plan.yaml").write_text("guests:\n  operator:\n    ip: 10.42.1.16\n")
+    assert agent.call("/api/agent/jobs")[0] == 401
+    (app.home / "plan.yaml").write_text("guests:\n  operator:\n    ip: 127.0.0.1\n")
+    agent.bearer = "wrong"
+    assert agent.call("/api/agent/verify", {})[0] == 401
+    agent.bearer = "agent-token"
+    status, job = agent.call("/api/agent/verify", {})
+    assert status == 200 and job["action"] == "verify" and job["args"] == ["verify"]
+    for _ in range(200):
+        status, seen = agent.call(f"/api/agent/jobs/{job['id']}")
+        if seen["state"] != "running":
+            break
+        time.sleep(0.05)
+    assert status == 200 and seen["rc"] == 0 and "ran verify" in seen["text"]
+    listed = agent.call("/api/agent/jobs")[1]
+    assert [j["action"] for j in listed] == ["verify", "probe"]
+    # Other jobs' logs, the owner's API and other actions stay closed.
+    assert agent.call(f"/api/agent/jobs/{owner_job['id']}")[0] == 404
+    assert agent.call("/api/state")[1] == {"auth": False, "has_password": True}
+    assert agent.call("/api/jobs", {"action": "apply"})[0] == 401
+    assert agent.call("/api/agent/apply", {})[0] == 401

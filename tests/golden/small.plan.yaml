@@ -193,6 +193,7 @@ flows:
   - service:monitoring -> router tcp/9100
   - role:owner -> nullbill tcp/8443
   - host -> nullbill tcp/8443
+  - service:operator -> nullbill tcp/8443
   - service:monitoring -> nullbill tcp/9100
   - zone:mgmt -> egress-proxy tcp/3128
   - zone:build -> egress-proxy tcp/3128

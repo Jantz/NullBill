@@ -100,8 +100,9 @@ services:
     proxy_allow: [registry.opentofu.org, galaxy.ansible.com]
     floor: {cores: 1, memory_mib: 768, disk_gib: 8}
     ports:
-      # host: the on-site screen's browser runs there.
-      - {port: 8443, proto: tcp, from: ["role:owner", "host"]}
+      # host: the on-site screen's browser runs there. operator: the
+      # runtime agent starts verify and reads its output (web/server.py).
+      - {port: 8443, proto: tcp, from: ["role:owner", "host", "service:operator"]}
   egress-proxy:
     id: 10
     kind: lxc
@@ -164,7 +165,7 @@ services:
     kind: lxc
     zone: mgmt
     workload: core
-    description: Holds the agent CLI and token. Owner only. Reaches the PVE API, CA, Loki, Prometheus and SSH on agent-managed guests.
+    description: Holds the agent CLI and token. Owner only. Reaches the PVE API, CA, Loki, Prometheus, the page's verify and SSH on agent-managed guests.
     # The agent CLI's model API (docs/adr/0002-agent-cli.md) and step-cli's
     # apt repository, for this guest only.
     proxy_allow: [api.anthropic.com, packages.smallstep.com]

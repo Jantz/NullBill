@@ -57,6 +57,12 @@ HEALTHCHECKS = re.compile(r"https://hc-ping\.com/[A-Za-z0-9_-]{8,}(/[a-z0-9_-]+)
 # The agent CLI signs in with an Anthropic API key or a Claude subscription
 # token from `claude setup-token`; each is kept under its own name.
 AGENT_CREDENTIALS = {"sk-ant-api": ("anthropic_api_key", "API key"), "sk-ant-oat": ("claude_oauth_token", "subscription token")}
+# The runtime agent on the operator may start verify and read verify's
+# output (docs/runbooks/agent-access.md): a bearer token whose SHA-256 apply
+# writes here, accepted only from the operator's address. It cannot start
+# anything else, read other jobs' logs, or use the owner's API.
+AGENT_TOKEN = "web/agent-token.sha256"
+AGENT_ACTIONS = {"verify"}
 # A Tailscale auth key logs the vpn guest in once; apply forgets it after.
 TAILSCALE_KEY = re.compile(r"tskey-auth-[A-Za-z0-9-]{8,200}")
 STATIC = {"/": ("index.html", "text/html"), "/app.js": ("app.js", "text/javascript"), "/style.css": ("style.css", "text/css")}
@@ -374,6 +380,23 @@ class App:
         base, _ = self.network()
         return base is not None and not lan.inside(client, base)
 
+    def agent_valid(self, authorization: str | None, client: str) -> bool:
+        """A request from the runtime agent: its token, from the operator."""
+        path = self.home / AGENT_TOKEN
+        scheme, _, token = (authorization or "").partition(" ")
+        if scheme != "Bearer" or not token or not path.exists():
+            return False
+        plan = self.home / "plan.yaml"
+        loaded = (yaml.safe_load(plan.read_text()) or {}) if plan.exists() else {}
+        operator = ((loaded.get("guests") or {}).get("operator") or {}).get("ip")
+        if operator is None or client.removeprefix("::ffff:") != operator:
+            return False
+        return hmac.compare_digest(hashlib.sha256(token.encode()).hexdigest(), path.read_text().strip())
+
+    def agent_jobs(self) -> list[dict]:
+        listed = sorted(self.jobs.values(), key=lambda j: j.started, reverse=True)
+        return [{"id": j.id, "action": j.action, "state": j.state(), "rc": j.rc, "started": j.started} for j in listed]
+
     def via_vpn(self, client: str) -> bool:
         return client.removeprefix("::ffff:") == self.network()[1]
 
@@ -459,6 +482,10 @@ class App:
         }
 
 
+def offset(query: str) -> int:
+    return int(dict(p.split("=", 1) for p in query.split("&") if "=" in p).get("offset", "0") or 0)
+
+
 def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
     class Handler(http.server.BaseHTTPRequestHandler):
         server_version = "nullbill"
@@ -501,6 +528,8 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 name, kind = STATIC[path]
                 body = resources.files("nullbill.web").joinpath("static", name).read_bytes()
                 return self.send(200, body, f"{kind}; charset=utf-8")
+            if path.startswith("/api/agent/"):
+                return self.agent_get(path, query)
             authed = app.valid(self.token())
             if path == "/api/state":
                 return self.json(200, app.state(authed, self.client()))
@@ -510,8 +539,24 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 return self.json(200, app.status())
             match = re.fullmatch(r"/api/jobs/([0-9T]+-[a-z-]+)", path)
             if match and match[1] in app.jobs:
-                offset = int(dict(p.split("=", 1) for p in query.split("&") if "=" in p).get("offset", "0") or 0)
-                return self.json(200, app.job_view(app.jobs[match[1]], offset))
+                return self.json(200, app.job_view(app.jobs[match[1]], offset(query)))
+            return self.json(404, {"error": "not found"})
+
+        def agent_authed(self) -> bool:
+            if app.agent_valid(self.headers.get("Authorization"), self.client()):
+                return True
+            self.json(401, {"error": "not the runtime agent"})
+            return False
+
+        def agent_get(self, path: str, query: str) -> None:
+            if not self.agent_authed():
+                return
+            if path == "/api/agent/jobs":
+                return self.json(200, app.agent_jobs())
+            match = re.fullmatch(r"/api/agent/jobs/([0-9T]+-[a-z-]+)", path)
+            job = app.jobs.get(match[1]) if match else None
+            if job is not None and job.action in AGENT_ACTIONS:
+                return self.json(200, app.job_view(job, offset(query)))
             return self.json(404, {"error": "not found"})
 
         def do_POST(self) -> None:  # noqa: N802
@@ -528,6 +573,13 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 body = json.loads(self.rfile.read(length) or b"{}")
             except ValueError:
                 return self.json(400, {"error": "body is not JSON"})
+            if self.path == "/api/agent/verify":
+                if not self.agent_authed():
+                    return
+                try:
+                    return self.json(200, app.job_view(app.start("verify", client=self.client())))
+                except NullBillError as exc:
+                    return self.json(409, {"error": "; ".join(exc.messages)})
             if self.path == "/api/login":
                 token = app.login(str(body.get("secret", "")))
                 if token is None:

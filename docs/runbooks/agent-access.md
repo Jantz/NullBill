@@ -13,9 +13,27 @@ References: <https://pve.proxmox.com/pve-docs/chapter-pveum.html>,
 ## Start a session
 
 1. Open a shell in the operator: `ssh -t root@pve.<your domain> pct enter <operator vmid>`.
-2. `su - agent`, then `claude`. The CLI reads its key, proxy and rules from
+2. `su - agent`, then `claude` (inside `tmux` for long work). The CLI reads its key, proxy and rules from
    `/etc/claude-code/`, which only root can change.
 3. To act on a guest yourself the way the agent does: `nb-ssh <guest ip> <command>`.
+
+## What it can do
+
+- **Inspect and analyze**: read every guest's state, config and task log
+  through the PVE API, metrics and firing alerts in Prometheus, and logs in
+  Loki. Its rules (`/etc/claude-code/CLAUDE.md`) list each guest with its
+  address and whether it may act on it.
+- **Check**: `nb-page verify` runs `nullbill verify` through the NullBill
+  page and prints its PASS, FAIL, SKIP and DEGRADED lines. `nb-page jobs`
+  shows whether your last setup run failed.
+- **Repair**: start, stop, restart and snapshot agent-managed guests, and
+  run commands on them as the unprivileged `agent` user.
+- **Configure**: anything beyond that it proposes to you, as the change to
+  make on the page or the commands to run; it cannot apply it.
+
+For long work, start it inside `tmux` (`tmux new -s agent`, detach with
+Ctrl-b d, `tmux attach -t agent` later) so it keeps running when your SSH
+connection ends.
 
 ## Read what it did
 

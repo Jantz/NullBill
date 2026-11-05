@@ -20,10 +20,17 @@ Each limit is enforced by a component the agent does not control:
 | Changes only inside the `agent-managed` pool: power and snapshots, no rollback | PVE ACLs on a privilege-separated token (`NullBillAgent` on `/pool/agent-managed`, `PVEAuditor` on `/`) | `src/nullbill/agent.py`, `tofu.py` |
 | mgmt and access guests never join the pool | `plan` refuses `agent_managed` there | `plan.py` |
 | SSH only to agent-managed guests, as `agent`, for at most 1 h | step-ca's `agent` provisioner template and claims; `TrustedUserCAKeys` and a principals file only on those guests | `ansible/roles/step_ca`, `agent_ssh` |
-| Network reach: PVE API, CA, Loki, Prometheus, SSH on agent-managed guests; model API and packages through the proxy | pve-firewall and nftables from the one flow list; Squid's per-guest allow-list | `flows.py`, `proxy.py` |
+| Network reach: PVE API, CA, Loki, Prometheus, the NullBill page, SSH on agent-managed guests; model API and packages through the proxy | pve-firewall and nftables from the one flow list; Squid's per-guest allow-list | `flows.py`, `proxy.py` |
 | apply and destroy | Need the owner's API credential and state passphrase, which only the controller holds | `tofu.py`, `$NULLBILL_HOME` |
+| Starts only `nullbill verify` with the owner's credential, and reads only verify's output | The page's agent API takes the agent's token from the operator's address only and offers nothing else; the page keeps the token's hash | `web/server.py`, `nb-page` |
 | Every command on record before it runs | sshd `ForceCommand` and a managed `PreToolUse` hook write to journald, failing closed; journald stamps the uid | `agent_ssh`, `operator` |
 | A record the agent cannot alter | Loki behind a gate that takes pushes only with a shipper certificate (CA key on the controller) and refuses deletes | `monitoring`, `log_shipper` |
+
+The agent runs `nullbill verify` through the page (`nb-page verify`):
+verify needs the owner's SSH access to the host, which the agent must not
+hold, so the page runs it and returns its output. verify only reads and
+probes; the agent cannot pass it arguments or start any other job. A
+prompt-injected agent can at worst run verify repeatedly, one at a time.
 
 `nullbill verify` proves the PVE limits from the operator. It reads the
 token's effective privileges on every guest and on `/`, then attempts a

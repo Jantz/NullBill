@@ -1,3 +1,4 @@
+import hashlib
 import json
 import shlex
 import time
@@ -499,6 +500,16 @@ def test_agents_stage_signs_in_the_operator_and_opens_agent_guests(ctx, stored):
     assert operator["operator_step_password"] == "agent-password"
     assert operator["operator_ca_url"] == "https://step-ca.nullbill.internal"
     assert playbooks[1][2] == {"agent_ssh_user_ca_key": "ecdsa-sha2-nistp256 AAAAuserca"}
+    # verify through the page: a token whose hash only the page keeps, and the page's key to pin.
+    token = c.secrets.data["agent_page_token"]
+    assert operator["operator_page_token"] == token and operator["operator_page_url"] == "https://10.42.1.2:8443/"
+    assert operator["operator_page_spki"] == "secret-token"
+    digest = (c.home / "web" / "agent-token.sha256").read_text().strip()
+    assert digest == hashlib.sha256(token.encode()).hexdigest() and token not in digest
+    # Its rules list the guests and which ones it may act on.
+    guests = {g["name"]: g for g in operator["operator_guests"]}
+    assert guests["workspace"]["agent_managed"] and not guests["router"]["agent_managed"]
+    assert guests["router"]["ip"] == "10.42.1.1" and guests["monitoring"]["fqdn"] == "monitoring.nullbill.internal"
 
 
 def test_logs_stage_gives_each_shipper_its_own_certificate(ctx):

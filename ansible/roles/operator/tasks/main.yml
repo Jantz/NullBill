@@ -36,6 +36,8 @@
       - jq
       - openssh-client
       - "step-cli={{ step_cli_version }}"
+      # Long agent sessions outlive the owner's connection.
+      - tmux
     update_cache: true
 
 - name: Agent user, no password and no sudo
@@ -69,6 +71,7 @@
     - {file: ca-root.pem, value: "{{ operator_ca_root }}"}
     - {file: step-password, value: "{{ operator_step_password }}"}
     - {file: "{{ operator_credential_file }}", value: "{{ operator_anthropic_api_key or operator_claude_oauth_token }}"}
+    - {file: page-token, value: "{{ operator_page_token }}"}
   loop_control:
     label: "{{ item.file }}"
   no_log: true
@@ -128,6 +131,13 @@
     dest: "/etc/claude-code/{{ item }}"
     mode: "0644"
   loop: [managed-settings.json, CLAUDE.md]
+
+- name: nb-page, verify through the NullBill page
+  ansible.builtin.template:
+    src: nb-page.j2
+    dest: /usr/local/bin/nb-page
+    mode: "0755"
+  when: operator_page_url | length > 0
 
 - name: nb-ssh, SSH to agent-managed guests with a short-lived certificate
   ansible.builtin.template:

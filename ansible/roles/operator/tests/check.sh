@@ -25,8 +25,35 @@ ansible-playbook -i localhost, -c local -e agent_ssh_manage_services=false \
 start_journald
 /usr/sbin/sshd -E /tmp/sshd.log
 
+# A stand-in for the NullBill page: it runs one verify job for the agent's
+# token and nothing for anyone else.
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 -subj /CN=nullbill \
+  -keyout /tmp/page.key -out /tmp/page.crt 2>/dev/null
+spki=$(openssl x509 -in /tmp/page.crt -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64)
+python3 - >/tmp/page.log 2>&1 <<'PY' &
+import http.server, json, ssl
+class Page(http.server.BaseHTTPRequestHandler):
+    def reply(self, data):
+        if self.headers.get("Authorization") != "Bearer page-token" or self.headers.get("X-NullBill") != "1":
+            self.send_response(401); self.end_headers(); return
+        body = json.dumps(data).encode()
+        self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(body)
+    def do_POST(self):
+        self.reply({"id": "20261105T100000000-verify", "state": "running", "text": "", "offset": 0}) if self.path == "/api/agent/verify" else self.reply({})
+    def do_GET(self):
+        if self.path.startswith("/api/agent/jobs/20261105T100000000-verify"):
+            self.reply({"state": "failed", "rc": 1, "text": "PASS one\nFAIL two\n", "offset": 18})
+        elif self.path == "/api/agent/jobs":
+            self.reply([{"id": "20261105T100000000-verify", "action": "verify", "state": "failed", "rc": 1}])
+server = http.server.HTTPServer(("127.0.0.1", 8444), Page)
+tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+tls.load_cert_chain("/tmp/page.crt", "/tmp/page.key")
+server.socket = tls.wrap_socket(server.socket, server_side=True)
+server.serve_forever()
+PY
+
 vars=$(mktemp)
-python3 - "$vars" <<'PY'
+python3 - "$vars" "$spki" <<'PY'
 import json, sys
 json.dump({
     "operator_pve_token": "nb-agent@pve!operator=00000000-0000-0000-0000-000000000000",
@@ -34,6 +61,13 @@ json.dump({
     "operator_ca_root": open("/etc/step-ca/certs/root_ca.crt").read(),
     "operator_step_password": open("/etc/step-ca/secrets/agent-password").read(),
     "operator_anthropic_api_key": "throwaway-key",
+    "operator_page_url": "https://127.0.0.1:8444/",
+    "operator_page_token": "page-token",
+    "operator_page_spki": sys.argv[2],
+    "operator_guests": [
+        {"name": "router", "fqdn": "router.nullbill.internal", "ip": "10.42.1.1", "zone": "mgmt", "kind": "vm", "vmid": 2001, "agent_managed": False},
+        {"name": "workspace", "fqdn": "workspace.nullbill.internal", "ip": "10.42.3.20", "zone": "build", "kind": "lxc", "vmid": 2020, "agent_managed": True},
+    ],
 }, open(sys.argv[1], "w"))
 PY
 converge operator.yml -e "@$vars"
@@ -91,6 +125,22 @@ if su - agent -c 'ssh -i ~/.ssh/nb-agent -o IdentitiesOnly=yes -o BatchMode=yes 
   fail "the agent's certificate logs in as root"
 fi
 pass "nb-ssh logs in to an agent-managed guest as agent with a reused certificate, never as root"
+
+grep -qxF '| workspace | workspace.nullbill.internal (10.42.3.20) | build | lxc | 2020 | yes |' /etc/claude-code/CLAUDE.md ||
+  fail "the agent's rules list the guests it may act on"
+grep -qxF '| router | router.nullbill.internal (10.42.1.1) | mgmt | vm | 2001 | read only |' /etc/claude-code/CLAUDE.md ||
+  fail "the agent's rules list the router as read only"
+code=0
+out=$(su - agent -c 'nb-page verify') || code=$?
+if [ "$code" != 1 ] || ! grep -qx "FAIL two" <<<"$out"; then
+  cat /tmp/page.log
+  fail "nb-page verify: exit $code, output '$out'"
+fi
+su - agent -c 'nb-page jobs' | grep -q "verify.failed.1" || fail "nb-page jobs"
+sed -i 's#sha256//[^'"'"']*#sha256//AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=#' /usr/local/bin/nb-page
+if su - agent -c 'nb-page jobs' >/dev/null 2>&1; then fail "nb-page talked to a page whose key is not the pinned one"; fi
+converge operator.yml -e "@$vars"
+pass "the agent runs verify through the page, whose key it pins, and its rules list the guests"
 
 # A Claude subscription token instead of an API key.
 python3 - "$vars" <<'PY'

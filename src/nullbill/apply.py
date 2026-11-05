@@ -9,8 +9,10 @@ host with `pct exec` (community.proxmox's proxmox_pct_remote connection),
 and VMs over SSH as `nullbill` with the host as jump host.
 """
 
+import hashlib
 import json
 import os
+import secrets
 import shlex
 import shutil
 import subprocess
@@ -213,19 +215,24 @@ def confirm_lan(ctx: Context) -> None:
 SPKI = 'openssl x509 -in "$1" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64'
 
 
+def page_spki(ctx: Context, stage: str) -> str:
+    """The page's public key, for clients that pin it."""
+    cert = ctx.home / "web" / "cert.pem"
+    rc, out = ctx.reach.local(["sh", "-c", SPKI, "sh", str(cert)], ctx.home, dict(os.environ), capture=True)
+    if rc != 0 or not out.strip():
+        raise ApplyError(stage, f"cannot read the page's key from {cert} (exit {rc}); is `nullbill web` set up?")
+    return out.strip()
+
+
+def page_url(ctx: Context) -> str:
+    return f"https://{ctx.bare['guests']['nullbill']['ip']}:8443/"
+
+
 def console_vars(ctx: Context) -> dict:
     """The on-site screen: on or off, and the page it shows with its key pinned."""
     if not ctx.model["host"]["console"]["enabled"]:
         return {"console_enabled": False}
-    cert = ctx.home / "web" / "cert.pem"
-    rc, out = ctx.reach.local(["sh", "-c", SPKI, "sh", str(cert)], ctx.home, dict(os.environ), capture=True)
-    if rc != 0 or not out.strip():
-        raise ApplyError("host", f"cannot read the page's key from {cert} (exit {rc}); is `nullbill web` set up?")
-    return {
-        "console_enabled": True,
-        "console_url": f"https://{ctx.bare['guests']['nullbill']['ip']}:8443/",
-        "console_page_spki": out.strip(),
-    }
+    return {"console_enabled": True, "console_url": page_url(ctx), "console_page_spki": page_spki(ctx, "host")}
 
 
 TOKEN_ID = "root@pam!nullbill"
@@ -771,10 +778,47 @@ def stage_agents(ctx: Context) -> None:
         "operator_ca_root": ca_root(ctx, "agents"),
         "operator_step_password": guest_out(ctx, "agents", "step-ca", ["cat", f"{STEP}/secrets/agent-password"]).strip(),
     }
+    variables |= agent_page(ctx) | {"operator_guests": agent_map(ctx), "operator_domain": ctx.bare["domain"]}
     run_playbook(ctx, "agents", "operator.yml", "operator", variables)
     key = ssh_user_ca(ctx, "agents")
     for name in agent_guests(ctx):
         run_playbook(ctx, "agents", "agent-ssh.yml", name, {"agent_ssh_user_ca_key": key})
+
+
+# The page keeps the SHA-256 of the agent's token, never the token itself.
+AGENT_PAGE_TOKEN = "web/agent-token.sha256"
+
+
+def agent_page(ctx: Context) -> dict:
+    """The agent's way to run verify and read its output through the page
+    (web/server.py), with the page's key pinned."""
+    token = ctx.secrets.ensure("agent_page_token", lambda: secrets.token_urlsafe(32))
+    path = ctx.home / AGENT_PAGE_TOKEN
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    digest = hashlib.sha256(token.encode()).hexdigest() + "\n"
+    if not path.exists() or path.read_text() != digest:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(digest)
+    return {"operator_page_url": page_url(ctx), "operator_page_token": token, "operator_page_spki": page_spki(ctx, "agents")}
+
+
+def agent_map(ctx: Context) -> list[dict]:
+    """What the agent's rules tell it about the guests: name, address, zone,
+    kind, and whether it may act on it."""
+    guests = ctx.bare["guests"]
+    return [
+        {
+            "name": name,
+            "fqdn": fqdn(ctx, name),
+            "ip": g["ips"][g["zone"]] if "ips" in g else g.get("ip") or g.get("template_ip", ""),
+            "zone": g["zone"],
+            "kind": g["kind"],
+            "vmid": g.get("vmid") or g.get("template_vmid"),
+            "agent_managed": bool(g.get("agent_managed")),
+        }
+        for name, g in sorted(guests.items())
+    ]
 
 
 def shippers(ctx: Context) -> list[str]:
