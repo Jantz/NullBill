@@ -1,8 +1,28 @@
 #!/usr/bin/env bash
 # Every check CI runs, runnable locally. Needs gitleaks on PATH and the
 # packages in requirements-dev.txt.
+#
+# CI_SKIP names container checks to leave out, space or comma separated:
+# apply install firewall guests host roles tofu, or docker for all of them.
+# Lint, tests and gitleaks always run. CI sets it from a "CI-Skip:" line in
+# the pull request body.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
+
+docker_checks=(apply install firewall guests host roles tofu)
+requested="${CI_SKIP:-}"
+read -ra requested <<<"${requested//,/ }"
+skip=" "
+for name in "${requested[@]}"; do
+  if [[ $name == docker ]]; then
+    skip+="${docker_checks[*]} "
+  elif [[ " ${docker_checks[*]} " == *" $name "* ]]; then
+    skip+="$name "
+  else
+    echo "CI_SKIP: unknown check '$name'; known: ${docker_checks[*]} docker" >&2
+    exit 2
+  fi
+done
 
 # Python scripts the roles install, which have no .py suffix.
 scripts=(ansible/roles/monitoring/files/nb-alert-relay ansible/roles/log_shipper/files/nb-log-shipper)
@@ -13,14 +33,20 @@ python3 -m pytest -q
 gitleaks dir --no-banner --redact -c .gitleaks.toml .
 gitleaks git --no-banner --redact -c .gitleaks.toml .
 
-if docker info >/dev/null 2>&1; then
-  tools/check-apply
-  tools/check-install
-  tools/check-firewall
-  tools/check-guests
-  tools/check-host
-  tools/check-roles
-  tools/check-tofu
+run=()
+for name in "${docker_checks[@]}"; do
+  if [[ $skip == *" $name "* ]]; then
+    echo "SKIP: check-$name (CI_SKIP)"
+  else
+    run+=("$name")
+  fi
+done
+if ((${#run[@]} == 0)); then
+  :
+elif docker info >/dev/null 2>&1; then
+  for name in "${run[@]}"; do
+    "tools/check-$name"
+  done
 else
-  echo "SKIP: apply and install stand-ins, pve-firewall, nftables, dnsmasq, squid, host baseline, guest role and OpenTofu checks need docker"
+  echo "SKIP: ${run[*]/#/check-} need docker"
 fi

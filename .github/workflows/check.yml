@@ -3,6 +3,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read
@@ -24,4 +25,13 @@ jobs:
           python3 -m venv /tmp/venv
           /tmp/venv/bin/pip install -r requirements-dev.txt -e .
           echo /tmp/venv/bin >> "$GITHUB_PATH"
+      # A "CI-Skip:" line in the PR body leaves out container checks; see
+      # tools/check. Pushes to main always run everything.
+      - name: Read CI-Skip from the PR body
+        if: github.event_name == 'pull_request'
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          skip=$(printf '%s\n' "$PR_BODY" | tr -d '\r' | sed -nE 's/^[[:space:]]*ci-skip:[[:space:]]*//Ip' | head -n 1)
+          echo "CI_SKIP=$skip" >> "$GITHUB_ENV"
       - run: tools/check

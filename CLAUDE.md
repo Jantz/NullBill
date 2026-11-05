@@ -45,6 +45,7 @@ names and reaches the host over SSH; it never runs on the host. Only `probe`,
 - `src/nullbill/artifacts.py`: `apply --dry-run` output, one `build/<machine>/` per target.
 - `src/nullbill/apply.py`: apply's stages, run in order through a `Reach` (ssh to the host, `ansible-playbook` with a temporary 0600 inventory and vars file). Containers via `community.proxmox.proxmox_pct_remote`, VMs as `nullbill` with the host as ProxyJump. `src/nullbill/secretfile.py`: `$NULLBILL_HOME/secrets.sops.yaml` through sops and age, saved as soon as a secret is made. `tools/check-apply` runs the real Reach against a host container (fake `pct`) and a VM container; `tests/test_apply.py` uses a recording Reach.
 - `tools/check`: every check CI runs. Run it before pushing. In a TLS-intercepting sandbox set `EXTRA_CA_FILE` to the proxy CA bundle.
+- Skipping CI: a line `CI-Skip: tofu, firewall` in the PR body leaves out those container checks (`apply install firewall guests host roles tofu`, or `docker` for all); editing the body re-runs CI. Lint, tests, gitleaks and the deny-list hook always run, an unknown name fails the run, and pushes to main run everything. Locally, `CI_SKIP=docker tools/check`. Skip only what the diff cannot touch, such as `docker` for a docs-only change.
 
 ## Privacy rules (public repo)
 
