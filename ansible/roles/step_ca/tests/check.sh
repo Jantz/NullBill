@@ -29,3 +29,42 @@ pass "ACME provisioner serves its directory"
 
 test "$(stat -c '%a %U' /etc/step-ca/secrets/password)" = "600 step" || fail "password file mode"
 pass "key password is 0600 and owned by step"
+
+# The agent provisioner: SSH user certificates for principal agent only.
+agent_cert() {
+  rm -f agent agent.pub agent-cert.pub
+  step ssh certificate "$@" --ca-url https://step-ca.nullbill.internal --root /etc/step-ca/certs/root_ca.crt \
+    --provisioner agent --provisioner-password-file /etc/step-ca/secrets/agent-password \
+    --no-password --insecure --no-agent --force >/tmp/agent-cert.log 2>&1
+}
+agent_cert root agent --principal root || { cat /tmp/agent-cert.log; fail "agent certificate"; }
+principals=$(ssh-keygen -L -f agent-cert.pub | sed -n '/Principals:/,/Critical Options:/p' | sed '1d;$d' | tr -d ' ')
+test "$principals" = agent || fail "principals are '$principals'"
+ssh-keygen -L -f agent-cert.pub | grep -q 'Type: .* user certificate' || fail "not a user certificate"
+pass "agent provisioner signs user certificates for principal agent, whatever was asked"
+
+if agent_cert agent agent --not-after 2h; then fail "a 2 h agent certificate was issued"; fi
+agent_cert agent agent --not-after 1h || { cat /tmp/agent-cert.log; fail "a 1 h agent certificate"; }
+pass "agent certificates last at most 1 h"
+
+if agent_cert --host role-check agent; then fail "agent provisioner signed a host certificate"; fi
+if step ca certificate forgejo.nullbill.internal x.crt x.key --ca-url https://step-ca.nullbill.internal \
+  --root /etc/step-ca/certs/root_ca.crt --provisioner agent \
+  --provisioner-password-file /etc/step-ca/secrets/agent-password --force >/dev/null 2>&1; then
+  fail "agent provisioner signed an X.509 certificate"
+fi
+pass "agent provisioner signs no host or X.509 certificate"
+
+# End to end: a guest set up by agent_ssh with this CA's key.
+ansible-playbook -i localhost, -c local -e agent_ssh_manage_services=false \
+  -e "agent_ssh_user_ca_key='$(cat /etc/step-ca/certs/ssh_user_ca_key.pub)'" /ansible/agent-ssh.yml >/tmp/agent-ssh.log 2>&1 ||
+  { cat /tmp/agent-ssh.log; fail "agent_ssh role"; }
+/usr/sbin/sshd -E /tmp/sshd.log
+agent_cert agent agent || fail "agent certificate"
+ssh_as() {
+  ssh -n -i agent -o CertificateFile=agent-cert.pub -o IdentitiesOnly=yes -o BatchMode=yes \
+    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$1@127.0.0.1" id -un
+}
+test "$(ssh_as agent)" = agent || { cat /tmp/sshd.log; fail "step-ca certificate login as agent"; }
+if ssh_as root >/dev/null 2>&1; then fail "step-ca agent certificate logs in as root"; fi
+pass "a certificate from the agent provisioner logs in as agent on a guest, not as root"

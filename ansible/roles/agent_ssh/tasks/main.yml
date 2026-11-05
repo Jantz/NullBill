@@ -1,0 +1,53 @@
+- name: The CA's SSH user key is set
+  ansible.builtin.assert:
+    that: agent_ssh_user_ca_key is match('^(ssh-|ecdsa-)\S+ \S+')
+    fail_msg: agent_ssh_user_ca_key must be the CA's SSH user public key
+
+- name: OpenSSH server
+  ansible.builtin.apt:
+    name: openssh-server
+    update_cache: true
+
+- name: Agent user, no password and no sudo
+  ansible.builtin.user:
+    name: "{{ agent_ssh_user }}"
+    shell: /bin/bash
+    password: "!"
+    groups: []
+    append: false
+
+- name: CA's SSH user key
+  ansible.builtin.copy:
+    dest: /etc/ssh/nullbill_user_ca.pub
+    content: "{{ agent_ssh_user_ca_key | trim }}\n"
+    mode: "0644"
+  notify: Reload sshd
+
+- name: Principals directory
+  ansible.builtin.file:
+    path: /etc/ssh/auth_principals
+    state: directory
+    mode: "0755"
+
+- name: Only the agent user accepts the agent principal
+  ansible.builtin.copy:
+    dest: "/etc/ssh/auth_principals/{{ agent_ssh_user }}"
+    content: "{{ agent_ssh_principal }}\n"
+    mode: "0644"
+
+- name: sshd settings for certificates and the agent user
+  ansible.builtin.template:
+    src: nullbill-agent.conf.j2
+    dest: /etc/ssh/sshd_config.d/60-nullbill-agent.conf
+    mode: "0644"
+  notify: Reload sshd
+
+- name: sshd's runtime directory, which sshd -t needs
+  ansible.builtin.file:
+    path: /run/sshd
+    state: directory
+    mode: "0755"
+
+- name: sshd accepts the whole configuration
+  ansible.builtin.command: sshd -t
+  changed_when: false

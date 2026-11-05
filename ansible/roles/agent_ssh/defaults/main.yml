@@ -1,0 +1,8 @@
+# The CA's SSH user key (/etc/step-ca/certs/ssh_user_ca_key.pub on the
+# step-ca guest). apply fills it in; the role refuses to run without it.
+agent_ssh_user_ca_key: ""
+agent_ssh_user: agent
+# The principal the agent provisioner puts in every certificate
+# (ansible/roles/step_ca/files/agent-ssh.tpl).
+agent_ssh_principal: agent
+agent_ssh_manage_services: true

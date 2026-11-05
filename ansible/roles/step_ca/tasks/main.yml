@@ -48,17 +48,19 @@
     mode: "0700"
   loop: ["", secrets]
 
-# The password protects the intermediate key on disk and never leaves the
-# guest. The root key is copied offline and removed by the owner; see
-# docs/runbooks/step-ca-root-key.md.
-- name: Generate the key password once
+# password protects the CA keys on disk and never leaves the guest. The
+# root key is copied offline and removed by the owner; see
+# docs/runbooks/step-ca-root-key.md. agent-password unlocks the agent
+# provisioner; apply copies it to the operator container and nowhere else.
+- name: Generate the key and agent provisioner passwords once
   ansible.builtin.shell: |
     set -o pipefail
     umask 077
-    head -c 32 /dev/urandom | base64 > {{ step_ca_home }}/secrets/password
+    head -c 32 /dev/urandom | base64 > {{ step_ca_home }}/secrets/{{ item }}
   args:
     executable: /bin/bash
-    creates: "{{ step_ca_home }}/secrets/password"
+    creates: "{{ step_ca_home }}/secrets/{{ item }}"
+  loop: [password, agent-password]
 
 - name: Initialise the CA once
   ansible.builtin.command:
@@ -74,9 +76,44 @@
       - "--password-file={{ step_ca_home }}/secrets/password"
       - "--provisioner-password-file={{ step_ca_home }}/secrets/password"
       - --acme
+      - --ssh
     creates: "{{ step_ca_home }}/config/ca.json"
   environment:
     STEPPATH: "{{ step_ca_home }}"
+  notify: Restart step-ca
+
+- name: Agent provisioner script
+  ansible.builtin.copy:
+    src: agent-provisioner
+    dest: /usr/local/sbin/nullbill-ca-agent-provisioner
+    mode: "0755"
+
+- name: Agent provisioner spec
+  ansible.builtin.copy:
+    dest: "{{ step_ca_home }}/nullbill-agent.json"
+    mode: "0600"
+    content: "{{ spec | to_nice_json }}\n"
+  vars:
+    spec:
+      name: agent
+      ca_config: "{{ step_ca_home }}/config/ca.json"
+      password_file: "{{ step_ca_home }}/secrets/agent-password"
+      claims:
+        enableSSHCA: true
+        defaultUserSSHCertDuration: "{{ step_ca_agent_ssh_default }}"
+        maxUserSSHCertDuration: "{{ step_ca_agent_ssh_max }}"
+        disableRenewal: true
+      ssh_template: "{{ lookup('ansible.builtin.file', 'agent-ssh.tpl') }}"
+      x509_template: "{{ lookup('ansible.builtin.file', 'agent-x509.tpl') }}"
+
+# Short-lived SSH user certificates for the runtime agent, always for the
+# principal "agent" and never X.509; see files/agent-ssh.tpl.
+- name: Agent provisioner
+  ansible.builtin.command: /usr/local/sbin/nullbill-ca-agent-provisioner {{ step_ca_home }}/nullbill-agent.json
+  environment:
+    STEPPATH: "{{ step_ca_home }}"
+  register: step_ca_agent
+  changed_when: (step_ca_agent.stdout | from_json).changed | length > 0
   notify: Restart step-ca
 
 - name: Hand the CA files to the step user

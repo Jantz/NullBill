@@ -1,0 +1,8 @@
+# SSH for the runtime agent on agent-managed guests: certificates from the
+# CA's agent provisioner log in as the unprivileged agent user and nothing
+# else. apply runs this on every agent-managed Linux guest and pool template.
+- name: Agent SSH on an agent-managed guest
+  hosts: all
+  become: false
+  roles:
+    - agent_ssh

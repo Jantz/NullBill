@@ -11,3 +11,8 @@ step_cli_version: 0.30.1-1
 
 step_ca_home: /etc/step-ca
 step_ca_manage_services: true
+
+# SSH user certificates for the runtime agent: short-lived, principal
+# "agent" only (files/agent-ssh.tpl).
+step_ca_agent_ssh_default: 30m
+step_ca_agent_ssh_max: 1h

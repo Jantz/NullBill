@@ -1,0 +1,56 @@
+#!/usr/bin/python3
+"""Bring the CA's agent provisioner to a spec.
+
+Usage: agent-provisioner SPEC.json
+
+Adds a JWK provisioner the first time (step creates its key, encrypted
+with the password file), then sets its claims and templates from the
+spec on every run. Prints {"changed": [...]}, empty when nothing changed.
+Installed and run by the step_ca role.
+"""
+
+import json
+import os
+import subprocess
+import sys
+
+
+def main(spec_path: str) -> None:
+    spec = json.load(open(spec_path))
+    config = spec["ca_config"]
+    changed = []
+
+    def provisioner() -> dict | None:
+        ca = json.load(open(config))
+        return next((p for p in ca["authority"]["provisioners"] if p["name"] == spec["name"]), None)
+
+    if provisioner() is None:
+        done = subprocess.run(
+            ["step", "ca", "provisioner", "add", spec["name"], "--type", "JWK", "--create",
+             "--password-file", spec["password_file"], "--ca-config", config],
+            capture_output=True, text=True,
+        )
+        if done.returncode != 0:
+            sys.exit(f"step ca provisioner add: {done.stderr.strip()}")
+        changed.append("created")
+
+    ca = json.load(open(config))
+    entry = next(p for p in ca["authority"]["provisioners"] if p["name"] == spec["name"])
+    want_options = {"x509": {"template": spec["x509_template"]}, "ssh": {"template": spec["ssh_template"]}}
+    if entry.get("claims") != spec["claims"]:
+        entry["claims"] = spec["claims"]
+        changed.append("claims")
+    if entry.get("options") != want_options:
+        entry["options"] = want_options
+        changed.append("templates")
+    if changed:
+        tmp = f"{config}.tmp"
+        with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, os.stat(config).st_mode & 0o777), "w") as out:
+            json.dump(ca, out, indent=4)
+            out.write("\n")
+        os.replace(tmp, config)
+    print(json.dumps({"changed": changed}))
+
+
+if __name__ == "__main__":
+    main(sys.argv[1])
