@@ -5,7 +5,7 @@
   "allowManagedHooksOnly": true,
   "hooks": {
     "PreToolUse": [
-      {"matcher": "*", "hooks": [{"type": "command", "command": "/usr/local/sbin/nb-log-tool-use"}]}
+      {"matcher": "*", "hooks": [{"type": "command", "command": "/usr/local/sbin/nb-log-tool-use", "timeout": 30, "onFailure": "block"}]}
     ]
   },
   "env": {

@@ -3,8 +3,13 @@
 
 Records every tool call (a Bash command, a file write, a fetch) in the
 journal under the agent's uid before it runs; the log shipper sends it to
-Loki. Exit 2 blocks the call when it cannot be recorded. Installed by the
-operator role.
+Loki. Installed by the operator role.
+
+Only exit 2 blocks a call; any other failure lets it run unrecorded
+(https://code.claude.com/docs/en/hooks.md). So every failure here, a
+journal that is down or input it cannot read, ends in exit 2, and the
+managed settings also set onFailure: block for a hook that cannot start
+or times out.
 """
 
 import json
@@ -13,14 +18,22 @@ import sys
 
 LIMIT = 4000
 
-event = json.load(sys.stdin)
-tool = event.get("tool_name", "?")
-given = event.get("tool_input", {})
-detail = given.get("command") if tool == "Bash" else json.dumps(given, sort_keys=True)
-line = f"tool {tool}: {detail}"
-if len(line) > LIMIT:
-    line = line[:LIMIT] + f" ... ({len(line) - LIMIT} more characters)"
-done = subprocess.run(["logger", "--socket-errors=on", "-t", "nb-cmd", "--", line], capture_output=True)
-if done.returncode != 0:
-    print("nb-log-tool-use: cannot record this tool call, so it does not run", file=sys.stderr)
+
+def record() -> None:
+    event = json.load(sys.stdin)
+    tool = event.get("tool_name", "?")
+    given = event.get("tool_input", {})
+    detail = given.get("command") if tool == "Bash" else json.dumps(given, sort_keys=True)
+    line = f"tool {tool}: {detail}"
+    if len(line) > LIMIT:
+        line = line[:LIMIT] + f" ... ({len(line) - LIMIT} more characters)"
+    done = subprocess.run(["logger", "--socket-errors=on", "-t", "nb-cmd", "--", line], capture_output=True, timeout=10)
+    if done.returncode != 0:
+        raise OSError(done.stderr.decode(errors="replace").strip() or f"logger exit {done.returncode}")
+
+
+try:
+    record()
+except Exception as exc:  # noqa: BLE001 - any failure must block the call
+    print(f"nb-log-tool-use: cannot record this tool call ({exc}), so it does not run", file=sys.stderr)
     sys.exit(2)

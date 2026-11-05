@@ -70,6 +70,11 @@ code=0
 echo '{"tool_name": "Bash", "tool_input": {"command": "true"}}' | su agent -c "$hook" 2>/dev/null || code=$?
 start_journald
 test "$code" = 2 || fail "hook exit $code with the journal down, expected 2 (block)"
+code=0
+echo 'not json' | su agent -c "$hook" 2>/dev/null || code=$?
+test "$code" = 2 || fail "hook exit $code on input it cannot read, expected 2 (block)"
+python3 -c 'import json, sys; h = json.load(open("/etc/claude-code/managed-settings.json"))["hooks"]["PreToolUse"][0]["hooks"][0]
+sys.exit(h.get("onFailure") != "block")' || fail "a hook that cannot start or times out does not block"
 pass "the agent CLI records each tool call under the agent's uid first, and blocks it when it cannot"
 
 out=$(su - agent -c 'nb-ssh 127.0.0.1 id -un' 2>/tmp/nb-ssh.log) || { cat /tmp/nb-ssh.log /tmp/sshd.log; fail "nb-ssh"; }
