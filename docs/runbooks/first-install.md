@@ -113,24 +113,26 @@ a monitor and a USB keyboard for the install, and a screwdriver.
 
 ## 4. Set up the BIOS
 
-The names below are ASUS's. Other makers use similar names in other menus;
-the board's manual lists them.
+The menus below are ASRock's (its Z390 boards), with ASUS's in
+brackets. Other makers use similar names in other menus; the board's manual
+lists them.
 
 **You need:** the server from part 3, switched off.
 
-1. Switch on and press **Delete** (or **F2**) until the BIOS opens. On ASUS,
-   press **F7** for **Advanced Mode**.
+1. Switch on and press **Delete** (or **F2**) until the BIOS opens. On
+   ASRock, **F6** switches from Easy Mode to the full menus; on ASUS, **F7**
+   opens **Advanced Mode**.
 2. Set these, then save and exit (**F10**):
 
-   | Setting (ASUS menu) | Value | Why |
-   | --- | --- | --- |
-   | Intel Virtualization Technology (Advanced, CPU Configuration) | Enabled | Required: the router, the backup server and the CI runners are virtual machines. |
-   | VT-d (Advanced, System Agent (SA) Configuration) | Enabled | Needed to hand the GPU to a guest later; harmless now. |
-   | SATA Mode Selection (Advanced, PCH Storage Configuration) | AHCI | With RAID or Intel RST, Proxmox may not see the disks. |
-   | Restore AC Power Loss (Advanced, APM Configuration) | Power On | The server starts by itself after a power cut. |
-   | Fast Boot (Boot) | Disabled | So the USB stick and the BIOS key are always seen at start. |
-   | Launch CSM (Boot, CSM) | Disabled | Proxmox installs in UEFI mode. |
-   | iGPU Multi-Monitor (Advanced, System Agent (SA) Configuration, Graphics Configuration) | Enabled | Only for the on-site screen: keeps the integrated graphics on next to the RTX 4070. |
+   | Setting | ASRock menu (ASUS menu) | Value | Why |
+   | --- | --- | --- | --- |
+   | Intel Virtualization Technology | Advanced, CPU Configuration (same) | Enabled | Required: the router, the backup server and the CI runners are virtual machines. |
+   | VT-d | Advanced, Chipset Configuration (Advanced, System Agent (SA) Configuration) | Enabled | Needed to hand the GPU to a guest later; harmless now. |
+   | SATA Mode Selection | Advanced, Storage Configuration (Advanced, PCH Storage Configuration) | AHCI | With RAID or Intel RST, Proxmox may not see the disks. |
+   | Restore on AC/Power Loss | Advanced, Chipset Configuration (Advanced, APM Configuration) | Power On | The server starts by itself after a power cut. |
+   | Fast Boot | Boot (same) | Disabled | So the USB stick and the BIOS key are always seen at start. |
+   | CSM | Boot, CSM (Boot, CSM, Launch CSM) | Disabled | Proxmox installs in UEFI mode. The options under it disappear; that is expected. |
+   | IGPU Multi-Monitor | Advanced, Chipset Configuration (Advanced, System Agent (SA) Configuration, Graphics Configuration) | Enabled | Only for the on-site screen: keeps the integrated graphics on next to the RTX 4070. |
 
    Secure Boot can stay as it is: the Proxmox VE 9 installer starts with it
    on. If the stick does not start in part 6, turn Secure Boot off and try
