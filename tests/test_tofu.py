@@ -66,7 +66,10 @@ def test_images_are_checksummed_and_nothing_identifying_is_rendered(facts):
     for download in config["resource"]["proxmox_download_file"].values():
         assert download["checksum_algorithm"] == "sha512" and len(download["checksum"]) == 128
     # The endpoint, node and keys come from apply; the token from its environment.
-    assert config["provider"]["proxmox"] == {"endpoint": "${var.pve_endpoint}"}
+    assert config["provider"]["proxmox"] == {
+        "endpoint": "${var.pve_endpoint}",
+        "ssh": {"node": [{"name": "${var.node_name}", "address": "${var.pve_ssh_address}"}]},
+    }
     assert [n for n, v in config["variable"].items() if "default" in v and not n.startswith("pbs_")] == ["lan_bridge"]
     assert all(config["variable"][n]["sensitive"] for n in ("pbs_token_secret", "pbs_encryption_key"))
     storage = config["resource"]["proxmox_storage_pbs"]["nb_pbs"]

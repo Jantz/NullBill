@@ -3,6 +3,7 @@ import hashlib
 import json
 import shlex
 import time
+from pathlib import Path
 
 import pytest
 from conftest import fixture_config
@@ -1045,6 +1046,9 @@ def test_tofu_stage_runs_init_and_apply_with_everything_in_the_environment(ctx):
     assert env["TF_VAR_state_passphrase"] == c.secrets.get("tofu_state_passphrase")
     assert env["TF_VAR_pve_endpoint"] == "https://pve.internal:8006/"
     assert env["TF_VAR_node_name"] == "pve"
+    # Disk imports: SSH to the host apply reaches, known_hosts under a real home.
+    assert env["TF_VAR_pve_ssh_address"] == "pve.internal"
+    assert env["HOME"] == str(Path.home())
     assert json.loads(env["TF_VAR_ssh_authorized_keys"]) == ["ssh-ed25519 AAAAexample nullbill@nullbill"]
     # No secret lands in the state directory or build/.
     for path in (c.home / "tofu").rglob("*"):

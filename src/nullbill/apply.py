@@ -326,6 +326,10 @@ def tofu_env(ctx: Context, stage: str = "tofu") -> dict[str, str]:
         # The provider reaches the host over SSH for disk imports.
         "PROXMOX_VE_SSH_USERNAME": "root",
         "PROXMOX_VE_SSH_PRIVATE_KEY": key.read_text() if key.exists() else "",
+        # The provider reads known_hosts under $HOME and fails without it;
+        # systemd gives the page's service none.
+        "HOME": str(Path.home()),
+        "TF_VAR_pve_ssh_address": host,
         # PVE's certificate is signed by its own CA.
         "SSL_CERT_FILE": str(ca),
         "TF_VAR_pve_endpoint": f"https://{host}:8006/",

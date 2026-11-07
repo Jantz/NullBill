@@ -897,7 +897,15 @@ WantedBy=multi-user.target
   },
   "provider": {
     "proxmox": {
-      "endpoint": "${var.pve_endpoint}"
+      "endpoint": "${var.pve_endpoint}",
+      "ssh": {
+        "node": [
+          {
+            "name": "${var.node_name}",
+            "address": "${var.pve_ssh_address}"
+          }
+        ]
+      }
     }
   },
   "variable": {
@@ -908,6 +916,10 @@ WantedBy=multi-user.target
     "node_name": {
       "type": "string",
       "description": "PVE node name"
+    },
+    "pve_ssh_address": {
+      "type": "string",
+      "description": "Address the provider reaches the PVE host at over SSH"
     },
     "lan_bridge": {
       "type": "string",
