@@ -8,8 +8,10 @@ batches over TLS with this guest's shipper certificate. Labels: job (from
 the source), host (from the config) and uid, the journal's trusted record
 of the sending process's user, which that process cannot forge. The cursor
 of the last pushed entry is saved after each push, so a restart resends
-nothing and skips nothing the journal still holds. Installed and run by
-the log_shipper role.
+nothing and skips nothing the journal still holds, except entries older
+than Loki accepts (a week by default), which it would refuse with the whole
+batch, stopping the shipper for good. Installed and run by the log_shipper
+role.
 """
 
 import json
@@ -23,6 +25,8 @@ import urllib.request
 
 BATCH = 500
 FLUSH_S = 1.0
+# Loki's reject_old_samples_max_age is 7 days; a day's margin for clocks.
+MAX_AGE_S = 6 * 86400
 
 
 def load(path: str) -> dict:
@@ -47,17 +51,27 @@ def job(conf: dict, entry: dict) -> str | None:
     return None
 
 
-def payload(conf: dict, entries: list[dict]) -> bytes:
+def payload(conf: dict, entries: list[dict], now: float | None = None) -> bytes | None:
+    """Loki's push body, or None when no entry is left to send."""
+    oldest_us = int(((time.time() if now is None else now) - MAX_AGE_S) * 1_000_000)
     streams: dict[tuple, list] = {}
+    old = 0
     for e in entries:
         name = job(conf, e)
         if name is None:
+            continue
+        if int(e["__REALTIME_TIMESTAMP"]) < oldest_us:
+            old += 1
             continue
         key = (name, e.get("_UID", ""))
         message = e.get("MESSAGE")
         if isinstance(message, list):  # journald sends non-UTF-8 as bytes
             message = bytes(message).decode("utf-8", "replace")
         streams.setdefault(key, []).append([str(int(e["__REALTIME_TIMESTAMP"]) * 1000), message or ""])
+    if old:
+        print(f"skipped {old} entries older than {MAX_AGE_S // 86400} days, which Loki refuses", file=sys.stderr, flush=True)
+    if not streams:
+        return None
     body = [{"stream": {"job": name, "host": conf["host"], "uid": uid}, "values": values} for (name, uid), values in streams.items()]
     return json.dumps({"streams": body}).encode()
 
@@ -65,6 +79,8 @@ def payload(conf: dict, entries: list[dict]) -> bytes:
 def push(conf: dict, context: ssl.SSLContext, entries: list[dict]) -> None:
     """Retry until Loki takes the batch; the journal keeps entries meanwhile."""
     data = payload(conf, entries)
+    if data is None:
+        return
     delay = 1
     while True:
         request = urllib.request.Request(conf["url"], data=data, headers={"Content-Type": "application/json"})
