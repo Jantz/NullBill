@@ -1,3 +1,4 @@
+import errno
 import shlex
 import socket
 import subprocess
@@ -8,7 +9,7 @@ from conftest import backup_host, fixture_config
 
 from nullbill.model import build_model
 from nullbill.plan import build_plan
-from nullbill.verify import _connect_via, _tcp, probes, run_verify
+from nullbill.verify import _connect_via, _lan, _tcp, probes, run_verify, tcp_connect
 
 PUBLIC = "192.0.2.80"  # RFC 5737 stand-in for the resolved public name
 
@@ -167,3 +168,22 @@ def test_host_only_port_is_refused_from_mgmt_guests(facts):
     names = [p.name for p in probes(plan, model, PUBLIC)[0]]
     assert any(n.endswith("(mgmt) is refused pbs tcp/8007") for n in names)
     assert any(n.endswith("(access) reaches pbs tcp/8007") for n in names)
+
+
+@pytest.mark.parametrize(
+    ("error", "status"),
+    [
+        (OSError(errno.ENETUNREACH, "Network is unreachable"), "SKIP"),
+        (socket.gaierror(socket.EAI_NONAME, "Name or service not known"), "SKIP"),
+        (TimeoutError("timed out"), "PASS"),
+        (ConnectionRefusedError(errno.ECONNREFUSED, "Connection refused"), "FAIL"),
+    ],
+)
+def test_the_lan_check_passes_only_on_a_drop(monkeypatch, error, status):
+    """A drop times out; no route or no address never reached the firewall."""
+
+    def connect(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(socket, "create_connection", connect)
+    assert {r.status for r in _lan("192.0.2.10", tcp_connect)} == {status}

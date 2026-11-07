@@ -156,19 +156,26 @@ def _lan(host: str, connect: Connect) -> list[Result]:
         state = connect(host, port)
         if state == "timeout":
             results.append(Result("PASS", name))
+        elif state.startswith("error"):
+            # No route, no address: nothing reached the firewall, so nothing was shown.
+            results.append(Result("SKIP", name, f"could not test from here: {state.removeprefix('error: ')}"))
         else:
             results.append(Result("FAIL", name, "connected" if state == "open" else "refused, not dropped"))
     return results
 
 
 def tcp_connect(host: str, port: int) -> str:
+    """open, refused, timeout (a drop), or "error: ..." when the attempt
+    never got as far as the host's firewall."""
     try:
         with socket.create_connection((host, port), timeout=TIMEOUT_S):
             return "open"
     except ConnectionRefusedError:
         return "refused"
-    except OSError:
+    except TimeoutError:
         return "timeout"
+    except OSError as err:
+        return f"error: {err.strerror or err}"
 
 
 def resolve_ipv4(name: str) -> str:
