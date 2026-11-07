@@ -311,8 +311,16 @@ def _disks(model: dict, facts: dict, errors: _Errors, want_pbs: bool, capacity: 
     # namespace in the files guest.
     names: dict[str, str] = {c["name"]: f"the copy {c['volume']}" for c in facts.get("copies", [])}
     storages: dict[str, str] = {}
+    # A disk apply made the PBS disk (nb-backup-disk) holds its volume group;
+    # LVM's signature on it is apply's own, so it stays the PBS disk.
+    made_pbs = next((d["id"] for d in facts["disks"] if backups.DISK_STORAGE in d.get("vgs", [])), None)
     for disk in facts["disks"]:
         pin = pins.get(disk["id"])
+        # LVM's signature on a disk apply made PBS or storage needs no wipe.
+        if pin is None or pin["use"] == "pbs":
+            own_vg = disk["id"] == made_pbs
+        else:
+            own_vg = pin["use"] == "storage" and legacy.storage_name(pin) in disk.get("vgs", [])
         base = {"size_gib": disk["size_gib"], "signatures": disk["signatures"]}
         if disk["system"]:
             if pin:
@@ -356,12 +364,17 @@ def _disks(model: dict, facts: dict, errors: _Errors, want_pbs: bool, capacity: 
         elif pin and pin["use"] == "pbs" and not want_pbs:
             errors.append(f"disks.{disk['id']}: pinned for PBS, but PBS is switched off")
         elif pin and pin["use"] == "pbs":
-            if disk["signatures"] and not pin.get("wipe"):
+            if disk["signatures"] and not pin.get("wipe") and not own_vg:
                 errors.append(f"disks.{disk['id']}: carries {', '.join(disk['signatures'])}; set wipe: true to let apply format it")
             if pbs:
                 errors.append(f"disks.{disk['id']}: a second PBS disk; {pbs} is already pinned")
+            if made_pbs and made_pbs != disk["id"]:
+                errors.append(f"disks.{disk['id']}: pinned for PBS, but {made_pbs} holds the PBS volume group {backups.DISK_STORAGE}")
             pbs = disk["id"]
-            why = "Pinned for PBS; apply will wipe its signatures." if disk["signatures"] else "Pinned for PBS."
+            if own_vg:
+                why = f"Pinned for PBS; it holds the PBS volume group {backups.DISK_STORAGE} already."
+            else:
+                why = "Pinned for PBS; apply will wipe its signatures." if disk["signatures"] else "Pinned for PBS."
             entry = {**base, "use": "pbs"}
             if converts:
                 entry["converts"] = converts
@@ -369,7 +382,7 @@ def _disks(model: dict, facts: dict, errors: _Errors, want_pbs: bool, capacity: 
             section[disk["id"]] = Note(entry, why + health)
         elif pin and pin["use"] == "storage":
             name = legacy.storage_name(pin)
-            if disk["signatures"] and not pin.get("wipe"):
+            if disk["signatures"] and not pin.get("wipe") and not own_vg:
                 errors.append(f"disks.{disk['id']}: carries {', '.join(disk['signatures'])}; set wipe: true to let apply format it")
             if name in storages:
                 errors.append(f"disks.{disk['id']}: storage {name} is also pinned for {storages[name]}; set disks.<id>.storage")
@@ -379,17 +392,23 @@ def _disks(model: dict, facts: dict, errors: _Errors, want_pbs: bool, capacity: 
                 errors.append(f"disks.{disk['id']}.storage: {name} is taken by another PVE storage; choose another name")
             why = f"Pinned as the LVM-thin PVE storage {name}, {legacy.storage_room_gib(disk['size_gib'])} GiB for volumes."
             why += " Guests stay on the system storage; move a volume there in PVE when you want."
-            if disk["signatures"]:
+            if own_vg:
+                why += f" It holds the volume group {name} already."
+            elif disk["signatures"]:
                 why += " apply will wipe its signatures."
             entry = {**base, "use": "storage", "storage": name}
             if converts:
                 entry["converts"] = converts
                 why = legacy.convert_note(converts) + " " + why
             section[disk["id"]] = Note(entry, why + health)
+        elif own_vg and want_pbs and pbs is None and "pbs" not in {p["use"] for p in pins.values()}:
+            pbs = disk["id"]
+            why = f"Holds the PBS volume group {backups.DISK_STORAGE} apply made, so it stays the PBS datastore."
+            section[disk["id"]] = Note({**base, "use": "pbs"}, why + health)
         elif disk["signatures"]:
             why = "Carries signatures; only an explicit pin with wipe: true changes that."
             section[disk["id"]] = Note({**base, "use": "untouched"}, why + health)
-        elif want_pbs and pbs is None and "pbs" not in {p["use"] for p in pins.values()}:
+        elif want_pbs and pbs is None and made_pbs is None and "pbs" not in {p["use"] for p in pins.values()}:
             pbs = disk["id"]
             section[disk["id"]] = Note({**base, "use": "pbs"}, "Blank, so it becomes the PBS datastore." + health)
         else:

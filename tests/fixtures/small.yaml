@@ -57,3 +57,6 @@ iommu:
 nvidia-smi:
   rc: 127
   err: "sh: 1: nvidia-smi: not found\n"
+pvs:
+  out: |
+    {"report": [{"pv": [{"pv_name": "/dev/sda3", "vg_name": "pve"}]}]}

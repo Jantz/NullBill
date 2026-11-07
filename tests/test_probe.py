@@ -34,6 +34,10 @@ def test_mid_gpu_and_blank_disk(facts):
     }
     hdd = next(d for d in f["disks"] if d["id"] == "ata-SYNTHETIC_HDD_0002")
     assert hdd["system"] is False and hdd["signatures"] == [] and hdd["rotational"] is True
+    assert hdd["vgs"] == []
+    # pvs names the volume group of each physical volume, on a partition too.
+    system = next(d for d in f["disks"] if d["id"] == "nvme-SYNTHETIC_NVME_0001")
+    assert system["vgs"] == ["pve"]
 
 
 def test_large_signatures(facts):

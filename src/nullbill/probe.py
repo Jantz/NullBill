@@ -35,6 +35,10 @@ COMMANDS: dict[str, tuple[str, bool]] = {
     # Copies apply made of kept disks before converting them
     # (nb-legacy-copy); none until then.
     "copies": ("cat /var/lib/nullbill/kept-copies 2>/dev/null; true", False),
+    # Which LVM volume group each physical volume is in, so a disk apply
+    # made storage or the PBS disk is known as such, not as a disk with
+    # signatures.
+    "pvs": ("pvs --reportformat json -o pv_name,vg_name", False),
 }
 
 Runner = Callable[[str, str], tuple[int, str, str]]
@@ -190,9 +194,20 @@ def _smart(text: str | None, ids: dict[str, str]) -> dict[str, dict]:
     return out
 
 
-def _disks(lsblk_text: str, by_id_text: str, smart_text: str | None = None) -> list[dict]:
+def _volume_groups(text: str | None) -> dict[str, str]:
+    """pvs: kernel device name (sdb, nvme0n1p3) -> volume group."""
+    out = {}
+    for report in json.loads(text).get("report", []) if text else []:
+        for pv in report.get("pv", []):
+            if pv.get("vg_name"):
+                out[Path(pv["pv_name"]).name] = pv["vg_name"]
+    return out
+
+
+def _disks(lsblk_text: str, by_id_text: str, smart_text: str | None = None, pvs_text: str | None = None) -> list[dict]:
     ids = _disk_ids(by_id_text)
     smart = _smart(smart_text, ids)
+    groups = _volume_groups(pvs_text)
     disks = []
     for dev in json.loads(lsblk_text)["blockdevices"]:
         if dev["type"] != "disk":
@@ -212,6 +227,7 @@ def _disks(lsblk_text: str, by_id_text: str, smart_text: str | None = None) -> l
                 "system": mounted or holds_pve,
                 "signatures": signatures,
                 "partitions": _partitions(dev),
+                "vgs": sorted({groups[n["name"]] for n in nodes if n.get("name") in groups}),
                 "smart": smart.get(ids.get(dev["name"], dev["name"]), {"health": "unknown"}),
             }
         )
@@ -296,7 +312,7 @@ def parse(raw: Path) -> dict:
         "pve_version": version.group(1) if version else None,
         "cpu": _cpu(texts["lscpu"]),
         "memory_mib": _memory_mib(texts["meminfo"]),
-        "disks": _disks(texts["lsblk"], texts["disk-by-id"], texts["smart"]),
+        "disks": _disks(texts["lsblk"], texts["disk-by-id"], texts["smart"], texts["pvs"]),
         "storage": _storage(texts["storage"]),
         "gpus": _gpus(texts["lspci"], texts["iommu"], texts["nvidia-smi"]),
         "copies": _copies(texts["copies"]),

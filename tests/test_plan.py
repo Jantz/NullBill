@@ -143,6 +143,44 @@ def test_unpinned_disk_with_signatures_is_untouched(facts):
     assert plan["backups"].value == {"target": "pbs datastore on ata-SYNTHETIC_HDD_0003", "status": "ok"}
 
 
+def test_the_pbs_disk_apply_made_stays_the_pbs_disk_after_a_new_probe(facts):
+    """nb-backup-disk leaves LVM's signature on the disk it picked; a probe
+    after that must not read it as someone else's disk, or the render drops
+    the PBS datastore disk and the backup job."""
+    from nullbill.tofu import render_tofu
+
+    config = fixture_config("mid")
+    model = build_model(config)
+    renders = []
+    for signatures, vgs in (([], []), (["LVM2_member"], ["nb-pbs-disk"])):
+        f = facts("mid")
+        disk = next(d for d in f["disks"] if d["id"] == "ata-SYNTHETIC_HDD_0002")
+        disk["signatures"], disk["vgs"] = signatures, vgs
+        plan = strip_notes(build_plan(model, f))
+        assert plan["disks"]["ata-SYNTHETIC_HDD_0002"]["use"] == "pbs"
+        assert plan["backups"]["status"] == "ok"
+        renders.append(json.loads(render_tofu(plan, model)["main.tf.json"])["resource"])
+    before, after = renders
+    assert after["proxmox_virtual_environment_vm"]["pbs"]["disk"] == before["proxmox_virtual_environment_vm"]["pbs"]["disk"]
+    assert after.get("proxmox_backup_job") == before.get("proxmox_backup_job") is not None
+    # The same pinned for PBS needs no wipe; any other LVM disk stays untouched.
+    pinned = {**config, "disks": {"ata-SYNTHETIC_HDD_0002": {"use": "pbs"}}}
+    assert strip_notes(plan_for(f, pinned))["disks"]["ata-SYNTHETIC_HDD_0002"]["use"] == "pbs"
+    disk["vgs"] = ["someone-elses"]
+    assert strip_notes(plan_for(f, config))["disks"]["ata-SYNTHETIC_HDD_0002"]["use"] == "untouched"
+
+
+def test_a_storage_disk_apply_made_needs_no_wipe_after_a_new_probe(facts):
+    f = facts("mid")
+    disk = next(d for d in f["disks"] if d["id"] == "ata-SYNTHETIC_HDD_0002")
+    disk["signatures"], disk["vgs"] = ["LVM2_member"], ["nb-data"]
+    config = {**fixture_config("mid"), "disks": {"ata-SYNTHETIC_HDD_0002": {"use": "storage"}}}
+    assert strip_notes(plan_for(f, config))["disks"]["ata-SYNTHETIC_HDD_0002"]["storage"] == "nb-data"
+    disk["vgs"] = ["nb-other"]
+    (message,) = errors_of(f, config)
+    assert message == "disks.ata-SYNTHETIC_HDD_0002: carries LVM2_member; set wipe: true to let apply format it"
+
+
 def test_single_disk_backups_degraded(facts):
     assert plan_for(facts("small"), fixture_config("small"))["backups"].value["status"] == "DEGRADED"
 

@@ -62,3 +62,6 @@ smart:
     == /dev/sda
     {"device": {"name": "/dev/sda", "protocol": "ATA"}, "smart_status": {"passed": true}, "power_on_time": {"hours": 20},
      "ata_smart_attributes": {"table": [{"id": 5, "name": "Reallocated_Sector_Ct", "raw": {"value": 0}}]}}
+pvs:
+  out: |
+    {"report": [{"pv": [{"pv_name": "/dev/nvme0n1p3", "vg_name": "pve"}]}]}
