@@ -165,9 +165,14 @@ Reference: <https://pve.proxmox.com/pve-docs/chapter-pve-installation.html>.
   router. NullBill's own networks use `10.42.x.x`; if your home network does
   too, stop and say so before you go on.
 
-1. Put the stick in and switch on. Open the boot menu (often **F8**, **F11**
-   or **F12**; the BIOS start screen names it) and pick the stick's UEFI
-   entry.
+1. Put the stick in and switch on. Open the boot menu (**F11** on ASRock,
+   **F8** on ASUS, often **F12** elsewhere; the BIOS start screen names it)
+   and pick the stick's entry that starts with **UEFI:**. Without that, the
+   machine starts whatever is on its disks. An old Windows may then sit at
+   its logo for a long time or open Automatic Repair, because SATA is now
+   AHCI. If that disk holds files you keep, let Windows finish and shut it
+   down with `shutdown /s /t 0`, or choose **Shut down** in Automatic
+   Repair; do not let it repair. Otherwise hold the power button.
 2. Choose **Install Proxmox VE (Graphical)** and accept the licence.
 3. **Target harddisk**: pick the system disk by its model and size. The
    installer erases it. Never pick the backup disk or a kept disk. Leave
