@@ -203,7 +203,8 @@ def lan_state(ctx: Context, open_variant: str) -> str:
     host_out(ctx, "host", f"mkdir -p -m 0700 {lan.SAVED_OPEN.rsplit('/', 1)[0]}")
     host_files(ctx, "host", lan.SAVED_OPEN.rsplit("/", 1)[0], {lan.SAVED_OPEN.rsplit("/", 1)[1]: open_variant})
     host_files(ctx, "host", "/etc/systemd/system", {lan.BOOT_UNIT: lan.boot_unit()})
-    host_out(ctx, "host", f"systemctl daemon-reload && systemctl enable -q {lan.BOOT_UNIT}")
+    # Acted on at boot only, so enabling is enough; enable also reloads a running systemd.
+    host_out(ctx, "host", f"systemctl enable -q {lan.BOOT_UNIT}")
     if ctx.open_lan:
         host_out(ctx, "host", f"{lan.DISARM} 2>/dev/null || true")
         lan.write(ctx.home, lan.OPEN)

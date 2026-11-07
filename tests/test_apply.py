@@ -929,7 +929,7 @@ def test_close_lan_arms_the_undo_before_closing_and_stays_closed_once_kept(ctx, 
     assert arm < closing, "the undo must be armed before the LAN closes"
     # A restart before "Keep it closed" opens it at boot: the unit is enabled before arming.
     assert reach.files[f"/etc/systemd/system/{lan.BOOT_UNIT}"] == lan.boot_unit()
-    assert host.index(f"systemctl daemon-reload && systemctl enable -q {lan.BOOT_UNIT}") < arm
+    assert host.index(f"systemctl enable -q {lan.BOOT_UNIT}") < arm
     # The controller can reach the host at its mgmt address from now on.
     assert known.read_text() == "10.42.1.254 ssh-ed25519 AAAAhostkey\n"
     assert lan.state(tmp_path) == lan.CLOSING

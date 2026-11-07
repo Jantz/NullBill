@@ -72,6 +72,8 @@ def check_host(ctx: apply.Context) -> None:
         fail("guest firewall files are installed")
     if on(TARGET, "cat /etc/pve/nodes/pve/host.fw") != ctx.files["firewall/host.fw"]:
         fail("host.fw is the node's own file, where PVE reads it")
+    if "nb-lan-revert-boot.service" not in on(TARGET, "ls /etc/systemd/system/multi-user.target.wants"):
+        fail("the unit that reopens the LAN at boot after an unconfirmed close is enabled")
     if "passwordauthentication no" not in on(TARGET, "/usr/sbin/sshd -T"):
         fail("the baseline made sshd key-only")
     ok("host stage: baseline over SSH, firewall files in /etc/pve/firewall and host.fw in /etc/pve/local")
