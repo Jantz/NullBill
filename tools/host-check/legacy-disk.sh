@@ -6,7 +6,7 @@
 # gets mounted. Sourced by check.sh, which defines fail.
 
 legacy_disk_checks() {
-  local by_id=/tmp/legacy/by-id by_uuid=/tmp/legacy/by-uuid units=/tmp/legacy/units base=/tmp/legacy/mnt
+  local by_id=/tmp/legacy/by-id by_uuid=/tmp/legacy/by-uuid units=/tmp/legacy/units base=/tmp/legacy/mnt prom=/tmp/legacy/textfile/nullbill-legacy.prom
   mkdir -p "$by_id" "$by_uuid" "$units" /tmp/legacy/fake
   cat >/tmp/legacy/systemctl <<'SH'
 #!/bin/bash
@@ -23,13 +23,11 @@ case $1 in
 esac
 SH
   chmod +x /tmp/legacy/systemctl
-  export NB_DISK_DIR=$by_id NB_UUID_DIR=$by_uuid NB_UNIT_DIR=$units NB_LEGACY_DIR=$base NB_SYSTEMCTL=/tmp/legacy/systemctl
-  local loops=()
+  export NB_DISK_DIR=$by_id NB_UUID_DIR=$by_uuid NB_UNIT_DIR=$units NB_LEGACY_DIR=$base NB_SYSTEMCTL=/tmp/legacy/systemctl NB_TEXTFILE_DIR=/tmp/legacy/textfile
   image() { # name size mkfs...
     truncate -s "$2" "/tmp/legacy/$1.img"
     local loop
     loop=$(losetup -f --show "/tmp/legacy/$1.img")
-    loops+=("$loop")
     "${@:3}" "$loop" >/dev/null 2>&1
     ln -sf "$loop" "$by_id/ata-SYNTHETIC_$1-part2"
     ln -sf "$loop" "$by_uuid/$(blkid -p -o value -s UUID "$loop")"
@@ -69,16 +67,20 @@ SH
   grep -qx 'Before=pve-guests.service' "$unit" || fail "unit is not ordered before the guests"
   [ "$(keep NTFS "$uuid" ntfs ro)" = kept ] || fail "second run did not keep the mount"
   [ "$(legacy list)" = "old-hdd $uuid ro ntfs mounted" ] || fail "list: $(legacy list)"
+  grep -qx 'nb_legacy_disk_mounted{name="old-hdd",mode="ro"} 1' "$prom" || fail "metric of a mounted disk: $(cat "$prom")"
   echo "ok   a kept NTFS disk mounts read-only by UUID as the share user, and stays as it is on the next run"
 
   # The disk goes missing: the empty mount point takes no writes.
   umount "$dir"
   if touch "$dir/lost" 2>/dev/null; then fail "wrote into the mount point of a missing disk"; fi
   [ "$(legacy list)" = "old-hdd $uuid ro ntfs unmounted" ] || fail "list of a missing disk: $(legacy list)"
+  legacy metrics
+  grep -qx 'nb_legacy_disk_mounted{name="old-hdd",mode="ro"} 0' "$prom" || fail "metric of a missing disk: $(cat "$prom")"
   [ "$(keep NTFS "$uuid" ntfs ro)" = mounted ] || fail "the disk was not mounted again once back"
-  echo "ok   while the disk is missing its mount point is immutable, so nothing lands on the system disk"
+  echo "ok   while the disk is missing its mount point is immutable, so nothing lands on the system disk, and LegacyDiskMissing's metric says 0"
   [ "$(legacy unmount old-hdd)" = removed ] || fail "unmount"
   if [ -e "$dir" ] || [ -e "$unit" ]; then fail "unmount left the mount point or the unit"; fi
+  test ! -e "$prom" || fail "the metric outlived the last kept disk"
   [ "$(sum NTFS)" = "$before" ] || fail "a read-only mount changed the disk"
   echo "ok   unmounting removes the unit and the mount point, and read-only use left the image byte for byte as it was"
 
@@ -186,5 +188,16 @@ PY
   done
   echo "ok   exFAT and FAT are refused read-write"
 
-  for loop in "${loops[@]}"; do losetup -d "$loop"; done
+  legacy_disk_cleanup
+}
+
+# Loop devices belong to the kernel, not the container: detach them even
+# when a check fails, or each failed run leaks some. image runs in a
+# subshell, so the images, not a list, say which loops are ours.
+legacy_disk_cleanup() {
+  findmnt -rno TARGET | grep '^/tmp/legacy/' | sort -r | xargs -r umount -l 2>/dev/null || true
+  for img in /tmp/legacy/*.img; do
+    [ -e "$img" ] || continue
+    losetup -j "$img" | cut -d: -f1 | xargs -r -n1 losetup -d 2>/dev/null || true
+  done
 }

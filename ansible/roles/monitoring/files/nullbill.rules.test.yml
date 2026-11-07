@@ -11,6 +11,25 @@ tests:
         values: "5x20"
       - series: 'node_filesystem_size_bytes{instance="pbs:9100",mountpoint="/",fstype="ext4"}'
         values: "100x20"
+      - series: 'node_filesystem_readonly{instance="pbs:9100",mountpoint="/",fstype="ext4"}'
+        values: "0x20"
+      # A disk kept read-only, 95% full: no page. Kept read-write: a page.
+      - series: 'node_filesystem_avail_bytes{instance="pve:9100",mountpoint="/mnt/nb-legacy/data",fstype="fuseblk"}'
+        values: "5x20"
+      - series: 'node_filesystem_size_bytes{instance="pve:9100",mountpoint="/mnt/nb-legacy/data",fstype="fuseblk"}'
+        values: "100x20"
+      - series: 'node_filesystem_readonly{instance="pve:9100",mountpoint="/mnt/nb-legacy/data",fstype="fuseblk"}'
+        values: "1x20"
+      - series: 'node_filesystem_avail_bytes{instance="pve:9100",mountpoint="/mnt/nb-legacy/media",fstype="fuseblk"}'
+        values: "5x20"
+      - series: 'node_filesystem_size_bytes{instance="pve:9100",mountpoint="/mnt/nb-legacy/media",fstype="fuseblk"}'
+        values: "100x20"
+      - series: 'node_filesystem_readonly{instance="pve:9100",mountpoint="/mnt/nb-legacy/media",fstype="fuseblk"}'
+        values: "0x20"
+      - series: 'nb_legacy_disk_mounted{job="host",instance="pve",name="data",mode="ro"}'
+        values: "1x5 0x15"
+      - series: 'nb_legacy_disk_mounted{job="host",instance="pve",name="media",mode="rw"}'
+        values: "1x20"
       - series: 'probe_ssl_earliest_cert_expiry{job="tls",instance="forgejo:443"}'
         values: "21000x70"
       - series: 'probe_success{job="tls",instance="forgejo:443"}'
@@ -51,6 +70,16 @@ tests:
         exp_alerts:
           - exp_labels: {severity: page, instance: "pbs:9100", mountpoint: /, fstype: ext4}
             exp_annotations: {summary: "pbs:9100 / has under 10% free"}
+          - exp_labels: {severity: page, instance: "pve:9100", mountpoint: /mnt/nb-legacy/media, fstype: fuseblk}
+            exp_annotations: {summary: "pve:9100 /mnt/nb-legacy/media has under 10% free"}
+      - eval_time: 15m
+        alertname: LegacyDiskMissing
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: LegacyDiskMissing
+        exp_alerts:
+          - exp_labels: {severity: page, job: host, instance: pve, name: data, mode: ro}
+            exp_annotations: {summary: "kept disk data is not mounted on the host; is it connected? Its share is empty until it is back"}
       - eval_time: 29m
         alertname: CertificateExpiresSoon
         exp_alerts: []

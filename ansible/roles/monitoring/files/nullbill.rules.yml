@@ -23,8 +23,12 @@ groups:
         labels: {severity: page}
         annotations:
           summary: "{{ $labels.job }} target {{ $labels.instance }} is not answering"
+      # Read-only filesystems cannot fill up; a full disk kept read-only
+      # from a previous OS would otherwise page for ever.
       - alert: DiskAlmostFull
-        expr: node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes < 0.10
+        expr: >-
+          node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes < 0.10
+          unless on(instance, mountpoint) node_filesystem_readonly == 1
         for: 15m
         labels: {severity: page}
         annotations:
@@ -96,6 +100,14 @@ groups:
   # A failed nightly job shows as the guest's newest backup growing old.
   - name: nullbill-backups
     rules:
+      # The host's nb-legacy-disk metrics: a disk kept from a previous OS
+      # is not mounted, so its share shows an empty, read-only folder.
+      - alert: LegacyDiskMissing
+        expr: nb_legacy_disk_mounted == 0
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: "kept disk {{ $labels.name }} is not mounted on the host; is it connected? Its share is empty until it is back"
       - alert: BackupTooOld
         # backups.MAX_AGE_H: a daily job plus slack for a long run.
         expr: time() - nb_backup_last_success_timestamp_seconds > 26 * 3600

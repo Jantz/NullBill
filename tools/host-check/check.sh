@@ -91,7 +91,11 @@ devices { obtain_device_list_from_udev = 0 }
 CONF
 truncate -s 256M /tmp/backup.img
 loop=$(losetup -f --show /tmp/backup.img)
-cleanup() { vgremove -qq -f nb-pbs-disk >/dev/null 2>&1 || true; losetup -d "$loop"; }
+cleanup() {
+  vgremove -qq -f nb-pbs-disk >/dev/null 2>&1 || true
+  losetup -d "$loop"
+  legacy_disk_cleanup
+}
 trap cleanup EXIT
 mkdir -p /tmp/by-id
 ln -s "$loop" /tmp/by-id/ata-SYNTHETIC_HDD_0002

@@ -5,6 +5,7 @@
 #   nb-legacy-disk mount DISK_ID PARTN UUID FSTYPE MODE NAME UID GID
 #   nb-legacy-disk unmount NAME
 #   nb-legacy-disk list
+#   nb-legacy-disk metrics
 #
 # mount keeps partition PARTN of DISK_ID mounted at /mnt/nb-legacy/NAME
 # through a systemd mount unit by UUID, owned by UID:GID, read-only (MODE
@@ -14,6 +15,9 @@
 # The empty mount point is immutable, so nothing lands on the system disk
 # while the disk is missing. Prints "kept" or "mounted".
 #
+# metrics writes nb_legacy_disk_mounted for node_exporter's textfile
+# collector (LegacyDiskMissing); mount and unmount run it too.
+#
 # Nothing here writes to the partition: no wipefs, mkfs, fsck or ntfsfix.
 # Only a read-write mount writes, through the filesystem.
 set -eu
@@ -22,6 +26,7 @@ units=${NB_UNIT_DIR:-/etc/systemd/system}
 disks=${NB_DISK_DIR:-/dev/disk/by-id}
 uuids=${NB_UUID_DIR:-/dev/disk/by-uuid}
 systemctl=${NB_SYSTEMCTL:-systemctl}
+textfiles=${NB_TEXTFILE_DIR:-/var/lib/prometheus/node-exporter}
 marker="# nb-legacy-disk:"
 
 die() {
@@ -78,6 +83,21 @@ list() {
     [ "$(mounted_mode "$base/$1")" = "$3" ] && state=mounted
     echo "$1 $2 $3 $4 $state"
   done
+}
+
+metrics() {
+  out=$textfiles/nullbill-legacy.prom
+  lines=$(list | while read -r name _ mode _ state; do
+    [ "$state" = mounted ] && up=1 || up=0
+    echo "nb_legacy_disk_mounted{name=\"$name\",mode=\"$mode\"} $up"
+  done)
+  if [ -z "$lines" ]; then
+    rm -f "$out"
+    return
+  fi
+  mkdir -p "$textfiles"
+  printf '# HELP nb_legacy_disk_mounted 1 while a disk kept from a previous OS is mounted as planned.\n# TYPE nb_legacy_disk_mounted gauge\n%s\n' "$lines" >"$out.tmp"
+  mv "$out.tmp" "$out"
 }
 
 ntfs_refusal() {
@@ -190,8 +210,9 @@ UNIT
 }
 
 case ${1:-} in
-  mount) shift && mount_disk "$@" ;;
-  unmount) [ $# = 2 ] || die "usage: nb-legacy-disk unmount NAME" && unmount "$2" ;;
+  mount) shift && mount_disk "$@" && metrics ;;
+  unmount) [ $# = 2 ] || die "usage: nb-legacy-disk unmount NAME" && unmount "$2" && metrics ;;
   list) list ;;
-  *) die "usage: nb-legacy-disk mount|unmount|list" ;;
+  metrics) metrics ;;
+  *) die "usage: nb-legacy-disk mount|unmount|list|metrics" ;;
 esac
