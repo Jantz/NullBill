@@ -5,6 +5,9 @@ Wants=network-online.target
 
 [Service]
 Environment=NULLBILL_HOME=/var/lib/nullbill
+# systemd sets no HOME for a system service; ssh, git and OpenTofu's
+# provider look for ~/.ssh there.
+Environment=HOME=/root
 Environment=PATH=/opt/nullbill/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=/opt/nullbill/venv/bin/nullbill web --listen 0.0.0.0:8443
 Restart=on-failure

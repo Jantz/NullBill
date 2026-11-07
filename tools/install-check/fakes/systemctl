@@ -3,6 +3,6 @@
 # starts the page as tools/nullbill-web.service would; the rest succeeds.
 if [ "$1" = restart ] && [ "$2" = nullbill-web ]; then
   pkill -f "nullbill web" || true
-  NULLBILL_HOME=/var/lib/nullbill nohup /opt/nullbill/venv/bin/nullbill web --listen 0.0.0.0:8443 >/var/log/nullbill-web.log 2>&1 &
+  HOME=/root NULLBILL_HOME=/var/lib/nullbill nohup /opt/nullbill/venv/bin/nullbill web --listen 0.0.0.0:8443 >/var/log/nullbill-web.log 2>&1 &
 fi
 exit 0
