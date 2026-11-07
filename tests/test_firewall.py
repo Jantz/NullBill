@@ -58,10 +58,13 @@ def test_proxy_zone_has_no_direct_egress(facts):
     assert not any("postgres" in r for r in workspace)
 
 
-def test_management_ipset_only_when_closed(facts):
+def test_the_lan_leaves_the_management_ipset_only_when_closed(facts):
     files = rendered(facts, "small")
     assert "[IPSET management]\n10.42.6.11\n" in files["firewall/cluster.fw"]
-    assert "[IPSET management]" not in files["firewall/cluster-lan-open.fw"]
+    assert "[IPSET management]\n10.42.6.11\n" in files["firewall/cluster-lan-open.fw"]
+    # PVE adds local_network to management whatever it holds: closed, it is the vpn guest, not the LAN.
+    assert "[ALIASES]\nlocal_network 10.42.6.11 #" in files["firewall/cluster.fw"]
+    assert "[ALIASES]" not in files["firewall/cluster-lan-open.fw"]
     vpn = rules(files["firewall/2011.fw"])
     assert "OUT ACCEPT -dest 10.42.1.254 -p tcp -dport 8006" in vpn
 

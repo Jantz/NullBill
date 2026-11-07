@@ -61,17 +61,22 @@ def _cluster(plan: dict, lan_open: bool) -> str:
         *(_ipset(f"nb-zone-{z}", [v["subnet"]]) for z, v in plan["zones"].items()),
         *(_ipset(svc_set(g), addresses(v)) for g, v in plan["guests"].items()),
     ]
+    # The owner reaches the web UI and SSH over the VPN in both variants.
+    vpn = plan["guests"]["vpn"]["ip"]
+    sets.append(_ipset("management", [vpn]))
+    aliases = ""
     if not lan_open:
-        # Defining `management` replaces PVE's default, which admits the whole
-        # local network to the web UI (8006) and SSH (22).
-        sets.append(_ipset("management", [plan["guests"]["vpn"]["ip"]]))
+        # PVE adds the local_network alias to the management ipset whatever
+        # the ipset holds, and detects it as the host's LAN unless the alias
+        # is set; so closed, it is set to the vpn guest too.
+        aliases = f"[ALIASES]\nlocal_network {vpn} # not the LAN: PVE adds it to management\n\n"
     note = (
-        "# LAN variant for the first apply: no management ipset, so PVE's default\n"
-        "# local-network access to 8006 and 22 stays until VPN reach is confirmed.\n"
+        "# LAN variant for the first apply: PVE's local_network (the LAN) is in its\n"
+        "# management ipset, so 8006 and 22 stay open to it until VPN reach is confirmed.\n"
         if lan_open
         else ""
     )
-    return HEADER + note + "[OPTIONS]\nenable: 1\npolicy_in: DROP\npolicy_out: ACCEPT\n\n" + "".join(sets)
+    return HEADER + note + "[OPTIONS]\nenable: 1\npolicy_in: DROP\npolicy_out: ACCEPT\n\n" + aliases + "".join(sets)
 
 
 def _guest_rules(name: str, rules_by_guest: _Rules, egress: str) -> list[str]:
@@ -94,7 +99,8 @@ def _guest_file(name: str, guest: dict, rules: list[str]) -> str:
 
 
 def render_firewall(plan_with_notes: dict, model: dict) -> dict[str, str]:
-    """Return {relative path: content} for /etc/pve/firewall."""
+    """Return {relative path: content}: host.fw for /etc/pve/local (the
+    node's own file), the rest for /etc/pve/firewall."""
     plan = strip_notes(plan_with_notes)
     plan["network_base"] = model["network"]["base"]
     by_guest = _Rules(plan, model)

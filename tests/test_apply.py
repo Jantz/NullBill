@@ -382,10 +382,13 @@ def test_host_stage_runs_the_baseline_then_installs_the_lan_open_firewall(ctx):
     }
     assert reach.calls[0][2] == {"pve": connection(c, None)}
     expected = {f"/etc/pve/firewall/{rel.removeprefix('firewall/')}" for rel in c.files if rel.startswith("firewall/")}
-    expected.discard("/etc/pve/firewall/cluster-lan-open.fw")
+    expected -= {"/etc/pve/firewall/cluster-lan-open.fw", "/etc/pve/firewall/host.fw"}
+    # PVE reads the host's rules from the node's own directory only.
+    expected.add("/etc/pve/local/host.fw")
     # The open variant, kept on the host for the timer that undoes a close.
     expected.add(lan.SAVED_OPEN)
     assert set(reach.files) == expected
+    assert reach.files["/etc/pve/local/host.fw"] == c.files["firewall/host.fw"]
     assert reach.files["/etc/pve/firewall/cluster.fw"] == c.files["firewall/cluster-lan-open.fw"]
     assert reach.files["/etc/pve/firewall/2017.fw"] == c.files["firewall/2017.fw"]
 

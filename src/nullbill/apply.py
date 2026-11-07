@@ -40,6 +40,9 @@ from nullbill.verify import run_verify
 ANSIBLE = REPO_ROOT / "ansible"
 PCT_CONNECTION = "community.proxmox.proxmox_pct_remote"
 PVE_FIREWALL = "/etc/pve/firewall"
+# The node's host firewall; PVE reads /etc/pve/nodes/<node>/host.fw, which
+# /etc/pve/local points to on every node.
+PVE_HOST_FIREWALL = "/etc/pve/local"
 # Alerts go to a ntfy.sh topic named by a random string NullBill makes (no
 # account needed); the page makes the topic, apply hands it to monitoring.
 NTFY = "https://ntfy.sh/"
@@ -161,10 +164,13 @@ def stage_host(ctx: Context) -> None:
     prefix = "firewall/"
     files = {rel.removeprefix(prefix): text for rel, text in ctx.files.items() if rel.startswith(prefix)}
     open_variant = files.pop("cluster-lan-open.fw")
+    host_fw = files.pop("host.fw")
     before = lan.state(ctx.home)
     state = lan_state(ctx, open_variant)
     if state == lan.OPEN:
         files["cluster.fw"] = open_variant
+    # host.fw first: it admits the controller at the mgmt address a close moves it to.
+    host_files(ctx, "host", PVE_HOST_FIREWALL, {"host.fw": host_fw})
     host_files(ctx, "host", PVE_FIREWALL, files)
     if state == lan.CLOSING and before == lan.OPEN:
         page = f"https://{ctx.bare['guests']['nullbill']['ip']}:8443"

@@ -70,9 +70,11 @@ def check_host(ctx: apply.Context) -> None:
         fail("cluster.fw is the LAN-open variant")
     if on(TARGET, "cat /etc/pve/firewall/2017.fw") != ctx.files["firewall/2017.fw"]:
         fail("guest firewall files are installed")
+    if on(TARGET, "cat /etc/pve/nodes/pve/host.fw") != ctx.files["firewall/host.fw"]:
+        fail("host.fw is the node's own file, where PVE reads it")
     if "passwordauthentication no" not in on(TARGET, "/usr/sbin/sshd -T"):
         fail("the baseline made sshd key-only")
-    ok("host stage: baseline over SSH, firewall files in /etc/pve/firewall")
+    ok("host stage: baseline over SSH, firewall files in /etc/pve/firewall and host.fw in /etc/pve/local")
     ctx.log.clear()
     apply.stage_host(ctx)
     if [line for line in ctx.log if "wrote" in line]:
