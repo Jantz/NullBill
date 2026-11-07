@@ -24,6 +24,23 @@
     state: absent
   register: router_cloud_init_file
 
+# Debian 12's cloud image configures the network through netplan and
+# systemd-networkd. netplan's 10-netplan-ethN.link files sort before the
+# rendered .link files and would name the legs eth1.. again, so the nb-*
+# interfaces dnsmasq binds to would never exist. ifupdown owns them now.
+- name: Remove cloud-init's netplan file
+  ansible.builtin.file:
+    path: /etc/netplan/50-cloud-init.yaml
+    state: absent
+  register: router_netplan_file
+
+- name: Leave the interfaces to ifupdown
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: false
+  loop: [systemd-networkd.socket, systemd-networkd.service, systemd-networkd-wait-online.service]
+  when: router_manage_services | bool
+
 - name: Directories for the rendered files
   ansible.builtin.file:
     path: "{{ item }}"
@@ -65,7 +82,7 @@
       ansible.builtin.reboot:
         reboot_timeout: 600
       when: >-
-        router_cloud_init_file.changed or
+        router_cloud_init_file.changed or router_netplan_file.changed or
         (router_placed.results | selectattr('changed') | map(attribute='item.key')
          | select('match', '^/etc/(network/interfaces|systemd/network/)') | list | length > 0)
 

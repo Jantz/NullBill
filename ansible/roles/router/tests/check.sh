@@ -6,13 +6,16 @@ set -euo pipefail
 # shellcheck source=tools/role-check/role-check.sh
 source /usr/local/lib/role-check.sh
 
-mkdir -p /etc/cloud/cloud.cfg.d /etc/network/interfaces.d
+mkdir -p /etc/cloud/cloud.cfg.d /etc/network/interfaces.d /etc/netplan
 echo "auto eth0" >/etc/network/interfaces.d/50-cloud-init
+echo "network: {version: 2}" >/etc/netplan/50-cloud-init.yaml
 python3 /ansible/roles/router/tests/vars.py /ansible/roles/router/tests/files >/tmp/vars.json
 converge router.yml -e router_manage_services=false -e @/tmp/vars.json
 
 cmp -s /etc/nftables.conf /ansible/roles/router/tests/files/etc/nftables.conf || fail "nftables.conf placed"
 test ! -e /etc/network/interfaces.d/50-cloud-init || fail "cloud-init's interface file removed"
+# Debian 12's cloud image names the legs through netplan, whose .link files win.
+test ! -e /etc/netplan/50-cloud-init.yaml || fail "cloud-init's netplan file removed"
 grep -qx "network: {config: disabled}" /etc/cloud/cloud.cfg.d/99-nullbill-network.cfg || fail "cloud-init network off"
 test -f /etc/systemd/network/11-nb-mgmt.link || fail ".link files placed"
 pass "rendered files placed; cloud-init no longer configures the network"
