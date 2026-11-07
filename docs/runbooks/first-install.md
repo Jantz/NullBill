@@ -207,6 +207,19 @@ password from part 6.
 3. Close the "No valid subscription" notice. NullBill switches Proxmox to
    the free update source for you.
 
+If the address does not open and `ping <address>` gets no answer, even
+from the router's address: a VPN app on the computer (ZeroTier, WireGuard,
+a company VPN) may send your home network's addresses somewhere else. On
+Windows, PowerShell shows which connection is used:
+
+```
+Find-NetRoute -RemoteIPAddress <address> | Select-Object InterfaceAlias, DestinationPrefix, NextHop
+```
+
+It must name your Wi-Fi or Ethernet. If it names a VPN, switch that VPN off
+or stop it from taking routes (in ZeroTier: the tray icon, the network,
+untick **Allow Managed**), then try again.
+
 ## 8. Install NullBill
 
 **You need:** the Proxmox web UI from part 7. The server needs internet
