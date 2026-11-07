@@ -356,9 +356,31 @@ def backup_disk(ctx: Context) -> None:
     if not backups.enabled(ctx.plan):
         return
     disk_id, _ = backups.disk(ctx.plan)
-    # The probe may have missed a kept disk's mount (the disk was out); what
-    # apply had mounted before this run keeps its data from the wipe, unless
-    # the plan converts it with a verified copy, or the owner discards it.
+    keep_files(ctx, disk_id)
+    wipe = "1" if ctx.model.get("disks", {}).get(disk_id, {}).get("wipe") else "0"
+    out = host_out(ctx, "tofu", shlex.join(["/usr/local/sbin/nb-backup-disk", disk_id, wipe])).strip()
+    if out == "made":
+        ctx.say(f"tofu: {disk_id} is now the {backups.DISK_STORAGE} storage for PBS")
+
+
+def storage_disks(ctx: Context) -> None:
+    """Each disk the plan pins as storage, as an LVM-thin PVE storage of its
+    own (nb-storage-disk); before OpenTofu, like the backup disk."""
+    for disk_id, disk in sorted(ctx.bare["disks"].items()):
+        if disk.get("use") != "storage":
+            continue
+        keep_files(ctx, disk_id)
+        wipe = "1" if ctx.model.get("disks", {}).get(disk_id, {}).get("wipe") else "0"
+        out = host_out(ctx, "tofu", shlex.join([STORAGE_DISK, disk_id, wipe, disk["storage"]])).strip()
+        if out == "made":
+            ctx.say(f"tofu: {disk_id} is now the LVM-thin storage {disk['storage']}")
+
+
+def keep_files(ctx: Context, disk_id: str) -> None:
+    """Before a disk is wiped: the probe may have missed a kept disk's mount
+    (the disk was out); what apply had mounted before this run keeps its data
+    from the wipe, unless the plan converts it with a verified copy, or the
+    owner discards it."""
     kept_before = kept_disks(ctx) if ctx.kept_before is None else ctx.kept_before
     pin = ctx.model.get("disks", {}).get(disk_id, {})
     if any(m["disk"] == disk_id for m in kept_before) and not pin.get("discard_data"):
@@ -370,16 +392,15 @@ def backup_disk(ctx: Context) -> None:
                 f"{disk_id} was kept as legacy and has no verified copy; it is not erased. Plug it in and probe again "
                 "to copy it (evacuate), or set discard_data: true if you have its files elsewhere",
             )
-    wipe = "1" if ctx.model.get("disks", {}).get(disk_id, {}).get("wipe") else "0"
-    out = host_out(ctx, "tofu", shlex.join(["/usr/local/sbin/nb-backup-disk", disk_id, wipe])).strip()
-    if out == "made":
-        ctx.say(f"tofu: {disk_id} is now the {backups.DISK_STORAGE} storage for PBS")
 
 
 # Disks kept from a previous OS (legacy.py): the host mounts them before
 # OpenTofu, and the files guest gets each as a bind mount point after.
 LEGACY = "/usr/local/sbin/nb-legacy-disk"
 COPY = "/usr/local/sbin/nb-legacy-copy"
+STORAGE_DISK = "/usr/local/sbin/nb-storage-disk"
+# A volume no guest config names any more (a moved copy's old place).
+PVESM_FREE = "pvesm free"
 # A kept disk's copy runs as a transient unit on the host, so a dropped SSH
 # connection does not stop it; apply waits for it, at the pace of a slow
 # USB 2 disk, then leaves it running and says so.
@@ -430,16 +451,37 @@ def copy_disks(ctx: Context) -> None:
             stop_files(ctx)
             unit = f"nb-legacy-copy-{c['name']}"
             argv = [COPY, "copy", c["name"], converts["evacuate"], vmid, str(c["size_gib"]), disk_id]
-            if host_out(ctx, "tofu", f"systemctl is-active {unit} || true").strip() not in ("active", "activating"):
-                host_out(ctx, "tofu", shlex.join(["systemd-run", f"--unit={unit}", "--collect", "--quiet", "--no-block", *argv]))
+            run_unit(ctx, unit, argv)
             where = f"{legacy.LEGACY_ROOT}/{c['name']} ({c['used_gib']} GiB)"
             ctx.say(f"tofu: copying {where} to {converts['evacuate']} before {disk_id} is converted")
-            wait_copy(ctx, unit, c)
+            wait_unit(ctx, unit, c["used_gib"])
+            record = copy_records(ctx).get(c["name"])
+            if record is None:
+                why = host_out(ctx, "tofu", f"journalctl -q -u {unit} -n 5 -o cat || true").strip()
+                raise ApplyError("tofu", f"copying {c['name']} failed; the kept disk is as it was and is not converted: {why}")
+            mib = int(record["bytes"]) // 2**20
+            ctx.say(f"tofu: {c['name']}: {record['files']} files, {mib} MiB copied to {record['volume']} and checked")
 
 
-def wait_copy(ctx: Context, unit: str, copy: dict) -> None:
-    """Until the copy's unit ends; then it must be recorded, or it failed."""
-    deadline = time.monotonic() + 1800 + copy["used_gib"] * 1024 // COPY_MIB_PER_S
+def copy_records(ctx: Context) -> dict[str, dict]:
+    """nb-legacy-copy's records: name -> volume, size_gib, files, bytes, disk."""
+    out = {}
+    for line in host_out(ctx, "tofu", f"{COPY} list").splitlines():
+        if line.strip():
+            name, volume, size_gib, files, size, disk = line.split()
+            out[name] = {"volume": volume, "size_gib": int(size_gib), "files": files, "bytes": size, "disk": disk}
+    return out
+
+
+def run_unit(ctx: Context, unit: str, argv: list[str]) -> None:
+    """argv as a transient unit on the host, unless it runs already."""
+    if host_out(ctx, "tofu", f"systemctl is-active {unit} || true").strip() not in ("active", "activating"):
+        host_out(ctx, "tofu", shlex.join(["systemd-run", f"--unit={unit}", "--collect", "--quiet", "--no-block", *argv]))
+
+
+def wait_unit(ctx: Context, unit: str, used_gib: int) -> None:
+    """Until a copy's unit ends, saying its last line every minute."""
+    deadline = time.monotonic() + 1800 + used_gib * 1024 // COPY_MIB_PER_S
     while host_out(ctx, "tofu", f"systemctl is-active {unit} || true").strip() in ("active", "activating"):
         if time.monotonic() > deadline:
             raise ApplyError("tofu", f"{unit} is still copying on the host; run apply again once it is done (journalctl -u {unit})")
@@ -447,12 +489,66 @@ def wait_copy(ctx: Context, unit: str, copy: dict) -> None:
         last = host_out(ctx, "tofu", f"journalctl -q -u {unit} -n 1 -o cat || true").strip()
         if last:
             ctx.say(f"tofu: {last}")
-    records = {line.split()[0]: line for line in host_out(ctx, "tofu", f"{COPY} list").splitlines() if line.strip()}
-    if copy["name"] not in records:
-        why = host_out(ctx, "tofu", f"journalctl -q -u {unit} -n 5 -o cat || true").strip()
-        raise ApplyError("tofu", f"copying {copy['name']} failed; the kept disk is as it was and is not converted: {why}")
-    _, volume, _, files, size, _ = records[copy["name"]].split()
-    ctx.say(f"tofu: {copy['name']}: {files} files, {int(size) // 2**20} MiB copied to {volume} and checked")
+
+
+def move_copies(ctx: Context) -> None:
+    """Copies of a disk that is storage now move onto it (phase 3): each is
+    copied again and checked, then the files guest takes the new volume and
+    the old one is freed. A copy the owner moved in PVE stays where it is."""
+    targets = {disk_id: d["storage"] for disk_id, d in ctx.bare["disks"].items() if d.get("use") == "storage"}
+    if not targets or FILES not in ctx.bare["guests"]:
+        return
+    found = files_mount_points(ctx)
+    at = volume_paths(found[2]) if found else {}
+    olds = moved_volumes(ctx)
+    vmid = str(files_vmid(ctx))
+    for name, record in sorted(copy_records(ctx).items()):
+        target = targets.get(record["disk"])
+        current = at.get(f"{legacy.SHARE_ROOT}/{name}", record["volume"])
+        if target is None or record["volume"].split(":", 1)[0] == target:
+            continue  # not for a storage disk, or moved already (attach_shares swaps it)
+        if current != record["volume"] and current not in olds:
+            continue  # the owner moved it in PVE
+        stop_files(ctx)
+        unit = f"nb-legacy-copy-{name}"
+        run_unit(ctx, unit, [COPY, "move", name, current, target, vmid])
+        ctx.say(f"tofu: moving the copy {name} from {current} to {target}")
+        wait_unit(ctx, unit, int(record["bytes"]) // 2**30)
+        moved = copy_records(ctx).get(name, {}).get("volume", "")
+        if not moved.startswith(f"{target}:"):
+            why = host_out(ctx, "tofu", f"journalctl -q -u {unit} -n 5 -o cat || true").strip()
+            raise ApplyError("tofu", f"moving the copy {name} to {target} failed; it stays on {current}: {why}")
+        ctx.say(f"tofu: {name}: moved to {moved} and checked")
+
+
+def volume_paths(volumes: "MountPoints") -> dict[str, str]:
+    """The files guest's volume mount points: path in the guest -> volume."""
+    return {_mp_fields(value)[1]: volume for volume, (_, value) in volumes.items()}
+
+
+def moved_volumes(ctx: Context) -> set[str]:
+    return {line.split()[1] for line in host_out(ctx, "tofu", f"{COPY} moved").splitlines() if line.strip()}
+
+
+def free_moved(ctx: Context) -> None:
+    """Old volumes of moved copies, once the files guest no longer uses them:
+    PVE keeps a replaced mount point's volume as unusedN, deleted here."""
+    moved = [line.split() for line in host_out(ctx, "tofu", f"{COPY} moved").splitlines() if line.strip()]
+    if not moved:
+        return
+    vmid = files_vmid(ctx)
+    config = host_out(ctx, "tofu", f"pct config {vmid}")
+    for _, old in moved:
+        holders = [line.split(":", 1)[0] for line in config.splitlines() if line.split(": ", 1)[-1].split(",", 1)[0] == old]
+        if any(not h.startswith("unused") for h in holders):
+            continue  # still mounted; attach_shares swaps it first
+        stop_files(ctx)
+        if holders:
+            host_out(ctx, "tofu", f"pct set {vmid} --delete {','.join(holders)}")
+        else:
+            host_out(ctx, "tofu", f"{PVESM_FREE} {shlex.quote(old)}")
+        host_out(ctx, "tofu", shlex.join([COPY, "forget", old]))
+        ctx.say(f"tofu: freed {old}, the old place of a moved copy")
 
 
 def legacy_disks(ctx: Context) -> None:
@@ -573,22 +669,30 @@ def attach_shares(ctx: Context) -> None:
         if not value or _mp_fields(value) != _mp_fields(line):
             sets.append(f"--mp{index} {shlex.quote(line)}")
     # Copies of converted kept disks: volumes the files guest owns, backed
-    # up with it. apply never takes one off; that is the owner's call.
-    for record in host_out(ctx, "tofu", f"{COPY} list").splitlines():
-        if not record.strip():
-            continue
-        name, volume = record.split()[:2]
-        line = f"{volume},mp={legacy.SHARE_ROOT}/{name},backup=1"
-        index, value = volumes.get(volume) or (min(i for i in range(256) if i not in used), "")
+    # up with it. apply never takes one off; that is the owner's call. Found
+    # by their path in the guest: a copy the owner moved in PVE is a new
+    # volume at the same path, and stays. A copy apply moved (move_copies)
+    # takes its new volume here.
+    at = volume_paths(volumes)
+    olds = moved_volumes(ctx) if copy_records(ctx) else set()
+    for name, record in sorted(copy_records(ctx).items()):
+        path = f"{legacy.SHARE_ROOT}/{name}"
+        current = at.get(path)
+        volume = record["volume"] if current is None or current in olds else current
+        line = f"{volume},mp={path},backup=1"
+        index, value = volumes.get(current, (None, "")) if current else (None, "")
+        if index is None:
+            index = min(i for i in range(256) if i not in used)
         used.add(index)
         if not value or _mp_fields(value) != _mp_fields(line) or "backup=1" not in value.split(","):
             sets.append(f"--mp{index} {shlex.quote(line)}")
-    if not sets and not ctx.files_stopped and not ctx.legacy_mounted:
-        return
     if sets:
         stop_files(ctx)
         host_out(ctx, "tofu", f"pct set {vmid} {' '.join(sets)}")
         ctx.say(f"tofu: gave the files guest {len(sets)} mount point(s) for kept disks and their copies")
+    free_moved(ctx)
+    if not ctx.files_stopped and not ctx.legacy_mounted:
+        return
     if files_running(ctx):
         # A disk mounted on the host after the guest started shows up in it
         # only once the guest starts again.
@@ -608,7 +712,9 @@ def stage_tofu(ctx: Context) -> None:
     copy_disks(ctx)
     legacy_disks(ctx)
     backup_disk(ctx)
+    storage_disks(ctx)
     run_tofu(ctx, "tofu", init=True, downloads=True)
+    move_copies(ctx)
     attach_shares(ctx)
     # The host reaches the zones through the router, not its LAN gateway.
     host_files(ctx, "tofu", "/etc/systemd/system", {ROUTES_UNIT: routes_unit(ctx)})

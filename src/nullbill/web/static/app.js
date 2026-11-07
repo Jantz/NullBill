@@ -48,21 +48,21 @@ function renderWorkloads(state) {
 const CHOICES = {
   alone: "Leave it alone",
   keep: "Keep its files and share them to me",
-  copy: "Copy its files onto the server, check the copy, then erase the disk and use it for backups",
-  erase: "Erase everything on it and use it for backups",
+  copy: "Copy its files onto the server, check the copy, then erase the disk",
+  erase: "Erase everything on it",
 };
 
 // What each choice says for this disk, and why it cannot be picked, if so.
 function diskChoice(disk, value, keepable) {
   if (value === "keep" && !keepable && disk.choice !== "keep") return [CHOICES.keep, "no NTFS, exFAT or FAT partition on it"];
   if (value === "copy") {
-    const size = disk.used_gib === null ? "" : ` (about ${disk.used_gib} GiB, shared to you like now and backed up)`;
+    const size = disk.used_gib === null ? "" : ` (about ${disk.used_gib} GiB, shared to you like now, and backed up)`;
     if (disk.choice === "copy") return [CHOICES.copy + size, ""];
     if (!disk.copy_to) return [CHOICES.copy, "the server's storage is not LVM; see docs/runbooks/legacy-disk.md"];
     if (disk.used_gib === null) return [CHOICES.copy, "how much it holds is unknown; probe the server again"];
     return [CHOICES.copy + size, ""];
   }
-  if (value === "erase" && disk.kept) return ["Erase everything on it without a copy (I have its files elsewhere) and use it for backups", ""];
+  if (value === "erase" && disk.kept) return ["Erase everything on it without a copy (I have its files elsewhere)", ""];
   return [CHOICES[value], ""];
 }
 
@@ -108,6 +108,18 @@ function renderDisks(disks) {
     rw.className = "disk-rw";
     const rwInput = Object.assign(document.createElement("input"), {type: "checkbox", checked: disk.rw});
     rw.append(rwInput, " Let me change files on it (NTFS only). Shut Windows down fully on that disk first, with shutdown /s /t 0, or it stays read-only.");
+    // What an erased disk becomes.
+    const uses = document.createElement("div");
+    uses.className = "disk-for";
+    for (const [value, text] of [["backups", "then use it for the nightly backups"],
+      ["storage", "then use it as extra storage in Proxmox; a copy made first moves onto it, checked again"]]) {
+      const label = document.createElement("label");
+      const input = Object.assign(document.createElement("input"), {type: "radio", name: `disk-for-${disk.id}`, value});
+      input.checked = disk.for === value;
+      label.append(input, " " + text);
+      uses.append(label);
+    }
+    box.append(uses);
     const confirm = document.createElement("label");
     confirm.className = "disk-confirm";
     confirm.append(`Type ${disk.confirm}, the end of its name, to erase everything on it`,
@@ -116,7 +128,10 @@ function renderDisks(disks) {
     const sync = () => {
       const chosen = box.querySelector("input[type=radio]:checked");
       rw.hidden = !chosen || chosen.value !== "keep";
-      confirm.hidden = !chosen || !["erase", "copy"].includes(chosen.value) || disk.choice === chosen.value;
+      const erasing = Boolean(chosen) && ["erase", "copy"].includes(chosen.value);
+      const usedFor = uses.querySelector("input:checked").value;
+      uses.hidden = !erasing;
+      confirm.hidden = !erasing || (disk.choice === chosen.value && disk.for === usedFor);
     };
     box.addEventListener("change", sync);
     sync();
@@ -131,6 +146,7 @@ function diskChoices() {
     out[box.dataset.id] = {
       choice: chosen ? chosen.value : "alone",
       rw: box.querySelector(".disk-rw input").checked,
+      for: box.querySelector(".disk-for input:checked").value,
       confirm: box.querySelector(".disk-confirm input").value,
     };
   }

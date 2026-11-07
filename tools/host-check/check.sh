@@ -92,8 +92,9 @@ CONF
 truncate -s 256M /tmp/backup.img
 loop=$(losetup -f --show /tmp/backup.img)
 cleanup() {
-  vgremove -qq -f nb-pbs-disk >/dev/null 2>&1 || true
+  vgremove -qq -f nb-pbs-disk nb-data >/dev/null 2>&1 || true
   losetup -d "$loop"
+  [ -z "${sloop:-}" ] || losetup -d "$sloop" 2>/dev/null || true
   legacy_disk_cleanup
 }
 trap cleanup EXIT
@@ -120,6 +121,31 @@ grep -qx "add lvm nb-pbs-disk --vgname nb-pbs-disk --content images" /tmp/pvesm.
 [ "$(disk 0)" = kept ] || fail "second run did not keep the disk"
 [ "$(wc -l </tmp/pvesm.log)" = 1 ] || fail "storage added twice"
 echo "ok   with wipe it becomes the nb-pbs-disk volume group and PVE storage, kept on the next run"
+
+# A storage disk (phase 3 of ADR 0007): the same refusals, then an LVM-thin
+# pool. Thin pools need the kernel's dm-thin target; without it, SKIP.
+truncate -s 256M /tmp/storage.img
+sloop=$(losetup -f --show /tmp/storage.img)
+ln -s "$sloop" /tmp/by-id/ata-SYNTHETIC_HDD_0003
+mkfs.ext4 -q "$sloop"
+storage() { NB_DISK_DIR=/tmp/by-id /usr/local/sbin/nb-storage-disk ata-SYNTHETIC_HDD_0003 "$1" "${2:-nb-data}"; }
+if storage 0 >/tmp/disk.log 2>&1; then fail "storage disk with a filesystem taken without wipe"; fi
+grep -q "carries ext4; set wipe: true" /tmp/disk.log || { cat /tmp/disk.log; fail "storage refusal names the signature"; }
+blkid -p "$sloop" | grep -q ext4 || fail "a refused storage disk was changed"
+if storage 1 nb-pbs-disk >/tmp/disk.log 2>&1; then fail "a storage disk took the backup disk's group"; fi
+grep -q "volume group nb-pbs-disk exists, but not on" /tmp/disk.log || { cat /tmp/disk.log; fail "storage name clash message"; }
+if storage 1 local >/tmp/disk.log 2>&1; then fail "a storage disk took a name outside nb-"; fi
+echo "ok   a storage disk with a filesystem is refused without wipe, and a name in use or outside nb- is refused"
+if dmsetup targets 2>/dev/null | grep -q '^thin-pool'; then
+  [ "$(storage 1)" = made ] || fail "storage disk not made"
+  lvs --noheadings -o lv_attr nb-data/data | grep -q '^ *t' || fail "no thin pool on the storage disk"
+  grep -qx "add lvmthin nb-data --vgname nb-data --thinpool data --content images,rootdir" /tmp/pvesm.log || fail "storage not added"
+  [ "$(storage 0)" = kept ] || fail "second run did not keep the storage disk"
+  [ "$(grep -c nb-data /tmp/pvesm.log)" = 1 ] || fail "storage added twice"
+  echo "ok   with wipe it becomes the nb-data LVM-thin pool and PVE storage, kept on the next run"
+else
+  echo "SKIP the storage disk's thin pool: this kernel has no dm-thin target"
+fi
 
 # Backup metrics: Debian's python3 runs it against a pvesh with no job yet.
 printf '#!/bin/sh\necho "[]"\n' >/usr/bin/pvesh

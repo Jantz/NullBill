@@ -62,7 +62,8 @@ setup page and remote access.
   [Proxmox VE](https://www.proxmox.com/en/downloads) 9 installed (PVE 8 is past its end of life).
   A second, empty disk is needed only for backups. A disk from your old
   PC can go in as it is: NullBill keeps its files and shares them to you,
-  and can later copy them onto the server before it reuses the disk
+  and can later copy them onto the server before it reuses the disk for
+  backups or as extra storage
   ([legacy-disk.md](docs/runbooks/legacy-disk.md)).
 - Another device with a web browser, on the same network.
 - On your phone: the free [ntfy](https://ntfy.sh/) app, for alerts.
@@ -177,6 +178,7 @@ overrides:
 disks:
   ata-EXAMPLE_DISK: {use: pbs, wipe: true}   # NullBill never formats a used disk without this
   ata-EXAMPLE_OLD: {use: legacy}             # keep its files as they are and share them, read-only
+  ata-EXAMPLE_BIG: {use: storage, wipe: true} # an LVM-thin storage of its own (nb-data)
 ```
 
 Every default in [`catalog.yaml`](src/nullbill/data/catalog.yaml) can be

@@ -110,12 +110,14 @@
     dest: /usr/local/sbin/nb-pve-api-cert
     mode: "0755"
 
-# apply runs it before OpenTofu when the plan gives PBS a disk of its own.
-- name: Backup disk script
+# apply runs them before OpenTofu when the plan gives PBS a disk of its own,
+# or pins a disk as storage (docs/adr/0007-legacy-disks.md, phase 3).
+- name: Backup and storage disk scripts
   ansible.builtin.copy:
-    src: nb-backup-disk
-    dest: /usr/local/sbin/nb-backup-disk
+    src: "{{ item }}"
+    dest: "/usr/local/sbin/{{ item }}"
     mode: "0755"
+  loop: [nb-backup-disk, nb-storage-disk]
 
 # apply runs it before OpenTofu for each partition the plan keeps from a
 # previous OS (docs/adr/0007-legacy-disks.md).

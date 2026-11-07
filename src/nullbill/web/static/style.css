@@ -92,6 +92,7 @@ p.errors { padding-left: 0; }
 .disk { border-top: 1px solid var(--line); padding-top: 10px; display: grid; gap: 4px; }
 .disk p { margin: 0; overflow-wrap: anywhere; }
 .disk ul { margin: 0 0 4px; padding-left: 18px; color: var(--muted); }
+.disk-for { padding-left: 22px; display: grid; gap: 4px; }
 .disk-confirm input {
   display: block;
   width: 100%;

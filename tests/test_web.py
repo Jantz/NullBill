@@ -643,6 +643,25 @@ def test_a_kept_disk_is_copied_or_given_up_before_it_is_erased(site):
     assert pins(app) == {OLD: {"use": "pbs", "wipe": True, "discard_data": True}}
 
 
+def test_an_erased_disk_becomes_backups_or_storage(site):
+    app, client = site
+    sign_in(app, client)
+    probed(app)
+    status, data = client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "erase", "for": "storage", "confirm": "D_0002"}}})
+    assert status == 200 and data["plan"]["errors"] == [] and pins(app) == {OLD: {"use": "storage", "wipe": True}}
+    assert {d["id"]: d for d in client.call("/api/state")[1]["disks"]}[OLD]["for"] == "storage"
+    # A storage disk made the backup disk loses what it holds: the name again.
+    status, data = client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "erase", "for": "backups"}}})
+    assert status == 400 and "type D_0002" in data["error"]
+    assert client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "erase", "for": "storage"}}})[0] == 200
+    assert client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "erase", "for": "nas"}}})[0] == 400
+    # A kept disk copied, then storage: the copy moves onto it.
+    kept_on_server(app)
+    status, data = client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "copy", "for": "storage", "confirm": "D_0002"}}})
+    assert status == 200 and data["plan"]["errors"] == []
+    assert pins(app) == {OLD: {"use": "storage", "wipe": True, "evacuate": "local-lvm"}}
+
+
 def test_a_disk_not_kept_cannot_be_copied(site):
     app, client = site
     sign_in(app, client)

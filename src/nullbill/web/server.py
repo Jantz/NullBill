@@ -73,7 +73,9 @@ AGENT_ACTIONS = {"verify"}
 # SHA-256 here, never the token. Every agent request goes to the journal
 # with the agent's name.
 REMOTE_AGENTS = "web/remote-agents.json"
-DISK_CHOICES = {"legacy": "keep", "pbs": "erase", "ignore": "alone"}
+DISK_CHOICES = {"legacy": "keep", "pbs": "erase", "storage": "erase", "ignore": "alone"}
+# What an erased disk becomes: the backup disk, or LVM-thin storage of its own.
+DISK_USES = {"backups": "pbs", "storage": "storage"}
 DISK_CHOICE_TEXT = "leave it alone, keep its files, copy its files and erase it, or erase it"
 REMOTE_AGENT_NAME = re.compile(r"[a-z][a-z0-9-]{0,30}")
 # A Tailscale auth key logs the vpn guest in once; apply forgets it after.
@@ -418,6 +420,7 @@ class App:
                     "power_on_hours": (disk.get("smart") or {}).get("power_on_hours"),
                     "partitions": parts,
                     "choice": choice,
+                    "for": "storage" if pin.get("use") == "storage" else "backups",
                     "rw": pin.get("mode") == "rw",
                     "confirm": disk["id"][-6:],
                     # Mounted as a kept disk now: erasing it asks how its files are kept.
@@ -435,8 +438,12 @@ class App:
             if disk_id not in known:
                 raise NullBillError(f"{disk_id}: no such disk in the last probe; probe the server again")
             choice, rw = str(want.get("choice", "alone")), bool(want.get("rw"))
+            use_for = str(want.get("for", "backups"))
+            if use_for not in DISK_USES:
+                raise NullBillError(f"{disk_id}: an erased disk is for backups or storage")
             current = known[disk_id]
-            if choice == current["choice"] and (choice != "keep" or rw == current["rw"]):
+            same_for = choice not in ("erase", "copy") or use_for == current["for"]
+            if choice == current["choice"] and (choice != "keep" or rw == current["rw"]) and same_for:
                 continue  # unchanged: keep the pin as it is, with any keys the page does not show
             if choice == "alone":
                 pins.pop(disk_id, None)
@@ -449,9 +456,11 @@ class App:
                     raise NullBillError(f"{disk_id}: only a disk kept and mounted on the server can be copied before it is erased")
                 if choice == "copy" and not current["copy_to"]:
                     raise NullBillError(f"{disk_id}: the guest storage is not LVM or LVM-thin, so the page cannot copy a disk there")
+                # Also when only what it becomes changes: a backup disk made
+                # storage loses its backups.
                 if str(want.get("confirm", "")).strip() != current["confirm"]:
-                    raise NullBillError(f"{disk_id}: type {current['confirm']}, the end of its name, to erase everything on it for backups")
-                pin = {"use": "pbs", "wipe": True}
+                    raise NullBillError(f"{disk_id}: type {current['confirm']}, the end of its name, to erase everything on it")
+                pin = {"use": DISK_USES[use_for], "wipe": True}
                 if choice == "copy":
                     pin["evacuate"] = current["copy_to"]
                 elif current["kept"]:

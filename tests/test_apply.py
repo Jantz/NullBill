@@ -67,6 +67,10 @@ class FakeReach:
         self.copy_runs = []
         self.copy_active = {}
         self.copy_fails = False
+        # Old volumes of moved copies (nb-legacy-copy moved), volumes freed, storage disks made.
+        self.moved = []
+        self.freed = []
+        self.storage_disks = {}
 
     def host(self, command, stdin=None, timeout=900):
         self.calls.append(("host", command))
@@ -129,6 +133,14 @@ class FakeReach:
             return 0, "", ""
         if command.startswith(("qm status ", "timeout 600 bash -c ")):
             return 0, "", ""
+        if command.startswith(apply.STORAGE_DISK + " "):
+            _, disk, wipe, name = shlex.split(command)
+            made = disk not in self.storage_disks
+            self.storage_disks[disk] = (wipe, name)
+            return 0, "made\n" if made else "kept\n", ""
+        if command.startswith(apply.PVESM_FREE + " "):
+            self.freed.append(shlex.split(command)[2])
+            return 0, "", ""
         if command.startswith("/usr/local/sbin/nb-backup-disk "):
             made = self.backup_disk is None
             self.backup_disk = shlex.split(command)[1:]
@@ -152,11 +164,16 @@ class FakeReach:
         argv = shlex.split(command)
         if command == f"{apply.COPY} list":
             return 0, "".join(line + "\n" for _, line in sorted(self.copies.items())), ""
+        if command == f"{apply.COPY} moved":
+            return 0, "".join(f"{n} {v}\n" for n, v in self.moved), ""
+        if argv[:2] == [apply.COPY, "forget"]:
+            self.moved = [(n, v) for n, v in self.moved if v != argv[2]]
+            return 0, "", ""
         if argv[0] == "systemd-run":
             unit = argv[1].removeprefix("--unit=")
             assert self.files_ct["status"] != "running" or not self.files_ct["exists"], "the files guest runs during a copy"
-            name, storage, vmid, size, disk = argv[argv.index(apply.COPY) + 2 :]
-            self.copy_runs.append((unit, name, storage, vmid, size, disk))
+            what, *args = argv[argv.index(apply.COPY) + 1 :]
+            self.copy_runs.append((unit, what, *args) if what == "move" else (unit, *args))
             self.copy_active[unit] = 2
             return 0, "", ""
         unit = argv[2]
@@ -165,9 +182,16 @@ class FakeReach:
                 return 0, "inactive\n", ""  # the command ends in || true
             self.copy_active[unit] -= 1
             if self.copy_active[unit] == 0 and not self.copy_fails:
-                run = next(r for r in self.copy_runs if r[0] == unit)
-                n = len(self.copies)
-                self.copies[run[1]] = f"{run[1]} {run[2]}:vm-{run[3]}-disk-{n} {run[4]} 1200 107374182400 {run[5]}"
+                run = [r for r in self.copy_runs if r[0] == unit][-1]
+                if run[1] == "move":
+                    _, _, name, old, storage, vmid = run
+                    fields = self.copies[name].split()
+                    fields[1] = f"{storage}:vm-{vmid}-disk-0"
+                    self.copies[name] = " ".join(fields)
+                    self.moved.append((name, old))
+                else:
+                    n = len(self.copies)
+                    self.copies[run[1]] = f"{run[1]} {run[2]}:vm-{run[3]}-disk-{n} {run[4]} 1200 107374182400 {run[5]}"
             return 0, "active\n", ""
         if self.copy_fails:
             return 0, "nb-legacy-copy: the copy differs: missing ['IMG_7.jpg']\n", ""
@@ -211,8 +235,15 @@ class FakeReach:
             for flag, value in zip(args[::2], args[1::2], strict=True):
                 if flag == "--delete":
                     for key in value.split(","):
-                        del self.files_ct["mps"][key]
+                        old = self.files_ct["mps"].pop(key)
+                        if key.startswith("unused"):
+                            self.freed.append(old)
                 else:
+                    # PVE keeps a replaced volume as unusedN; a bind mount it just drops.
+                    old = self.files_ct["mps"].get(flag[2:], "").split(",")[0]
+                    if old and not old.startswith("/") and old != value.split(",")[0]:
+                        n = min(i for i in range(256) if f"unused{i}" not in self.files_ct["mps"])
+                        self.files_ct["mps"][f"unused{n}"] = old
                     self.files_ct["mps"][flag[2:]] = value
             return 0, "", ""
         return 127, "", f"fake host: unexpected {command}"
@@ -1240,13 +1271,13 @@ def test_a_full_apply_with_a_kept_disk(ctx, monkeypatch, tailnet):
     assert any("files" in hosts for hosts in shipped)
 
 
-def converting(facts, ctx, evacuate=True):
+def converting(facts, ctx, evacuate=True, use="pbs"):
     """The large host after a first apply kept its old disk: mounted, shared, recorded."""
     probed = copy.deepcopy(facts("large"))
     disk = next(d for d in probed["disks"] if d["id"] == OLD)
     disk["partitions"][1] |= {"mounts": ["/mnt/nb-legacy/data"], "used_bytes": 100 * 2**30}
     how = {"evacuate": "local-lvm"} if evacuate else {"discard_data": True}
-    config = fixture_config("large") | {"disks": {OLD: {"use": "pbs", "wipe": True, **how}}}
+    config = fixture_config("large") | {"disks": {OLD: {"use": use, "wipe": True, **how}}}
     c = ctx("large", config=config, probed=probed)
     c.reach.legacy = {"data": ("0123456789ABCDEF", "ro", "ntfs", "mounted")}
     c.reach.files_ct |= {"exists": True, "mps": {"mp0": "/mnt/nb-legacy/data,mp=/srv/share/data,backup=0,ro=1"}}
@@ -1279,6 +1310,81 @@ def test_converting_a_kept_disk_copies_it_first_then_wipes_and_shares_the_copy(c
     apply.stage_tofu(c)
     host = [call[1] for call in c.reach.calls if call[0] == "host"]
     assert len(c.reach.copy_runs) == 1 and not [x for x in host if x.startswith(("pct set", "pct shutdown"))]
+
+
+def test_a_kept_disk_made_storage_takes_its_copy_back_checked(ctx, facts, monkeypatch):
+    monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
+    monkeypatch.setattr(apply, "sleep", lambda s: None)
+    c = converting(facts, ctx, use="storage")
+    apply.stage_tofu(c)
+    calls = host_calls(c)
+    run = index_of(calls, "systemd-run --unit=nb-legacy-copy-data")
+    wipe = index_of(calls, apply.STORAGE_DISK)
+    move = next(i for i, x in enumerate(calls) if isinstance(x, str) and x.startswith("systemd-run") and " move " in x)
+    assert run < index_of(calls, f"{apply.LEGACY} unmount data") < wipe < index_of(calls, "tofu init") < move
+    assert c.reach.storage_disks == {OLD: ("1", "nb-data")}
+    assert c.reach.copy_runs[1] == ("nb-legacy-copy-data", "move", "data", "local-lvm:vm-2023-disk-0", "nb-data", "2023")
+    # The guest takes the copy on the storage disk; the first copy is freed.
+    assert c.reach.files_ct["mps"] == {"mp0": "nb-data:vm-2023-disk-0,mp=/srv/share/data,backup=1"}
+    assert c.reach.freed == ["local-lvm:vm-2023-disk-0"] and c.reach.moved == []
+    assert c.reach.files_ct["status"] == "running"
+    assert "tofu: data: moved to nb-data:vm-2023-disk-0 and checked" in c.log
+    # The next run changes nothing.
+    c.reach.calls.clear()
+    apply.stage_tofu(c)
+    host = [call[1] for call in c.reach.calls if call[0] == "host"]
+    assert len(c.reach.copy_runs) == 2 and not [x for x in host if x.startswith(("pct set", "pct shutdown", "pvesm free"))]
+
+
+def test_a_move_that_fails_keeps_the_first_copy(ctx, facts, monkeypatch):
+    monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
+    monkeypatch.setattr(apply, "sleep", lambda s: None)
+    c = converting(facts, ctx, use="storage")
+    real = c.reach.copy
+
+    def copy_then_fail(command):
+        if " move " in command:
+            c.reach.copy_fails = True
+        return real(command)
+
+    c.reach.copy = copy_then_fail
+    with pytest.raises(ApplyError, match="moving the copy data to nb-data failed; it stays on local-lvm:vm-2023-disk-0"):
+        apply.stage_tofu(c)
+    assert c.reach.copies["data"].split()[1] == "local-lvm:vm-2023-disk-0" and c.reach.freed == []
+
+
+def test_a_moved_copy_waits_for_the_guest_before_its_old_volume_is_freed(ctx, facts, monkeypatch):
+    """apply stopped after the move: the record names the new volume, the guest the old one."""
+    monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
+    probed = copy.deepcopy(facts("large"))
+    record = "data nb-data:vm-2023-disk-1 106 1200 107374182400 " + OLD
+    record_fields = {"size_gib": 106, "files": 1200, "bytes": 107374182400, "disk": OLD}
+    probed["copies"] = [{"name": "data", "volume": "nb-data:vm-2023-disk-1", **record_fields}]
+    config = fixture_config("large") | {"disks": {OLD: {"use": "storage", "wipe": True, "evacuate": "local-lvm"}}}
+    c = ctx("large", config=config, probed=probed)
+    c.reach.copies = {"data": record}
+    c.reach.moved = [("data", "local-lvm:vm-2023-disk-0")]
+    c.reach.storage_disks = {OLD: ("1", "nb-data")}
+    c.reach.files_ct |= {"exists": True, "status": "running", "mps": {"mp0": "local-lvm:vm-2023-disk-0,mp=/srv/share/data,backup=1"}}
+    apply.stage_tofu(c)
+    assert c.reach.files_ct["mps"] == {"mp0": "nb-data:vm-2023-disk-1,mp=/srv/share/data,backup=1"}
+    assert c.reach.freed == ["local-lvm:vm-2023-disk-0"] and c.reach.moved == []
+    assert len(c.reach.copy_runs) == 0
+
+
+def test_a_copy_the_owner_moved_in_pve_stays_where_it_is(ctx, facts, monkeypatch):
+    monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
+    probed = copy.deepcopy(facts("large"))
+    record_fields = {"size_gib": 106, "files": 1200, "bytes": 107374182400, "disk": OLD}
+    probed["copies"] = [{"name": "data", "volume": "local-lvm:vm-2023-disk-0", **record_fields}]
+    config = fixture_config("large") | {"disks": {OLD: {"use": "storage", "wipe": True}}}
+    c = ctx("large", config=config, probed=probed)
+    c.reach.copies = {"data": "data local-lvm:vm-2023-disk-0 106 1200 107374182400 " + OLD}
+    c.reach.storage_disks = {OLD: ("1", "nb-data")}
+    mps = {"mp0": "tank:subvol-2023-disk-0,mp=/srv/share/data,backup=1"}
+    c.reach.files_ct |= {"exists": True, "status": "running", "mps": dict(mps)}
+    apply.stage_tofu(c)
+    assert c.reach.files_ct["mps"] == mps and c.reach.copy_runs == [] and c.reach.freed == []
 
 
 def test_a_copy_that_fails_leaves_the_kept_disk_as_it_was(ctx, facts, monkeypatch):

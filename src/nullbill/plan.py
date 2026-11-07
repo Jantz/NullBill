@@ -7,7 +7,7 @@ of them, so the owner sees every problem in one run.
 import ipaddress
 from typing import Any
 
-from nullbill import ci, legacy
+from nullbill import backups, ci, legacy
 from nullbill.errors import NullBillError
 from nullbill.proxy import allows
 from nullbill.render import Note
@@ -310,6 +310,7 @@ def _disks(model: dict, facts: dict, errors: _Errors, want_pbs: bool, capacity: 
     # Share names: kept partitions and copies of converted ones share one
     # namespace in the files guest.
     names: dict[str, str] = {c["name"]: f"the copy {c['volume']}" for c in facts.get("copies", [])}
+    storages: dict[str, str] = {}
     for disk in facts["disks"]:
         pin = pins.get(disk["id"])
         base = {"size_gib": disk["size_gib"], "signatures": disk["signatures"]}
@@ -326,6 +327,10 @@ def _disks(model: dict, facts: dict, errors: _Errors, want_pbs: bool, capacity: 
             for key in legacy.LEGACY_KEYS:
                 if key in pin:
                     errors.append(f"disks.{disk['id']}.{key}: only for use: legacy")
+        if pin and pin["use"] != "storage":
+            for key in legacy.STORAGE_KEYS:
+                if key in pin:
+                    errors.append(f"disks.{disk['id']}.{key}: only for use: storage")
         if pin and pin["use"] not in legacy.CONVERT_TO:
             for key in legacy.CONVERT_KEYS:
                 if key in pin:
@@ -358,6 +363,25 @@ def _disks(model: dict, facts: dict, errors: _Errors, want_pbs: bool, capacity: 
             pbs = disk["id"]
             why = "Pinned for PBS; apply will wipe its signatures." if disk["signatures"] else "Pinned for PBS."
             entry = {**base, "use": "pbs"}
+            if converts:
+                entry["converts"] = converts
+                why = legacy.convert_note(converts) + " " + why
+            section[disk["id"]] = Note(entry, why + health)
+        elif pin and pin["use"] == "storage":
+            name = legacy.storage_name(pin)
+            if disk["signatures"] and not pin.get("wipe"):
+                errors.append(f"disks.{disk['id']}: carries {', '.join(disk['signatures'])}; set wipe: true to let apply format it")
+            if name in storages:
+                errors.append(f"disks.{disk['id']}: storage {name} is also pinned for {storages[name]}; set disks.<id>.storage")
+            storages[name] = disk["id"]
+            other = next((st for st in facts["storage"] if st["name"] == name and st["type"] != "lvmthin"), None)
+            if name == backups.DISK_STORAGE or other:
+                errors.append(f"disks.{disk['id']}.storage: {name} is taken by another PVE storage; choose another name")
+            why = f"Pinned as the LVM-thin PVE storage {name}, {legacy.storage_room_gib(disk['size_gib'])} GiB for volumes."
+            why += " Guests stay on the system storage; move a volume there in PVE when you want."
+            if disk["signatures"]:
+                why += " apply will wipe its signatures."
+            entry = {**base, "use": "storage", "storage": name}
             if converts:
                 entry["converts"] = converts
                 why = legacy.convert_note(converts) + " " + why

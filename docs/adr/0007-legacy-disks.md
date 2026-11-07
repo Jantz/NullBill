@@ -120,8 +120,26 @@ extended attributes, such as Windows' "downloaded from the internet" mark)
 are not copied, since ext4 cannot hold large ones. A ZFS guest storage is
 not supported yet: the page offers the copy only on LVM storage.
 
-**A storage disk** (Phase 3, its own change) adds `use: storage`, an
-LVM-thin pool on a pinned disk, which a copy can go to.
+**A storage disk** (Phase 3). `use: storage` makes a disk an LVM-thin PVE
+storage of its own (`storage: nb-<name>`, default `nb-data`), for images
+and container volumes. `nb-storage-disk` refuses a disk with signatures
+without `wipe`, a mounted disk, and a name another storage or volume group
+has; it puts the thin pool on 95 % of the group, so its metadata can grow.
+The planner keeps the guests on the system storage it picks; the owner
+moves a volume there in PVE when they want.
+
+A kept disk converts to `storage` like it does to `pbs`. With `evacuate`,
+plan also checks that the copies fit on the disk once it is storage, and
+apply moves them there after it has made the storage: the files guest is
+stopped, `nb-legacy-copy move` copies each one to a new volume and checks
+it the same way, and only then does its record name the new volume. apply
+then gives the files guest the new volume and deletes the old one, which
+PVE keeps as an unused volume of the guest, or frees it if the guest never
+had it. A move that fails frees the new volume, and the copy stays where it
+was. If apply stops in between, the next run finishes the swap; a volume
+the record still names is never freed. A copy the owner moved to another
+storage in PVE themselves (Move Storage) is found by its path in the guest
+and stays where they put it.
 
 ## Alternatives
 

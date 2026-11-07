@@ -234,8 +234,13 @@ def test_failing_disk_gets_a_warning(facts):
 # Verify
 
 
-def answers(host="fuseblk ro,noatime,user_id=0", guest="fuseblk ro,relatime", samba="SMB3\nrequired\nNever\n"):
+STATUS = "Name Type Status Total Used Available %\nnb-data lvmthin active 3500000000 10 3499999990 0.00%\n"
+
+
+def answers(host="fuseblk ro,noatime,user_id=0", guest="fuseblk ro,relatime", samba="SMB3\nrequired\nNever\n", storage=STATUS):
     def run(target, command):
+        if command == "pvesm status --storage nb-data":
+            return (0, storage, "") if storage else (2, "", "storage 'nb-data' does not exist\n")
         if command.startswith("findmnt"):
             return 0, host + "\n" if host else "", ""
         if command.startswith("pct exec 2023 -- findmnt"):
@@ -347,10 +352,45 @@ def test_evacuating_needs_room_on_a_storage_for_containers(facts):
 
 def test_convert_keys_belong_to_a_conversion(facts):
     (message,) = errors(facts("large"), {OLD: {"use": "legacy", "evacuate": "local-lvm"}})
-    assert message == f"disks.{OLD}.evacuate: only for converting a kept disk to pbs"
+    assert message == f"disks.{OLD}.evacuate: only for converting a kept disk to pbs or storage"
     # Once converted, the disk is no longer kept: the pin may keep its key.
     p = plan(facts("large"), {OLD: {"use": "pbs", "wipe": True, "evacuate": "local-lvm"}})
     assert "converts" not in p["disks"][OLD].value and "files" not in p["guests"]
+
+
+def test_a_storage_disk_is_lvm_thin_storage_of_its_own(facts):
+    f = with_parts(facts, part(1, "ext4"))
+    (message,) = errors(f, {OLD: {"use": "storage"}})
+    assert message == f"disks.{OLD}: carries ext4, gpt; set wipe: true to let apply format it"
+    p = plan(f, {OLD: {"use": "storage", "wipe": True}})
+    disk = p["disks"][OLD]
+    assert disk.value["use"] == "storage" and disk.value["storage"] == "nb-data" and "converts" not in disk.value
+    assert "LVM-thin PVE storage nb-data, 3362 GiB for volumes" in disk.why and "apply will wipe its signatures" in disk.why
+    # The guests stay on the system storage, which keeps its size.
+    assert p["disk"]["storage"] == "local-lvm"
+    assert plan(f, {OLD: {"use": "storage", "wipe": True, "storage": "nb-photos"}})["disks"][OLD].value["storage"] == "nb-photos"
+    (message,) = errors(f, {OLD: {"use": "storage", "wipe": True, "storage": "nb-pbs-disk"}})
+    assert message == f"disks.{OLD}.storage: nb-pbs-disk is taken by another PVE storage; choose another name"
+    (message,) = errors(f, {OLD: {"use": "pbs", "wipe": True, "storage": "nb-data"}})
+    assert message == f"disks.{OLD}.storage: only for use: storage"
+
+
+def test_a_kept_disk_converted_to_storage_takes_its_copies(facts):
+    p = plan(mounted(facts), {OLD: {"use": "storage", "wipe": True, "evacuate": "local-lvm"}})
+    converts = p["disks"][OLD].value["converts"]
+    assert converts["evacuate"] == "local-lvm" and converts["moves_to"] == "nb-data"
+    assert "the copies move onto it, checked again" in p["disks"][OLD].why
+    assert [g for g in p["guests"] if g == "files"] == ["files"]
+    # Without a copy it is erased like a backup disk would be.
+    p = plan(mounted(facts), {OLD: {"use": "storage", "wipe": True, "discard_data": True}})
+    assert p["disks"][OLD].value["converts"]["discard_data"] is True
+    (message,) = errors(mounted(facts), {OLD: {"use": "storage", "wipe": True}})
+    assert "converting it to storage erases it" in message
+    # The copies must fit on the disk once it is storage.
+    small = mounted(facts, used_gib=100)
+    next(d for d in small["disks"] if d["id"] == OLD)["size_gib"] = 100
+    (message,) = errors(small, {OLD: {"use": "storage", "wipe": True, "evacuate": "local-lvm"}})
+    assert message == f"disks.{OLD}: the copies need 106 GiB, more than the 90 GiB the disk holds as storage nb-data"
 
 
 COPY = {"name": "data", "volume": "local-lvm:vm-2023-disk-1", "size_gib": 106, "files": 1200, "bytes": 107374182400, "disk": OLD}
@@ -389,3 +429,11 @@ def test_verify_checks_a_copy_in_the_files_guest(facts):
         ("PASS", "files guest's Samba takes SMB3 with encryption only, and no guests", ""),
     ]
     assert verdicts(p, answers(guest=""))[0] == ("FAIL", "files guest sees the copy data rw", "nothing mounted at /srv/share/data")
+
+
+def test_verify_checks_a_storage_disk(facts):
+    p = plan(with_parts(facts, part(1, "ext4")), {OLD: {"use": "storage", "wipe": True}})
+    label = "storage disk nb-data is active LVM-thin storage"
+    assert verdicts(p, answers()) == [("PASS", label, "")]
+    assert verdicts(p, answers(storage="")) == [("FAIL", label, "storage 'nb-data' does not exist")]
+    assert verdicts(p, answers(storage=STATUS.replace("active", "inactive"))) == [("FAIL", label, "lvmthin inactive")]

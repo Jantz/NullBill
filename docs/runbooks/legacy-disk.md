@@ -81,10 +81,12 @@ There is no alert for this between probes yet.
 Choose **Leave it alone** and run setup. The share goes away and the disk is
 unmounted; its files are not touched. Then you can take it out.
 
-## Reuse it for backups
+## Reuse it for backups or as storage
 
-To erase a kept disk and use it for the nightly backups, step 3 offers two
-choices for it. Both ask you to type the end of its name.
+To erase a kept disk, step 3 offers two choices for it, and for each,
+whether the disk then holds the nightly backups or becomes extra storage in
+Proxmox (an LVM-thin storage called `nb-data`, for volumes you put there).
+Both ask you to type the end of its name.
 
 - **Copy its files onto the server, check the copy, then erase the disk.**
   Setup copies each kept partition to a new volume on the server's storage
@@ -93,7 +95,9 @@ choices for it. Both ask you to type the end of its name.
   the run prints a line a minute, and the files guest is stopped meanwhile.
   If anything differs, setup stops and the disk is left as it was. The copy
   is shared under the same name as before, read-write, and is backed up
-  every night from then on.
+  every night from then on. If the disk becomes storage, the copy then moves
+  onto it, checked again, and the first copy is deleted; setup takes about
+  twice as long.
 - **Erase everything on it without a copy.** For when you have its files
   elsewhere. The plan says how many GiB are lost.
 
@@ -124,11 +128,16 @@ To reuse it for backups, replace that pin with:
 
 ```yaml
   ata-EXAMPLE_DISK:
-    use: pbs
+    use: pbs              # or storage: LVM-thin storage of its own
     wipe: true
     evacuate: local-lvm   # copy first, to this storage; or:
     # discard_data: true  # erase without a copy
+    # storage: nb-photos  # use: storage only; default nb-data
 ```
+
+A copy is a volume of the files guest. To put it somewhere else, use
+**Move Storage** on its mount point in Proxmox (the files guest,
+**Resources**); setup leaves it where you put it.
 
 On the host, `nb-legacy-disk list` shows what is kept and whether it is
 mounted, and `nb-legacy-copy list` the verified copies

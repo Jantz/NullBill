@@ -109,7 +109,9 @@ $defs:
     properties:
       # legacy: keep the data, mount it on the host and share it to the
       # owner (docs/adr/0007-legacy-disks.md). Never chosen by default.
-      use: {enum: [pbs, ignore, legacy]}
+      # storage: an LVM-thin PVE storage of its own; guests stay where the
+      # plan puts them. Never chosen by default.
+      use: {enum: [pbs, ignore, legacy, storage]}
       # Required to let apply format a disk that carries signatures.
       wipe: {type: boolean}
       # legacy only. ro (default) or rw; rw only on NTFS that checks clean.
@@ -127,6 +129,8 @@ $defs:
       evacuate: {type: string, pattern: "^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$"}
       # discard_data: the owner has the files elsewhere; they are lost.
       discard_data: {const: true}
+      # storage only. The PVE storage and volume group name; default nb-data.
+      storage: {type: string, pattern: "^nb-[a-z][a-z0-9-]{0,30}$"}
 
   override:
     type: object

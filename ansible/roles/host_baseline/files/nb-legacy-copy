@@ -3,7 +3,10 @@
 # converted (docs/adr/0007-legacy-disks.md, phase 2).
 #
 #   nb-legacy-copy copy NAME STORAGE VMID SIZE_GIB DISK_ID
+#   nb-legacy-copy move NAME VOLUME STORAGE VMID
 #   nb-legacy-copy list
+#   nb-legacy-copy moved
+#   nb-legacy-copy forget VOLUME
 #
 # copy makes a SIZE_GIB volume on the LVM storage STORAGE, owned by the
 # files guest VMID, puts ext4 on it and copies /mnt/nb-legacy/NAME into it
@@ -15,6 +18,14 @@
 # that fails is freed and nothing is recorded. Prints "kept VOLUME" or
 # "copied VOLUME".
 #
+# move copies a recorded copy, now at VOLUME, to a new volume on STORAGE in
+# the same way and checks it the same way (phase 3: onto the disk that was
+# kept, once it is LVM-thin storage). Only then does the record name the new
+# volume; the old one is listed by "moved" until apply has taken it off the
+# files guest and freed it, and says so with "forget VOLUME". A move that
+# fails frees the new volume and changes nothing. Prints "moved VOLUME" or
+# "kept VOLUME" when the copy is on STORAGE already.
+#
 # The kept disk is only read. Named data streams (ntfs-3g shows them as
 # extended attributes, such as Windows' "downloaded from the internet"
 # mark) are not copied: ext4 cannot hold large ones.
@@ -24,7 +35,9 @@ records=${NB_COPIES:-/var/lib/nullbill/kept-copies}
 work=${NB_COPY_DIR:-/run/nb-legacy-copy}
 pvesm=${NB_PVESM:-pvesm}
 pvesh=${NB_PVESH:-pvesh}
+pct=${NB_PCT:-pct}
 pending=$records.pending
+moved=$records.moved
 
 die() {
   echo "nb-legacy-copy: $*" >&2
@@ -97,6 +110,67 @@ print(len(files), sum(a[k][1] for k in files), len(sample))
 PY
 }
 
+# Check STORAGE has room for SIZE_GIB and allocate a volume owned by VMID
+# there; print it. It is listed as pending until it is recorded.
+allocate() {
+  storage=$1 vmid=$2 size=$3 name=$4
+  status=$("$pvesh" get "/nodes/localhost/storage/$storage/status" --output-format json) || die "no storage $storage"
+  # shellcheck disable=SC2046 # three words, split on purpose
+  set -- $(printf '%s' "$status" | python3 -I -c 'import json,sys; s=json.load(sys.stdin); print(s.get("type"), int(s.get("total", 0)), int(s.get("avail", 0)))')
+  type=$1 total=$2 avail=$3
+  case $type in lvmthin | lvm) ;; *) die "$storage is $type; a copy goes on LVM or LVM-thin storage" ;; esac
+  # Leave 5 % of the storage free: a thin pool that fills up stops every guest on it.
+  need=$((size * 1073741824))
+  [ "$need" -le $((avail - total / 20)) ] || die "$storage has $((avail / 1073741824)) GiB free; the copy needs $size GiB and 5 % must stay free"
+  n=0
+  while "$pvesm" list "$storage" --vmid "$vmid" 2>/dev/null | grep -q "^$storage:vm-$vmid-disk-$n "; do n=$((n + 1)); done
+  mkdir -p "$(dirname "$records")"
+  printf '%s %s\n' "$name" "$storage:vm-$vmid-disk-$n" >>"$pending"
+  "$pvesm" alloc "$storage" "$vmid" "vm-$vmid-disk-$n" "${size}G" >/dev/null
+  echo "$storage:vm-$vmid-disk-$n"
+}
+
+# A new, empty volume: ext4 on it, mounted at $1.
+format_at() {
+  dev=$("$pvesm" path "$volume")
+  [ -z "$(blkid -p -o value -s TYPE "$dev" 2>/dev/null || true)" ] || die "the new volume $volume is not empty"
+  mkfs.ext4 -q -m 0 "$dev"
+  mkdir -p "$1"
+  mount "$dev" "$1"
+  # Not part of the owner's files; fsck makes it again when it needs it.
+  rmdir "$1/lost+found"
+}
+
+# rsync SRC into DST with a line a minute, then compare; print FILES BYTES SAMPLED.
+transfer() {
+  total=$(findmnt -bno USED --mountpoint "$1" | head -1)
+  echo "nb-legacy-copy: copying $1 ($((${total:-0} / 1048576)) MiB) to $volume" >&2
+  # A line a minute while it copies: hours, for a full disk.
+  (while sleep 60; do
+    done_bytes=$(findmnt -bno USED --mountpoint "$2" | head -1)
+    echo "nb-legacy-copy: $((${done_bytes:-0} / 1048576)) MiB copied" >&2
+  done) &
+  ticker=$!
+  rc=0
+  rsync -aH --numeric-ids "$1/" "$2/" >&2 || rc=$?
+  kill "$ticker" 2>/dev/null || true
+  [ "$rc" = 0 ] || die "rsync failed (exit $rc); nothing recorded, $3 is as it was"
+  sync
+  compare "$1" "$2" || die "the copy of $name did not verify; nothing recorded, $3 is as it was"
+}
+
+# Replace NAME's record line with LINE, atomically.
+rerecord() {
+  tmp=$records.tmp
+  { [ ! -e "$records" ] || awk -v n="$1" '$1 != n' "$records"; echo "$2"; } >"$tmp"
+  mv "$tmp" "$records"
+}
+
+unpend() {
+  sed -i "\|^$1 $2\$|d" "$pending"
+  [ -s "$pending" ] || rm -f "$pending"
+}
+
 copy() {
   [ $# = 5 ] || die "usage: nb-legacy-copy copy NAME STORAGE VMID SIZE_GIB DISK_ID"
   name=$1 storage=$2 vmid=$3 size=$4 disk=$5
@@ -111,61 +185,70 @@ copy() {
   [ -n "$(findmnt -rno TARGET --mountpoint "$src" 2>/dev/null)" ] || die "$src is not mounted; is the disk connected?"
   free_pending
 
-  status=$("$pvesh" get "/nodes/localhost/storage/$storage/status" --output-format json) || die "no storage $storage"
-  # shellcheck disable=SC2046 # three words, split on purpose
-  set -- $(printf '%s' "$status" | python3 -I -c 'import json,sys; s=json.load(sys.stdin); print(s.get("type"), int(s.get("total", 0)), int(s.get("avail", 0)))')
-  type=$1 total=$2 avail=$3
-  case $type in lvmthin | lvm) ;; *) die "$storage is $type; a copy goes on LVM or LVM-thin storage" ;; esac
-  # Leave 5 % of the storage free: a thin pool that fills up stops every guest on it.
-  need=$((size * 1073741824))
-  [ "$need" -le $((avail - total / 20)) ] || die "$storage has $((avail / 1073741824)) GiB free; the copy needs $size GiB and 5 % must stay free"
-
-  n=0
-  while "$pvesm" list "$storage" --vmid "$vmid" 2>/dev/null | grep -q "^$storage:vm-$vmid-disk-$n "; do n=$((n + 1)); done
-  volume=$storage:vm-$vmid-disk-$n
-  mkdir -p "$(dirname "$records")"
-  printf '%s %s\n' "$name" "$volume" >>"$pending"
-  "$pvesm" alloc "$storage" "$vmid" "vm-$vmid-disk-$n" "${size}G" >/dev/null
+  volume=$(allocate "$storage" "$vmid" "$size" "$name")
   dst=$work/$name
   # From here on a failure frees the volume: it holds nothing but this copy.
-  trap 'kill "${ticker:-}" 2>/dev/null || true; umount "$dst" 2>/dev/null || true; "$pvesm" free "$volume" >/dev/null 2>&1 || true; sed -i "\|^$name $volume\$|d" "$pending"; [ -s "$pending" ] || rm -f "$pending"' EXIT
-  dev=$("$pvesm" path "$volume")
-  [ -z "$(blkid -p -o value -s TYPE "$dev" 2>/dev/null || true)" ] || die "the new volume $volume is not empty"
-  mkfs.ext4 -q -m 0 "$dev"
-  mkdir -p "$dst"
-  mount "$dev" "$dst"
-  # Not part of the owner's files; fsck makes it again when it needs it.
-  rmdir "$dst/lost+found"
-  total=$(findmnt -bno USED --mountpoint "$src" | head -1)
-  echo "nb-legacy-copy: copying $src ($((${total:-0} / 1048576)) MiB) to $volume" >&2
-  # A line a minute while it copies: hours, for a full disk.
-  (while sleep 60; do
-    done_bytes=$(findmnt -bno USED --mountpoint "$dst" | head -1)
-    echo "nb-legacy-copy: $((${done_bytes:-0} / 1048576)) MiB copied" >&2
-  done) &
-  ticker=$!
-  rc=0
-  rsync -aH --numeric-ids "$src/" "$dst/" >&2 || rc=$?
-  kill "$ticker" 2>/dev/null || true
-  [ "$rc" = 0 ] || die "rsync failed (exit $rc); nothing recorded, the disk is as it was"
-  sync
-  result=$(compare "$src" "$dst") || die "the copy of $name did not verify; nothing recorded, the disk is as it was"
+  trap 'kill "${ticker:-}" 2>/dev/null || true; umount "$dst" 2>/dev/null || true; "$pvesm" free "$volume" >/dev/null 2>&1 || true; unpend "$name" "$volume"' EXIT
+  format_at "$dst"
+  result=$(transfer "$src" "$dst" "the disk")
   umount "$dst"
   rmdir "$dst"
   # shellcheck disable=SC2086 # FILES BYTES SAMPLED
   set -- $result
-  tmp=$records.tmp
-  { [ ! -e "$records" ] || cat "$records"; echo "$name $volume $size $1 $2 $disk"; } >"$tmp"
-  mv "$tmp" "$records"
+  rerecord "$name" "$name $volume $size $1 $2 $disk"
   trap - EXIT
-  sed -i "\|^$name $volume\$|d" "$pending"
-  [ -s "$pending" ] || rm -f "$pending"
+  unpend "$name" "$volume"
   echo "nb-legacy-copy: $1 files, $2 bytes; $3 compared by SHA-256" >&2
   echo "copied $volume"
 }
 
+move() {
+  [ $# = 4 ] || die "usage: nb-legacy-copy move NAME VOLUME STORAGE VMID"
+  name=$1 old=$2 storage=$3 vmid=$4
+  line=$(recorded "$name") || die "no copy named $name"
+  # shellcheck disable=SC2086 # NAME VOLUME SIZE_GIB FILES BYTES DISK_ID
+  set -- $line
+  size=$3 disk=$6
+  case $old in "$storage":*)
+    echo "kept $old"
+    return
+    ;;
+  esac
+  # Nothing may change the copy while it moves.
+  "$pct" status "$vmid" | grep -qx 'status: stopped' || die "guest $vmid must be stopped to move $name"
+  free_pending
+  volume=$(allocate "$storage" "$vmid" "$size" "$name")
+  src=$work/$name.from dst=$work/$name
+  trap 'kill "${ticker:-}" 2>/dev/null || true; umount "$dst" 2>/dev/null || true; umount "$src" 2>/dev/null || true; "$pvesm" free "$volume" >/dev/null 2>&1 || true; unpend "$name" "$volume"' EXIT
+  mkdir -p "$src"
+  # The copy it moves is only read.
+  mount -o ro "$("$pvesm" path "$old")" "$src"
+  format_at "$dst"
+  result=$(transfer "$src" "$dst" "the copy on $old")
+  umount "$dst" "$src"
+  rmdir "$dst" "$src"
+  # shellcheck disable=SC2086 # FILES BYTES SAMPLED
+  set -- $result
+  # The record first: a crash in between leaves the old volume unlisted
+  # (left over, never freed), not listed while the record still names it.
+  rerecord "$name" "$name $volume $size $1 $2 $disk"
+  echo "$name $old" >>"$moved"
+  trap - EXIT
+  unpend "$name" "$volume"
+  echo "nb-legacy-copy: $1 files, $2 bytes; $3 compared by SHA-256" >&2
+  echo "moved $volume"
+}
+
 case ${1:-} in
   copy) shift && copy "$@" ;;
+  move) shift && move "$@" ;;
   list) [ ! -e "$records" ] || cat "$records" ;;
-  *) die "usage: nb-legacy-copy copy|list" ;;
+  moved) [ ! -e "$moved" ] || cat "$moved" ;;
+  forget)
+    [ $# = 2 ] || die "usage: nb-legacy-copy forget VOLUME"
+    [ ! -e "$moved" ] || { awk -v v="$2" '$2 != v' "$moved" >"$moved.tmp" && mv "$moved.tmp" "$moved"; }
+    [ ! -s "$moved" ] || exit 0
+    rm -f "$moved"
+    ;;
+  *) die "usage: nb-legacy-copy copy|move|list|moved|forget" ;;
 esac

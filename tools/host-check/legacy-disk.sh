@@ -214,11 +214,12 @@ legacy_copy_checks() {
 set -eu
 vols=/tmp/legacy/vols
 echo "$*" >>/tmp/legacy/pvesm.log
+file() { echo "$vols/${1%%:*}--${1#*:}"; } # STORAGE:NAME -> its file, without .img
 case $1 in
-  list) for f in "$vols"/*.img; do [ -e "$f" ] || continue; n=$(basename "$f" .img); echo "$2:$n raw images 1 ${n#vm-}"; done ;;
-  alloc) truncate -s "$5" "$vols/$4.img"; losetup -f --show "$vols/$4.img" >"$vols/$4.loop"; echo "successfully created '$2:$4'" ;;
-  path) cat "$vols/${2#*:}.loop" ;;
-  free) n=${2#*:}; losetup -d "$(cat "$vols/$n.loop")"; rm -f "$vols/$n.img" "$vols/$n.loop" ;;
+  list) for f in "$vols/$2--"*.img; do [ -e "$f" ] || continue; n=$(basename "$f" .img); n=${n#*--}; echo "$2:$n raw images 1 ${n#vm-}"; done ;;
+  alloc) f=$(file "$2:$4"); truncate -s "$5" "$f.img"; losetup -f --show "$f.img" >"$f.loop"; echo "successfully created '$2:$4'" ;;
+  path) cat "$(file "$2").loop" ;;
+  free) f=$(file "$2"); losetup -d "$(cat "$f.loop")"; rm -f "$f.img" "$f.loop" ;;
   *) exit 2 ;;
 esac
 SH
@@ -226,8 +227,10 @@ SH
 #!/bin/sh
 echo "{\"type\": \"${NB_FAKE_TYPE:-lvmthin}\", \"total\": 107374182400, \"avail\": ${NB_FAKE_AVAIL:-53687091200}}"
 SH
-  chmod +x /tmp/legacy/pvesm /tmp/legacy/pvesh
-  export NB_PVESM=/tmp/legacy/pvesm NB_PVESH=/tmp/legacy/pvesh NB_COPIES=/tmp/legacy/kept-copies NB_COPY_DIR=/tmp/legacy/copying
+  # shellcheck disable=SC2016 # the fake's own variable
+  printf '#!/bin/sh\necho "status: ${NB_FAKE_CT:-stopped}"\n' >/tmp/legacy/pct
+  chmod +x /tmp/legacy/pvesm /tmp/legacy/pvesh /tmp/legacy/pct
+  export NB_PVESM=/tmp/legacy/pvesm NB_PVESH=/tmp/legacy/pvesh NB_PCT=/tmp/legacy/pct NB_COPIES=/tmp/legacy/kept-copies NB_COPY_DIR=/tmp/legacy/copying
   copy() { /usr/local/sbin/nb-legacy-copy copy old-hdd local-lvm 2023 1 ata-SYNTHETIC_NTFS; }
   volumes() { find "$vols" -name '*.img' | wc -l; }
 
@@ -289,14 +292,44 @@ SH
   grep -q "453 files, .* bytes; 200 compared by SHA-256" /tmp/legacy/err || fail "sample size: $(tail -1 /tmp/legacy/err)"
   [ "$(copy)" = "kept local-lvm:vm-2023-disk-0" ] || fail "second run did not keep the copy"
   mkdir -p /tmp/legacy/check
-  mount -o ro "$(cat "$vols/vm-2023-disk-0.loop")" /tmp/legacy/check
+  mount -o ro "$(cat "$vols/local-lvm--vm-2023-disk-0.loop")" /tmp/legacy/check
   diff -r "$dir" /tmp/legacy/check >/dev/null || fail "the copy differs from the kept disk"
   [ "$(stat -c %u:%g "/tmp/legacy/check/Fotos 2019/video.mp4")" = 101000:101000 ] || fail "the copy is not owned by the share user"
   umount /tmp/legacy/check
   legacy unmount old-hdd >/dev/null
   [ "$(sum NTFS)" = "$before" ] || fail "copying changed the kept disk"
-  /tmp/legacy/pvesm free local-lvm:vm-2023-disk-0
   echo "ok   a verified copy is recorded once, equals the kept disk, keeps its owner, and the disk is unchanged"
+
+  # Moving the copy onto the storage disk (phase 3): same checks, and the old
+  # volume stays until apply has taken it off the guest.
+  move() { /usr/local/sbin/nb-legacy-copy move old-hdd "$1" nb-data 2023; }
+  local record
+  record=$(cat /tmp/legacy/kept-copies)
+  if NB_FAKE_CT=running move local-lvm:vm-2023-disk-0 2>/tmp/legacy/err; then fail "moved a copy while its guest runs"; fi
+  grep -q "guest 2023 must be stopped to move old-hdd" /tmp/legacy/err || fail "running guest message: $(cat /tmp/legacy/err)"
+  fake_rsync "rm -f 'Fotos 2019/video.mp4'"
+  if PATH=/tmp/legacy/copy-fake:$PATH move local-lvm:vm-2023-disk-0 2>/tmp/legacy/err; then fail "recorded a move with a file missing"; fi
+  grep -q "the copy differs: missing \['Fotos 2019/video.mp4'\]" /tmp/legacy/err || fail "move: missing file message: $(cat /tmp/legacy/err)"
+  [ "$(volumes)" = 1 ] || fail "a failed move left its volume"
+  [ "$(cat /tmp/legacy/kept-copies)" = "$record" ] || fail "a failed move changed the record"
+  test ! -e /tmp/legacy/kept-copies.moved || fail "a failed move listed the old volume"
+  out=$(move local-lvm:vm-2023-disk-0 2>/tmp/legacy/err) || fail "move: $(cat /tmp/legacy/err)"
+  [ "$out" = "moved nb-data:vm-2023-disk-0" ] || fail "move printed $out"
+  [ "$(cat /tmp/legacy/kept-copies)" = "${record/local-lvm:/nb-data:}" ] || fail "record after the move: $(cat /tmp/legacy/kept-copies)"
+  [ "$(/usr/local/sbin/nb-legacy-copy moved)" = "old-hdd local-lvm:vm-2023-disk-0" ] || fail "the old volume is not listed as moved"
+  [ "$(volumes)" = 2 ] || fail "the old volume was freed before apply took it off the guest"
+  mkdir -p /tmp/legacy/check2
+  mount -o ro "$(cat "$vols/local-lvm--vm-2023-disk-0.loop")" /tmp/legacy/check
+  mount -o ro "$(cat "$vols/nb-data--vm-2023-disk-0.loop")" /tmp/legacy/check2
+  diff -r /tmp/legacy/check /tmp/legacy/check2 >/dev/null || fail "the moved copy differs"
+  [ "$(stat -c %u:%g "/tmp/legacy/check2/Fotos 2019/video.mp4")" = 101000:101000 ] || fail "the moved copy is not owned by the share user"
+  umount /tmp/legacy/check /tmp/legacy/check2
+  [ "$(move nb-data:vm-2023-disk-0)" = "kept nb-data:vm-2023-disk-0" ] || fail "a copy on the storage was moved again"
+  /usr/local/sbin/nb-legacy-copy forget local-lvm:vm-2023-disk-0
+  test ! -e /tmp/legacy/kept-copies.moved || fail "forget left the moved list"
+  /tmp/legacy/pvesm free local-lvm:vm-2023-disk-0
+  /tmp/legacy/pvesm free nb-data:vm-2023-disk-0
+  echo "ok   a copy moves to another storage only when its guest is stopped and the move checks out; the old volume waits for apply"
 }
 
 # Loop devices belong to the kernel, not the container: detach them even

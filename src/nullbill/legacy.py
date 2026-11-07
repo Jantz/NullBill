@@ -139,7 +139,7 @@ def shares(plan: dict) -> list[dict]:
 # Converting a kept disk (Phase 2 of ADR 0007). A copy is an ext4 volume
 # on a PVE storage, owned by the files guest and mounted in it read-write
 # at SHARE_ROOT/<name>, with backup=1 so PBS backs it up from then on.
-CONVERT_TO = ("pbs",)
+CONVERT_TO = ("pbs", "storage")
 CONVERT_KEYS = ("evacuate", "discard_data")
 # Storage types nb-legacy-copy puts a copy on (an ext4 volume it makes).
 COPY_STORAGE = ("lvmthin", "lvm")
@@ -225,16 +225,40 @@ def plan_convert(disk: dict, pin: dict, facts: dict, capacity: dict, errors: lis
             f"{evacuate} has {max(free, 0)} GiB free after the guests' disks"
         )
         return {}
-    return {"from": "legacy", "evacuate": evacuate, "copies": copies}
+    out = {"from": "legacy", "evacuate": evacuate, "copies": copies}
+    if pin["use"] == "storage":
+        # The copies then move onto the disk itself, once it is storage.
+        target, room = storage_name(pin), storage_room_gib(disk["size_gib"])
+        if need > room:
+            errors.append(f"{where}: the copies need {need} GiB, more than the {room} GiB the disk holds as storage {target}")
+            return {}
+        out["moves_to"] = target
+    return out
+
+
+# A storage disk (phase 3): one volume group with a thin pool on 95 % of it,
+# of which copies leave 5 % free, as nb-legacy-copy does on any storage.
+STORAGE_DEFAULT = "nb-data"
+STORAGE_KEYS = ("storage",)
+
+
+def storage_name(pin: dict) -> str:
+    return pin.get("storage", STORAGE_DEFAULT)
+
+
+def storage_room_gib(size_gib: int) -> int:
+    pool = size_gib * 95 // 100
+    return pool - math.ceil(pool / 20)
 
 
 def convert_note(converts: dict) -> str:
     if converts.get("discard_data"):
         return f"Converts a kept disk: its files ({converts['lost_gib']} GiB) are not copied and are lost, as discard_data: true says."
     names = ", ".join(c["name"] for c in converts["copies"])
+    then = f" Once it is storage {converts['moves_to']}, the copies move onto it, checked again." if converts.get("moves_to") else ""
     return (
         f"Converts a kept disk: apply first copies its files ({names}) to {converts['evacuate']}, checks the copy and "
-        "shares it from the files guest, backed up; only then is the disk wiped."
+        f"shares it from the files guest, backed up; only then is the disk wiped.{then}"
     )
 
 
@@ -274,7 +298,17 @@ def _labels(plan: dict) -> list[str]:
     labels += [f"files guest sees the copy {c['name']} rw" for c in copies(plan)]
     if shares(plan) or copies(plan):
         labels.append(SAMBA_LABEL)
+    labels += [_storage_label(name) for name in storages(plan)]
     return labels
+
+
+def storages(plan: dict) -> list[str]:
+    """The storage disks' PVE storage names (phase 3)."""
+    return sorted(d["storage"] for d in plan["disks"].values() if d.get("use") == "storage")
+
+
+def _storage_label(name: str) -> str:
+    return f"storage disk {name} is active LVM-thin storage"
 
 
 def skipped(plan_with_notes: dict, reason: str) -> list[Result]:
@@ -333,4 +367,13 @@ def check(plan_with_notes: dict, target: str, run: Runner) -> list[Result]:
         got = dict(zip(SAMBA, out.split(), strict=False))
         wrong = [f"{p} = {got.get(p, '?')}" for p, want in SAMBA.items() if got.get(p) != want]
         results.append(Result("FAIL", SAMBA_LABEL, "; ".join(wrong)[:120]) if wrong else Result("PASS", SAMBA_LABEL))
+    for name in storages(plan):
+        rc, out, err = run(target, f"pvesm status --storage {shlex.quote(name)}")
+        row = next((line.split() for line in out.splitlines() if line.split()[:1] == [name]), [])
+        if rc != 0 or len(row) < 3:
+            results.append(Result("FAIL", _storage_label(name), (err.strip() or "PVE has no such storage; run apply")[:120]))
+        elif row[1:3] != ["lvmthin", "active"]:
+            results.append(Result("FAIL", _storage_label(name), f"{row[1]} {row[2]}"))
+        else:
+            results.append(Result("PASS", _storage_label(name)))
     return results
