@@ -61,8 +61,12 @@ NTFS disk.
 
 **Mount on the host.** `nb-legacy-disk` (host baseline) mounts each kept
 partition read-only or read-write at `/mnt/nb-legacy/<name>` through a
-systemd mount unit by UUID, owned by host uid and gid 101000 (uid 1000 in an
-unprivileged container). The empty mount point is made immutable first, so
+systemd mount unit, owned by host uid and gid 101000 (uid 1000 in an
+unprivileged container). The unit mounts the partition by its by-id name,
+which carries the disk's serial, not by UUID: a cloned disk carries the same
+UUID, and `/dev/disk/by-uuid` then points at either one. The script checks
+the UUID the plan expects on that partition before mounting, and the device
+actually mounted after. The empty mount point is made immutable first, so
 nothing can land on the system disk while the disk is missing. The unit
 orders itself before `pve-guests.service`, so the share guest starts with
 the disk mounted.

@@ -8,7 +8,8 @@
 #   nb-legacy-disk metrics
 #
 # mount keeps partition PARTN of DISK_ID mounted at /mnt/nb-legacy/NAME
-# through a systemd mount unit by UUID, owned by UID:GID, read-only (MODE
+# through a systemd mount unit by the partition's by-id name (which names
+# the disk's serial; a UUID can repeat on cloned disks), owned by UID:GID, read-only (MODE
 # ro) or read-write (rw, NTFS only). It refuses a partition whose probed
 # filesystem or UUID differs from the plan's, and read-write on an NTFS
 # volume that Windows left hibernated, unclean or marked for a disk check.
@@ -24,7 +25,6 @@ set -eu
 base=${NB_LEGACY_DIR:-/mnt/nb-legacy}
 units=${NB_UNIT_DIR:-/etc/systemd/system}
 disks=${NB_DISK_DIR:-/dev/disk/by-id}
-uuids=${NB_UUID_DIR:-/dev/disk/by-uuid}
 systemctl=${NB_SYSTEMCTL:-systemctl}
 textfiles=${NB_TEXTFILE_DIR:-/var/lib/prometheus/node-exporter}
 marker="# nb-legacy-disk:"
@@ -100,6 +100,17 @@ metrics() {
   mv "$out.tmp" "$out"
 }
 
+# A mount that is not what was asked for goes, unit and all, so a reboot
+# does not bring it back.
+take_down() {
+  "$systemctl" stop "$unit" 2>/dev/null || true
+  [ -z "$(mounted_mode "$dir")" ] || umount "$dir"
+  "$systemctl" disable -q "$unit" 2>/dev/null || true
+  rm -f "$units/$unit"
+  "$systemctl" daemon-reload
+  die "$@"
+}
+
 ntfs_refusal() {
   case $1 in
     12) echo "it holds no valid NTFS" ;;
@@ -146,7 +157,7 @@ Description=NullBill kept disk $name
 Before=pve-guests.service
 
 [Mount]
-What=$uuids/$uuid
+What=$dev
 Where=$dir
 Type=$type
 Options=$mode,noatime,uid=$uid,gid=$gid,dmask=0077,fmask=0177$extra
@@ -196,16 +207,10 @@ UNIT
   "$systemctl" enable -q "$unit"
   "$systemctl" start "$unit" || true
   now=$(mounted_mode "$dir")
-  if [ "$now" != "$mode" ]; then
-    # ntfs-3g mounts an unsafe volume read-only instead of read-write. The
-    # unit goes too, so a reboot does not bring it back.
-    "$systemctl" stop "$unit" 2>/dev/null || true
-    [ -z "$(mounted_mode "$dir")" ] || umount "$dir"
-    "$systemctl" disable -q "$unit" 2>/dev/null || true
-    rm -f "$units/$unit"
-    "$systemctl" daemon-reload
-    die "$dev mounted ${now:-not at all} instead of $mode; nothing kept mounted (journalctl -u $unit)"
-  fi
+  # ntfs-3g mounts an unsafe volume read-only instead of read-write.
+  [ "$now" = "$mode" ] || take_down "$dev mounted ${now:-not at all} instead of $mode; nothing kept mounted (journalctl -u $unit)"
+  source=$(findmnt -rno SOURCE --mountpoint "$dir" | head -1)
+  [ "$(readlink -f "$source")" = "$real" ] || take_down "$dir came up holding $source, not $dev; nothing kept mounted"
   echo mounted
 }
 

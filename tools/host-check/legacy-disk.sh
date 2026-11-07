@@ -63,12 +63,12 @@ SH
   [ "$(stat -c %u:%g "$dir/hello.txt")" = 101000:101000 ] || fail "files not owned by the share user (host 101000)"
   if touch "$dir/new" 2>/dev/null; then fail "wrote to a read-only kept disk"; fi
   grep -qx 'Options=ro,noatime,uid=101000,gid=101000,dmask=0077,fmask=0177' "$unit" || fail "unit options: $(grep Options "$unit")"
-  grep -qx "What=$by_uuid/$uuid" "$unit" || fail "unit mounts by UUID"
+  grep -qx "What=$by_id/ata-SYNTHETIC_NTFS-part2" "$unit" || fail "unit mounts by the partition's by-id name"
   grep -qx 'Before=pve-guests.service' "$unit" || fail "unit is not ordered before the guests"
   [ "$(keep NTFS "$uuid" ntfs ro)" = kept ] || fail "second run did not keep the mount"
   [ "$(legacy list)" = "old-hdd $uuid ro ntfs mounted" ] || fail "list: $(legacy list)"
   grep -qx 'nb_legacy_disk_mounted{name="old-hdd",mode="ro"} 1' "$prom" || fail "metric of a mounted disk: $(cat "$prom")"
-  echo "ok   a kept NTFS disk mounts read-only by UUID as the share user, and stays as it is on the next run"
+  echo "ok   a kept NTFS disk mounts read-only by its by-id name as the share user, and stays as it is on the next run"
 
   # The disk goes missing: the empty mount point takes no writes.
   umount "$dir"
@@ -148,6 +148,16 @@ PY
   grep -q "Windows marked it for a disk check" /tmp/legacy/err || fail "chkdsk message: $(cat /tmp/legacy/err)"
   [ "$(sum DIRTY)" = "$before" ] || fail "checking a dirty disk changed it"
   echo "ok   read-write is refused on an NTFS volume marked for chkdsk, which ntfs-3g.probe alone passes"
+
+  # A cloned disk carries the same UUID: the partition named is the one mounted.
+  # The volume serial sits at byte 0x48 of the boot sector, little-endian.
+  python3 -c 'import sys; f = open(sys.argv[1], "r+b"); f.seek(0x48); f.write(int(sys.argv[2], 16).to_bytes(8, "little"))' "$dirty" "$uuid"
+  [ "$(blkid -p -o value -s UUID "$dirty")" = "$uuid" ] || fail "the twin's UUID"
+  ln -sf "$dirty" "$by_uuid/$uuid"
+  [ "$(keep NTFS "$uuid" ntfs ro)" = mounted ] || fail "kept disk beside its twin"
+  [ "$(findmnt -rno SOURCE --mountpoint "$dir")" = "$ntfs" ] || fail "mounted the twin, not the disk named"
+  legacy unmount old-hdd >/dev/null
+  echo "ok   of two disks with the same UUID (a clone), the one the plan names is mounted"
 
   # A refused change puts back what was mounted.
   [ "$(keep NTFS "$uuid" ntfs ro)" = mounted ] || fail "read-only mount before a refused change"
