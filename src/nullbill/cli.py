@@ -18,12 +18,26 @@ from nullbill.secretfile import Secrets, Sops
 from nullbill.verify import run_verify
 
 
+def probe_target(home) -> str:
+    """target.ssh from config.yaml, or before the first choices the host
+    install.sh recorded; the host's mgmt address once the LAN is closing or
+    closed, as for apply."""
+    path = home / "config.yaml"
+    configured = (load_config(path) if path.is_file() else {}).get("target", {}).get("ssh")
+    install = home / "install.json"
+    if not configured and install.is_file():
+        configured = f"root@{json.loads(install.read_text())['host']}"
+    if not configured:
+        raise NullBillError(f"{path}: target.ssh is required for probe")
+    if lan.state(home) == lan.OPEN:
+        return configured
+    model, facts_bytes = _load(home)
+    return reach_target(home, configured, build_plan(model, json.loads(facts_bytes)))
+
+
 def cmd_probe(_args: argparse.Namespace) -> int:
     home = nullbill_home()
-    config = load_config(home / "config.yaml")
-    if "target" not in config:
-        raise NullBillError(f"{home / 'config.yaml'}: target.ssh is required for probe")
-    run_dir = run_probe(config["target"]["ssh"], home)
+    run_dir = run_probe(probe_target(home), home)
     print(f"probe stored in {run_dir}")
     return 0
 
