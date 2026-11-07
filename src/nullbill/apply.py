@@ -1514,6 +1514,9 @@ def run_apply(ctx: Context, stages: list[Stage] = STAGES, only: str | None = Non
             stage(ctx)
 
 
+SSH_RETRIES = 12
+
+
 class SshReach:
     """The real Reach: ssh and ansible-playbook on the controller."""
 
@@ -1551,7 +1554,15 @@ class SshReach:
                 fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                 with os.fdopen(fd, "w") as f:
                     json.dump(data, f)
-            env = os.environ | {"ANSIBLE_COLLECTIONS_PATH": str(self.collections), "ANSIBLE_RETRY_FILES_ENABLED": "false"}
+            env = os.environ | {
+                "ANSIBLE_COLLECTIONS_PATH": str(self.collections),
+                "ANSIBLE_RETRY_FILES_ENABLED": "false",
+                # A VM OpenTofu has just made, or made again, is still booting
+                # when its stage starts. Ansible retries an SSH connection
+                # error with a growing pause (1, 3, 7, 15, then 30 s), so
+                # 12 retries wait about four minutes for sshd and cloud-init.
+                "ANSIBLE_SSH_RETRIES": str(SSH_RETRIES),
+            }
             argv = ["ansible-playbook", "-i", str(inventory), "-e", f"@{values}", str(ANSIBLE / playbook)]
             try:
                 return subprocess.run(argv, env=env, check=False).returncode

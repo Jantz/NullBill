@@ -118,9 +118,9 @@ ADVICE = [
         "Run install.sh in the Proxmox Shell again; it puts the key back.",
     ),
     (
-        r"UNREACHABLE|no answer from the host|Connection refused|Connection reset",
-        "A machine did not answer. Check that the Proxmox host is on and that the guest named above is running in Proxmox, "
-        "then run setup again.",
+        r"UNREACHABLE|no answer from the host|Connection refused|Connection reset|kex_exchange_identification",
+        "A machine did not answer. A guest setup has just made can take a few minutes to start; wait a minute and run "
+        "setup again. If it stops here again, check in Proxmox that the guest named above is running.",
     ),
     (r"is still copying", "A copy is still running on the host. Wait for it to finish, then run setup again."),
     (r"checks failed", "Look at the failing checks below. Fix what they name, then run the checks again."),

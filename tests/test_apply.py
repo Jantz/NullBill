@@ -1186,6 +1186,18 @@ def test_a_host_that_stops_answering_fails_the_stage_instead_of_crashing(monkeyp
     assert reach.host("vzdump 2010", timeout=5) == (124, "", "no answer from the host within 5 s")
 
 
+def test_ansible_waits_for_a_vm_that_is_still_booting(monkeypatch, tmp_path):
+    seen = {}
+
+    def run(argv, env, check):
+        seen.update(env)
+        return apply.subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(apply.subprocess, "run", run)
+    assert apply.SshReach("root@192.0.2.10", tmp_path).playbook("router.yml", {}, {}) == 0
+    assert seen["ANSIBLE_SSH_RETRIES"] == "12"
+
+
 # Disks kept from a previous OS (docs/adr/0007-legacy-disks.md).
 OLD = "ata-SYNTHETIC_HDD_0002"
 
