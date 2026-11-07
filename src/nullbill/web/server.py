@@ -41,6 +41,7 @@ from nullbill.model import build_model
 from nullbill.plan import guest_storage
 from nullbill.secretfile import Codec, Secrets, Sops
 from nullbill.tailnet import render_tailnet
+from nullbill.web import progress
 
 SESSION_S = 12 * 3600
 MIN_PASSWORD = 12
@@ -589,15 +590,19 @@ class App:
         facts = self.home / "probe" / "latest" / "facts.json"
         config = self.config()
         if config is None or not facts.is_file():
-            return {"text": None, "errors": [], "tailnet_policy": None}
+            return {"text": None, "errors": [], "advice": [], "summary": None, "tailnet_policy": None}
         try:
             model = build_model(config)
             text = plan_text(model, facts.read_bytes())
         except NullBillError as exc:
-            return {"text": None, "errors": exc.messages, "tailnet_policy": None}
+            # One line of advice per cause, in the order the problems are listed.
+            other = "Change your choices in step 3 so this no longer applies, and press Save and plan."
+            advice = list(dict.fromkeys(progress.advice(m, default=other) for m in exc.messages))
+            return {"text": None, "errors": exc.messages, "advice": advice, "summary": None, "tailnet_policy": None}
         _write_private(self.home / "plan.yaml", text)
-        policy = render_tailnet(yaml.safe_load(text), model)["policy.json"]
-        return {"text": text, "errors": [], "tailnet_policy": policy}
+        loaded = yaml.safe_load(text)
+        policy = render_tailnet(loaded, model)["policy.json"]
+        return {"text": text, "errors": [], "advice": [], "summary": plan_summary(loaded), "tailnet_policy": policy}
 
     # The LAN. Its addresses come from the plan, so nothing is known before one.
     def network(self) -> tuple[str | None, str | None]:
@@ -752,14 +757,44 @@ class App:
 
     def job_view(self, job: Job, offset: int = 0) -> dict:
         data = job.log.read_bytes()
+        state = job.state()
+        ended = job.rc_file.stat().st_mtime if state != "running" and job.rc_file.exists() else None
+        now = time.time()
+        times = {"started": job.started, "now": now, "ended": ended or (None if state == "running" else now)}
+        times["output"] = job.log.stat().st_mtime
         return {
             "id": job.id,
             "action": job.action,
             "args": job.args,
-            "state": job.state(),
+            "state": state,
             "rc": job.rc,
             "text": data[offset:].decode(errors="replace"),
             "offset": len(data),
+            "started": job.started,
+            "seconds": round((times["ended"] or now) - job.started),
+            "progress": progress.summarize(job.action, data.decode(errors="replace"), state, times),
+        }
+
+    def last_jobs(self) -> dict:
+        """Each action's latest job: how it ended, and when."""
+        out: dict[str, dict] = {}
+        for job in sorted(self.jobs.values(), key=lambda j: j.started):
+            out[job.action] = {"id": job.id, "state": job.state(), "started": job.started}
+        return out
+
+    def hardware(self) -> dict | None:
+        """The last probe, in a line or two."""
+        facts = self.facts()
+        if not facts:
+            return None
+        cpu = facts.get("cpu") or {}
+        return {
+            "cpu": cpu.get("model"),
+            "threads": cpu.get("threads"),
+            "memory_mib": facts.get("memory_mib"),
+            "gpus": [g.get("name") for g in facts.get("gpus") or [] if not g.get("integrated")],
+            "disks": len(facts.get("disks") or []),
+            "pve_version": facts.get("pve_version"),
         }
 
     def state(self, authed: bool, client: str = "") -> dict:
@@ -772,6 +807,9 @@ class App:
             "has_password": has_password,
             "install": self.install(),
             "probed": (self.home / "probe" / "latest" / "facts.json").is_file(),
+            "hardware": self.hardware(),
+            "last_jobs": self.last_jobs(),
+            "remote_agents_ready": self.guest_ip("nullbill") is not None and self.guest_ip("vpn") is not None,
             "choices": self.choices(),
             "disks": self.disks(),
             "gpus": self.gpus(),
@@ -786,6 +824,25 @@ class App:
             "lan": {"state": lan.state(self.home), "via_vpn": self.via_vpn(client), "minutes": lan.REVERT_AFTER_S // 60},
             "job": self.job_view(latest) | {"text": ""} if latest else None,
         }
+
+
+def plan_summary(plan: dict) -> dict:
+    """The plan's memory and guests, for the page's table."""
+    host = plan.get("host") or {}
+    guests = [
+        {
+            "name": name,
+            "kind": g.get("kind"),
+            "zone": g.get("zone"),
+            "cores": g.get("cores"),
+            "memory_mib": g.get("memory_mib"),
+            "count": g.get("count"),
+            "installed": bool(g.get("installed")),
+        }
+        for name, g in (plan.get("guests") or {}).items()
+    ]
+    memory = {k: host.get(k) for k in ("host_mib", "reserve_mib", "guests_mib", "limits_mib", "unallocated_mib")}
+    return {"memory": memory, "guests": guests}
 
 
 def offset(query: str) -> int:

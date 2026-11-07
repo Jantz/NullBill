@@ -177,7 +177,7 @@ def test_choices_write_config_and_probe_gives_a_plan(site):
     assert client.call("/api/choices", {"workloads": ["agents"], "owner_login": "not an email"})[0] == 400
     choices = {"workloads": ["agents", "linux-ci", "bogus"], "backups": False, "owner_login": "owner-a@example.internal"}
     status, data = client.call("/api/choices", choices)
-    assert status == 200 and data["plan"] == {"text": None, "errors": [], "tailnet_policy": None}
+    assert status == 200 and data["plan"] == {"text": None, "errors": [], "advice": [], "summary": None, "tailnet_policy": None}
     config = yaml.safe_load((app.home / "config.yaml").read_text())
     assert config["target"] == {"ssh": "root@192.0.2.10"}
     assert config["intent"] == {"workloads": ["agents", "linux-ci"]}
@@ -215,6 +215,10 @@ def test_jobs_report_failure_and_offsets(site):
     done = wait(client, job["id"])
     assert done["state"] == "failed" and done["rc"] == 3
     assert done["text"] == "ran apply --stage host\n"
+    # It said nothing of why, and the page says so, at the first stage.
+    assert done["progress"]["steps"][0]["status"] == "failed"
+    assert done["progress"]["error"]["message"].startswith("It ended without saying why")
+    assert client.call("/api/state")[1]["last_jobs"]["apply"]["state"] == "failed"
     later = client.call(f"/api/jobs/{job['id']}?offset={done['offset']}")[1]
     assert later["text"] == ""
 

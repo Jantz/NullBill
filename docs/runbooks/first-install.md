@@ -274,9 +274,10 @@ URL and the agent credential if you made them.
      fully (part 2), and only if you need to.
    - **Your Tailscale login**: exactly as noted in part 1.
    - Press **Save and plan**.
-6. **4. Check the plan**: any errors are listed there. Each one says what does
-   not fit; change your choices in step 3 and save again until none are
-   left. Open **Plan** and check: the system disk shows as `use: system`, a
+6. **4. Check the plan**: a green box says the plan fits and how the memory
+   is shared out; a red box lists what does not fit and what to change.
+   Change your choices in step 3 and save again until it is green. Open
+   **The full plan** and check: the system disk shows as `use: system`, a
    backup disk as `use: pbs`, a kept disk as `use: legacy` with each
    partition it keeps.
 7. **5. Get alerts on your phone**: in the ntfy app, add a subscription to
@@ -296,12 +297,12 @@ URL and the agent credential if you made them.
    and **OAuth client secret** and press **Save**. You can skip Tailscale
    for now: the vpn stage then waits and everything else still runs, but
    the page stays reachable only from home.
-10. **8. Build it**: press **Run setup**. The log shows each stage: render,
-    tailnet, host, tofu, router, proxy, updates, ca, postgres, monitoring,
-    forgejo, files, ci, agents, logs, backups, vpn, verify. The first run
-    downloads images and packages and takes a while; tofu, ci and the first
-    backup are the longest. Without an auth key yet, the vpn stage reports
-    `vpn: waiting for a Tailscale auth key`. That is expected.
+10. **8. Build it**: press **Run setup**. The page lists every stage, ticks
+    each one off as it finishes and shows what the running one does now;
+    **Full log** has every line. The first run downloads images and packages
+    and takes a while; creating the guests, building the CI images and the
+    first backup are the longest. Without an auth key yet, the vpn stage
+    reports `vpn: waiting for a Tailscale auth key`. That is expected.
 
     If a stage fails, see [If a stage fails](#if-a-stage-fails).
 11. **Backups only: copy the backup encryption key** now, while the Proxmox
@@ -396,11 +397,13 @@ Tailscale.
 
 ## If a stage fails
 
-The log names the stage and the playbook or command. Copy the last 50 lines
-of the log into the chat. Leave out anything you consider private; the log
-carries addresses on your network and guest names, not secrets. Fix the
-cause and press **Run setup** again; stages that already finished change
-nothing the second time.
+The page marks the stage that stopped in red and says what went wrong, the
+step that failed with its own message, and what to do. Press **Copy the
+details** and paste them into the chat if the advice does not settle it:
+it copies that summary and the last 60 lines of the log. Leave out anything
+you consider private; the log carries addresses on your network and guest
+names, not secrets. Fix the cause and press **Run setup again**; stages that
+already finished change nothing the second time.
 
 ## After the server was off for a day or more
 

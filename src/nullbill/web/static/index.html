@@ -8,168 +8,296 @@
 <script src="/app.js" defer></script>
 </head>
 <body>
-<header>
-  <h1>NullBill</h1>
-  <button id="logout" class="link" hidden>Sign out</button>
+<header class="top">
+  <div class="brand"><span class="logo" aria-hidden="true"></span>NullBill</div>
+  <div class="top-right">
+    <span id="conn" class="conn" role="status" hidden></span>
+    <button id="logout" class="link" hidden>Sign out</button>
+  </div>
 </header>
+
+<div id="toast" class="toast" role="alert" hidden>
+  <span id="toast-text"></span>
+  <button type="button" id="toast-close" class="link" aria-label="Dismiss">Dismiss</button>
+</div>
+
+<button type="button" id="jobbar" class="jobbar" hidden>
+  <span class="spin" aria-hidden="true"></span>
+  <span id="jobbar-text"></span>
+  <span class="jobbar-go">Show progress</span>
+</button>
+
 <main>
-  <section id="login" hidden>
+  <p id="loading" class="loading"><span class="spin" aria-hidden="true"></span> Loading…</p>
+
+  <section id="login" class="card narrow" hidden>
     <h2>Sign in</h2>
     <p id="login-hint"></p>
-    <form id="login-form">
-      <input id="secret" type="password" autocomplete="current-password" required>
-      <button type="submit">Sign in</button>
+    <form id="login-form" novalidate>
+      <label>Setup code or password
+        <input id="secret" type="password" autocomplete="current-password">
+      </label>
+      <div class="actions">
+        <button type="submit">Sign in</button>
+        <p class="feedback" id="login-result" role="status" aria-live="polite"></p>
+      </div>
     </form>
   </section>
 
-  <section id="password" hidden>
+  <section id="password" class="card narrow" hidden>
     <h2>1. Choose a password</h2>
     <p>From now on you sign in with this password instead of the setup code. Use at least 12 characters and keep it in your password manager.</p>
-    <form id="password-form">
-      <input id="new-password" type="password" autocomplete="new-password" minlength="12" required>
-      <button type="submit">Save password</button>
+    <form id="password-form" novalidate>
+      <label>New password
+        <input id="new-password" type="password" autocomplete="new-password">
+      </label>
+      <p class="hint" id="password-count"></p>
+      <div class="actions">
+        <button type="submit">Save password</button>
+        <p class="feedback" id="password-result" role="status" aria-live="polite"></p>
+      </div>
     </form>
   </section>
 
-  <div id="setup" hidden>
-    <section id="status">
-      <h2>Status</h2>
-      <p id="status-summary">Checking…</p>
-      <ul id="status-alerts" class="alerts"></ul>
-      <ul id="status-facts"></ul>
-    </section>
+  <div id="setup" class="layout" hidden>
+    <nav class="overview" aria-label="Setup steps">
+      <h2>Setup</h2>
+      <p id="overview-summary" class="overview-summary"></p>
+      <ol id="overview-list"></ol>
+    </nav>
 
-    <section>
-      <h2>2. Look at the hardware</h2>
-      <p>NullBill reads the CPU, memory, disks and GPU of this server. It changes nothing.</p>
-      <button data-action="probe">Probe the server</button>
-      <span id="probed"></span>
-    </section>
+    <div class="steps">
+      <section id="status" class="card status">
+        <div class="status-head">
+          <span id="status-dot" class="dot" aria-hidden="true"></span>
+          <h2>Server status</h2>
+        </div>
+        <p id="status-summary">Checking…</p>
+        <ul id="status-alerts" class="alerts"></ul>
+        <ul id="status-facts" class="facts"></ul>
+      </section>
 
-    <section>
-      <h2>3. Choose what to run</h2>
-      <form id="choices-form">
-        <fieldset id="workloads"></fieldset>
-        <label><input type="checkbox" id="backups"> Nightly backups (needs a second disk to survive a disk failure)</label>
-        <label><input type="checkbox" id="console"> On-site screen: show this page on a monitor plugged into the server, with its keyboard and mouse (uses about 512 MB of memory)</label>
-        <fieldset id="gpus" hidden>
-          <legend>Graphics card</legend>
-          <p>Local AI models run in the card's own memory. Proxmox cannot read its size until a driver is installed, so give it here, as on the box or in the card's specifications.</p>
-          <div id="gpu-list"></div>
-        </fieldset>
-        <fieldset id="disks" hidden>
-          <legend>Other disks</legend>
-          <p>Disks besides the one Proxmox runs from, as the probe found them. Nothing happens to a disk you leave alone. Keeping a disk from your old PC shares its files to you over Tailscale, read-only unless you allow changes. NullBill does not back a kept disk up, so keep a copy of anything you cannot lose. See <a href="https://github.com/Jantz/NullBill/blob/main/docs/runbooks/legacy-disk.md" rel="noopener noreferrer" target="_blank">legacy-disk.md</a>.</p>
-          <div id="disk-list"></div>
-        </fieldset>
-        <label>Your Tailscale login (email)
-          <input id="owner-login" type="email" required>
-        </label>
-        <button type="submit">Save and plan</button>
-      </form>
-      <div id="files-info" hidden>
-        <h3>Your kept disks</h3>
-        <p>Once setup has run, open these from a device signed in to your Tailscale, as user <code id="files-user"></code>. Windows: File Explorer's address bar. macOS: Finder, Go, Connect to Server. Linux: your file manager's Other Locations.</p>
-        <ul id="files-shares"></ul>
-        <button type="button" id="files-reveal" class="secondary">Show the password</button>
-        <code id="files-password"></code>
-      </div>
-    </section>
+      <section class="card step" id="step-1" data-step="1" data-title="Choose a password">
+        <header class="step-head"><span class="badge">1</span><h2>Choose a password</h2><span class="pill"></span></header>
+        <p>Your password is set. Sign out and back in with it whenever you like.</p>
+      </section>
 
-    <section>
-      <h2>4. Check the plan</h2>
-      <p id="plan-hint">Probe the server and save your choices to see what NullBill will build.</p>
-      <ul id="plan-errors" class="errors"></ul>
-      <details id="plan-details"><summary>Plan</summary><pre id="plan"></pre></details>
-    </section>
+      <section class="card step" id="step-2" data-step="2" data-title="Look at the hardware">
+        <header class="step-head"><span class="badge">2</span><h2>Look at the hardware</h2><span class="pill"></span></header>
+        <p>NullBill reads the CPU, memory, disks and GPU of this server. It changes nothing.</p>
+        <ul id="hardware" class="facts" hidden></ul>
+        <div class="actions">
+          <button type="button" data-action="probe">Probe the server</button>
+          <p class="feedback" id="probe-result" role="status" aria-live="polite"></p>
+        </div>
+        <div class="job-slot" data-for="probe"></div>
+      </section>
 
-    <section>
-      <h2>5. Get alerts on your phone</h2>
-      <p>Install the free <a href="https://ntfy.sh/" rel="noopener noreferrer" target="_blank">ntfy</a> app and subscribe to this topic. It needs no account. Anyone who knows the topic can read your alerts, so keep it to yourself.</p>
-      <p><code id="ntfy-topic"></code></p>
-      <form id="alerts-form">
-        <label>Optional: a <a href="https://healthchecks.io/" rel="noopener noreferrer" target="_blank">Healthchecks.io</a> ping URL. Make a free check with a 10 minute period and 10 minute grace. It tells you when the server goes silent, for example in a power cut.
-          <input id="healthchecks-url" type="url" placeholder="https://hc-ping.com/...">
-        </label>
-        <button type="submit">Save</button>
-        <button type="button" id="test-alerts" class="secondary">Send a test alert</button>
-        <span id="alerts-result"></span>
-      </form>
-    </section>
+      <section class="card step" id="step-3" data-step="3" data-title="Choose what to run">
+        <header class="step-head"><span class="badge">3</span><h2>Choose what to run</h2><span class="pill"></span></header>
+        <form id="choices-form" novalidate>
+          <fieldset id="workloads"><legend>Workloads</legend></fieldset>
+          <fieldset>
+            <legend>Extras</legend>
+            <label class="check"><input type="checkbox" id="backups"><span>Nightly backups <small>Needs a second, empty disk to survive a disk failure.</small></span></label>
+            <label class="check"><input type="checkbox" id="console"><span>On-site screen <small>Shows this page on a monitor plugged into the server, with its keyboard and mouse. Uses about 512 MB of memory.</small></span></label>
+          </fieldset>
+          <fieldset id="gpus" hidden>
+            <legend>Graphics card</legend>
+            <p>Local AI models run in the card's own memory. Proxmox cannot read its size until a driver is installed, so give it here, as on the box or in the card's specifications.</p>
+            <div id="gpu-list"></div>
+          </fieldset>
+          <fieldset id="disks" hidden>
+            <legend>Other disks</legend>
+            <p>Disks besides the one Proxmox runs from, as the probe found them. Nothing happens to a disk you leave alone. Keeping a disk from your old PC shares its files to you over Tailscale, read-only unless you allow changes. NullBill does not back a kept disk up, so keep a copy of anything you cannot lose. See <a href="https://github.com/Jantz/NullBill/blob/main/docs/runbooks/legacy-disk.md" rel="noopener noreferrer" target="_blank">legacy-disk.md</a>.</p>
+            <div id="disk-list"></div>
+          </fieldset>
+          <label>Your Tailscale login (email)
+            <input id="owner-login" type="email" autocomplete="email" placeholder="you@example.com">
+          </label>
+          <div class="actions">
+            <button type="submit">Save and plan</button>
+            <p class="feedback" id="choices-result" role="status" aria-live="polite"></p>
+          </div>
+        </form>
+        <div id="files-info" class="subcard" hidden>
+          <h3>Your kept disks</h3>
+          <p>Once setup has run, open these from a device signed in to your Tailscale, as user <code id="files-user"></code>. Windows: File Explorer's address bar. macOS: Finder, Go, Connect to Server. Linux: your file manager's Other Locations.</p>
+          <ul id="files-shares"></ul>
+          <div class="actions">
+            <button type="button" id="files-reveal" class="secondary">Show the password</button>
+            <p class="feedback" id="files-result" role="status" aria-live="polite"></p>
+          </div>
+          <code id="files-password"></code>
+        </div>
+      </section>
 
-    <section>
-      <h2>6. Sign in the coding agent</h2>
-      <p>Only needed if you chose coding agents. Paste an Anthropic API key, or run <code>claude setup-token</code> on a computer where you use Claude Code with a Pro, Max, Team or Enterprise plan and paste the token it prints. That token lasts a year. It is kept encrypted on this server and shown to nobody.</p>
-      <form id="agent-form">
-        <label>API key or subscription token
-          <input id="agent-credential" type="password" autocomplete="off" placeholder="sk-ant-...">
-        </label>
-        <button type="submit">Save</button>
-        <span id="agent-result"></span>
-      </form>
-    </section>
+      <section class="card step" id="step-4" data-step="4" data-title="Check the plan">
+        <header class="step-head"><span class="badge">4</span><h2>Check the plan</h2><span class="pill"></span></header>
+        <p id="plan-hint">Probe the server and save your choices to see what NullBill will build.</p>
+        <p id="plan-stale" class="note warn" hidden>You changed your choices in step 3 without saving. This plan is for the choices you saved last. Press <b>Save and plan</b> to see the new one.</p>
+        <div id="plan-problems" class="box error" hidden>
+          <h3>The plan does not fit yet</h3>
+          <ul id="plan-errors"></ul>
+          <h4>What to do</h4>
+          <ul id="plan-advice"></ul>
+          <a href="#step-3" class="button secondary">Change the choices in step 3</a>
+        </div>
+        <div id="plan-ok" hidden>
+          <div class="box ok"><h3>The plan fits this server</h3><p id="plan-ok-text"></p></div>
+          <div id="memory" class="memory" aria-hidden="true"><span class="m-reserve"></span><span class="m-guests"></span><span class="m-free"></span></div>
+          <ul class="legend" id="memory-legend"></ul>
+          <details><summary>What it will build</summary>
+            <table class="guests"><thead><tr><th>Guest</th><th>Kind</th><th>Zone</th><th>Cores</th><th>Memory limit</th></tr></thead><tbody id="plan-guests"></tbody></table>
+          </details>
+        </div>
+        <details id="plan-details"><summary>The full plan</summary><pre id="plan"></pre></details>
+      </section>
 
-    <section>
-      <h2>7. Reach it from anywhere</h2>
-      <p>Optional. Your server joins your free <a href="https://tailscale.com/" rel="noopener noreferrer" target="_blank">Tailscale</a> network, so this page and your guests are reachable from your own devices wherever you are. Until then everything stays on your local network.</p>
-      <ol>
-        <li>Sign in to the Tailscale admin console with the login you gave in step 3. Under <b>Settings, Trust credentials</b>, add an <b>OAuth client</b> with the scope <b>Policy file</b> set to write, and the scopes the console adds to it. Paste its client ID and secret below. Setup uses it to put the policy below in place each run, and stops if Tailscale refuses it; the policy lets you, and nobody else, reach the server.</li>
-        <li>Run setup once, so the policy, which defines the tag <code>tag:nb-vpn</code>, is in place. Then under <b>Settings, Keys</b>, press <b>Generate auth key</b>. Leave <b>Reusable</b> and <b>Ephemeral</b> off, turn on <b>Pre-approved</b> and <b>Tags</b> with <code>tag:nb-vpn</code>, and press <b>Generate key</b>.</li>
-        <li>Paste the key here and run setup again. The server uses it once to join, then forgets it.</li>
-      </ol>
-      <p id="tailnet-hint">The policy appears once the plan is ready.</p>
-      <details id="tailnet-details" hidden><summary>Tailscale policy</summary><pre id="tailnet-policy"></pre></details>
-      <form id="tailscale-client-form">
-        <label>OAuth client ID
-          <input id="tailscale-client-id" autocomplete="off">
-        </label>
-        <label>OAuth client secret
-          <input id="tailscale-client-secret" type="password" autocomplete="off" placeholder="tskey-client-...">
-        </label>
-        <button type="submit">Save</button>
-        <span id="tailscale-client-result"></span>
-      </form>
-      <form id="vpn-form">
-        <label>Tailscale auth key
-          <input id="tailscale-key" type="password" autocomplete="off" placeholder="tskey-auth-...">
-        </label>
-        <button type="submit">Save</button>
-        <span id="vpn-result"></span>
-      </form>
-      <h3>Agents on other computers</h3>
-      <p>A coding agent elsewhere, such as on your laptop, can run the checks and read their output over Tailscale, and nothing else. Name it and the page shows its token once; revoke it here when it is done. An agent on a computer that is not signed in as you needs that computer on your tailnet with an auth key tagged <code>tag:nb-agent</code>, which reaches only this page. See <a href="https://github.com/Jantz/NullBill/blob/main/docs/runbooks/agent-access.md" rel="noopener noreferrer" target="_blank">agent-access.md</a> for the calls.</p>
-      <form id="remote-agent-form">
-        <label>Agent name
-          <input id="remote-agent-name" autocomplete="off" placeholder="laptop">
-        </label>
-        <button type="submit">Make a token</button>
-      </form>
-      <pre id="remote-agent-token" hidden></pre>
-      <ul id="remote-agents"></ul>
-    </section>
+      <section class="card step" id="step-5" data-step="5" data-title="Get alerts on your phone">
+        <header class="step-head"><span class="badge">5</span><h2>Get alerts on your phone</h2><span class="pill"></span></header>
+        <p>Install the free <a href="https://ntfy.sh/" rel="noopener noreferrer" target="_blank">ntfy</a> app and subscribe to this topic. It needs no account. Anyone who knows the topic can read your alerts, so keep it to yourself.</p>
+        <p class="copyline"><code id="ntfy-topic"></code> <button type="button" id="copy-topic" class="link">Copy</button></p>
+        <form id="alerts-form" novalidate>
+          <label>Optional: a <a href="https://healthchecks.io/" rel="noopener noreferrer" target="_blank">Healthchecks.io</a> ping URL. Make a free check with a 10 minute period and 10 minute grace. It tells you when the server goes silent, for example in a power cut.
+            <input id="healthchecks-url" type="url" placeholder="https://hc-ping.com/...">
+          </label>
+          <div class="actions">
+            <button type="submit">Save</button>
+            <button type="button" id="test-alerts" class="secondary">Send a test alert</button>
+            <p class="feedback" id="alerts-result" role="status" aria-live="polite"></p>
+          </div>
+        </form>
+      </section>
 
-    <section>
-      <h2>8. Build it</h2>
-      <p>Each step can be run again safely. If one fails, fix the cause and press the button again.</p>
-      <button data-action="apply">Run setup</button>
-      <button data-action="verify" class="secondary">Run checks</button>
-    </section>
+      <section class="card step" id="step-6" data-step="6" data-title="Sign in the coding agent">
+        <header class="step-head"><span class="badge">6</span><h2>Sign in the coding agent</h2><span class="pill"></span></header>
+        <p>Only needed if you chose coding agents. Paste an Anthropic API key, or run <code>claude setup-token</code> on a computer where you use Claude Code with a Pro, Max, Team or Enterprise plan and paste the token it prints. That token lasts a year. It is kept encrypted on this server and shown to nobody.</p>
+        <p id="agent-saved" class="note ok" hidden></p>
+        <form id="agent-form" novalidate>
+          <label><span id="agent-label">API key or subscription token</span>
+            <input id="agent-credential" type="password" autocomplete="off" placeholder="sk-ant-...">
+          </label>
+          <div class="actions">
+            <button type="submit">Save</button>
+            <p class="feedback" id="agent-result" role="status" aria-live="polite"></p>
+          </div>
+        </form>
+      </section>
 
-    <section>
-      <h2>9. Close the home network</h2>
-      <p>Once you reach this page over Tailscale, close Proxmox's web UI and SSH to your home network, so only Tailscale gets in. If you do not then press <b>Keep it closed</b> on this page opened over Tailscale within <span id="lan-minutes">15</span> minutes, the server opens it again by itself, so a mistake cannot lock you out. Once closed, this page also answers only over Tailscale and on the on-site screen.</p>
-      <p id="lan-status"></p>
-      <button data-action="close-lan" id="lan-close">Close the home network</button>
-      <button data-action="keep-lan-closed" id="lan-keep">Keep it closed</button>
-      <button data-action="open-lan" id="lan-open" class="secondary">Open it again</button>
-    </section>
+      <section class="card step" id="step-7" data-step="7" data-title="Reach it from anywhere">
+        <header class="step-head"><span class="badge">7</span><h2>Reach it from anywhere</h2><span class="pill"></span></header>
+        <p>Optional. Your server joins your free <a href="https://tailscale.com/" rel="noopener noreferrer" target="_blank">Tailscale</a> network, so this page and your guests are reachable from your own devices wherever you are. Until then everything stays on your local network.</p>
+        <ol class="howto">
+          <li>Sign in to the Tailscale admin console with the login you gave in step 3. Under <b>Settings, Trust credentials</b>, add an <b>OAuth client</b> with the scope <b>Policy file</b> set to write, and the scopes the console adds to it. Paste its client ID and secret below. Setup uses it to put the policy below in place each run, and stops if Tailscale refuses it; the policy lets you, and nobody else, reach the server.</li>
+          <li>Run setup once, so the policy, which defines the tag <code>tag:nb-vpn</code>, is in place. Then under <b>Settings, Keys</b>, press <b>Generate auth key</b>. Leave <b>Reusable</b> and <b>Ephemeral</b> off, turn on <b>Pre-approved</b> and <b>Tags</b> with <code>tag:nb-vpn</code>, and press <b>Generate key</b>.</li>
+          <li>Paste the key here and run setup again. The server uses it once to join, then forgets it.</li>
+        </ol>
+        <p id="tailnet-hint" class="hint">The policy appears once the plan is ready.</p>
+        <details id="tailnet-details" hidden><summary>Tailscale policy</summary><pre id="tailnet-policy"></pre></details>
+        <form id="tailscale-client-form" class="subcard" novalidate>
+          <h3>a. OAuth client</h3>
+          <p id="tailscale-client-saved" class="note ok" hidden>An OAuth client is saved; each setup run puts the policy in place with it. Paste a new one here to replace it.</p>
+          <label>OAuth client ID
+            <input id="tailscale-client-id" autocomplete="off">
+          </label>
+          <label>OAuth client secret
+            <input id="tailscale-client-secret" type="password" autocomplete="off" placeholder="tskey-client-...">
+          </label>
+          <div class="actions">
+            <button type="submit">Save</button>
+            <p class="feedback" id="tailscale-client-result" role="status" aria-live="polite"></p>
+          </div>
+        </form>
+        <form id="vpn-form" class="subcard" novalidate>
+          <h3>b. Auth key</h3>
+          <p id="vpn-saved" class="note" hidden></p>
+          <label>Tailscale auth key
+            <input id="tailscale-key" type="password" autocomplete="off" placeholder="tskey-auth-...">
+          </label>
+          <div class="actions">
+            <button type="submit">Save</button>
+            <p class="feedback" id="vpn-result" role="status" aria-live="polite"></p>
+          </div>
+        </form>
+        <div class="subcard">
+          <h3>Agents on other computers</h3>
+          <p>A coding agent elsewhere, such as on your laptop, can run the checks and read their output over Tailscale, and nothing else. Name it and the page shows its token once; revoke it here when it is done. An agent on a computer that is not signed in as you needs that computer on your tailnet with an auth key tagged <code>tag:nb-agent</code>, which reaches only this page. See <a href="https://github.com/Jantz/NullBill/blob/main/docs/runbooks/agent-access.md" rel="noopener noreferrer" target="_blank">agent-access.md</a> for the calls.</p>
+          <p id="remote-agent-wait" class="note" hidden>This needs a plan first: finish steps 2 to 4.</p>
+          <form id="remote-agent-form" novalidate>
+            <label>Agent name
+              <input id="remote-agent-name" autocomplete="off" placeholder="laptop">
+            </label>
+            <div class="actions">
+              <button type="submit">Make a token</button>
+              <p class="feedback" id="remote-agent-result" role="status" aria-live="polite"></p>
+            </div>
+          </form>
+          <pre id="remote-agent-token" hidden></pre>
+          <ul id="remote-agents" class="plain"></ul>
+        </div>
+      </section>
 
-    <section id="job-section" hidden>
-      <h2 id="job-title"></h2>
-      <pre id="job-log"></pre>
-    </section>
+      <section class="card step" id="step-8" data-step="8" data-title="Build it">
+        <header class="step-head"><span class="badge">8</span><h2>Build it</h2><span class="pill"></span></header>
+        <p>Setup runs one stage after another and shows each one here. It is safe to run again: if it stops, fix what it names and press <b>Run setup</b> again. The first run downloads images and packages and takes a while.</p>
+        <ul id="ready-list" class="ready"></ul>
+        <div class="actions">
+          <button type="button" data-action="apply">Run setup</button>
+          <button type="button" data-action="verify" class="secondary">Run checks</button>
+          <p class="feedback" id="apply-result" role="status" aria-live="polite"></p>
+        </div>
+        <div class="job-slot" data-for="apply verify rebake-ci"></div>
+      </section>
+
+      <section class="card step" id="step-9" data-step="9" data-title="Close the home network">
+        <header class="step-head"><span class="badge">9</span><h2>Close the home network</h2><span class="pill"></span></header>
+        <p>Once you reach this page over Tailscale, close Proxmox's web UI and SSH to your home network, so only Tailscale gets in. If you do not then press <b>Keep it closed</b> on this page opened over Tailscale within <span id="lan-minutes">15</span> minutes, the server opens it again by itself, so a mistake cannot lock you out. Once closed, this page also answers only over Tailscale and on the on-site screen.</p>
+        <p id="lan-status" class="note"></p>
+        <div class="actions">
+          <button type="button" data-action="close-lan" id="lan-close">Close the home network</button>
+          <button type="button" data-action="keep-lan-closed" id="lan-keep">Keep it closed</button>
+          <button type="button" data-action="open-lan" id="lan-open" class="secondary">Open it again</button>
+          <p class="feedback" id="lan-result" role="status" aria-live="polite"></p>
+        </div>
+        <div class="job-slot" data-for="close-lan keep-lan-closed open-lan"></div>
+      </section>
+    </div>
   </div>
-  <p id="error" class="errors" role="alert"></p>
+
+  <template id="job-template">
+    <div class="job" tabindex="-1">
+      <div class="job-head">
+        <span class="job-icon" aria-hidden="true"></span>
+        <div>
+          <h3 class="job-title"></h3>
+          <p class="job-sub"></p>
+        </div>
+      </div>
+      <div class="bar" role="progressbar" aria-valuemin="0"><span class="fill"></span></div>
+      <p class="job-now" aria-live="polite"></p>
+      <div class="box error job-error" hidden>
+        <h4>What went wrong</h4>
+        <p class="job-message"></p>
+        <ul class="job-more"></ul>
+        <div class="job-detail" hidden><h4 class="job-detail-title"></h4><pre class="job-detail-text"></pre></div>
+        <h4>What to do</h4>
+        <p class="job-advice"></p>
+        <div class="actions">
+          <button type="button" class="job-retry">Run setup again</button>
+          <button type="button" class="secondary job-copy">Copy the details</button>
+          <p class="feedback job-copy-result" role="status" aria-live="polite"></p>
+        </div>
+      </div>
+      <div class="box ok job-ok" hidden><h4 class="job-ok-title"></h4><p class="job-ok-text"></p></div>
+      <div class="job-verify" hidden>
+        <p class="counts"></p>
+        <ul class="problems"></ul>
+      </div>
+      <details class="job-stages" open><summary>Stages</summary><ol class="stages"></ol></details>
+      <details class="job-log"><summary>Full log</summary><pre></pre></details>
+    </div>
+  </template>
 </main>
 </body>
 </html>

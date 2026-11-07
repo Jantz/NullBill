@@ -1475,6 +1475,8 @@ def stage_verify(ctx: Context) -> None:
 
 
 Stage = tuple[str, Callable[[Context], None]]
+STAGE_MARK = "--- stage "
+STAGE_TIME = "%Y-%m-%d %H:%M:%S"
 STAGES: list[Stage] = [
     ("render", stage_render),
     ("tailnet", stage_tailnet),
@@ -1503,6 +1505,8 @@ def run_apply(ctx: Context, stages: list[Stage] = STAGES, only: str | None = Non
         raise NullBillError(f"unknown stage {only!r}; stages are {', '.join(names)}")
     for name, stage in stages:
         if only in (None, name):
+            # The page follows apply by these lines (nullbill/web/progress.py).
+            print(f"{STAGE_MARK}{name}, {time.strftime(STAGE_TIME)}", flush=True)
             stage(ctx)
 
 
