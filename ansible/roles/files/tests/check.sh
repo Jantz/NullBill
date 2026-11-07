@@ -65,15 +65,19 @@ client=$!
 sleep 2
 smbstatus 2>/dev/null >/tmp/smbstatus.txt
 wait "$client"
-grep -E '^old-hdd ' /tmp/smbstatus.txt | grep -qE 'AES-(128|256)-(GCM|CCM)' || { cat /tmp/smbstatus.txt; fail "the session was not encrypted"; }
+grep -qE '^old-hdd .*AES-(128|256)-(GCM|CCM)' /tmp/smbstatus.txt || { cat /tmp/smbstatus.txt; fail "the session was not encrypted"; }
 pass "SMB before 3 is refused, and a client asking for no encryption is encrypted anyway"
 
-for _ in $(seq 20); do journalctl -q --no-pager -t smbd | grep -q 'NT_STATUS_WRONG_PASSWORD' && break; sleep 0.5; done
-journalctl -q --no-pager -t smbd | grep -q 'NT_STATUS_WRONG_PASSWORD' || { journalctl -q --no-pager | tail; fail "failed logon in the journal"; }
+# Into a file first: grep -q stops at the first match, and under pipefail
+# journalctl's SIGPIPE would fail the pipeline.
+smbd_journal() { journalctl -q --no-pager -t smbd >/tmp/smbd-journal.txt; }
+for _ in $(seq 20); do smbd_journal && grep -q 'NT_STATUS_WRONG_PASSWORD' /tmp/smbd-journal.txt && break; sleep 0.5; done
+smbd_journal
+grep -q 'NT_STATUS_WRONG_PASSWORD' /tmp/smbd-journal.txt || { grep -E 'Auth:' /tmp/smbd-journal.txt; fail "failed logon in the journal"; }
 # The same pattern Loki's FailedLogins rule counts.
 pattern=$(sed -n 's/.*|~ "\([^"]*\)".*/\1/p' /ansible/roles/monitoring/files/loki-rules/nullbill.yml)
-[ "$(journalctl -q --no-pager -t smbd | grep -cE "$pattern")" -ge 1 ] || fail "FailedLogins would not count Samba's failed logon"
-journalctl -q --no-pager -t smbd | grep "nbshare" | grep -vE "$pattern" | grep -q . || fail "a good logon is counted as failed"
+[ "$(grep -cE "$pattern" /tmp/smbd-journal.txt)" -ge 1 ] || fail "FailedLogins would not count Samba's failed logon"
+[ "$(grep "nbshare" /tmp/smbd-journal.txt | grep -cvE "$pattern")" -ge 1 ] || fail "a good logon is counted as failed"
 pass "logons reach the journal under smbd, and FailedLogins counts the failed ones only"
 
 # A new password from apply replaces the old one; the old one stops working.
