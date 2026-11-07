@@ -48,8 +48,9 @@ If the old PC no longer starts, keep the disk read-only.
 
 ## Open the files
 
-From a device signed in to your Tailscale (or on the home network until you
-close it):
+From a device signed in to your Tailscale. The `files` guest sits in
+NullBill's own network, which the home network has no route to, so a
+device at home needs Tailscale too:
 
 - **Windows**: in File Explorer's address bar, type `\\10.42.1.23\data`
   (the address the page shows). Sign in as `nbshare` with the password.
@@ -103,6 +104,9 @@ Both ask you to type the end of its name.
 
 The copy needs room: the files plus 5 %, and the plan shrinks the CI runners'
 space to make it. If it does not fit, the plan says so and nothing happens.
+Files Windows stored compressed (NTFS compression) take their full size in
+the copy, more than the disk shows as used; if the copy runs out of room it
+stops, nothing is recorded and the disk is not erased.
 Copying works when the server's storage is LVM, the Proxmox default; on a ZFS
 install, copy the files off yourself over the share, then choose the erase.
 

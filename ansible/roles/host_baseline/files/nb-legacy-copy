@@ -164,7 +164,8 @@ transfer() {
   done) &
   ticker=$!
   rc=0
-  rsync -aH --numeric-ids "$1/" "$2/" >&2 || rc=$?
+  # Sparse files stay sparse (-S), so they need no more room than on the disk.
+  rsync -aHS --numeric-ids "$1/" "$2/" >&2 || rc=$?
   kill "$ticker" 2>/dev/null || true
   [ "$rc" = 0 ] || die "rsync failed (exit $rc); nothing recorded, $3 is as it was"
   sync
