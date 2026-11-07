@@ -33,6 +33,15 @@ groups:
         labels: {severity: page}
         annotations:
           summary: "{{ $labels.instance }} {{ $labels.mountpoint }} has under 10% free"
+      # The plan counts containers at part of their limit (catalog.yaml,
+      # host.container_share_pct); when they all fill up at once the host
+      # runs short and starts swapping.
+      - alert: HostMemoryLow
+        expr: node_memory_MemAvailable_bytes{job="host"} / node_memory_MemTotal_bytes{job="host"} < 0.10
+        for: 15m
+        labels: {severity: warn}
+        annotations:
+          summary: "The PVE host has under 10% of its memory available; stop a guest or lower a container's limit"
       - alert: CertificateExpiresSoon
         # step-ca certificates last 24 h and renew with 8 h left, so under
         # 6 h means renewal has stopped.

@@ -255,11 +255,15 @@ URL and the agent credential if you made them.
    manager. From now on you sign in with it.
 4. **2. Look at the hardware**: press **Probe the server**. It only reads.
 5. **3. Choose what to run**:
-   - **AI agents**, plus either **Linux CI runners** or **A Windows desktop
-     VM**: at 16 GB both do not fit together. The Windows desktop needs its
-     ISO uploaded first ([windows-desktop.md](windows-desktop.md)). Leave
-     local AI models and Windows CI runners off: they do not fit in 16 GB
-     and are not built yet.
+   - Any of **AI agents**, **Linux CI runners**, **Local AI models on the
+     GPU** and **A Windows desktop VM**: on 16 GB they fit together, with
+     one CI runner at a time. Containers count at half their memory limit
+     (they take memory only as they use it); VMs count in full. The Windows
+     desktop needs its ISO uploaded first
+     ([windows-desktop.md](windows-desktop.md)). Leave **Windows CI
+     runners** off: they are not built yet.
+   - **Graphics card**: if it shows, type the card's memory in GB (12 for
+     an RTX 4070). Proxmox cannot read it before a driver is installed.
    - Tick **Nightly backups** only with a backup disk from part 2.
    - Tick **On-site screen** only if you plugged the monitor into the
      motherboard (part 3) and turned on iGPU Multi-Monitor (part 4).
@@ -408,8 +412,7 @@ certificates.
 ## What this run does not cover yet
 
 - Local AI models and Windows CI runners: NullBill makes their guests but
-  does not set up the GPU, the model server or the runners yet, and at
-  16 GB they do not fit. Installing Windows in the desktop VM is done by
+  does not set up the GPU driver, the model server or the runners yet. Installing Windows in the desktop VM is done by
   hand ([windows-desktop.md](windows-desktop.md)).
 - Signing in to Forgejo and Grafana yourself. Setup makes their admin
   passwords and keeps them encrypted on the server, but the page does not

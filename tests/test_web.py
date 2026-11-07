@@ -13,8 +13,9 @@ from pathlib import Path
 
 import pytest
 import yaml
-from fixturedata import fixture_config
+from fixturedata import fixture_config, write_raw
 
+from nullbill.probe import parse
 from nullbill.web import server as web
 
 FAKE_PROBE = """
@@ -677,3 +678,27 @@ def test_a_disk_not_kept_cannot_be_copied(site):
     status, data = client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "copy", "confirm": "D_0002"}}})
     assert status == 400 and "not LVM or LVM-thin" in data["error"]
     assert not (app.home / "config.yaml").exists()
+
+
+def test_the_owner_gives_the_gpu_memory_the_probe_could_not_read(site):
+    """A fresh Proxmox host has no NVIDIA driver, so the probe reads no VRAM;
+    the page asks for it in GB and pins it for that GPU only."""
+    app, client = site
+    sign_in(app, client)
+    run = app.home / "probe" / "run1"
+    facts = parse(write_raw(run / "raw", "mid"))
+    facts["gpus"][0]["vram_mib"] = None
+    (run / "facts.json").write_text(json.dumps(facts))
+    (app.home / "probe" / "latest").symlink_to("run1")
+    gpus = client.call("/api/state")[1]["gpus"]
+    assert [(g["pci"], g["probed_mib"], g["vram_mib"]) for g in gpus] == [("0000:01:00.0", None, None)]
+    choices = {"workloads": ["agents", "inference"], "backups": False, "owner_login": "owner-a@example.internal"}
+    bad = client.call("/api/choices", {**choices, "gpus": {"0000:01:00.0": "twelve"}})
+    assert bad[0] == 400 and "number of GB" in bad[1]["error"]
+    assert client.call("/api/choices", {**choices, "gpus": {"0000:01:00.0": "12", "0000:09:00.0": "8"}})[0] == 200
+    config = yaml.safe_load((app.home / "config.yaml").read_text())
+    assert config["gpus"] == {"0000:01:00.0": {"vram_mib": 12288}}
+    assert client.call("/api/state")[1]["gpus"][0]["vram_mib"] == 12288
+    # Cleared again, the pin goes.
+    client.call("/api/choices", {**choices, "gpus": {"0000:01:00.0": ""}})
+    assert "gpus" not in yaml.safe_load((app.home / "config.yaml").read_text())

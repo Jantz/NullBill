@@ -7,9 +7,12 @@ host:
   host_mib: 257617
   # Left to PVE itself; pin with host.reserve.memory_mib.
   reserve_mib: 4096
-  guests_mib: 100352
+  # VMs in full, containers at 50% of their limit.
+  guests_mib: 89344
+  # Every guest's memory limit added up; containers take theirs only as they use it.
+  limits_mib: 94208
   # Not assigned to any guest.
-  unallocated_mib: 153169
+  unallocated_mib: 164177
   # Off. host.console.enabled shows the NullBill page on a monitor plugged into the server.
   console:
     enabled: false
@@ -182,7 +185,7 @@ guests:
     kind: lxc
     zone: inference
     cores: 2
-    memory_mib: 8192
+    memory_mib: 2048
     disk_gib: 64
     vmid: 2020
     ip: 10.42.4.20

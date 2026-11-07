@@ -52,6 +52,11 @@
         <fieldset id="workloads"></fieldset>
         <label><input type="checkbox" id="backups"> Nightly backups (needs a second disk to survive a disk failure)</label>
         <label><input type="checkbox" id="console"> On-site screen: show this page on a monitor plugged into the server, with its keyboard and mouse (uses about 512 MB of memory)</label>
+        <fieldset id="gpus" hidden>
+          <legend>Graphics card</legend>
+          <p>Local AI models run in the card's own memory. Proxmox cannot read its size until a driver is installed, so give it here, as on the box or in the card's specifications.</p>
+          <div id="gpu-list"></div>
+        </fieldset>
         <fieldset id="disks" hidden>
           <legend>Other disks</legend>
           <p>Disks besides the one Proxmox runs from, as the probe found them. Nothing happens to a disk you leave alone. Keeping a disk from your old PC shares its files to you over Tailscale, read-only unless you allow changes. NullBill does not back a kept disk up, so keep a copy of anything you cannot lose. See <a href="https://github.com/Jantz/NullBill/blob/main/docs/runbooks/legacy-disk.md" rel="noopener noreferrer" target="_blank">legacy-disk.md</a>.</p>

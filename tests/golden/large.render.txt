@@ -1830,7 +1830,7 @@ WantedBy=multi-user.target
           "cores": 2
         },
         "memory": {
-          "dedicated": 8192,
+          "dedicated": 2048,
           "swap": 0
         },
         "disk": {

@@ -161,6 +161,8 @@ $defs:
           properties:
             memory_mib: {type: integer, minimum: 1024}
             below_mib: {type: integer, minimum: 1024}
+        # Percent of a container's memory limit the plan counts as used.
+        container_share_pct: {type: integer, minimum: 10, maximum: 100}
         console:
           type: object
           additionalProperties: false

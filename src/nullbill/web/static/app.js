@@ -145,6 +145,27 @@ function renderDisks(disks) {
   }
 }
 
+function renderGpus(gpus) {
+  const list = $("gpu-list");
+  list.replaceChildren();
+  const unread = gpus.filter((g) => !g.probed_mib);
+  show("gpus", unread.length > 0);
+  for (const gpu of unread) {
+    const label = document.createElement("label");
+    const input = Object.assign(document.createElement("input"),
+      {type: "number", min: "1", max: "256", step: "1", value: gpu.vram_mib ? Math.round(gpu.vram_mib / 1024) : ""});
+    input.dataset.pci = gpu.pci;
+    label.append(`Memory of the ${gpu.name}, in GB `, input);
+    list.append(label);
+  }
+}
+
+function gpuChoices() {
+  const out = {};
+  for (const input of $("gpu-list").querySelectorAll("input")) out[input.dataset.pci] = input.value;
+  return out;
+}
+
 function diskChoices() {
   const out = {};
   for (const box of $("disk-list").querySelectorAll(".disk")) {
@@ -283,6 +304,7 @@ async function refresh() {
   $("probed").textContent = state.probed ? "Done." : "";
   renderWorkloads(state);
   renderDisks(state.disks);
+  renderGpus(state.gpus);
   renderFiles(state.files);
   $("backups").checked = state.choices.backups;
   $("console").checked = state.choices.console;
@@ -349,7 +371,7 @@ document.addEventListener("DOMContentLoaded", () => {
     showError("");
     try {
       const result = await api("/api/choices", {workloads, backups: $("backups").checked, console: $("console").checked,
-        owner_login: $("owner-login").value, disks: diskChoices()});
+        owner_login: $("owner-login").value, disks: diskChoices(), gpus: gpuChoices()});
       renderPlan(result.plan);
       $("plan-details").open = true;
       const state = await api("/api/state");

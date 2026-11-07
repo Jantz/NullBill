@@ -402,6 +402,21 @@ class App:
         path = self.home / "probe" / "latest" / "facts.json"
         return json.loads(path.read_text()) if path.is_file() else None
 
+    # Discrete GPUs: the probe reads their memory through the NVIDIA driver,
+    # which a fresh Proxmox host lacks; then the owner says it on the page.
+    def gpus(self) -> list[dict]:
+        pins = (self.config() or {}).get("gpus") or {}
+        return [
+            {
+                "pci": g["pci"],
+                "name": g["name"],
+                "probed_mib": g["vram_mib"],
+                "vram_mib": g["vram_mib"] or pins.get(g["pci"], {}).get("vram_mib"),
+            }
+            for g in (self.facts() or {}).get("gpus", [])
+            if not g.get("integrated")
+        ]
+
     def disks(self) -> list[dict]:
         facts = self.facts() or {}
         pins = (self.config() or {}).get("disks") or {}
@@ -534,6 +549,8 @@ class App:
                 del host["console"]
         if not host:
             del config["host"]
+        if isinstance(body.get("gpus"), dict):
+            self._gpu_pins(config, body["gpus"])
         if isinstance(body.get("disks"), dict):
             pins = self._disk_pins(config, body["disks"])
             if pins:
@@ -542,6 +559,31 @@ class App:
                 config.pop("disks", None)
         build_model(config)  # validates against the schema before anything is written
         _write_private(self.home / "config.yaml", yaml.safe_dump(config, sort_keys=False))
+
+    def _gpu_pins(self, config: dict, answers: dict) -> None:
+        """Pin the VRAM the owner gave, in GB, for GPUs the probe could not read."""
+        unread = {g["pci"] for g in self.gpus() if not g["probed_mib"]}
+        pins = config.get("gpus") or {}
+        for pci, gb in answers.items():
+            if pci not in unread:
+                continue
+            pin = {k: v for k, v in pins.get(pci, {}).items() if k != "vram_mib"}
+            if gb not in (None, ""):
+                try:
+                    value = float(gb)
+                except (TypeError, ValueError):
+                    raise NullBillError(f"the GPU's memory is a number of GB, not {gb!r}") from None
+                if not 1 <= value <= 256:
+                    raise NullBillError("the GPU's memory is between 1 and 256 GB")
+                pin["vram_mib"] = round(value * 1024)
+            if pin:
+                pins[pci] = pin
+            else:
+                pins.pop(pci, None)
+        if pins:
+            config["gpus"] = pins
+        else:
+            config.pop("gpus", None)
 
     def plan(self) -> dict:
         facts = self.home / "probe" / "latest" / "facts.json"
@@ -732,6 +774,7 @@ class App:
             "probed": (self.home / "probe" / "latest" / "facts.json").is_file(),
             "choices": self.choices(),
             "disks": self.disks(),
+            "gpus": self.gpus(),
             "files": self.files(),
             "workloads": WORKLOADS,
             "plan": self.plan(),

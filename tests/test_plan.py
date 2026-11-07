@@ -100,7 +100,10 @@ def errors_of(facts: dict, config: dict) -> list[str]:
 def test_floors_over_capacity_fail(facts):
     config = {"intent": {"workloads": ["agents", "linux-ci", "windows-ci", "windows-dev"]}}
     messages = errors_of(facts("small"), config)
-    assert messages[0] == "memory: planned guests need 19968 MiB at their floors; the host has 15848 MiB minus a 3072 MiB host reserve"
+    assert messages[0] == (
+        "memory: planned guests need 16384 MiB at their floors (containers at 50% of their limit); "
+        "the host has 15848 MiB minus a 3072 MiB host reserve"
+    )
     assert messages[1] == "disk: guests need 440 GiB, storage local-lvm has 350 GiB free"
 
 
@@ -275,9 +278,7 @@ def test_small_hosts_keep_less_for_pve_and_zfs_adds_its_cache(facts):
     assert plan["host"]["reserve_mib"] == 3072
     zfs = copy.deepcopy(small)
     zfs["storage"].append({"name": "local-zfs", "type": "zfspool", "content": ["images"], "avail_gib": 1})
-    # On ZFS, 16 GiB no longer holds agents and Linux CI; core still fits.
-    assert errors_of(zfs, fixture_config("small"))[0].endswith(f"minus a {3072 + small['memory_mib'] // 10} MiB host reserve")
-    plan = strip_notes(plan_for(zfs, {**fixture_config("small"), "intent": {"workloads": []}}))
+    plan = strip_notes(plan_for(zfs, fixture_config("small")))
     assert plan["host"]["reserve_mib"] == 3072 + small["memory_mib"] // 10
     mid = strip_notes(plan_for(facts("mid"), fixture_config("mid")))
     assert mid["host"]["reserve_mib"] == 4096
@@ -299,3 +300,31 @@ def test_on_site_screen_costs_host_memory_and_needs_a_gpu_left_to_the_host(facts
     gpus = {g["pci"]: {"owner": "vm:windows-dev"} for g in large["gpus"]}
     config = {**base, "intent": {"workloads": workloads}, "gpus": gpus, "host": {"console": {"enabled": True}}}
     assert "host.console: every GPU is passed through to a VM, so nothing is left to drive a screen" in errors_of(large, config)
+
+
+def test_containers_count_at_their_share_so_16_gib_holds_every_workload_but_windows_ci(facts):
+    """The owner's 16 GiB server: agents, Linux CI, local models on the GPU
+    and the Windows desktop, with the on-site screen and room for a kept
+    disk's files guest (512 MiB, counted at half). VMs
+    count in full, containers at host.container_share_pct of their limit."""
+    f = facts("mid")
+    f["memory_mib"] = 15645
+    f["gpus"][0]["vram_mib"] = None
+    config = {
+        **fixture_config("mid"),
+        "intent": {"workloads": ["agents", "linux-ci", "inference", "windows-dev"]},
+        "services": {"pbs": {"enabled": False}},
+        "host": {"console": {"enabled": True}},
+        "gpus": {"0000:01:00.0": {"vram_mib": 12282}},
+    }
+    plan = strip_notes(plan_for(f, config))
+    guests = plan["guests"]
+    vms = sum(g["memory_mib"] * g.get("count", 1) for g in guests.values() if g["kind"] != "lxc")
+    containers = sum(g["memory_mib"] for g in guests.values() if g["kind"] == "lxc")
+    assert plan["host"]["guests_mib"] == vms + containers // 2
+    assert plan["host"]["guests_mib"] + 256 + plan["host"]["reserve_mib"] <= 15645
+    assert guests["windows-dev"]["memory_mib"] == 4096 and guests["inference"]["memory_mib"] == 2048
+    assert plan["gpus"]["0000:01:00.0"]["consumers"] == {"inference": 12282}
+    # Counted in full, the same guests would not fit.
+    full = {**config, "host": {**config["host"], "container_share_pct": 100}}
+    assert errors_of(f, full)[0].startswith("memory: planned guests need")

@@ -206,10 +206,19 @@ def _size(model: dict, planned: dict, facts: dict, errors: _Errors) -> tuple[dic
     available = facts["memory_mib"] - reserve_mib
     pools = [n for n in planned if planned[n]["kind"] == "vm-pool"]
     counts = {n: pinned_counts.get(n, 1) for n in pools}
-    floor_total = sum(s["memory_mib"] * counts.get(n, 1) for n, s in sizes.items())
+    container_pct = model["host"].get("container_share_pct", 100)
+
+    def counted(name: str, size: dict) -> int:
+        """What a guest takes from the host's memory: all of a VM's, the
+        container share of a container's limit."""
+        if planned[name]["kind"] == "lxc":
+            return size["memory_mib"] * container_pct // 100
+        return size["memory_mib"] * counts.get(name, 1)
+
+    floor_total = sum(counted(n, s) for n, s in sizes.items())
     if floor_total > available:
         errors.append(
-            f"memory: planned guests need {floor_total} MiB at their floors; "
+            f"memory: planned guests need {floor_total} MiB at their floors (containers at {container_pct}% of their limit); "
             f"the host has {facts['memory_mib']} MiB minus a {reserve_mib} MiB host reserve"
         )
 
@@ -249,12 +258,14 @@ def _size(model: dict, planned: dict, facts: dict, errors: _Errors) -> tuple[dic
     if storage and disk > room:
         copies = f" besides {reserved} GiB for copies of kept disks" if reserved else ""
         errors.append(f"disk: guests need {disk} GiB, storage {storage['name']} has {room} GiB free{copies}")
-    allocated = sum(s["memory_mib"] * counts.get(n, 1) for n, s in sizes.items())
+    allocated = sum(counted(n, s) for n, s in sizes.items())
+    limits_total = sum(s["memory_mib"] * counts.get(n, 1) for n, s in sizes.items())
 
     memory = {
         "host_mib": facts["memory_mib"],
         "reserve_mib": Note(reserve_mib, reserve_why),
-        "guests_mib": allocated,
+        "guests_mib": Note(allocated, f"VMs in full, containers at {container_pct}% of their limit."),
+        "limits_mib": Note(limits_total, "Every guest's memory limit added up; containers take theirs only as they use it."),
         "unallocated_mib": Note(facts["memory_mib"] - reserve_mib - allocated, "Not assigned to any guest."),
     }
     disk_section = {

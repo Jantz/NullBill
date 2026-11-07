@@ -23,6 +23,12 @@ host:
   reserve_small:
     memory_mib: 3072
     below_mib: 24576
+  # A container's memory is a limit it may grow to, taken only as it is used;
+  # a VM holds all of its own. The plan counts each container at this many
+  # percent of its limit against the host's memory, so idle services do not
+  # crowd out VMs. A policy choice, not a measurement: the host's swap and
+  # the MemoryHigh alert cover the case where they all fill up at once.
+  container_share_pct: 50
   # The on-site screen (ansible/roles/console): a kiosk browser on the host's
   # monitor showing the NullBill page. Off by default; it costs the host
   # about memory_mib.
@@ -232,7 +238,10 @@ services:
     workload: inference
     agent_managed: true
     gpu: true
-    floor: {cores: 2, memory_mib: 8192, disk_gib: 64}
+    # The model lives in the GPU's VRAM (gpus.<pci>.consumers budgets it);
+    # memory holds the server and the file cache it loads from, which the
+    # kernel takes back under pressure.
+    floor: {cores: 2, memory_mib: 2048, disk_gib: 64}
   model-gateway:
     id: 21
     kind: lxc

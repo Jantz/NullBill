@@ -7,16 +7,19 @@ host:
   host_mib: 15848
   # Left to PVE itself on a host under 24 GiB; pin with host.reserve_small.
   reserve_mib: 3072
-  guests_mib: 11776
+  # VMs in full, containers at 50% of their limit.
+  guests_mib: 10240
+  # Every guest's memory limit added up; containers take theirs only as they use it.
+  limits_mib: 13824
   # Not assigned to any guest.
-  unallocated_mib: 1000
+  unallocated_mib: 2536
   # Off. host.console.enabled shows the NullBill page on a monitor plugged into the server.
   console:
     enabled: false
 disk:
   storage: local-lvm
   # Includes one golden template per pool.
-  needed_gib: 216
+  needed_gib: 248
   free_gib: 350
   # Holds the downloaded container template and cloud image.
   media: local
@@ -147,15 +150,15 @@ guests:
     cores: 2
     memory_mib: 2048
     disk_gib: 32
-    # Clones, limited by memory.
-    count: 1
+    # Clones, limited by host threads.
+    count: 2
     template_vmid: 2030
     # Clones take DHCP leases from this range.
     clone_range: 10.42.3.128/26
     # The golden image's reserved lease while apply bakes it.
     template_ip: 10.42.3.129
     # The dispatcher clones one per queued job into these.
-    clone_vmids: 6000-6000
+    clone_vmids: 6000-6001
     agent_managed: true
   workspace:
     kind: lxc

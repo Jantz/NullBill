@@ -15,7 +15,7 @@ names and reaches the host over SSH; it never runs on the host. Only `probe`,
 - `src/nullbill/data/catalog.yaml`: platform defaults (zones, roles, services, engine table).
 - `src/nullbill/data/schema.yaml`: JSON Schema for `config.yaml` and for the merged model.
 - `src/nullbill/probe.py`: read-only probe commands and their parser.
-- `src/nullbill/plan.py`: sizing rules; every rule failure is collected and reported together.
+- `src/nullbill/plan.py`: sizing rules; every rule failure is collected and reported together. Memory: VMs count in full, containers at `host.container_share_pct` (50) of their limit, since an LXC limit is not a reservation; `HostMemoryLow` alerts when that bet fails. A GPU's VRAM is needed only when inference budgets it; the page asks for it when the probe (no driver yet) cannot read it.
 - `tests/fixtures/<class>.yaml`: synthetic probe output for small, mid, large.
 - `tests/golden/<class>.plan.yaml`: expected plans. Regenerate with `UPDATE_GOLDEN=1 python3 -m pytest` and review the diff.
 - `hooks/`, `tools/denylist-scan`: privacy hooks. `tools/install-hooks` enables them.
