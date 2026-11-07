@@ -8,10 +8,14 @@
     name: openssh-server
     update_cache: true
 
+# sshd runs ForceCommand through the user's shell. bash would first read
+# the agent's own ~/.bashrc (Debian builds it to, for ssh sessions), which
+# could run commands before nb-agent-command records them; dash reads
+# nothing when it runs a command.
 - name: Agent user, no password and no sudo
   ansible.builtin.user:
     name: "{{ agent_ssh_user }}"
-    shell: /bin/bash
+    shell: /bin/sh
     password: "!"
     groups: []
     append: false

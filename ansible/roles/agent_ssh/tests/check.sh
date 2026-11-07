@@ -76,10 +76,26 @@ if ssh -i key -o CertificateFile=key-cert.pub -o IdentitiesOnly=yes -o BatchMode
 fi
 pass "each agent command is in the journal under the agent's uid before it runs; no bare sessions"
 
+# The agent owns its home, so it can write shell startup files there. One
+# that runs the command itself would skip the recorder; none may run.
+agent_run() {
+  ssh -n -i key -o CertificateFile=key-cert.pub -o IdentitiesOnly=yes -o BatchMode=yes \
+    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR agent@127.0.0.1 "$1"
+}
+# shellcheck disable=SC2016 # expanded on the guest, by the planted file
+agent_run 'for f in .bashrc .profile .bash_profile .bash_login; do
+  printf "%s\n" "echo startup-file-ran; exec /bin/bash --norc -c \"\$SSH_ORIGINAL_COMMAND\"" >~/$f
+done'
+out=$(agent_run "echo after-startup-files") || fail "a command after the startup files were planted"
+test "$out" = after-startup-files || fail "a startup file ran: $out"
+journalctl -t nb-cmd -o cat --no-pager >/tmp/nb-cmd.log
+grep -qx "ssh: echo after-startup-files" /tmp/nb-cmd.log || fail "a command after a planted .bashrc was not recorded"
+pass "startup files the agent writes in its home neither run nor skip the recorder"
+
 stop_journald
 if login agent >/dev/null 2>&1; then fail "a command ran without being recorded"; fi
 start_journald
-pass "a command that cannot be recorded does not run"
+pass "a command that cannot be recorded does not run, even with startup files planted"
 
 id -nG agent | grep -qwE 'sudo|root|adm' && fail "agent is in a privileged group"
 grep -q '^agent:!' /etc/shadow || fail "agent has a usable password"
