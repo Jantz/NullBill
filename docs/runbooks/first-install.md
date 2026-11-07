@@ -168,11 +168,12 @@ Reference: <https://pve.proxmox.com/pve-docs/chapter-pve-installation.html>.
 1. Put the stick in and switch on. Open the boot menu (**F11** on ASRock,
    **F8** on ASUS, often **F12** elsewhere; the BIOS start screen names it)
    and pick the stick's entry that starts with **UEFI:**. Without that, the
-   machine starts whatever is on its disks. An old Windows may then sit at
-   its logo for a long time or open Automatic Repair, because SATA is now
-   AHCI. If that disk holds files you keep, let Windows finish and shut it
-   down with `shutdown /s /t 0`, or choose **Shut down** in Automatic
-   Repair; do not let it repair. Otherwise hold the power button.
+   machine starts whatever is on its disks, and an old Windows may then sit
+   at its logo for a long time after the BIOS changes. Windows mounts every
+   disk it sees, so if one holds files you keep, let Windows finish and shut
+   it down with `shutdown /s /t 0`, or choose **Shut down** in Automatic
+   Repair; do not let it repair. If it stays stuck, hold the power button:
+   the files stay intact, and NullBill then shares that disk read-only.
 2. Choose **Install Proxmox VE (Graphical)** and accept the licence.
 3. **Target harddisk**: pick the system disk by its model and size. The
    installer erases it. Never pick the backup disk or a kept disk. Leave
