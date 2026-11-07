@@ -322,7 +322,9 @@ class App:
         return next((label for name, label in AGENT_CREDENTIALS.values() if data.get(name)), None)
 
     def save_agent_credential(self, body: dict) -> None:
-        value = str(body.get("credential", "")).strip()
+        # A token copied from a terminal can come with its line breaks or
+        # spaces where the terminal wrapped it; neither kind ever holds any.
+        value = re.sub(r"\s+", "", str(body.get("credential", "")))
         kind = next((v for prefix, v in AGENT_CREDENTIALS.items() if value.startswith(prefix)), None)
         if kind is None or len(value) > 512 or not re.fullmatch(r"[A-Za-z0-9_-]+", value):
             raise NullBillError("paste an Anthropic API key (sk-ant-api...) or the token `claude setup-token` prints (sk-ant-oat...)")

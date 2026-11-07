@@ -259,7 +259,8 @@ def test_agent_credential_is_kept_by_kind_and_never_shown(site):
     assert client.call("/api/agent", {"credential": f" {key}\n"}) == (200, {"ok": True, "agent_credential": "API key"})
     assert app.codec(app.home).load()["anthropic_api_key"] == key
     token = "sk-ant-oat01-" + "b" * 40
-    assert client.call("/api/agent", {"credential": token}) == (200, {"ok": True, "agent_credential": "subscription token"})
+    wrapped = f"{token[:30]}\n  {token[30:]} "
+    assert client.call("/api/agent", {"credential": wrapped}) == (200, {"ok": True, "agent_credential": "subscription token"})
     stored = app.codec(app.home).load()
     assert stored["claude_oauth_token"] == token and "anthropic_api_key" not in stored
     state = json.dumps(client.call("/api/state")[1])

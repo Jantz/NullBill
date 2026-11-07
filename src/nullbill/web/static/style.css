@@ -84,6 +84,15 @@ pre {
 }
 .errors { color: var(--error); padding-left: 18px; }
 p.errors { padding-left: 0; }
+/* Kept in view: a form's error must not wait at the bottom of a long page. */
+#error:not(:empty) {
+  position: sticky;
+  bottom: 12px;
+  padding: 12px;
+  background: var(--card);
+  border: 1px solid var(--error);
+  border-radius: 8px;
+}
 
 .alerts { list-style: none; padding: 0; margin: 0 0 8px; display: grid; gap: 6px; }
 .alerts li { padding: 8px 10px; border-radius: 8px; border-left: 4px solid var(--warn, #b7791f); background: var(--bg); }

@@ -26,7 +26,13 @@ async function api(path, body) {
 
 function show(id, visible) { $(id).hidden = !visible; }
 
-function showError(error) { $("error").textContent = error ? String(error.message || error) : ""; }
+// The message shows at the bottom of the window, and beside the form it came
+// from when one is named, so it is seen where the owner pressed.
+function showError(error, near) {
+  const text = error ? String(error.message || error) : "";
+  $("error").textContent = text;
+  if (near && text) $(near).textContent = text;
+}
 
 function renderWorkloads(state) {
   const box = $("workloads");
@@ -357,7 +363,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const result = await api("/api/alerts", {healthchecks_url: $("healthchecks-url").value});
       renderAlerts(result.alerts);
       $("alerts-result").textContent = "Saved.";
-    } catch (error) { showError(error); }
+    } catch (error) { showError(error, "alerts-result"); }
   });
   $("agent-form").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -365,7 +371,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const result = await api("/api/agent", {credential: $("agent-credential").value});
       $("agent-credential").value = "";
       renderAgent(result.agent_credential);
-    } catch (error) { showError(error); }
+    } catch (error) { showError(error, "agent-result"); }
   });
   $("tailscale-client-form").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -375,7 +381,7 @@ document.addEventListener("DOMContentLoaded", () => {
       $("tailscale-client-id").value = "";
       $("tailscale-client-secret").value = "";
       renderTailscaleClient(result.tailscale_client);
-    } catch (error) { showError(error); }
+    } catch (error) { showError(error, "tailscale-client-result"); }
   });
   $("remote-agent-form").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -398,7 +404,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const result = await api("/api/vpn", {key: $("tailscale-key").value});
       $("tailscale-key").value = "";
       renderVpn(result.tailscale_key);
-    } catch (error) { showError(error); }
+    } catch (error) { showError(error, "vpn-result"); }
   });
   $("files-reveal").addEventListener("click", async () => {
     try {
@@ -409,7 +415,7 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       const result = await api("/api/alerts/test", {});
       $("alerts-result").textContent = `Sent to ${result.sent.join(" and ")}.`;
-    } catch (error) { showError(error); }
+    } catch (error) { showError(error, "alerts-result"); }
   });
   for (const button of document.querySelectorAll("button[data-action]")) {
     button.addEventListener("click", async () => {
