@@ -5,7 +5,7 @@ const LABELS = {
   "linux-ci": "Linux CI runners for Forgejo",
   "inference": "Local AI models on the GPU (needs more memory)",
   "windows-ci": "Windows CI runners (needs a Windows ISO and more memory)",
-  "windows-dev": "A Windows desktop VM (needs a Windows ISO and more memory)",
+  "windows-dev": "A Windows desktop VM (upload the Windows 11 ISO in Proxmox first; you install Windows in it)",
 };
 
 const $ = (id) => document.getElementById(id);

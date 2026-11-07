@@ -255,8 +255,11 @@ URL and the agent credential if you made them.
    manager. From now on you sign in with it.
 4. **2. Look at the hardware**: press **Probe the server**. It only reads.
 5. **3. Choose what to run**:
-   - Start with **AI agents** and **Linux CI runners**. Leave local AI
-     models and both Windows choices off at 16 GB of memory.
+   - **AI agents**, plus either **Linux CI runners** or **A Windows desktop
+     VM**: at 16 GB both do not fit together. The Windows desktop needs its
+     ISO uploaded first ([windows-desktop.md](windows-desktop.md)). Leave
+     local AI models and Windows CI runners off: they do not fit in 16 GB
+     and are not built yet.
    - Tick **Nightly backups** only with a backup disk from part 2.
    - Tick **On-site screen** only if you plugged the monitor into the
      motherboard (part 3) and turned on iGPU Multi-Monitor (part 4).
@@ -404,8 +407,10 @@ certificates.
 
 ## What this run does not cover yet
 
-- Windows guests and local AI models: options to add after a memory
-  upgrade.
+- Local AI models and Windows CI runners: NullBill makes their guests but
+  does not set up the GPU, the model server or the runners yet, and at
+  16 GB they do not fit. Installing Windows in the desktop VM is done by
+  hand ([windows-desktop.md](windows-desktop.md)).
 - Signing in to Forgejo and Grafana yourself. Setup makes their admin
   passwords and keeps them encrypted on the server, but the page does not
   show them yet. Your devices do not resolve the services' names

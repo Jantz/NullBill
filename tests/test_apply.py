@@ -73,6 +73,7 @@ class FakeReach:
         self.storage_disks = {}
         # VMs as /cluster/resources lists them, for retiring CI clones.
         self.vms = []
+        self.isos = []
 
     def host(self, command, stdin=None, timeout=900):
         self.calls.append(("host", command))
@@ -105,6 +106,8 @@ class FakeReach:
         }
         if command in answers:
             return 0, answers[command], ""
+        if command == apply.ISO_LIST:
+            return 0, "".join(f"Volid Format Type Size VMID\n{v} iso iso 5819484160\n" for v in self.isos), ""
         if command == lan.ARMED:
             return 0, ("armed" if self.revert == "armed" else "gone") + "\n", ""
         if command == lan.arm_command():
@@ -1108,9 +1111,28 @@ def test_tofu_failure_stops_apply(ctx, monkeypatch):
 def test_windows_needs_an_iso_before_tofu(ctx, monkeypatch):
     monkeypatch.delenv("TF_VAR_windows_iso", raising=False)
     c = ctx("mid")
-    with pytest.raises(ApplyError, match="no Windows ISO"):
+    c.reach.isos = ["local:iso/debian-13.iso"]
+    with pytest.raises(ApplyError, match="Proxmox holds no Windows ISO; upload one"):
         apply.stage_tofu(c)
     assert [call for call in c.reach.calls if call[0] == "local"] == []
+    c.reach.isos += ["local:iso/Win11_English_x64.iso", "nb-data:iso/windows-server.iso"]
+    with pytest.raises(ApplyError, match=r"more than one Windows ISO in Proxmox \(local:iso/Win11_English_x64.iso, nb-data"):
+        apply.stage_tofu(c)
+
+
+def test_tofu_finds_the_windows_iso_the_owner_uploaded(ctx, monkeypatch):
+    monkeypatch.delenv("TF_VAR_windows_iso", raising=False)
+    c = ctx("mid")
+    c.reach.isos = ["local:iso/debian-13.iso", "local:iso/Win11_English_x64.iso"]
+    apply.stage_tofu(c)
+    assert "tofu: Windows guests install from local:iso/Win11_English_x64.iso" in c.log
+    local = [call for call in c.reach.calls if call[0] == "local"]
+    envs = [env for call, env in zip(local, c.reach.envs, strict=True) if call[1][0] == "tofu"]
+    assert envs and all(env["TF_VAR_windows_iso"] == "local:iso/Win11_English_x64.iso" for env in envs)
+    # Without Windows in the plan, Proxmox is not asked.
+    s = ctx("small")
+    apply.stage_tofu(s)
+    assert ("host", apply.ISO_LIST) not in s.reach.calls
 
 
 def test_a_full_apply_runs_every_stage_against_the_stand_ins(ctx, monkeypatch, tailnet):

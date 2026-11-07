@@ -282,10 +282,32 @@ def api_token(ctx: Context) -> str:
     return token
 
 
-def windows_iso(ctx: Context, stage: str) -> None:
+# Every ISO image on a storage that holds them, as `pvesm list` prints it
+# (volume id first). The owner uploads the Windows installer in the web UI.
+ISO_LIST = "for s in $(pvesm status --content iso --enabled 1 | awk 'NR > 1 {print $1}'); do pvesm list \"$s\" --content iso; done"
+
+
+def windows_iso(ctx: Context, stage: str, say: bool = False) -> str | None:
+    """The volume the Windows guests install from: TF_VAR_windows_iso when
+    set, otherwise the one ISO in Proxmox whose file name holds "win"."""
     variables = json.loads(ctx.files["tofu/main.tf.json"])["variable"]
-    if "windows_iso" in variables and not os.environ.get("TF_VAR_windows_iso"):
-        raise ApplyError(stage, "Windows guests are planned but no Windows ISO is set; turn off the Windows workloads for now")
+    if "windows_iso" not in variables:
+        return None
+    if os.environ.get("TF_VAR_windows_iso"):
+        return os.environ["TF_VAR_windows_iso"]
+    volumes = [line.split()[0] for line in host_out(ctx, stage, ISO_LIST).splitlines() if ":iso/" in line]
+    found = sorted({v for v in volumes if "win" in v.split(":iso/", 1)[1].lower()})
+    if not found:
+        raise ApplyError(
+            stage,
+            "Windows guests are planned but Proxmox holds no Windows ISO; upload one in the web UI "
+            "(storage local, ISO Images, Upload) or turn off the Windows workloads",
+        )
+    if len(found) > 1:
+        raise ApplyError(stage, f"more than one Windows ISO in Proxmox ({', '.join(found)}); remove all but one")
+    if say:
+        ctx.say(f"{stage}: Windows guests install from {found[0]}")
+    return found[0]
 
 
 def tofu_env(ctx: Context, stage: str = "tofu") -> dict[str, str]:
@@ -294,7 +316,7 @@ def tofu_env(ctx: Context, stage: str = "tofu") -> dict[str, str]:
     _, host = split_target(ctx.target)
     variables = json.loads(ctx.files["tofu/main.tf.json"])["variable"]
     install = json.loads((ctx.home / "install.json").read_text()) if (ctx.home / "install.json").exists() else {}
-    windows_iso(ctx, stage)
+    iso = windows_iso(ctx, stage)
     keys = [line for line in host_out(ctx, stage, "cat /root/.ssh/authorized_keys").splitlines() if line.startswith("ssh-")]
     ca = ctx.home / "pve-root-ca.pem"
     ca.write_text(host_out(ctx, stage, "cat /etc/pve/pve-root-ca.pem"))
@@ -313,6 +335,8 @@ def tofu_env(ctx: Context, stage: str = "tofu") -> dict[str, str]:
         "TF_VAR_state_passphrase": ctx.secrets.ensure("tofu_state_passphrase"),
         "TF_IN_AUTOMATION": "1",
     }
+    if iso:
+        env["TF_VAR_windows_iso"] = iso
     # Set by the backups stage once PBS answers; until then the storage and
     # the nightly job wait (tofu.WHEN_PBS_READY).
     for name in PBS_VARS:
@@ -740,7 +764,7 @@ def stage_tofu(ctx: Context) -> None:
     work = ctx.home / "tofu"
     work.mkdir(mode=0o700, exist_ok=True)
     (work / "main.tf.json").write_text(ctx.files["tofu/main.tf.json"])
-    windows_iso(ctx, "tofu")
+    windows_iso(ctx, "tofu", say=True)
     ctx.legacy_mounted = ctx.files_stopped = False
     ctx.kept_before = kept_disks(ctx)
     copy_disks(ctx)
