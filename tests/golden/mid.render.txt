@@ -977,29 +977,6 @@ WantedBy=multi-user.target
     },
     {
       "src": [
-        "group:nb-default"
-      ],
-      "dst": [
-        "10.42.2.17"
-      ],
-      "ip": [
-        "tcp:443",
-        "tcp:22"
-      ]
-    },
-    {
-      "src": [
-        "group:nb-default"
-      ],
-      "dst": [
-        "10.42.3.19"
-      ],
-      "ip": [
-        "tcp:22"
-      ]
-    },
-    {
-      "src": [
         "group:nb-owner"
       ],
       "dst": [
