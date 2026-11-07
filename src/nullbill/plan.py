@@ -7,7 +7,7 @@ of them, so the owner sees every problem in one run.
 import ipaddress
 from typing import Any
 
-from nullbill import ci
+from nullbill import ci, legacy
 from nullbill.errors import NullBillError
 from nullbill.proxy import allows
 from nullbill.render import Note
@@ -22,11 +22,20 @@ class _Errors(list):
             raise NullBillError(*self)
 
 
+# Planned by itself when a disk is kept and shared, never by intent.
+FILES_WORKLOAD = "files"
+
+
 def _planned_services(model: dict, errors: _Errors) -> dict[str, dict]:
     workloads = set(model.get("intent", {}).get("workloads", []))
     known = {s["workload"] for s in model["services"].values()} - {"core"}
     for unknown in sorted(workloads - known):
         errors.append(f"intent.workloads: unknown workload {unknown!r}; known: {', '.join(sorted(known))}")
+    if FILES_WORKLOAD in workloads:
+        errors.append(f"intent.workloads: {FILES_WORKLOAD} is planned by itself once a disk is kept and shared (disks.<id>.use: legacy)")
+        workloads.discard(FILES_WORKLOAD)
+    if any(p["use"] == "legacy" and p.get("share", True) for p in model.get("disks", {}).values()):
+        workloads.add(FILES_WORKLOAD)
     return {
         name: svc
         for name, svc in model["services"].items()
@@ -282,6 +291,7 @@ def _disks(model: dict, facts: dict, errors: _Errors, want_pbs: bool) -> tuple[d
         errors.append(f"disks.{disk_id}: no such disk in the probe")
     section: dict[str, Any] = {}
     pbs = None
+    names: dict[str, str] = {}
     for disk in facts["disks"]:
         pin = pins.get(disk["id"])
         base = {"size_gib": disk["size_gib"], "signatures": disk["signatures"]}
@@ -290,10 +300,31 @@ def _disks(model: dict, facts: dict, errors: _Errors, want_pbs: bool) -> tuple[d
                 errors.append(f"disks.{disk['id']}: the PVE system disk cannot be pinned")
             section[disk["id"]] = Note({**base, "use": "system"}, "Holds PVE; never touched.")
             continue
+        base["health"] = disk["smart"]["health"]
+        health = _health_note(disk["smart"])
         if not disk["stable_id"]:
             errors.append(f"disks.{disk['id']}: no /dev/disk/by-id name; refusing to plan an unstable disk name")
-        if pin and pin["use"] == "ignore":
-            section[disk["id"]] = Note({**base, "use": "ignore"}, "Pinned: left alone.")
+        if pin and pin["use"] != "legacy":
+            for key in legacy.LEGACY_KEYS:
+                if key in pin:
+                    errors.append(f"disks.{disk['id']}.{key}: only for use: legacy")
+        kept = [m for p in disk["partitions"] for m in p["mounts"] if m.startswith(legacy.LEGACY_ROOT + "/")]
+        if kept and pin and pin["use"] not in ("legacy", "ignore"):
+            errors.append(
+                f"disks.{disk['id']}: kept as legacy and mounted at {', '.join(kept)}; converting it to {pin['use']} "
+                "needs a verified copy of the data first, which is not built yet; keep use: legacy"
+            )
+            continue
+        if pin and pin["use"] == "legacy":
+            mounts, left = legacy.plan_disk(disk["id"], disk, pin, errors)
+            for m in mounts:
+                name = m["mount"].rsplit("/", 1)[1]
+                if name in names:
+                    errors.append(f"disks.{disk['id']}: share name {name!r} is also used on {names[name]}; set disks.<id>.name")
+                names[name] = disk["id"]
+            section[disk["id"]] = Note({**base, "use": "legacy", "partitions": mounts}, legacy.note(mounts, left) + health)
+        elif pin and pin["use"] == "ignore":
+            section[disk["id"]] = Note({**base, "use": "ignore"}, "Pinned: left alone." + health)
         elif pin and pin["use"] == "pbs" and not want_pbs:
             errors.append(f"disks.{disk['id']}: pinned for PBS, but PBS is switched off")
         elif pin and pin["use"] == "pbs":
@@ -303,16 +334,26 @@ def _disks(model: dict, facts: dict, errors: _Errors, want_pbs: bool) -> tuple[d
                 errors.append(f"disks.{disk['id']}: a second PBS disk; {pbs} is already pinned")
             pbs = disk["id"]
             why = "Pinned for PBS; apply will wipe its signatures." if disk["signatures"] else "Pinned for PBS."
-            section[disk["id"]] = Note({**base, "use": "pbs"}, why)
+            section[disk["id"]] = Note({**base, "use": "pbs"}, why + health)
         elif disk["signatures"]:
             why = "Carries signatures; only an explicit pin with wipe: true changes that."
-            section[disk["id"]] = Note({**base, "use": "untouched"}, why)
+            section[disk["id"]] = Note({**base, "use": "untouched"}, why + health)
         elif want_pbs and pbs is None and "pbs" not in {p["use"] for p in pins.values()}:
             pbs = disk["id"]
-            section[disk["id"]] = Note({**base, "use": "pbs"}, "Blank, so it becomes the PBS datastore.")
+            section[disk["id"]] = Note({**base, "use": "pbs"}, "Blank, so it becomes the PBS datastore." + health)
         else:
-            section[disk["id"]] = Note({**base, "use": "unused"}, "Blank and not needed.")
+            section[disk["id"]] = Note({**base, "use": "unused"}, "Blank and not needed." + health)
     return section, pbs
+
+
+def _health_note(smart: dict) -> str:
+    if smart["health"] == "FAILED":
+        return " SMART says this disk is failing: copy anything on it elsewhere now."
+    if smart["health"] == "unknown":
+        return " SMART health could not be read."
+    if smart.get("reallocated_sectors"):
+        return f" SMART: {smart['reallocated_sectors']} reallocated sectors, an early sign of wear."
+    return ""
 
 
 def _backups(planned: dict, pbs: str | None) -> Note:

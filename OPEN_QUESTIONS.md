@@ -49,9 +49,6 @@ answered items move to the decisions list at the bottom.
 
 10. **Disks from a previous OS** (docs/adr/0007-legacy-disks.md). A disk
     with your files can be kept as it is and shared to you over the VPN.
-    - Approve `ntfs-3g` on the host and Samba in a new `files` guest?
-      Recommendation: yes; SMB is built into Windows and macOS, and ntfs-3g
-      is the only tool that spots a hibernated Windows disk.
     - Zone for the `files` guest: mgmt (internet only through the proxy) or
       services (direct)? Recommendation: mgmt, since it holds your personal
       files and only the owner reaches it.
@@ -137,6 +134,9 @@ answered items move to the decisions list at the bottom.
 
 ## Decisions
 
+- Disks from a previous OS (question 10): `ntfs-3g` on the host and Samba
+  in a `files` guest, approved (owner, 2026-11-07;
+  docs/adr/0007-legacy-disks.md).
 - CI image age (question 9): the recommendation, built: apply bakes each
   golden image again once it is a week old, the page runs that weekly, and
   an alert fires past 14 days. Jobs wait in Forgejo while it bakes; say if

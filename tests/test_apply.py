@@ -57,6 +57,10 @@ class FakeReach:
         self.revert = None  # the LAN revert timer: None, "armed" or "gone"
         self.timeouts = []
         self.dispatcher_stopped = False
+        # Kept disks on the host (nb-legacy-disk): name -> (uuid, mode, fstype, state).
+        self.legacy = {}
+        # OpenTofu makes the files guest (VMID 2023) on its first apply.
+        self.files_ct = {"exists": False, "status": "running", "mps": {}, "reboots": 0}
 
     def host(self, command, stdin=None, timeout=900):
         self.calls.append(("host", command))
@@ -96,6 +100,10 @@ class FakeReach:
         if command.startswith("rm -f "):
             self.files.pop(command.split()[2], None)
             return 0, "", ""
+        if command.startswith(apply.LEGACY) or command.startswith(("findmnt ", "pct status 2023", "pct shutdown 2023", "pct start 2023")):
+            return self.kept(command)
+        if command.startswith(("pct reboot 2023", "pct set 2023 ")) or command == "pct config 2023":
+            return self.kept(command)
         if command.startswith("pct config "):
             return 0, "hostname: nullbill\n" + "".join(f"net{n}: {v}\n" for n, v in sorted(self.nets.items())), ""
         if command.startswith("pct set 2002 --net1 "):
@@ -131,6 +139,50 @@ class FakeReach:
             return self.guest(shlex.split(command)[2], shlex.split(command)[4:])
         return 127, "", f"fake host: unexpected {command}"
 
+    def kept(self, command):
+        """nb-legacy-disk, findmnt and pct for the files guest (VMID 2023)."""
+        argv = shlex.split(command)
+        if command.startswith(f"{apply.LEGACY} list"):
+            return 0, "".join(f"{n} {' '.join(v)}\n" for n, v in sorted(self.legacy.items())), ""
+        if argv[:2] == [apply.LEGACY, "mount"]:
+            _, _, disk, n, uuid, fstype, mode, name, uid, gid = argv
+            assert (uid, gid) == ("101000", "101000")
+            want = (uuid, mode, fstype, "mounted")
+            known = self.legacy.get(name) == want
+            self.legacy[name] = want
+            return 0, "kept\n" if known else "mounted\n", ""
+        if argv[:2] == [apply.LEGACY, "unmount"]:
+            self.legacy.pop(argv[2], None)
+            return 0, "removed\n", ""
+        if argv[0] == "findmnt":
+            return 0, json.dumps({"filesystems": [{"used": 3000000000000, "size": 4000000000000}]}), ""
+        if command == "pct status 2023":
+            return 0, f"status: {self.files_ct['status']}\n", ""
+        if argv[:2] == ["pct", "shutdown"]:
+            self.files_ct["status"] = "stopped"
+            return 0, "", ""
+        if argv[:2] == ["pct", "start"]:
+            self.files_ct["status"] = "running"
+            return 0, "", ""
+        if argv[:2] == ["pct", "reboot"]:
+            self.files_ct["reboots"] += 1
+            return 0, "", ""
+        if command == "pct config 2023":
+            if not self.files_ct["exists"]:
+                return 2, "", "Configuration file 'nodes/pve/lxc/2023.conf' does not exist\n"
+            return 0, "hostname: files\n" + "".join(f"{k}: {v}\n" for k, v in sorted(self.files_ct["mps"].items())), ""
+        if argv[:3] == ["pct", "set", "2023"]:
+            assert self.files_ct["status"] == "stopped", "mount points change only while the files guest is stopped"
+            args = argv[3:]
+            for flag, value in zip(args[::2], args[1::2], strict=True):
+                if flag == "--delete":
+                    for key in value.split(","):
+                        del self.files_ct["mps"][key]
+                else:
+                    self.files_ct["mps"][flag[2:]] = value
+            return 0, "", ""
+        return 127, "", f"fake host: unexpected {command}"
+
     def guest(self, vmid, argv):
         """Containers, reached with pct exec: step-ca answers for its CA."""
         if argv == ["sh", "-c", "systemctl stop nb-dispatcher 2>/dev/null || true"]:
@@ -162,6 +214,8 @@ class FakeReach:
             return self.openssl(argv[1:], cwd)
         if argv[0] == "ssh":
             return self.vm(argv[-2], argv[-1])
+        if argv[:2] == ["tofu", "apply"] and not any(a.startswith("-target=") for a in argv):
+            self.files_ct["exists"] = True
         if argv[:2] == ["tofu", "apply"] and any(a.startswith("-replace=") for a in argv):
             self.templates.clear()  # OpenTofu made a fresh, plain VM
         for start, left in self.flaky.items():
@@ -202,8 +256,8 @@ class FakeReach:
 
 @pytest.fixture
 def ctx(facts, tmp_path):
-    def make(fixture="mid", reach=None, **kw):
-        model = build_model(fixture_config(fixture))
+    def make(fixture="mid", reach=None, config=None, **kw):
+        model = build_model(config or fixture_config(fixture))
         plan = build_plan(model, facts(fixture))
         files = render_all(plan, model)
         return Context(plan, model, tmp_path, TARGET, reach or FakeReach(), Secrets(MemoryCodec()), files, **kw)
@@ -247,7 +301,12 @@ def test_host_stage_runs_the_baseline_then_installs_the_lan_open_firewall(ctx):
     reach = c.reach
     assert reach.calls[0][:2] == ("playbook", "host-baseline.yml")
     # Guests reach the API by its mgmt name and address; its certificate names both.
-    assert reach.calls[0][3] == {"host_baseline_api_name": "pve.nullbill.internal", "host_baseline_api_address": "10.42.1.254"}
+    assert reach.calls[0][3] == {
+        "host_baseline_api_name": "pve.nullbill.internal",
+        "host_baseline_api_address": "10.42.1.254",
+        # ntfs-3g only when the plan keeps an NTFS disk.
+        "host_baseline_ntfs": False,
+    }
     assert reach.calls[0][2] == {"pve": connection(c, None)}
     expected = {f"/etc/pve/firewall/{rel.removeprefix('firewall/')}" for rel in c.files if rel.startswith("firewall/")}
     expected.discard("/etc/pve/firewall/cluster-lan-open.fw")
@@ -982,3 +1041,158 @@ def test_a_host_that_stops_answering_fails_the_stage_instead_of_crashing(monkeyp
     monkeypatch.setattr(apply.subprocess, "run", hang)
     reach = apply.SshReach("root@192.0.2.10", tmp_path)
     assert reach.host("vzdump 2010", timeout=5) == (124, "", "no answer from the host within 5 s")
+
+
+# Disks kept from a previous OS (docs/adr/0007-legacy-disks.md).
+OLD = "ata-SYNTHETIC_HDD_0002"
+
+
+def legacy_config(**pin):
+    return {**fixture_config("large"), "disks": {OLD: {"use": "legacy", **pin}}}
+
+
+def replan(c, config):
+    """The same host, planned again from a changed config.yaml."""
+    from conftest import write_raw
+
+    from nullbill.probe import parse
+
+    c.model = build_model(config)
+    c.plan = build_plan(c.model, parse(write_raw(c.home / "raw", "large")))
+    c.files = render_all(c.plan, c.model)
+
+
+def host_calls(c):
+    return [call[1] for call in c.reach.calls if call[0] in ("host", "local")]
+
+
+def index_of(calls, start):
+    found = [i for i, call in enumerate(calls) if (call if isinstance(call, str) else " ".join(call)).startswith(start)]
+    assert found, start
+    return found[0]
+
+
+def test_a_kept_disk_is_mounted_before_tofu_then_shared_and_left_alone_next_time(ctx, monkeypatch):
+    monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
+    c = ctx("large", config=legacy_config())
+    apply.stage_host(c)
+    assert c.reach.calls[0][3]["host_baseline_ntfs"] is True
+    c.reach.calls.clear()
+    apply.stage_tofu(c)
+    apply.stage_files(c)
+    calls = host_calls(c)
+    mount = index_of(calls, f"{apply.LEGACY} mount {OLD} 2 0123456789ABCDEF ntfs ro data 101000 101000")
+    tofu = index_of(calls, "tofu init")
+    attach = index_of(calls, "pct set 2023 --mp0 ")
+    assert mount < index_of(calls, "/usr/local/sbin/nb-backup-disk") < tofu < attach
+    assert c.reach.files_ct["mps"] == {"mp0": "/mnt/nb-legacy/data,mp=/srv/share/data,backup=0,ro=1"}
+    assert c.reach.files_ct["status"] == "running"
+    files = [call for call in c.reach.calls if call[0] == "playbook" and call[1] == "files.yml"]
+    (play,) = files
+    assert play[2] == {"files": connection(c, "files")}
+    assert play[3]["files_shares"] == [{"name": "data", "read_only": True}]
+    assert play[3]["files_password"] == c.secrets.data["files_share_password"] and len(play[3]["files_password"]) >= 24
+    assert json.loads((c.home / "disks.json").read_text())["mounts"] == [
+        {
+            "disk": OLD,
+            "n": 2,
+            "uuid": "0123456789ABCDEF",
+            "fstype": "ntfs",
+            "mode": "ro",
+            "name": "data",
+            "mount": "/mnt/nb-legacy/data",
+            "used_bytes": 3000000000000,
+            "size_bytes": 4000000000000,
+        }
+    ]
+    assert "files" in apply.shippers(c)
+    # Nothing changed: the disk is kept, the guest keeps running, the password stays.
+    password = c.secrets.data["files_share_password"]
+    c.reach.calls.clear()
+    apply.stage_tofu(c)
+    apply.stage_files(c)
+    calls = host_calls(c)
+    restarts = ("pct set 2023", "pct shutdown 2023", "pct reboot 2023", "pct start 2023")
+    assert not [x for x in calls if isinstance(x, str) and x.startswith(restarts)]
+    assert not [line for line in c.log[-3:] if "mounted partition" in line]
+    assert c.secrets.data["files_share_password"] == password
+
+
+def test_switching_to_read_write_stops_the_guest_before_the_host_remounts(ctx, monkeypatch):
+    monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
+    c = ctx("large", config=legacy_config())
+    apply.stage_tofu(c)
+    replan(c, legacy_config(mode="rw"))
+    c.reach.calls.clear()
+    apply.stage_tofu(c)
+    calls = host_calls(c)
+    assert index_of(calls, "pct shutdown 2023") < index_of(calls, f"{apply.LEGACY} mount {OLD} 2 0123456789ABCDEF ntfs rw data")
+    assert c.reach.files_ct["mps"]["mp0"].endswith(",ro=0")
+    assert c.reach.files_ct["status"] == "running"
+
+
+def test_dropping_a_kept_disk_detaches_it_then_unmounts_it_and_wipes_nothing(ctx, monkeypatch):
+    monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
+    c = ctx("large", config=legacy_config())
+    apply.stage_tofu(c)
+    replan(c, fixture_config("large"))
+    assert "files" not in c.bare["guests"]
+    c.reach.calls.clear()
+    apply.stage_tofu(c)
+    calls = host_calls(c)
+    detach = index_of(calls, "pct set 2023 --delete mp0")
+    assert index_of(calls, "pct shutdown 2023") < detach < index_of(calls, f"{apply.LEGACY} unmount data") < index_of(calls, "tofu init")
+    assert c.reach.legacy == {} and c.reach.files_ct["mps"] == {}
+    assert not [x for x in calls if "wipefs" in " ".join(x if isinstance(x, list) else [x])]
+    assert json.loads((c.home / "disks.json").read_text()) == {"mounts": []}
+
+
+def test_share_false_keeps_the_mount_but_no_guest(ctx, monkeypatch):
+    monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
+    c = ctx("large", config=legacy_config(share=False))
+    apply.stage_tofu(c)
+    assert "data" in c.reach.legacy
+    assert not [x for x in host_calls(c) if isinstance(x, str) and x.startswith("pct set 2023")]
+    apply.stage_files(c)
+    assert "files.yml" not in [call[1] for call in c.reach.calls if call[0] == "playbook"]
+
+
+def test_a_refused_mount_stops_apply_before_tofu(ctx, monkeypatch):
+    monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
+    c = ctx("large", config=legacy_config(mode="rw"))
+    real = c.reach.kept
+
+    def refuse(command):
+        if command.startswith(f"{apply.LEGACY} mount"):
+            return 1, "", "nb-legacy-disk: /dev/disk/by-id/x cannot be read-write: Windows is hibernated on it\n"
+        return real(command)
+
+    c.reach.kept = refuse
+    with pytest.raises(ApplyError, match="Windows is hibernated on it"):
+        apply.stage_tofu(c)
+    assert not [call for call in c.reach.calls if call[0] == "local" and call[1][0] == "tofu"]
+
+
+def test_the_pbs_disk_is_never_one_apply_kept(ctx, monkeypatch, tmp_path):
+    """Safety rule 2 at apply: even if the probe missed the mount, a disk that
+    disks.json records as kept is not handed to nb-backup-disk."""
+    monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
+    c = ctx("mid")
+    (c.home / "disks.json").write_text(json.dumps({"mounts": [{"disk": "ata-SYNTHETIC_HDD_0002", "name": "data"}]}))
+    c.reach.legacy = {}
+    with pytest.raises(ApplyError, match="holds a disk kept as legacy"):
+        apply.backup_disk(c)
+    assert c.reach.backup_disk is None
+
+
+def test_a_full_apply_with_a_kept_disk(ctx, monkeypatch, tailnet):
+    monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
+    monkeypatch.setattr(apply, "run_verify", lambda *a, **kw: [Result("PASS", "everything")])
+    c = with_client(ctx("large", config=legacy_config()))
+    c.secrets.set("ntfy_topic", "nullbill-topic")
+    (c.home / "web").mkdir()
+    run_apply(c)
+    ran = [call[1] for call in c.reach.calls if call[0] == "playbook"]
+    assert "files.yml" in ran and ran.index("updates.yml") < ran.index("files.yml")
+    shipped = [call[2] for call in c.reach.calls if call[0] == "playbook" and call[1] == "log-shipper.yml"]
+    assert any("files" in hosts for hosts in shipped)

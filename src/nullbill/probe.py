@@ -19,12 +19,19 @@ COMMANDS: dict[str, tuple[str, bool]] = {
     "pveversion": ("pveversion", True),
     "lscpu": ("lscpu -J", True),
     "meminfo": ("cat /proc/meminfo", True),
-    "lsblk": ("lsblk -J -b -o NAME,SIZE,TYPE,ROTA,FSTYPE,PTTYPE,MOUNTPOINTS", True),
+    "lsblk": ("lsblk -J -b -o NAME,SIZE,TYPE,ROTA,FSTYPE,PTTYPE,PARTTYPE,PARTN,LABEL,UUID,MOUNTPOINTS", True),
     "disk-by-id": ("find /dev/disk/by-id -maxdepth 1 -type l -printf '%f %l\\n'", True),
     "storage": ("pvesh get /nodes/localhost/storage --output-format json", True),
     "lspci": ("lspci -Dnn", True),
     "iommu": ("find /sys/kernel/iommu_groups -mindepth 3 -maxdepth 3 -type l", False),
     "nvidia-smi": ("nvidia-smi --query-gpu=pci.bus_id,name,memory.total --format=csv,noheader,nounits", False),
+    # SMART health and attributes of every disk, read only; smartctl is part
+    # of PVE. A disk that answers nothing is reported as unknown.
+    "smart": (
+        "command -v smartctl >/dev/null || exit 127; "
+        'for d in $(lsblk -dnpo NAME,TYPE | awk \'$2 == "disk" {print $1}\'); do echo "== $d"; smartctl -j -H -A "$d"; done; true',
+        False,
+    ),
 }
 
 Runner = Callable[[str, str], tuple[int, str, str]]
@@ -114,15 +121,68 @@ def _walk(dev: dict):
         yield from _walk(child)
 
 
-def _disks(lsblk_text: str, by_id_text: str) -> list[dict]:
+# Where apply mounts a disk kept from a previous OS (legacy.py). Such a
+# mount does not make the disk a system disk.
+LEGACY_ROOT = "/mnt/nb-legacy"
+
+
+def _legacy_mount(path: str) -> bool:
+    return path.startswith(LEGACY_ROOT + "/")
+
+
+def _partitions(dev: dict) -> list[dict]:
+    parts = []
+    for child in dev.get("children", []):
+        if child.get("type") != "part":
+            continue
+        mounts = [m for m in child.get("mountpoints") or [] if m]
+        parts.append(
+            {
+                "n": child.get("partn"),
+                "size_mib": int(child["size"]) // 2**20,
+                "fstype": child.get("fstype"),
+                # A GPT type GUID, or an MBR type code such as 0x7.
+                "parttype": (child.get("parttype") or "").lower() or None,
+                "label": child.get("label"),
+                "uuid": child.get("uuid"),
+                "mounts": mounts,
+            }
+        )
+    return sorted(parts, key=lambda p: p["n"] or 0)
+
+
+def _smart(text: str | None, ids: dict[str, str]) -> dict[str, dict]:
+    """by-id name -> health (PASSED, FAILED or unknown), power-on hours and
+    reallocated sectors, from `smartctl -j -H -A` per disk."""
+    out: dict[str, dict] = {}
+    parts = re.split(r"^== (/dev/\S+)$", text or "", flags=re.MULTILINE)
+    for device, body in zip(parts[1::2], parts[2::2], strict=True):
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            data = {}
+        passed = (data.get("smart_status") or {}).get("passed")
+        attributes = {a.get("id"): a for a in (data.get("ata_smart_attributes") or {}).get("table", [])}
+        reallocated = (attributes.get(5) or {}).get("raw", {}).get("value")
+        name = Path(device.strip()).name
+        out[ids.get(name, name)] = {
+            "health": "unknown" if passed is None else "PASSED" if passed else "FAILED",
+            "power_on_hours": (data.get("power_on_time") or {}).get("hours"),
+            "reallocated_sectors": reallocated,
+        }
+    return out
+
+
+def _disks(lsblk_text: str, by_id_text: str, smart_text: str | None = None) -> list[dict]:
     ids = _disk_ids(by_id_text)
+    smart = _smart(smart_text, ids)
     disks = []
     for dev in json.loads(lsblk_text)["blockdevices"]:
         if dev["type"] != "disk":
             continue
         nodes = list(_walk(dev))
         signatures = sorted({s for n in nodes for s in (n.get("pttype"), n.get("fstype")) if s})
-        mounted = any(m for n in nodes for m in (n.get("mountpoints") or []) if m)
+        mounted = any(m and not _legacy_mount(m) for n in nodes for m in (n.get("mountpoints") or []))
         # A disk holding the PVE volume group serves the host even when the
         # LVs that use it are not mounted.
         holds_pve = any(n.get("name", "").startswith("pve-") for n in nodes)
@@ -134,6 +194,8 @@ def _disks(lsblk_text: str, by_id_text: str) -> list[dict]:
                 "rotational": bool(dev.get("rota")),
                 "system": mounted or holds_pve,
                 "signatures": signatures,
+                "partitions": _partitions(dev),
+                "smart": smart.get(ids.get(dev["name"], dev["name"]), {"health": "unknown"}),
             }
         )
     return sorted(disks, key=lambda d: d["id"])
@@ -217,7 +279,7 @@ def parse(raw: Path) -> dict:
         "pve_version": version.group(1) if version else None,
         "cpu": _cpu(texts["lscpu"]),
         "memory_mib": _memory_mib(texts["meminfo"]),
-        "disks": _disks(texts["lsblk"], texts["disk-by-id"]),
+        "disks": _disks(texts["lsblk"], texts["disk-by-id"], texts["smart"]),
         "storage": _storage(texts["storage"]),
         "gpus": _gpus(texts["lspci"], texts["iommu"], texts["nvidia-smi"]),
     }

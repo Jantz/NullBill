@@ -30,6 +30,20 @@ def test_golden(cls, facts):
     assert text == path.read_text()
 
 
+def legacy_config() -> dict:
+    """The large class with its old NTFS disk kept and shared."""
+    return {**fixture_config("large"), "disks": {"ata-SYNTHETIC_HDD_0002": {"use": "legacy"}}}
+
+
+def test_golden_legacy(facts):
+    """A variant of the large class: its old Windows data disk kept as legacy."""
+    text = plan_text(build_model(legacy_config()), json.dumps(facts("large"), sort_keys=True).encode())
+    path = GOLDEN / "large-legacy.plan.yaml"
+    if os.environ.get("UPDATE_GOLDEN"):
+        path.write_text(text)
+    assert text == path.read_text()
+
+
 @pytest.mark.parametrize("cls", CLASSES)
 def test_rendered_plan_parses_back(cls, facts):
     model, f = build_model(fixture_config(cls)), facts(cls)

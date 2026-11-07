@@ -1,0 +1,8 @@
+# The files guest: Samba sharing the disks kept from a previous OS to the
+# owner (docs/adr/0007-legacy-disks.md). apply runs this with the plan's
+# shares and the share user's password.
+- name: Files share
+  hosts: all
+  become: false
+  roles:
+    - files

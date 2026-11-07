@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from nullbill import backups, ci, lan
+from nullbill import backups, ci, lan, legacy
 from nullbill.artifacts import write_build
 from nullbill.errors import NullBillError
 from nullbill.flows import mac
@@ -77,6 +77,8 @@ class Context:
     known_hosts: Path | None = None  # the controller's own, ~/.ssh/known_hosts
     run: Runner | None = None  # verify's runner; the real one is ssh_run
     log: list[str] = field(default_factory=list)
+    files_stopped: bool = False  # apply stopped the files guest for a disk change
+    legacy_mounted: bool = False  # a kept disk was mounted in this run
 
     @property
     def bare(self) -> dict:
@@ -147,7 +149,11 @@ def stage_render(ctx: Context) -> None:
 
 
 def stage_host(ctx: Context) -> None:
-    api = {"host_baseline_api_name": f"pve.{ctx.bare['domain']}", "host_baseline_api_address": ctx.bare["zones"]["mgmt"]["host_ip"]}
+    api = {
+        "host_baseline_api_name": f"pve.{ctx.bare['domain']}",
+        "host_baseline_api_address": ctx.bare["zones"]["mgmt"]["host_ip"],
+        "host_baseline_ntfs": any(m["fstype"] == "ntfs" for m in legacy.mounts(ctx.bare)),
+    }
     run_playbook(ctx, "host", "host-baseline.yml", None, api)
     # Before the firewall: a close in this run ends the LAN path apply came by.
     run_playbook(ctx, "host", "console.yml", None, console_vars(ctx))
@@ -349,10 +355,171 @@ def backup_disk(ctx: Context) -> None:
     if not backups.enabled(ctx.plan):
         return
     disk_id, _ = backups.disk(ctx.plan)
+    # The probe may have missed a kept disk's mount (the disk was out); what
+    # apply last mounted is the record that keeps its data from the wipe.
+    if any(m["disk"] == disk_id for m in kept_disks(ctx)):
+        raise ApplyError("tofu", f"{disk_id} holds a disk kept as legacy; converting it needs a verified copy first, so it is not erased")
     wipe = "1" if ctx.model.get("disks", {}).get(disk_id, {}).get("wipe") else "0"
     out = host_out(ctx, "tofu", shlex.join(["/usr/local/sbin/nb-backup-disk", disk_id, wipe])).strip()
     if out == "made":
         ctx.say(f"tofu: {disk_id} is now the {backups.DISK_STORAGE} storage for PBS")
+
+
+# Disks kept from a previous OS (legacy.py): the host mounts them before
+# OpenTofu, and the files guest gets each as a bind mount point after.
+LEGACY = "/usr/local/sbin/nb-legacy-disk"
+DISKS_FILE = "disks.json"
+FILES = "files"
+
+
+def kept_disks(ctx: Context) -> list[dict]:
+    """What apply last mounted ($NULLBILL_HOME/disks.json)."""
+    path = ctx.home / DISKS_FILE
+    return json.loads(path.read_text())["mounts"] if path.exists() else []
+
+
+def files_vmid(ctx: Context) -> int:
+    return ctx.model["network"]["vmid_base"] + ctx.model["services"][FILES]["id"]
+
+
+def files_running(ctx: Context) -> bool:
+    rc, out, _ = ctx.reach.host(f"pct status {files_vmid(ctx)}")
+    return rc == 0 and "running" in out
+
+
+def stop_files(ctx: Context) -> None:
+    """Before a kept mount changes under it: a container keeps its own copy of
+    the mount, so it must not run while the host unmounts."""
+    if not ctx.files_stopped and files_mount_points(ctx) is not None and files_running(ctx):
+        host_out(ctx, "tofu", f"pct shutdown {files_vmid(ctx)} --timeout 60 --forceStop 1")
+        ctx.say("tofu: stopped the files guest while its disks change")
+    ctx.files_stopped = True
+
+
+def legacy_disks(ctx: Context) -> None:
+    """Mount each kept partition and unmount those the plan dropped. The
+    host script refuses anything unsafe (nb-legacy-disk)."""
+    ctx.legacy_mounted = ctx.files_stopped = False
+    want = {m["name"]: m for m in legacy.mounts(ctx.bare)}
+    listed = {}
+    for line in host_out(ctx, "tofu", f"{LEGACY} list 2>/dev/null || true").splitlines():
+        name, uuid, mode, fstype, state = line.split()
+        listed[name] = (uuid, mode, fstype, state)
+    gone = sorted(set(listed) - set(want))
+    changed = [n for n in want if n in listed and listed[n] != (want[n]["uuid"], want[n]["mode"], want[n]["fstype"], "mounted")]
+    detach_stale(ctx)
+    if gone or changed:
+        stop_files(ctx)
+    for name in gone:
+        host_out(ctx, "tofu", shlex.join([LEGACY, "unmount", name]))
+        ctx.say(f"tofu: stopped keeping {legacy.LEGACY_ROOT}/{name}; its disk is left as it is")
+    host_id = str(legacy.HOST_ID_OFFSET + legacy.SHARE_UID)
+    for name, m in sorted(want.items()):
+        argv = [LEGACY, "mount", m["disk"], str(m["n"]), m["uuid"], m["fstype"], m["mode"], name, host_id, host_id]
+        if host_out(ctx, "tofu", shlex.join(argv)).strip() == "mounted":
+            ctx.say(f"tofu: mounted partition {m['n']} of {m['disk']} {'read-write' if m['mode'] == 'rw' else 'read-only'} at {m['mount']}")
+            ctx.legacy_mounted = True
+    record_disks(ctx, list(want.values()))
+
+
+def record_disks(ctx: Context, mounts: list[dict]) -> None:
+    """disks.json: each kept mount with its used and total bytes, for the page
+    and for converting the disk later."""
+    out = []
+    for m in mounts:
+        found = json.loads(host_out(ctx, "tofu", f"findmnt -b -J -o USED,SIZE --mountpoint {shlex.quote(m['mount'])}") or "{}")
+        sizes = (found.get("filesystems") or [{}])[0]
+        keys = ("disk", "n", "uuid", "fstype", "mode", "name", "mount")
+        out.append({k: m[k] for k in keys} | {"used_bytes": sizes.get("used"), "size_bytes": sizes.get("size")})
+    path = ctx.home / DISKS_FILE
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"mounts": out}, indent=2, sort_keys=True) + "\n")
+    tmp.replace(path)
+
+
+def mount_point(m: dict) -> str:
+    ro = "1" if m["mode"] == "ro" else "0"
+    # backup=0 says so in the config; PVE never backs up a bind mount anyway.
+    return f"{m['mount']},mp={legacy.SHARE_ROOT}/{m['name']},backup=0,ro={ro}"
+
+
+def _mp_fields(value: str) -> tuple[str, str, str]:
+    """What matters in a mount point line, however PVE orders it: the host
+    path, the path in the guest and read-only."""
+    head, *rest = value.split(",")
+    opts = dict(item.split("=", 1) for item in rest if "=" in item)
+    return head, opts.get("mp", ""), opts.get("ro", "0")
+
+
+def files_mount_points(ctx: Context) -> tuple[dict[str, tuple[int, str]], set[int]] | None:
+    """The files guest's kept-disk mount points (host path -> index, value)
+    and every mpN index in use; None while no files guest of NullBill's
+    exists (a container of the owner's own may hold the VMID)."""
+    vmid = files_vmid(ctx)
+    rc, config, _ = ctx.reach.host(f"pct config {vmid}")
+    if rc != 0 or "hostname: files" not in config.splitlines():
+        return None
+    current = {}
+    used = set()
+    for line in config.splitlines():
+        key, _, value = line.partition(": ")
+        if key.startswith("mp") and key[2:].isdigit():
+            used.add(int(key[2:]))
+            if value.startswith(legacy.LEGACY_ROOT + "/"):
+                current[value.split(",", 1)[0]] = (int(key[2:]), value)
+    return current, used
+
+
+def detach_stale(ctx: Context) -> None:
+    """Before the host unmounts anything or OpenTofu removes the guest: take
+    off each mount point the plan no longer shares."""
+    found = files_mount_points(ctx)
+    if found is None:
+        return
+    current, _ = found
+    keep = {m["mount"] for m in legacy.shares(ctx.bare)} if FILES in ctx.bare["guests"] else set()
+    stale = [f"mp{current[path][0]}" for path in sorted(set(current) - keep)]
+    if stale:
+        stop_files(ctx)
+        host_out(ctx, "tofu", f"pct set {files_vmid(ctx)} --delete {','.join(stale)}")
+        ctx.say(f"tofu: took {len(stale)} kept disk(s) off the files guest")
+
+
+def attach_shares(ctx: Context) -> None:
+    """Each shared mount as a bind mount point of the files guest, set as
+    root (PVE refuses bind mounts to API tokens), keeping each mpN index."""
+    if FILES not in ctx.bare["guests"]:
+        return
+    vmid = files_vmid(ctx)
+    found = files_mount_points(ctx)
+    if found is None:
+        raise ApplyError("tofu", f"container {vmid} is not NullBill's files guest")
+    current, used = found
+    want = legacy.shares(ctx.bare)
+    sets = []
+    for m in want:
+        if m["mount"] in current:
+            index, value = current[m["mount"]]
+        else:
+            index = min(i for i in range(256) if i not in used)
+            used.add(index)
+            value = ""
+        line = mount_point(m)
+        if not value or _mp_fields(value) != _mp_fields(line):
+            sets.append(f"--mp{index} {shlex.quote(line)}")
+    if not sets and not ctx.files_stopped and not ctx.legacy_mounted:
+        return
+    if sets:
+        stop_files(ctx)
+        host_out(ctx, "tofu", f"pct set {vmid} {' '.join(sets)}")
+        ctx.say(f"tofu: gave the files guest {len(want)} kept disk(s) as mount points")
+    if files_running(ctx):
+        # A disk mounted on the host after the guest started shows up in it
+        # only once the guest starts again.
+        host_out(ctx, "tofu", f"pct reboot {vmid} --timeout 60")
+    else:
+        host_out(ctx, "tofu", f"pct start {vmid}")
+    ctx.files_stopped = False
 
 
 def stage_tofu(ctx: Context) -> None:
@@ -360,8 +527,10 @@ def stage_tofu(ctx: Context) -> None:
     work.mkdir(mode=0o700, exist_ok=True)
     (work / "main.tf.json").write_text(ctx.files["tofu/main.tf.json"])
     windows_iso(ctx, "tofu")
+    legacy_disks(ctx)
     backup_disk(ctx)
     run_tofu(ctx, "tofu", init=True, downloads=True)
+    attach_shares(ctx)
     # The host reaches the zones through the router, not its LAN gateway.
     host_files(ctx, "tofu", "/etc/systemd/system", {ROUTES_UNIT: routes_unit(ctx)})
     host_out(ctx, "tofu", f"systemctl daemon-reload && systemctl enable -q {ROUTES_UNIT} && systemctl restart {ROUTES_UNIT}")
@@ -631,6 +800,17 @@ def stage_forgejo(ctx: Context) -> None:
     ctx.secrets.set("forgejo_admin_password", password)
 
 
+def stage_files(ctx: Context) -> None:
+    """Samba on the files guest, one share per kept disk, for the owner only."""
+    if not planned(ctx, FILES):
+        return
+    shares = [{"name": m["share"], "read_only": m["mode"] == "ro"} for m in legacy.shares(ctx.bare)]
+    password = ctx.secrets.ensure("files_share_password", lambda: secrets.token_urlsafe(24))
+    run_playbook(ctx, "files", "files.yml", FILES, {"files_shares": shares, "files_password": password})
+    address = ctx.bare["guests"][FILES]["ip"]
+    ctx.say(f"files: from your devices on the tailnet, open \\\\{address}\\<share> as user nbshare; the page shows the password")
+
+
 def ssh_user_ca(ctx: Context, stage: str) -> str:
     return guest_out(ctx, stage, "step-ca", ["cat", f"{STEP}/certs/ssh_user_ca_key.pub"]).strip()
 
@@ -849,7 +1029,7 @@ def shippers(ctx: Context) -> list[str]:
     agent-managed guests, and the VMs that run sshd."""
     guests = ctx.bare["guests"]
     vms = [n for n, g in guests.items() if g["kind"] == "vm" and g["zone"] != "windows"]
-    return [n for n in guests if n == "operator" or n in agent_guests(ctx) or n in vms]
+    return [n for n in guests if n in ("operator", FILES) or n in agent_guests(ctx) or n in vms]
 
 
 # The host label and certificate name of the PVE host's own shipper.
@@ -1042,6 +1222,7 @@ STAGES: list[Stage] = [
     ("postgres", stage_postgres),
     ("monitoring", stage_monitoring),
     ("forgejo", stage_forgejo),
+    ("files", stage_files),
     ("ci", stage_ci),
     ("agents", stage_agents),
     ("logs", stage_logs),

@@ -1,6 +1,6 @@
 # ADR 0007: Keeping, sharing and later converting a disk from a previous OS
 
-Status: proposed, awaiting owner review
+Status: accepted (owner approved ntfs-3g and Samba, 2026-11-07)
 
 ## Context
 

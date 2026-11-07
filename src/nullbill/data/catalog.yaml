@@ -190,6 +190,18 @@ services:
     ports:
       # Each clone fetches its one-time runner registration here at boot.
       - {port: 8443, proto: tcp, from: ["zone:build", "service:monitoring"]}
+  files:
+    id: 23
+    kind: lxc
+    # mgmt: owner-only, and out to the internet only through the proxy.
+    zone: mgmt
+    # Planned by itself once a disk is kept and shared (disks.<id>.use:
+    # legacy); never listed in intent.workloads.
+    workload: files
+    description: Shares disks kept from a previous OS to the owner over SMB. Holds the owner's files, so never agent-managed. Not backed up.
+    floor: {cores: 1, memory_mib: 512, disk_gib: 4}
+    ports:
+      - {port: 445, proto: tcp, from: ["role:owner"]}
   linux-runner:
     id: 30
     kind: vm-pool

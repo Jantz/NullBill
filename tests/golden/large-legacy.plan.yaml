@@ -1,0 +1,365 @@
+# NullBill plan. Generated; change config.yaml instead of this file.
+# facts sha256: 69fb7249f339504e
+# Follows the discrete GPU count: none, one, several.
+class: large
+host:
+  threads: 32
+  host_mib: 257617
+  # Left to PVE itself; pin with host.reserve.memory_mib.
+  reserve_mib: 4096
+  guests_mib: 100864
+  # Not assigned to any guest.
+  unallocated_mib: 152657
+  # Off. host.console.enabled shows the NullBill page on a monitor plugged into the server.
+  console:
+    enabled: false
+disk:
+  storage: local-lvm
+  # Includes one golden template per pool.
+  needed_gib: 1632
+  free_gib: 1664
+  # Holds the downloaded container template and cloud image.
+  media: local
+domain: nullbill.internal
+# Uplink-less bridges; the router guest routes between them.
+zones:
+  mgmt:
+    bridge: vmbr101
+    subnet: 10.42.1.0/24
+    gateway: 10.42.1.1
+    egress: proxy
+    host_ip: 10.42.1.254
+  services:
+    bridge: vmbr102
+    subnet: 10.42.2.0/24
+    gateway: 10.42.2.1
+    egress: direct
+  build:
+    bridge: vmbr103
+    subnet: 10.42.3.0/24
+    gateway: 10.42.3.1
+    egress: proxy
+  inference:
+    bridge: vmbr104
+    subnet: 10.42.4.0/24
+    gateway: 10.42.4.1
+    egress: proxy
+  windows:
+    bridge: vmbr105
+    subnet: 10.42.5.0/24
+    gateway: 10.42.5.1
+    egress: proxy
+  access:
+    bridge: vmbr106
+    subnet: 10.42.6.0/24
+    gateway: 10.42.6.1
+    egress: direct
+guests:
+  router:
+    kind: vm
+    zone: mgmt
+    cores: 1
+    memory_mib: 512
+    disk_gib: 4
+    vmid: 2001
+    attach: all-zones
+    # One leg in every planned zone.
+    ips:
+      mgmt: 10.42.1.1
+      services: 10.42.2.1
+      build: 10.42.3.1
+      inference: 10.42.4.1
+      windows: 10.42.5.1
+      access: 10.42.6.1
+  nullbill:
+    kind: lxc
+    zone: mgmt
+    cores: 1
+    memory_mib: 768
+    disk_gib: 8
+    vmid: 2002
+    ip: 10.42.1.2
+    # Made by install.sh; apply adds its mgmt leg (docs/adr/0006-nullbill-on-the-server.md).
+    installed: true
+  egress-proxy:
+    kind: lxc
+    zone: services
+    cores: 1
+    memory_mib: 512
+    disk_gib: 4
+    vmid: 2010
+    ip: 10.42.2.10
+  vpn:
+    kind: lxc
+    zone: access
+    cores: 1
+    memory_mib: 256
+    disk_gib: 2
+    vmid: 2011
+    ip: 10.42.6.11
+  step-ca:
+    kind: lxc
+    zone: mgmt
+    cores: 1
+    memory_mib: 256
+    disk_gib: 2
+    vmid: 2012
+    ip: 10.42.1.12
+  postgres:
+    kind: lxc
+    zone: services
+    cores: 1
+    memory_mib: 1024
+    disk_gib: 16
+    vmid: 2013
+    ip: 10.42.2.13
+  monitoring:
+    kind: lxc
+    zone: mgmt
+    cores: 1
+    memory_mib: 1536
+    disk_gib: 32
+    vmid: 2014
+    ip: 10.42.1.14
+  pbs:
+    kind: vm
+    zone: mgmt
+    cores: 1
+    memory_mib: 2048
+    disk_gib: 8
+    vmid: 2015
+    ip: 10.42.1.15
+  operator:
+    kind: lxc
+    zone: mgmt
+    cores: 1
+    memory_mib: 512
+    disk_gib: 8
+    vmid: 2016
+    ip: 10.42.1.16
+  forgejo:
+    kind: lxc
+    zone: services
+    cores: 1
+    memory_mib: 1024
+    disk_gib: 32
+    vmid: 2017
+    ip: 10.42.2.17
+  runner-dispatcher:
+    kind: lxc
+    zone: services
+    cores: 1
+    memory_mib: 256
+    disk_gib: 4
+    vmid: 2018
+    ip: 10.42.2.18
+  files:
+    kind: lxc
+    zone: mgmt
+    cores: 1
+    memory_mib: 512
+    disk_gib: 4
+    vmid: 2023
+    ip: 10.42.1.23
+  linux-runner:
+    kind: vm-pool
+    zone: build
+    cores: 2
+    memory_mib: 2048
+    disk_gib: 32
+    # Clones, limited by host threads.
+    count: 16
+    template_vmid: 2030
+    # Clones take DHCP leases from this range.
+    clone_range: 10.42.3.128/26
+    # The golden image's reserved lease while apply bakes it.
+    template_ip: 10.42.3.129
+    # The dispatcher clones one per queued job into these.
+    clone_vmids: 6000-6015
+    agent_managed: true
+  workspace:
+    kind: lxc
+    zone: build
+    cores: 1
+    memory_mib: 1024
+    disk_gib: 32
+    vmid: 2019
+    ip: 10.42.3.19
+    agent_managed: true
+  inference:
+    kind: lxc
+    zone: inference
+    cores: 2
+    memory_mib: 8192
+    disk_gib: 64
+    vmid: 2020
+    ip: 10.42.4.20
+    agent_managed: true
+  model-gateway:
+    kind: lxc
+    zone: inference
+    cores: 1
+    memory_mib: 512
+    disk_gib: 4
+    vmid: 2021
+    ip: 10.42.4.21
+  windows-runner:
+    kind: vm-pool
+    zone: windows
+    cores: 2
+    memory_mib: 4096
+    disk_gib: 64
+    # Clones, limited by disk.
+    count: 11
+    template_vmid: 2031
+    # Clones take DHCP leases from this range.
+    clone_range: 10.42.5.128/26
+    # The golden image's reserved lease while apply bakes it.
+    template_ip: 10.42.5.129
+    # The dispatcher clones one per queued job into these.
+    clone_vmids: 6100-6110
+    agent_managed: true
+  windows-dev:
+    kind: vm
+    zone: windows
+    cores: 2
+    memory_mib: 4096
+    disk_gib: 96
+    vmid: 2022
+    ip: 10.42.5.22
+gpus:
+  # Owned by the host and shared; consumers list their VRAM budget in MiB.
+  '0000:17:00.0':
+    name: NVIDIA Corporation Synthetic GPU 48G
+    owner: host-shared
+    vram_mib: 49140
+    consumers:
+      inference: 49140
+  # Owned by the host and shared; consumers list their VRAM budget in MiB.
+  0000:65:00.0:
+    name: NVIDIA Corporation Synthetic GPU 48G
+    owner: host-shared
+    vram_mib: 49140
+    consumers:
+      inference: 49140
+inference:
+  # Chosen for 2 inference GPU(s) by the catalog engine table.
+  engine: vllm
+disks:
+  # Kept as it is: mounted read-only under /mnt/nb-legacy and shared to the owner over the VPN as data (docs/runbooks/legacy-disk.md). Not backed up by NullBill; keep a copy elsewhere. Left alone: partition 1 (Microsoft reserved).
+  ata-SYNTHETIC_HDD_0002:
+    size_gib: 3726
+    signatures:
+      - gpt
+      - ntfs
+    health: PASSED
+    use: legacy
+    partitions: [{fstype: ntfs, label: Data, mode: ro, mount: /mnt/nb-legacy/data, n: 2, share: data, uuid: 0123456789ABCDEF}]
+  # Blank, so it becomes the PBS datastore.
+  ata-SYNTHETIC_HDD_0003:
+    size_gib: 3726
+    signatures: []
+    health: PASSED
+    use: pbs
+  # Holds PVE; never touched.
+  nvme-SYNTHETIC_NVME_0001:
+    size_gib: 1863
+    signatures:
+      - LVM2_member
+      - ext4
+      - gpt
+      - vfat
+    use: system
+# PBS on its own disk.
+backups:
+  target: pbs datastore on ata-SYNTHETIC_HDD_0003
+  status: ok
+# Allowed flows; everything else is denied.
+flows:
+  - zone:* -> router udp/53
+  - zone:* -> router tcp/53
+  - host -> router tcp/22
+  - role:owner -> router tcp/22
+  - service:monitoring -> router tcp/9100
+  - role:owner -> nullbill tcp/8443
+  - host -> nullbill tcp/8443
+  - service:operator -> nullbill tcp/8443
+  - service:monitoring -> nullbill tcp/9100
+  - zone:mgmt -> egress-proxy tcp/3128
+  - zone:build -> egress-proxy tcp/3128
+  - zone:inference -> egress-proxy tcp/3128
+  - zone:windows -> egress-proxy tcp/3128
+  - service:monitoring -> egress-proxy tcp/9100
+  - service:monitoring -> vpn tcp/9100
+  - zone:* -> step-ca tcp/443
+  - service:monitoring -> step-ca tcp/9100
+  - service:forgejo -> postgres tcp/5432
+  - service:monitoring -> postgres tcp/9100
+  - role:owner -> monitoring tcp/3000
+  - zone:* -> monitoring tcp/3100
+  - service:operator -> monitoring tcp/9090
+  - service:nullbill -> monitoring tcp/9090
+  - service:monitoring -> monitoring tcp/9100
+  - host -> pbs tcp/8007
+  - role:owner -> pbs tcp/8007
+  - host -> pbs tcp/22
+  - service:monitoring -> pbs tcp/9100
+  - service:monitoring -> operator tcp/9100
+  - role:owner -> forgejo tcp/443
+  - role:default -> forgejo tcp/443
+  - zone:build -> forgejo tcp/443
+  - zone:windows -> forgejo tcp/443
+  - service:runner-dispatcher -> forgejo tcp/443
+  - service:monitoring -> forgejo tcp/443
+  - role:owner -> forgejo tcp/22
+  - role:default -> forgejo tcp/22
+  - service:monitoring -> forgejo tcp/9100
+  - zone:build -> runner-dispatcher tcp/8443
+  - service:monitoring -> runner-dispatcher tcp/8443
+  - service:monitoring -> runner-dispatcher tcp/9100
+  - role:owner -> files tcp/445
+  - service:monitoring -> files tcp/9100
+  - host -> linux-runner tcp/22
+  - service:operator -> linux-runner tcp/22
+  - role:default -> workspace tcp/22
+  - role:owner -> workspace tcp/22
+  - service:operator -> workspace tcp/22
+  - service:monitoring -> workspace tcp/9100
+  - service:operator -> inference tcp/22
+  - service:monitoring -> inference tcp/9100
+  - zone:build -> model-gateway tcp/4000
+  - role:owner -> model-gateway tcp/4000
+  - service:monitoring -> model-gateway tcp/9100
+  - role:owner -> windows-dev tcp/3389
+  - role:owner -> the PVE host tcp/8006
+  - service:nullbill -> the PVE host tcp/8006
+  - service:operator -> the PVE host tcp/8006
+  - service:runner-dispatcher -> the PVE host tcp/8006
+  - role:owner -> the PVE host tcp/22
+  - service:nullbill -> the PVE host tcp/22
+  - service:monitoring -> the PVE host tcp/9100
+people:
+  owner-a: owner
+  dev-b: default
+updates:
+  # Debian security updates install by themselves on the host and every Linux guest.
+  security: nightly
+  # When a guest whose update needs a reboot reboots.
+  reboot_at: 04:30
+  # These wait for the owner: the host takes every guest down, agents run long jobs. Monitoring reminds.
+  owner_reboots:
+    - host
+    - workspace
+    - inference
+  # Windows Update is not managed by NullBill yet.
+  not_managed:
+    - windows-runner
+    - windows-dev
+# Tailscale Personal: free for personal, non-commercial use. One group per role; the vpn guest is the tagged device.
+tailnet:
+  users: 2 of 6
+  groups: 2 of 3
+  tagged_devices: 1 of 50
+owner_supplies:
+  - Windows ISO
+  - Windows licence

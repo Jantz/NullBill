@@ -55,3 +55,10 @@ iommu:
     /sys/kernel/iommu_groups/14/devices/0000:01:00.1
 nvidia-smi:
   out: "00000000:01:00.0, Synthetic GPU 24G, 24564\n"
+smart:
+  out: |
+    == /dev/nvme0n1
+    {"device": {"name": "/dev/nvme0n1", "protocol": "NVMe"}, "smart_status": {"passed": true}, "power_on_time": {"hours": 900}}
+    == /dev/sda
+    {"device": {"name": "/dev/sda", "protocol": "ATA"}, "smart_status": {"passed": true}, "power_on_time": {"hours": 20},
+     "ata_smart_attributes": {"table": [{"id": 5, "name": "Reallocated_Sector_Ct", "raw": {"value": 0}}]}}

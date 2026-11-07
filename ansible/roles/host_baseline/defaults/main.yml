@@ -9,3 +9,7 @@ host_baseline_api_address: ""
 # Start, reload and load services. Only the container test turns this off,
 # because a container has neither an init system nor kernel audit.
 host_baseline_manage_services: true
+
+# Install ntfs-3g for a disk kept from a previous OS; apply sets it when the
+# plan keeps an NTFS partition.
+host_baseline_ntfs: false

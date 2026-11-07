@@ -117,6 +117,22 @@
     dest: /usr/local/sbin/nb-backup-disk
     mode: "0755"
 
+# apply runs it before OpenTofu for each partition the plan keeps from a
+# previous OS (docs/adr/0007-legacy-disks.md).
+- name: Kept disk script
+  ansible.builtin.copy:
+    src: nb-legacy-disk
+    dest: /usr/local/sbin/nb-legacy-disk
+    mode: "0755"
+
+# The NTFS driver for kept disks, with ntfs-3g.probe and ntfsinfo, which
+# tell a volume Windows left hibernated, unclean or marked for chkdsk.
+- name: ntfs-3g, when the plan keeps an NTFS disk
+  ansible.builtin.apt:
+    name: [ntfs-3g]
+    state: present
+  when: host_baseline_ntfs | bool
+
 # Each guest's newest encrypted backup, hourly, for the monitoring role's
 # BackupTooOld alert; it writes nothing until the nightly job exists.
 - name: Backup metrics script

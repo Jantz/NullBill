@@ -1,5 +1,5 @@
 # NullBill plan. Generated; change config.yaml instead of this file.
-# facts sha256: 46cfccf92b43f2dc
+# facts sha256: bf7c4939b50436bf
 # Follows the discrete GPU count: none, one, several.
 class: small
 host:

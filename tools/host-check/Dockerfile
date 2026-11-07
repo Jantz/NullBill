@@ -8,10 +8,12 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod +x /usr/sbin
  && apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       ansible-core python3-apt openssh-server ca-certificates curl lvm2 e2fsprogs \
+      dosfstools exfatprogs \
  && cat /tmp/extra-ca.crt >> /etc/ssl/certs/ca-certificates.crt \
  && curl -fsSLo /usr/share/keyrings/proxmox-archive-keyring.gpg \
       https://enterprise.proxmox.com/debian/proxmox-archive-keyring-trixie.gpg \
  && echo "136673be77aba35dcce385b28737689ad64fd785a797e57897589aed08db6e45  /usr/share/keyrings/proxmox-archive-keyring.gpg" | sha256sum -c - \
  && rm -rf /var/lib/apt/lists/*
+COPY legacy-disk.sh /usr/local/lib/legacy-disk.sh
 COPY check.sh /usr/local/bin/check.sh
 ENTRYPOINT ["bash", "/usr/local/bin/check.sh"]

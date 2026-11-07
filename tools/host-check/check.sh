@@ -5,12 +5,14 @@ set -euo pipefail
 
 play() {
   ansible-playbook -i localhost, -c local -e host_baseline_manage_services=false \
-    -e host_baseline_api_name=pve.nullbill.internal -e host_baseline_api_address=10.42.1.254 /ansible/host-baseline.yml
+    -e host_baseline_ntfs=true -e host_baseline_api_name=pve.nullbill.internal -e host_baseline_api_address=10.42.1.254 /ansible/host-baseline.yml
 }
 fail() {
   echo "FAIL $1"
   exit 1
 }
+# shellcheck source=tools/host-check/legacy-disk.sh
+source /usr/local/lib/legacy-disk.sh
 
 dpkg-query -W -f '${Package} ${Version}\n' ansible-core openssh-server
 ssh-keygen -A >/dev/null
@@ -122,6 +124,8 @@ chmod +x /usr/bin/pvesh
 test ! -e /var/lib/prometheus/node-exporter/nullbill-backups.prom || fail "backup metrics written without a job"
 grep -qx "OnUnitActiveSec=1h" /etc/systemd/system/nb-backup-metrics.timer || fail "backup metrics timer"
 echo "ok   backup metrics script and hourly timer, silent until the nightly job exists"
+
+legacy_disk_checks
 
 test -s /etc/audit/rules.d/50-nullbill.rules || fail "audit rules"
 echo "ok   audit rules installed (loading them needs a kernel; not checked here)"

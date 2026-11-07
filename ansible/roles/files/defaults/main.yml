@@ -1,0 +1,12 @@
+# One share per kept disk, as {name, read_only}; the files guest sees each
+# at /srv/share/<name> (a bind mount point apply sets). apply fills it in.
+files_shares: []
+# The one user who may connect. uid 1000 is host uid 101000, which owns the
+# kept disks' files (nb-legacy-disk).
+files_user: nbshare
+files_uid: 1000
+# The user's password: apply makes it once and keeps it in the secrets file.
+files_password: ""
+files_share_root: /srv/share
+# Start and reload smbd. Only the container check turns this off.
+files_manage_services: true

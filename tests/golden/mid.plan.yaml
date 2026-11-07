@@ -1,5 +1,5 @@
 # NullBill plan. Generated; change config.yaml instead of this file.
-# facts sha256: 52e009dd29ce93fa
+# facts sha256: 3719686068cb9658
 # Follows the discrete GPU count: none, one, several.
 class: mid
 host:
@@ -235,6 +235,7 @@ disks:
   ata-SYNTHETIC_HDD_0002:
     size_gib: 1863
     signatures: []
+    health: PASSED
     use: pbs
   # Holds PVE; never touched.
   nvme-SYNTHETIC_NVME_0001:

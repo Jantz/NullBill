@@ -14,6 +14,8 @@ log_shipper_sources:
   - {job: auth, match: [SYSLOG_IDENTIFIER=sshd]}
   # OpenSSH 9.8 and later (Debian 13, PVE 9) log logins from sshd-session.
   - {job: auth, match: [SYSLOG_IDENTIFIER=sshd-session]}
+  # Samba's logons on the files guest (auth_audit, ansible/roles/files).
+  - {job: auth, match: [SYSLOG_IDENTIFIER=smbd]}
 # Names the machine's own resolver does not know, as {name: address}. The
 # PVE host asks the owner's LAN for names, which knows nothing under the
 # NullBill domain, so apply gives it the gate's address here.

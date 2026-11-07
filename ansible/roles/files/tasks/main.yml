@@ -1,0 +1,95 @@
+- name: A password from apply
+  ansible.builtin.assert:
+    that: files_password | length >= 16
+    fail_msg: files_password is missing or short; run this through nullbill apply
+
+- name: Share names
+  ansible.builtin.assert:
+    that: item.name is match('^[a-z][a-z0-9-]{0,30}$')
+    fail_msg: "bad share name {{ item.name }}"
+  loop: "{{ files_shares }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Samba
+  ansible.builtin.apt:
+    name: [samba]
+    install_recommends: false
+    update_cache: true
+
+# NetBIOS name service is off (disable netbios); clients connect by address.
+- name: No nmbd
+  ansible.builtin.systemd_service:
+    name: nmbd
+    enabled: false
+    state: stopped
+  when: files_manage_services | bool
+
+- name: Share group
+  ansible.builtin.group:
+    name: "{{ files_user }}"
+    gid: "{{ files_uid }}"
+
+- name: Share user, without a login
+  ansible.builtin.user:
+    name: "{{ files_user }}"
+    uid: "{{ files_uid }}"
+    group: "{{ files_user }}"
+    shell: /usr/sbin/nologin
+    create_home: false
+    password: "!"
+
+# The bind mount points apply sets land here; empty until then.
+- name: Share root
+  ansible.builtin.file:
+    path: "{{ files_share_root }}"
+    state: directory
+    mode: "0755"
+
+- name: smb.conf, checked before it replaces the last
+  ansible.builtin.template:
+    src: smb.conf.j2
+    dest: /etc/samba/smb.conf
+    mode: "0644"
+    validate: testparm -s --suppress-prompt %s
+  register: files_conf
+
+# smbpasswd keeps only a hash, so a hash of the password apply gave is kept
+# beside it (root only) to tell whether it changed.
+- name: Password as last set
+  ansible.builtin.slurp:
+    src: /etc/samba/nb-share-password.sha256
+  register: files_set
+  failed_when: false
+  changed_when: false
+
+- name: Set the share user's password
+  when: (files_set.content | default('') | b64decode | trim) != (files_password | hash('sha256'))
+  no_log: true
+  block:
+    - name: smbpasswd
+      ansible.builtin.command:
+        argv: [smbpasswd, -s, -a, "{{ files_user }}"]
+        stdin: "{{ files_password }}\n{{ files_password }}"
+      changed_when: true
+
+    - name: Remember it
+      ansible.builtin.copy:
+        dest: /etc/samba/nb-share-password.sha256
+        content: "{{ files_password | hash('sha256') }}\n"
+        mode: "0600"
+
+- name: smbd runs
+  when: files_manage_services | bool
+  block:
+    - name: Reload smbd after a change
+      ansible.builtin.systemd_service:
+        name: smbd
+        state: restarted
+      when: files_conf.changed
+
+    - name: smbd enabled and running
+      ansible.builtin.systemd_service:
+        name: smbd
+        enabled: true
+        state: started

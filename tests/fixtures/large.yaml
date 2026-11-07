@@ -31,7 +31,10 @@ lsblk:
       ]},
       {"name": "sda", "size": 4000787030016, "type": "disk", "rota": true, "fstype": null, "pttype": "gpt", "mountpoints": [null],
        "children": [
-        {"name": "sda1", "size": 4000785104896, "type": "part", "rota": true, "fstype": "ntfs", "pttype": "gpt", "mountpoints": [null]}
+        {"name": "sda1", "size": 16777216, "type": "part", "rota": true, "fstype": null, "pttype": "gpt",
+         "parttype": "e3c9e316-0b5c-4db8-817d-f92df00215ae", "partn": 1, "label": null, "uuid": null, "mountpoints": [null]},
+        {"name": "sda2", "size": 4000767180800, "type": "part", "rota": true, "fstype": "ntfs", "pttype": "gpt",
+         "parttype": "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7", "partn": 2, "label": "Data", "uuid": "0123456789ABCDEF", "mountpoints": [null]}
       ]},
       {"name": "sdb", "size": 4000787030016, "type": "disk", "rota": true, "fstype": null, "pttype": null, "mountpoints": [null]}
     ]}
@@ -42,6 +45,7 @@ disk-by-id:
     nvme-SYNTHETIC_NVME_0001-part3 ../../nvme0n1p3
     ata-SYNTHETIC_HDD_0002 ../../sda
     ata-SYNTHETIC_HDD_0002-part1 ../../sda1
+    ata-SYNTHETIC_HDD_0002-part2 ../../sda2
     ata-SYNTHETIC_HDD_0003 ../../sdb
 storage:
   out: |
@@ -67,3 +71,13 @@ nvidia-smi:
   out: |
     00000000:17:00.0, Synthetic GPU 48G, 49140
     00000000:65:00.0, Synthetic GPU 48G, 49140
+smart:
+  out: |
+    == /dev/nvme0n1
+    {"device": {"name": "/dev/nvme0n1", "protocol": "NVMe"}, "smart_status": {"passed": true}, "power_on_time": {"hours": 1200}}
+    == /dev/sda
+    {"device": {"name": "/dev/sda", "protocol": "ATA"}, "smart_status": {"passed": true}, "power_on_time": {"hours": 41000},
+     "ata_smart_attributes": {"table": [{"id": 5, "name": "Reallocated_Sector_Ct", "raw": {"value": 0}}]}}
+    == /dev/sdb
+    {"device": {"name": "/dev/sdb", "protocol": "ATA"}, "smart_status": {"passed": true}, "power_on_time": {"hours": 10},
+     "ata_smart_attributes": {"table": [{"id": 5, "name": "Reallocated_Sector_Ct", "raw": {"value": 0}}]}}

@@ -9,7 +9,7 @@ variables and environment, never part of the rendered files.
 
 import json
 
-from nullbill import agent, backups, ci
+from nullbill import agent, backups, ci, legacy
 from nullbill.flows import mac
 from nullbill.render import strip_notes
 
@@ -139,6 +139,10 @@ def _container(name: str, guest: dict, plan: dict, model: dict, storage: str) ->
         },
         "depends_on": [_bridge_ref(plan["zones"][zone]["bridge"])],
     }
+    if legacy.shares(plan) and name == "files":
+        # apply sets the kept disks' bind mount points as root over SSH: PVE
+        # refuses bind mounts to API tokens (docs/adr/0007-legacy-disks.md).
+        container["lifecycle"] = {"ignore_changes": ["mount_point"]}
     return _in_agent_pool(container, guest)
 
 
