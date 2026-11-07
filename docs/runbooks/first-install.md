@@ -18,6 +18,12 @@ the button again. Every stage can be run again safely.
   (`https://hc-ping.com/...`). The check stays "new" until the server pings
   it for the first time. Healthchecks.io alerts the address you signed up
   with; its Integrations page adds other channels.
+- If a disk from your old Windows PC goes into the server: on that PC, while
+  the disk is still in it, shut Windows down fully with `shutdown /s /t 0`
+  (in a Command Prompt or the Run box). A normal shutdown with Fast Startup
+  on leaves the disk half asleep, and NullBill then keeps it read-only. If
+  the old PC no longer starts, or you only want to read the files, skip
+  this. Details in [legacy-disk.md](legacy-disk.md).
 - Optional, for the on-site screen: the monitor plugged into the
   motherboard's output, integrated graphics enabled in the BIOS
   (OPEN_QUESTIONS 8).
