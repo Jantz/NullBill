@@ -77,16 +77,16 @@ wait_for() {
   return 1
 }
 wait_for http://127.0.0.1:9090/-/ready || { cat /tmp/prometheus.log; fail "prometheus ready"; }
-curl -fsS http://127.0.0.1:9090/api/v1/rules | grep -q CertificateExpiresSoon || fail "prometheus loaded the rules"
+grep -q CertificateExpiresSoon <<<"$(curl -fsS http://127.0.0.1:9090/api/v1/rules)" || fail "prometheus loaded the rules"
 # The operator queries it from another guest; the guest firewall limits who.
 curl -fsS "http://$(hostname -i | cut -d' ' -f1):9090/-/ready" >/dev/null || fail "prometheus answers on the guest address"
 pass "prometheus is up on the guest address with the rules loaded"
 
 for _ in $(seq 60); do
-  curl -fsS -G http://127.0.0.1:9090/api/v1/query --data-urlencode 'query=up{job="node"}' | grep -q '"instance":"nothing-here"' && break
+  grep -q '"instance":"nothing-here"' <<<"$(curl -fsS -G http://127.0.0.1:9090/api/v1/query --data-urlencode 'query=up{job="node"}')" && break
   sleep 1
 done
-curl -fsS -G http://127.0.0.1:9090/api/v1/query --data-urlencode 'query=up{job="node"}' | grep -q '"instance":"nothing-here"' ||
+grep -q '"instance":"nothing-here"' <<<"$(curl -fsS -G http://127.0.0.1:9090/api/v1/query --data-urlencode 'query=up{job="node"}')" ||
   fail "a node target is named by its guest"
 pass "node targets are named by their guest in alerts"
 
@@ -124,12 +124,12 @@ push() {
 test "$(push "${shipper[@]}")" = 204 || fail "a shipper certificate pushes"
 found=0
 for _ in $(seq 20); do
-  curl -fsS "${tls[@]}" -G "$gate/loki/api/v1/query_range" --data-urlencode 'query={job="auth"} |~ "Failed password"' \
-    | grep -q "Failed password for root" && { found=1; break; }
+  grep -q "Failed password for root" <<<"$(curl -fsS "${tls[@]}" -G "$gate/loki/api/v1/query_range" \
+    --data-urlencode 'query={job="auth"} |~ "Failed password"')" && { found=1; break; }
   sleep 1
 done
 [ "$found" = 1 ] || fail "query the pushed line back without a certificate"
-curl -fsS http://127.0.0.1:3101/prometheus/api/v1/rules | grep -q FailedLogins || fail "loki ruler loaded FailedLogins"
+grep -q FailedLogins <<<"$(curl -fsS http://127.0.0.1:3101/prometheus/api/v1/rules)" || fail "loki ruler loaded FailedLogins"
 pass "loki stores lines a shipper pushes, anyone may query them, and the failed-login rule is loaded"
 
 test "$(push)" = 403 || fail "push without a certificate"
@@ -147,7 +147,7 @@ pass "no push without a shipper certificate; no deletes, rule changes or other p
 
 wait_for http://127.0.0.1:3000/api/health || { tail -20 /tmp/grafana.log; fail "grafana health"; }
 pw=$(cat /etc/grafana/admin-password)
-curl -fsS -u "admin:$pw" http://127.0.0.1:3000/api/datasources | grep -q '"type":"loki"' || fail "grafana data sources"
+grep -q '"type":"loki"' <<<"$(curl -fsS -u "admin:$pw" http://127.0.0.1:3000/api/datasources)" || fail "grafana data sources"
 stock="admin"  # Grafana's out-of-the-box admin password
 code=$(curl -s -o /dev/null -w '%{http_code}' -u "admin:$stock" http://127.0.0.1:3000/api/datasources)
 [ "$code" = 401 ] || fail "default admin password still works ($code)"

@@ -43,7 +43,7 @@ url=https://forgejo.nullbill.internal
 tls=(--cacert /tmp/pki/ca.crt)
 pass "forgejo answers over HTTPS with the step-ca certificate"
 basic=$(printf 'nullbill-admin:%s' "$(cat /etc/forgejo/admin-password)" | base64 -w0)
-curl -fsS "${tls[@]}" -H "Authorization: Basic $basic" "$url/api/v1/user" | grep -q '"is_admin":true' \
+grep -q '"is_admin":true' <<<"$(curl -fsS "${tls[@]}" -H "Authorization: Basic $basic" "$url/api/v1/user")" \
   || fail "the stored admin password logs in"
 pass "the first administrator logs in with the password only root can read"
 
@@ -63,7 +63,9 @@ pass "plain HTTP stays on localhost"
 
 code=$(curl -sS -o /dev/null -w '%{http_code}' "${tls[@]}" "$url/api/v1/repos/search")
 test "$code" = 401 -o "$code" = 403 || fail "anonymous API read refused (got $code)"
-curl -fsS "${tls[@]}" "$url/user/sign_up" | grep -q 'Registration is disabled' || fail "sign-up page refuses"
+# A here-string, not a pipe: grep -q stops at the first match, and under
+# pipefail curl's failed write to the closed pipe would fail the check.
+grep -q 'Registration is disabled' <<<"$(curl -fsS "${tls[@]}" "$url/user/sign_up")" || fail "sign-up page refuses"
 pass "anonymous visitors see nothing and cannot sign up"
 
 token=$(nb-forgejo admin user generate-access-token --username nullbill-admin --token-name check \
