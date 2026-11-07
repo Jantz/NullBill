@@ -12,7 +12,8 @@ References: <https://pve.proxmox.com/pve-docs/chapter-pveum.html>,
 
 ## Start a session
 
-1. Open a shell in the operator: `ssh -t root@pve.<your domain> pct enter <operator vmid>`.
+1. Open a shell in the operator: in the Proxmox web UI, select the node `pve`, open **Shell** and run
+   `pct enter <operator vmid>`.
 2. `su - agent`, then `claude` (inside `tmux` for long work). The CLI reads its key, proxy and rules from
    `/etc/claude-code/`, which only root can change.
 3. To act on a guest yourself the way the agent does: `nb-ssh <guest ip> <command>`.
@@ -72,8 +73,8 @@ in `jobs/<id>.json`). **Revoke** on the page refuses the token at once.
 
 ## Read what it did
 
-In Grafana (`http://monitoring.<your domain>:3000` over the VPN, Explore, Loki) or with
-`curl -G https://monitoring.<your domain>:3100/loki/api/v1/query_range`:
+In Grafana (`http://monitoring.nullbill.internal:3000` over the VPN, Explore, Loki) or with
+`curl -G https://monitoring.nullbill.internal:3100/loki/api/v1/query_range`:
 
 - `{job="commands"}`: every agent CLI tool call (`tool Bash: ...`) and
   every command over SSH (`ssh: ...`).

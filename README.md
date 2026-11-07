@@ -167,7 +167,7 @@ page writes it for you. By hand it looks like this:
 
 ```yaml
 target:
-  ssh: root@pve.example.internal
+  ssh: root@pve.internal
 intent:
   workloads: [agents, linux-ci]
 people:                                  # Tailscale logins; one owner is required

@@ -66,7 +66,7 @@ def fake_runner(fixture):
     by_command = {cmd: spec.get(name, {}) for name, (cmd, _) in COMMANDS.items()}
 
     def run(target, command):
-        assert target == "root@pve.example.internal"
+        assert target == "root@pve.internal"
         entry = by_command[command]
         return entry.get("rc", 0), entry.get("out", ""), entry.get("err", "")
 
@@ -74,7 +74,7 @@ def fake_runner(fixture):
 
 
 def test_run_probe_writes_facts_and_latest(tmp_path):
-    run_dir = run_probe("root@pve.example.internal", tmp_path, fake_runner("mid"))
+    run_dir = run_probe("root@pve.internal", tmp_path, fake_runner("mid"))
     latest = tmp_path / "probe" / "latest"
     assert latest.resolve() == run_dir.resolve()
     assert json.loads((latest / "facts.json").read_text())["cpu"]["threads"] == 16
@@ -85,4 +85,4 @@ def test_run_probe_fails_on_required_command(tmp_path):
         return (255, "", "ssh: connect refused") if command.startswith("lsblk") else fake_runner("mid")(target, command)
 
     with pytest.raises(NullBillError, match="lsblk"):
-        run_probe("root@pve.example.internal", tmp_path, run)
+        run_probe("root@pve.internal", tmp_path, run)

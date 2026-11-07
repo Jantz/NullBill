@@ -8,7 +8,9 @@ Reference: <https://pve.proxmox.com/pve-docs/chapter-pveum.html#pveum_tfa_auth>
 
 You do this yourself in the web UI; nullbill never sees the secret.
 
-1. Sign in to `https://pve.<your domain>:8006` as `root@pam`.
+1. Sign in to the host (`pve.internal`) at `https://<its mgmt address>:8006`
+   over Tailscale (or its home-network address while that is open) as
+   `root@pam`.
 2. Open **Datacenter → Permissions → Two Factor** and choose **Add → TOTP**.
 3. Pick the user, give the entry a description such as `phone`, scan the QR
    code with your authenticator app, enter the code it shows, and save.

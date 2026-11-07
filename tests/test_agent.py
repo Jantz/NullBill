@@ -95,7 +95,7 @@ def _agent_results(facts, **kw):
     from nullbill.agent import check
 
     plan, _ = planned(facts, "mid")
-    return plan, {r.name: (r.status, r.detail) for r in check(plan, "root@pve.example.internal", agent_api(plan, **kw))}
+    return plan, {r.name: (r.status, r.detail) for r in check(plan, "root@pve.internal", agent_api(plan, **kw))}
 
 
 def test_correct_grants_pass(facts):

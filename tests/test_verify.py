@@ -49,7 +49,7 @@ def statuses(results):
 
 def test_correct_host_passes_everything_it_can(facts):
     plan, model = setup(facts)
-    results = run_verify(plan, model, "root@pve.example.internal", firewall(plan, model), lambda h, p: "timeout", lambda n: PUBLIC)
+    results = run_verify(plan, model, "root@pve.internal", firewall(plan, model), lambda h, p: "timeout", lambda n: PUBLIC)
     by = statuses(results)
     assert by["FAIL"] == []
     assert [r.name for r in by["SKIP"]] == ["zone windows"]
@@ -65,7 +65,7 @@ def test_correct_host_passes_everything_it_can(facts):
 
 def test_open_host_fails_every_denial(facts):
     plan, model = setup(facts)
-    results = run_verify(plan, model, "root@pve.example.internal", firewall(plan, model, leak=True), lambda h, p: "open", lambda n: PUBLIC)
+    results = run_verify(plan, model, "root@pve.internal", firewall(plan, model, leak=True), lambda h, p: "open", lambda n: PUBLIC)
     failed = {r.name for r in statuses(results)["FAIL"]}
     assert "step-ca (mgmt) is refused the PVE host tcp/8006" in failed
     assert "workspace (build) is refused deb.debian.org directly by IP" in failed
@@ -100,7 +100,7 @@ def test_refused_is_not_dropped(facts):
         rc, out, err = run(target, command)
         return rc, out.replace("rc=124", "rc=1"), err
 
-    results = run_verify(plan, model, "root@pve.example.internal", refusing, lambda h, p: "refused", lambda n: PUBLIC)
+    results = run_verify(plan, model, "root@pve.internal", refusing, lambda h, p: "refused", lambda n: PUBLIC)
     fails = statuses(results)["FAIL"]
     assert fails and all("refused" in r.detail for r in fails)
 
@@ -117,9 +117,9 @@ def test_firewall_down_and_unreachable_guest_fail(facts):
     def broken(target, command):
         if command == "pve-firewall status":
             return 0, "Status: disabled/stopped\n", ""
-        return 255, "", "ssh: connect to host pve.example.internal port 22: Connection timed out"
+        return 255, "", "ssh: connect to host pve.internal port 22: Connection timed out"
 
-    results = run_verify(plan, model, "root@pve.example.internal", broken, lambda h, p: "timeout", lambda n: PUBLIC)
+    results = run_verify(plan, model, "root@pve.internal", broken, lambda h, p: "timeout", lambda n: PUBLIC)
     by = statuses(results)
     assert by["FAIL"][0].name == "pve-firewall is running"
     probe_names = {p.name for p in probes(plan, model, PUBLIC)[0]}

@@ -17,7 +17,7 @@ from nullbill.tofu import render_tofu
 from nullbill.verify import run_verify
 
 ROLE_DEFAULTS = Path(__file__).parents[1] / "ansible/roles/pbs/defaults/main.yml"
-TARGET = "root@pve.example.internal"
+TARGET = "root@pve.internal"
 
 
 def planned(facts, cls="mid"):

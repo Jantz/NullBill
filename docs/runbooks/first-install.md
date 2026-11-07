@@ -181,9 +181,15 @@ Reference: <https://pve.proxmox.com/pve-docs/chapter-pve-installation.html>.
 4. Country, time zone and keyboard layout.
 5. The root password and your email address.
 6. **Management network**: the network card with the cable (it shows a
-   link), **Hostname (FQDN)** such as `pve.home.arpa`, **IP address** the
-   free address you picked with `/24` (for example `192.168.1.20/24`),
+   link), **Hostname (FQDN)** `pve.internal`, **IP address** the free
+   address you picked with `/24` (for example `192.168.1.20/24`),
    **Gateway** and **DNS server** both the router's address. Note the
+   address.
+
+   The hostname's first part, `pve`, becomes the node's name in Proxmox and
+   is hard to change later; the guides call the host by it. `.internal` is
+   reserved for private networks, like NullBill's own `nullbill.internal`
+   names. Your router does not know the name, so you open Proxmox by its
    address.
 7. Check the summary and press **Install**. When it restarts, take the
    stick out. The screen then shows `https://<address>:8006`.

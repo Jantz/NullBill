@@ -240,7 +240,7 @@ $defs:
         additionalProperties: false
         required: [ssh]
         properties:
-          # ssh destination of the PVE host, e.g. root@pve.example.internal
+          # ssh destination of the PVE host, e.g. root@pve.internal
           ssh: {type: string, minLength: 1}
       intent:
         type: object

@@ -1,6 +1,6 @@
 # Baseline for the PVE host: key-only SSH, auditd, the no-subscription
 # repository and security-only unattended upgrades. Run from the controller:
-#   ansible-playbook -i root@pve.example.internal, ansible/host-baseline.yml
+#   ansible-playbook -i root@pve.internal, ansible/host-baseline.yml
 - name: PVE host baseline
   hosts: all
   become: false

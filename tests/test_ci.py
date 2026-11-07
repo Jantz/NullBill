@@ -103,7 +103,7 @@ def _checked(facts, cls="mid", wrong="", dispatcher_extra=None):
     def run(target, command):
         return (0, services[command], "") if command in services else api(target, command)
 
-    results = ci.check(plan, "root@pve.example.internal", run) + forge.check(plan, "root@pve.example.internal", run)
+    results = ci.check(plan, "root@pve.internal", run) + forge.check(plan, "root@pve.internal", run)
     return strip_notes(plan), {r.name: (r.status, r.detail) for r in results}
 
 
@@ -141,7 +141,7 @@ def test_agent_reaches_runner_clones_through_the_ci_pool(facts):
     from conftest import agent_api
 
     plan, _ = planned(facts, "mid")
-    results = {r.name: r.status for r in agent.check(plan, "root@pve.example.internal", agent_api(plan))}
+    results = {r.name: r.status for r in agent.check(plan, "root@pve.internal", agent_api(plan))}
     assert results["agent token may power-manage and snapshot linux-runner clones, nothing else"] == "PASS"
     assert results["agent token cannot change the linux-runner template"] == "PASS"
 

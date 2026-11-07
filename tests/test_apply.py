@@ -17,7 +17,7 @@ from nullbill.results import Result
 from nullbill.secretfile import Secrets
 from nullbill.tailnet import routes
 
-TARGET = "root@pve.example.internal"
+TARGET = "root@pve.internal"
 
 
 class MemoryCodec:
@@ -356,11 +356,11 @@ def test_missing_owner_secret_names_the_file():
 
 def test_containers_are_reached_through_the_host_and_vms_by_jump(ctx):
     c = ctx()
-    host = {"ansible_host": "pve.example.internal", "ansible_user": "root", "ansible_python_interpreter": "/usr/bin/python3"}
+    host = {"ansible_host": "pve.internal", "ansible_user": "root", "ansible_python_interpreter": "/usr/bin/python3"}
     assert connection(c, None) == host
     forgejo = connection(c, "forgejo")
     assert forgejo["ansible_connection"] == "community.proxmox.proxmox_pct_remote"
-    assert (forgejo["ansible_host"], forgejo["proxmox_vmid"]) == ("pve.example.internal", 2017)
+    assert (forgejo["ansible_host"], forgejo["proxmox_vmid"]) == ("pve.internal", 2017)
     pbs = connection(c, "pbs")
     assert (pbs["ansible_host"], pbs["ansible_user"], pbs["ansible_become"]) == ("10.42.1.15", "nullbill", True)
     assert f"-o ProxyJump={TARGET} " in pbs["ansible_ssh_common_args"]
@@ -985,7 +985,7 @@ def test_verify_reports_an_open_lan_as_degraded_not_failed(ctx, monkeypatch):
     monkeypatch.setattr(apply, "run_verify", lambda *a, **kw: seen.update(kw) or [Result("PASS", "x")])
     c = ctx()
     apply.stage_verify(c)
-    assert seen == {"lan_state": "open", "lan_host": "pve.example.internal"}
+    assert seen == {"lan_state": "open", "lan_host": "pve.internal"}
 
 
 def test_a_failed_playbook_stops_apply_before_later_stages(ctx):
@@ -1040,7 +1040,7 @@ def test_tofu_stage_runs_init_and_apply_with_everything_in_the_environment(ctx):
     assert env["PROXMOX_VE_API_TOKEN"].startswith("root@pam!nullbill=uuid-")
     assert env["PROXMOX_VE_API_TOKEN"] == c.secrets.get("pve_api_token")
     assert env["TF_VAR_state_passphrase"] == c.secrets.get("tofu_state_passphrase")
-    assert env["TF_VAR_pve_endpoint"] == "https://pve.example.internal:8006/"
+    assert env["TF_VAR_pve_endpoint"] == "https://pve.internal:8006/"
     assert env["TF_VAR_node_name"] == "pve"
     assert json.loads(env["TF_VAR_ssh_authorized_keys"]) == ["ssh-ed25519 AAAAexample nullbill@nullbill"]
     # No secret lands in the state directory or build/.

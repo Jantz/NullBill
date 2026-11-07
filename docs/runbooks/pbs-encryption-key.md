@@ -13,16 +13,18 @@ Reference: <https://pbs.proxmox.com/docs/backup-client.html#encryption>
 
 You do this yourself, once, after the first setup run with backups:
 
-1. Print a paper copy on the host and keep it offline, never in the repo:
+1. In the Proxmox web UI, select the node `pve` (the host, `pve.internal`)
+   and open **Shell**. Make a paper copy and keep it offline, never in the
+   repo:
 
    ```sh
-   ssh root@pve.<your domain> proxmox-backup-client key paperkey /etc/pve/priv/storage/nb-pbs.enc --output-format text
+   proxmox-backup-client key paperkey /etc/pve/priv/storage/nb-pbs.enc --output-format text
    ```
 
    It prints the key as text and as a QR code. Print it or write it down.
    Do not save it as a file on a synced or backed-up disk.
 2. Check the copy: the `fingerprint` line on the paper must equal the one
-   `ssh root@pve.<your domain> proxmox-backup-client key show /etc/pve/priv/storage/nb-pbs.enc`
+   `proxmox-backup-client key show /etc/pve/priv/storage/nb-pbs.enc`
    prints. `nullbill verify` restores a file every run, which proves the
    key on the host still opens the backups.
 

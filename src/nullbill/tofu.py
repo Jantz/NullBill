@@ -437,7 +437,7 @@ def _tf_name(name: str) -> str:
 
 def _variables(plan: dict) -> dict:
     variables = {
-        "pve_endpoint": {"type": "string", "description": "PVE API URL, e.g. https://pve.example.internal:8006/"},
+        "pve_endpoint": {"type": "string", "description": "PVE API URL, e.g. https://pve.internal:8006/"},
         "node_name": {"type": "string", "description": "PVE node name"},
         "lan_bridge": {"type": "string", "default": "vmbr0", "description": "Bridge on the LAN, the router's uplink"},
         "ssh_authorized_keys": {"type": "list(string)", "description": "Keys for the nullbill user on Linux guests"},

@@ -253,7 +253,7 @@ def answers(host="fuseblk ro,noatime,user_id=0", guest="fuseblk ro,relatime", sa
 
 
 def verdicts(p, run):
-    return [(r.status, r.name, r.detail) for r in legacy.check(p, "root@pve.example.internal", run)]
+    return [(r.status, r.name, r.detail) for r in legacy.check(p, "root@pve.internal", run)]
 
 
 def test_verify_passes_a_kept_disk_mounted_and_shared_as_planned(facts):

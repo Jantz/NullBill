@@ -926,7 +926,7 @@ WantedBy=multi-user.target
   "variable": {
     "pve_endpoint": {
       "type": "string",
-      "description": "PVE API URL, e.g. https://pve.example.internal:8006/"
+      "description": "PVE API URL, e.g. https://pve.internal:8006/"
     },
     "node_name": {
       "type": "string",
