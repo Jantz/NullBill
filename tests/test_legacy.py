@@ -5,11 +5,13 @@ import copy
 import pytest
 from conftest import fixture_config
 
+from nullbill import legacy
 from nullbill.errors import NullBillError
 from nullbill.model import build_model
 from nullbill.plan import build_plan
 from nullbill.probe import _disks
 from nullbill.render import strip_notes
+from nullbill.verify import run_verify
 
 OLD = "ata-SYNTHETIC_HDD_0002"
 MSR = "e3c9e316-0b5c-4db8-817d-f92df00215ae"
@@ -226,3 +228,56 @@ def test_failing_disk_gets_a_warning(facts):
     p = plan(f, {OLD: {"use": "legacy"}})
     assert p["disks"][OLD].value["health"] == "FAILED"
     assert "SMART says this disk is failing" in p["disks"][OLD].why
+
+
+# Verify
+
+
+def answers(host="fuseblk ro,noatime,user_id=0", guest="fuseblk ro,relatime", samba="SMB3\nrequired\nNever\n"):
+    def run(target, command):
+        if command.startswith("findmnt"):
+            return 0, host + "\n" if host else "", ""
+        if command.startswith("pct exec 2023 -- findmnt"):
+            return (0, guest + "\n", "") if guest else (1, "", "")
+        if command.startswith("pct exec 2023 -- sh -c"):
+            return 0, samba, ""
+        raise AssertionError(command)
+
+    return run
+
+
+def verdicts(p, run):
+    return [(r.status, r.name, r.detail) for r in legacy.check(p, "root@pve.example.internal", run)]
+
+
+def test_verify_passes_a_kept_disk_mounted_and_shared_as_planned(facts):
+    p = plan(facts("large"), {OLD: {"use": "legacy"}})
+    assert verdicts(p, answers()) == [
+        ("PASS", "kept disk data is mounted ro on the host", ""),
+        ("PASS", "files guest sees kept disk data ro", ""),
+        ("PASS", "files guest's Samba takes SMB3 with encryption only, and no guests", ""),
+    ]
+
+
+def test_verify_fails_a_missing_or_wrongly_mounted_kept_disk(facts):
+    p = plan(facts("large"), {OLD: {"use": "legacy"}})
+    missing = verdicts(p, answers(host="", guest=""))
+    assert missing[0][0] == "FAIL" and f"is partition 2 of {OLD} connected" in missing[0][2]
+    assert missing[1] == ("FAIL", "files guest sees kept disk data ro", "nothing mounted at /srv/share/data")
+    # Asked for read-write, ntfs-3g fell back to read-only.
+    rw = plan(facts("large"), {OLD: {"use": "legacy", "mode": "rw"}})
+    assert [v[:1] + v[2:] for v in verdicts(rw, answers())[:2]] == [("FAIL", "fuseblk ro"), ("FAIL", "/srv/share/data is ro")]
+    assert verdicts(p, answers(samba="SMB2\nrequired\nBad User\n"))[2][2] == "server min protocol = SMB2; map to guest = Bad"
+
+
+def test_verify_without_a_share_checks_the_host_only(facts):
+    p = plan(facts("large"), {OLD: {"use": "legacy", "share": False}})
+    assert [v[1] for v in verdicts(p, answers())] == ["kept disk data is mounted ro on the host"]
+
+
+def test_verify_without_a_target_skips_the_kept_disk(facts):
+    config = {**fixture_config("large"), "disks": {OLD: {"use": "legacy"}}}
+    model = build_model(config)
+    results = run_verify(build_plan(model, facts("large")), model, None, None)
+    skipped = [r.name for r in results if r.status == "SKIP" and "kept disk" in r.name]
+    assert skipped == ["kept disk data is mounted ro on the host", "files guest sees kept disk data ro"]

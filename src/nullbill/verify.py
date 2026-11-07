@@ -13,7 +13,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from nullbill import agent, backups, ci, forge, lan
+from nullbill import agent, backups, ci, forge, lan, legacy
 from nullbill.errors import NullBillError
 from nullbill.flows import HOST, HOST_PORTS, resolve_flows
 from nullbill.probe import Runner
@@ -204,6 +204,7 @@ def run_verify(
             + agent.skipped(plan, reason)
             + forge.skipped(plan, reason)
             + ci.skipped(plan, reason)
+            + legacy.skipped(plan, reason)
         )
     name = model["verify"]["public_name"]
     try:
@@ -228,4 +229,5 @@ def run_verify(
     results += agent.check(plan, target, run)
     results += forge.check(plan, target, run)
     results += ci.check(plan, target, run)
+    results += legacy.check(plan, target, run)
     return results

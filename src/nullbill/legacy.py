@@ -7,9 +7,12 @@ apply formats, wipes or repairs such a disk.
 """
 
 import re
+import shlex
 from typing import Any
 
-from nullbill.probe import LEGACY_ROOT
+from nullbill.probe import LEGACY_ROOT, Runner
+from nullbill.render import strip_notes
+from nullbill.results import Result
 
 # Filesystems a legacy disk may hold. NTFS mounts through ntfs-3g, which,
 # with ntfs-3g.probe and ntfsinfo, can tell a hibernated or unclean volume;
@@ -138,3 +141,68 @@ def note(mounts_: list[dict], left: list[str]) -> str:
     if left:
         text += f" Left alone: {', '.join(left)}."
     return text
+
+
+# What findmnt calls each filesystem once mounted: ntfs-3g is a FUSE driver.
+MOUNTED_AS = {"ntfs": "fuseblk", "exfat": "exfat", "vfat": "vfat"}
+SAMBA = {"server min protocol": "SMB3", "server smb encrypt": "required", "map to guest": "Never"}
+SAMBA_LABEL = "files guest's Samba takes SMB3 with encryption only, and no guests"
+
+
+def _labels(plan: dict) -> list[str]:
+    labels = []
+    for m in mounts(plan):
+        labels.append(f"kept disk {m['name']} is mounted {m['mode']} on the host")
+        if "share" in m:
+            labels.append(f"files guest sees kept disk {m['name']} {m['mode']}")
+    if shares(plan):
+        labels.append(SAMBA_LABEL)
+    return labels
+
+
+def skipped(plan_with_notes: dict, reason: str) -> list[Result]:
+    return [Result("SKIP", label, reason) for label in _labels(strip_notes(plan_with_notes))]
+
+
+def _mounted(out: str) -> tuple[str, str]:
+    """findmnt -rno FSTYPE,OPTIONS: the filesystem and the first option."""
+    fstype, _, options = out.strip().partition(" ")
+    return fstype, options.split(",", 1)[0]
+
+
+def check(plan_with_notes: dict, target: str, run: Runner) -> list[Result]:
+    """Each kept partition mounted on the host as planned and, if shared,
+    seen by the files guest with the same mode; Samba as the role set it."""
+    plan = strip_notes(plan_with_notes)
+    results = []
+    vmid = plan["guests"].get("files", {}).get("vmid")
+    for m in mounts(plan):
+        label = f"kept disk {m['name']} is mounted {m['mode']} on the host"
+        rc, out, err = run(target, f"findmnt -rno FSTYPE,OPTIONS --mountpoint {shlex.quote(m['mount'])}")
+        fstype, mode = _mounted(out)
+        if not fstype:
+            why = f"not mounted; is partition {m['n']} of {m['disk']} connected? (docs/runbooks/legacy-disk.md)"
+            results.append(Result("FAIL", label, why))
+        elif (fstype, mode) != (MOUNTED_AS[m["fstype"]], m["mode"]):
+            results.append(Result("FAIL", label, f"{fstype} {mode}"))
+        else:
+            results.append(Result("PASS", label))
+        if "share" not in m:
+            continue
+        label = f"files guest sees kept disk {m['name']} {m['mode']}"
+        where = f"{SHARE_ROOT}/{m['share']}"
+        rc, out, err = run(target, f"pct exec {vmid} -- findmnt -rno FSTYPE,OPTIONS --mountpoint {shlex.quote(where)}")
+        fstype, mode = _mounted(out)
+        if rc != 0 or not fstype:
+            results.append(Result("FAIL", label, (err.strip() or f"nothing mounted at {where}")[:120]))
+        elif mode != m["mode"]:
+            results.append(Result("FAIL", label, f"{where} is {mode}"))
+        else:
+            results.append(Result("PASS", label))
+    if shares(plan):
+        script = "; ".join(f"testparm -s --parameter-name={shlex.quote(p)} 2>/dev/null" for p in SAMBA)
+        rc, out, err = run(target, f"pct exec {vmid} -- sh -c {shlex.quote(script)}")
+        got = dict(zip(SAMBA, out.split(), strict=False))
+        wrong = [f"{p} = {got.get(p, '?')}" for p, want in SAMBA.items() if got.get(p) != want]
+        results.append(Result("FAIL", SAMBA_LABEL, "; ".join(wrong)[:120]) if wrong else Result("PASS", SAMBA_LABEL))
+    return results
