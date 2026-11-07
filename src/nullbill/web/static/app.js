@@ -297,6 +297,11 @@ async function refresh() {
 function follow(id, first) {
   clearInterval(polling);
   let offset = 0;
+  // Draw the page again only when a job finishes while it is followed. A
+  // job that had already finished (refresh shows the last one) must not:
+  // refresh would follow it again, redraw the forms every few milliseconds
+  // and undo every choice the owner makes.
+  const running = !first || first.state === "running";
   show("job-section", true);
   $("job-log").textContent = "";
   const tick = async () => {
@@ -308,7 +313,7 @@ function follow(id, first) {
     log.scrollTop = log.scrollHeight;
     if (job.state !== "running") {
       clearInterval(polling);
-      if (job.action === "probe" || job.action.endsWith("-lan") || job.action === "keep-lan-closed") refresh();
+      if (running && (job.action === "probe" || job.action.endsWith("-lan") || job.action === "keep-lan-closed")) refresh();
     }
   };
   tick().catch(showError);
