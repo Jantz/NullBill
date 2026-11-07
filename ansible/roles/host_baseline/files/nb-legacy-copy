@@ -50,17 +50,29 @@ recorded() { # name -> its record line, if any
 }
 
 # A volume this script made and never finished: the files guest has no use
-# for it, so it is freed before trying again.
+# for it, so it is freed before trying again. One the record names is a
+# finished copy (the run stopped after recording it); any other is not,
+# even when the record names an older copy of the same name (a move that
+# stopped). A volume stays listed until it is freed or gone.
 free_pending() {
   [ -e "$pending" ] || return 0
+  left=$pending.left
+  : >"$left"
   while read -r left_name left_volume; do
     [ -n "$left_volume" ] || continue
-    if ! recorded "$left_name" >/dev/null; then
-      "$pvesm" free "$left_volume" >/dev/null 2>&1 || true
+    committed=$(recorded "$left_name" | cut -d' ' -f2)
+    [ "$committed" != "$left_volume" ] || continue
+    if "$pvesm" free "$left_volume" >/dev/null 2>&1; then
       echo "nb-legacy-copy: freed $left_volume, left over from an unfinished copy of $left_name" >&2
+    elif "$pvesm" list "${left_volume%%:*}" 2>/dev/null | awk '{print $1}' | grep -qxF "$left_volume"; then
+      echo "$left_name $left_volume" >>"$left"
     fi
   done <"$pending"
-  rm -f "$pending"
+  if [ -s "$left" ]; then
+    mv "$left" "$pending"
+    die "cannot free $(cut -d' ' -f2 "$pending" | tr '\n' ' ')left over from an unfinished copy; free it with pvesm free, then try again"
+  fi
+  rm -f "$left" "$pending"
 }
 
 # Compare two trees and hash a sample; print FILES BYTES SAMPLED.
