@@ -64,7 +64,9 @@ NullBill needs Proxmox VE 9; version 8 reached its end of life in 2026-08.
 3. **Look at the hardware**: run it; it only reads.
 4. **Choose what to run**: start small (coding agents and Linux CI), leave
    local models and Windows off at 16 GB. Tick backups only if the server
-   has a second, empty disk. Check the plan.
+   has a second, empty disk. A disk from your old PC is listed under
+   **Other disks**; to keep its files, see [legacy-disk.md](legacy-disk.md).
+   Check the plan.
 5. **Alerts**: in the ntfy app, add a subscription to the topic the page
    shows (server ntfy.sh, no account needed), paste the Healthchecks.io
    ping URL if you made one, press **Save**, then **Send a test alert**.
@@ -75,8 +77,8 @@ NullBill needs Proxmox VE 9; version 8 reached its end of life in 2026-08.
    key, as [vpn.md](vpn.md) describes. Without them the vpn stage waits and
    the rest still runs.
 8. **Run setup**. The log shows each stage: render, tailnet, host, tofu, router,
-   proxy, updates, ca, postgres, monitoring, forgejo, ci, agents, logs,
-   backups, vpn, verify. The first run downloads images and packages and
+   proxy, updates, ca, postgres, monitoring, forgejo, files, ci, agents,
+   logs, backups, vpn, verify. The first run downloads images and packages and
    takes a while; tofu, ci and the first backup are the longest.
 9. Once Tailscale works: **Close the home network**, then **Keep it closed**
    from the page opened over Tailscale ([vpn.md](vpn.md)). Until then

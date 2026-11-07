@@ -60,7 +60,9 @@ setup page and remote access.
 
 - A spare x86 PC on your home network, with
   [Proxmox VE](https://www.proxmox.com/en/downloads) 9 installed (PVE 8 is past its end of life).
-  A second, empty disk is needed only for backups.
+  A second, empty disk is needed only for backups. A disk from your old
+  PC can go in as it is: NullBill keeps its files and shares them to you
+  ([legacy-disk.md](docs/runbooks/legacy-disk.md)).
 - Another device with a web browser, on the same network.
 - On your phone: the free [ntfy](https://ntfy.sh/) app, for alerts.
 - For coding agents: an Anthropic API key, or a Claude subscription token
@@ -99,7 +101,7 @@ It runs these stages in order and stops at the first one that fails.
 |---|---|
 | render | Writes every config file from the plan. |
 | host | Hardens Proxmox: SSH by key only, audit log, the free update source, nightly security updates, the firewall. Sets up the on-site screen if chosen. |
-| tofu | Creates the zone networks and every container and VM ([OpenTofu](https://opentofu.org/)). |
+| tofu | Mounts any disk you kept from an old PC, then creates the zone networks and every container and VM ([OpenTofu](https://opentofu.org/)). |
 | router | Sets up the router guest: routing, firewall and DNS between zones. |
 | proxy | A web proxy that lets build guests reach only listed sites (package mirrors, GitHub and similar). |
 | updates | Nightly security updates and update monitoring on each guest. |
@@ -107,6 +109,7 @@ It runs these stages in order and stops at the first one that fails.
 | postgres | The database Forgejo uses. |
 | monitoring | Prometheus, Grafana, Loki and the alerts to ntfy. |
 | forgejo | The Git server. |
+| files | With a kept disk: shares its files to you over SMB 3, encrypted, with one password. |
 | ci | Builds the CI runner image, then the service that gives each job its own copy. |
 | agents | The agent's container and CLI, and its SSH access to the guests it may manage. |
 | logs | Sends agent commands and SSH logins to Loki. |
@@ -120,7 +123,8 @@ It runs these stages in order and stops at the first one that fails.
   setup** again. Only what changed is changed.
 - **Alerts** arrive in ntfy: a guest that stops answering, a nearly full
   disk, an expiring certificate, updates that fail or wait, a guest whose
-  nightly backup did not happen, a server that restarted, and (with
+  nightly backup did not happen, a kept disk that is missing, a server
+  that restarted, and (with
   Healthchecks.io) a server that went quiet.
 - **Updates**: guests install security updates each night and restart at
   04:30 when one needs it. Proxmox's own packages and restarts of the
@@ -128,8 +132,8 @@ It runs these stages in order and stops at the first one that fails.
 - **Use the coding agent**: [docs/runbooks/agent-access.md](docs/runbooks/agent-access.md)
   shows how to start it, read what it did, and cut it off.
 - **More step-by-step guides** are in [`docs/runbooks/`](docs/runbooks/):
-  adding a person, CI runners, restoring a guest, and keeping the keys you
-  must not lose.
+  adding a person, CI runners, restoring a guest, keeping a disk from your
+  old PC, and keeping the keys you must not lose.
 
 ## Not done yet
 
@@ -171,6 +175,7 @@ overrides:
   linux-runner: {count: 2}
 disks:
   ata-EXAMPLE_DISK: {use: pbs, wipe: true}   # NullBill never formats a used disk without this
+  ata-EXAMPLE_OLD: {use: legacy}             # keep its files as they are and share them, read-only
 ```
 
 Every default in [`catalog.yaml`](src/nullbill/data/catalog.yaml) can be
