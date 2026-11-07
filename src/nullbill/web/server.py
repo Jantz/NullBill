@@ -23,6 +23,7 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
@@ -326,8 +327,20 @@ class App:
         # spaces where the terminal wrapped it; neither kind ever holds any.
         value = re.sub(r"\s+", "", str(body.get("credential", "")))
         kind = next((v for prefix, v in AGENT_CREDENTIALS.items() if value.startswith(prefix)), None)
-        if kind is None or len(value) > 512 or not re.fullmatch(r"[A-Za-z0-9_-]+", value):
+        if kind is None:
             raise NullBillError("paste an Anthropic API key (sk-ant-api...) or the token `claude setup-token` prints (sk-ant-oat...)")
+        # Say what is wrong without echoing the secret: where, and only a
+        # character no credential holds.
+        odd = re.search(r"[^A-Za-z0-9_-]", value)
+        if odd:
+            char = odd.group()
+            shown = repr(char) if char.isascii() and char.isprintable() else unicodedata.name(char, f"U+{ord(char):04X}")
+            raise NullBillError(
+                f"the pasted {kind[1]} has {shown} at character {odd.start() + 1} of {len(value)}, which a "
+                f"{kind[1]} never holds; copy it again, or type that part by hand"
+            )
+        if len(value) > 512:
+            raise NullBillError(f"the pasted {kind[1]} is {len(value)} characters long; copy only the token itself")
         with self.lock:
             if any(job.state() == "running" for job in self.jobs.values()):
                 raise NullBillError("wait until the running job finishes")

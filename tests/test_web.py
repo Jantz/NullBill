@@ -255,6 +255,9 @@ def test_agent_credential_is_kept_by_kind_and_never_shown(site):
     assert client.call("/api/state")[1]["agent_credential"] is None
     bad = client.call("/api/agent", {"credential": "hunter2"})
     assert bad[0] == 400 and "claude setup-token" in bad[1]["error"]
+    odd = client.call("/api/agent", {"credential": "sk-ant-oat01-abc\u2026def"})
+    assert odd[0] == 400 and odd[1]["error"].startswith("the pasted subscription token has HORIZONTAL ELLIPSIS at character 17 of 20")
+    assert "abc" not in odd[1]["error"]
     key = "sk-ant-api03-" + "a" * 40
     assert client.call("/api/agent", {"credential": f" {key}\n"}) == (200, {"ok": True, "agent_credential": "API key"})
     assert app.codec(app.home).load()["anthropic_api_key"] == key
