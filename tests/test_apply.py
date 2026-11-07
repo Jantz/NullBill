@@ -71,9 +71,17 @@ class FakeReach:
         self.moved = []
         self.freed = []
         self.storage_disks = {}
+        # VMs as /cluster/resources lists them, for retiring CI clones.
+        self.vms = []
 
     def host(self, command, stdin=None, timeout=900):
         self.calls.append(("host", command))
+        if command == apply.CLUSTER_VMS:
+            return 0, json.dumps(self.vms), ""
+        if command.startswith("qm stop ") and "qm destroy " in command:
+            vmid = int(command.split()[2])
+            self.vms = [vm for vm in self.vms if vm["vmid"] != vmid]
+            return 0, "", ""
         if command.startswith((apply.COPY, "systemd-run ", "systemctl is-active nb-legacy-copy-", "journalctl -q -u nb-legacy-copy-")):
             return self.copy(command)
         if "if cmp -s" in command:
@@ -123,7 +131,7 @@ class FakeReach:
             return 0, "", ""
         if command.startswith("cat ") and command.endswith(" 2>/dev/null || true"):
             return 0, self.files.get(command.split()[1], ""), ""
-        if command.startswith("bash -c ") and "qm destroy" in command:
+        if command.startswith("bash -c ") and "qm status" in command:
             self.timeouts.append(timeout)
             return 0, "", ""
         if command.startswith("qm config "):
@@ -568,12 +576,14 @@ def test_ci_stage_bakes_each_golden_image_once_then_runs_the_dispatcher(ctx):
     # A week on, the dispatcher stops taking jobs, the old image's clones
     # finish, OpenTofu makes a fresh VM and it is baked again.
     c.reach.files[metric] = ci.baked_metric("linux-runner", time.time() - ci.REBAKE_AFTER_S - 60)
+    c.reach.vms = [{"vmid": 6000, "type": "qemu", "pool": ci.POOL, "status": "running"}]
     c.reach.calls.clear()
     apply.stage_ci(c)
     assert c.reach.dispatcher_stopped
     host = [call[1] for call in c.reach.calls if call[0] == "host"]
-    drain = next(h for h in host if "qm destroy" in h)
-    assert "-v a=6000 -v b=6000" in drain and c.reach.timeouts[-1] > ci.MAX_JOB_S
+    drain = next(h for h in host if "qm status" in h)
+    assert "for v in 6000;" in drain and c.reach.timeouts[-1] > ci.MAX_JOB_S
+    assert "qm stop 6000 2>/dev/null; qm destroy 6000 --purge" in host and c.reach.vms == []
     tofu = [call[1] for call in c.reach.calls if call[0] == "local" and call[1][:2] == ["tofu", "apply"]]
     assert tofu == [["tofu", "apply", "-auto-approve", "-input=false", "-no-color", "-replace=proxmox_virtual_environment_vm.linux-runner"]]
     assert [call[1] for call in c.reach.calls if call[0] == "playbook"] == [
@@ -585,6 +595,26 @@ def test_ci_stage_bakes_each_golden_image_once_then_runs_the_dispatcher(ctx):
     order = [i for i, call in enumerate(c.reach.calls) if call[0] in ("local", "playbook") and call[1] in (tofu[0], "ci-runner.yml")]
     assert len(order) == 2 and c.reach.calls[order[0]][1] == tofu[0]
     assert time.time() - ci.baked_time(c.reach.files[metric]) < 60
+
+
+def test_retiring_a_golden_image_destroys_only_its_pool_clones(ctx, monkeypatch):
+    """A VM of the owner's inside the clone range, or a template, is never a
+    clone; only VMs in the nb-ci pool and the range are stopped and destroyed."""
+    monkeypatch.setattr(apply, "run_tofu", lambda *a, **kw: None)
+    c = ctx("mid")
+    guest = c.bare["guests"]["linux-runner"] | {"clone_vmids": "6000-6010"}
+    c.reach.vms = [
+        {"vmid": 6001, "type": "qemu", "status": "stopped", "name": "owner-data"},
+        {"vmid": 6002, "type": "qemu", "pool": ci.POOL, "status": "running"},
+        {"vmid": 6003, "type": "lxc", "pool": ci.POOL, "status": "running"},
+        {"vmid": 6004, "type": "qemu", "pool": ci.POOL, "status": "stopped", "template": 1},
+        {"vmid": 6020, "type": "qemu", "pool": ci.POOL, "status": "stopped"},
+    ]
+    apply.retire(c, "linux-runner", guest)
+    host = [call[1] for call in c.reach.calls if call[0] == "host"]
+    assert next(h for h in host if "qm status" in h).count("for v in 6002;") == 1
+    assert [h for h in host if "qm destroy" in h] == ["qm stop 6002 2>/dev/null; qm destroy 6002 --purge"]
+    assert sorted(vm["vmid"] for vm in c.reach.vms) == [6001, 6003, 6004, 6020]
 
 
 def test_a_bake_that_stopped_partway_starts_again_from_a_fresh_vm(ctx):

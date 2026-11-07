@@ -1042,16 +1042,29 @@ def forget_host_key(ctx: Context, address: str) -> None:
         known.write_text("".join(line for line in lines if line.split(" ", 1)[0] != address))
 
 
-def drain_clones(first: int, last: int, limit_s: int) -> str:
-    """A host script: wait up to limit_s for the clones in first..last to
-    finish their jobs, stop any still running, and destroy them all."""
+CLUSTER_VMS = "pvesh get /cluster/resources --type vm --output-format json"
+
+
+def ci_clones(ctx: Context, first: int, last: int) -> list[int]:
+    """The CI clones in first..last: VMs in the nb-ci pool only, so a VM of
+    the owner's that happens to sit in that range is never touched."""
+    vms = json.loads(host_out(ctx, "ci", CLUSTER_VMS) or "[]")
+    return sorted(
+        int(vm["vmid"])
+        for vm in vms
+        if vm.get("type") == "qemu" and vm.get("pool") == ci.POOL and not vm.get("template") and first <= int(vm["vmid"]) <= last
+    )
+
+
+def drain_clones(vmids: list[int], limit_s: int) -> str:
+    """A host script: wait up to limit_s for these clones to finish their
+    jobs, then stop any still running."""
+    listed = " ".join(str(v) for v in vmids)
     return (
-        f'clones() {{ qm list | awk -v a={first} -v b={last} -v want="$1" '
-        "'NR > 1 && $1 >= a && $1 <= b && (want == \"\" || $3 == want) { print $1 }'; }; "
+        f'running() {{ for v in {listed}; do qm status "$v" 2>/dev/null | grep -q "status: running" && echo "$v"; done; true; }}; '
         f"end=$((SECONDS + {limit_s})); "
-        'while [ -n "$(clones running)" ] && [ "$SECONDS" -lt "$end" ]; do sleep 30; done; '
-        'for v in $(clones running); do qm stop "$v"; done; '
-        'for v in $(clones ""); do qm destroy "$v" --purge; done'
+        'while [ -n "$(running)" ] && [ "$SECONDS" -lt "$end" ]; do sleep 30; done; '
+        'for v in $(running); do qm stop "$v"; done'
     )
 
 
@@ -1062,8 +1075,13 @@ def retire(ctx: Context, name: str, guest: dict) -> None:
     pinned image. Jobs queue in Forgejo meanwhile."""
     guest_out(ctx, "ci", "runner-dispatcher", ["sh", "-c", "systemctl stop nb-dispatcher 2>/dev/null || true"])
     first, last = (int(v) for v in guest["clone_vmids"].split("-"))
-    ctx.say(f"ci: waiting for {name}'s running jobs to finish, at most {ci.MAX_JOB_S // 3600} h")
-    host_out(ctx, "ci", f"bash -c {shlex.quote(drain_clones(first, last, ci.MAX_JOB_S))}", timeout=ci.MAX_JOB_S + 900)
+    vmids = ci_clones(ctx, first, last)
+    if vmids:
+        ctx.say(f"ci: waiting for {name}'s running jobs to finish, at most {ci.MAX_JOB_S // 3600} h")
+        host_out(ctx, "ci", f"bash -c {shlex.quote(drain_clones(vmids, ci.MAX_JOB_S))}", timeout=ci.MAX_JOB_S + 900)
+    # Asked again: only what is still a clone in the pool is destroyed.
+    for vmid in ci_clones(ctx, first, last):
+        host_out(ctx, "ci", f"qm stop {vmid} 2>/dev/null; qm destroy {vmid} --purge")
     run_tofu(ctx, "ci", init=False, replace=(f"proxmox_virtual_environment_vm.{name}",))
 
 

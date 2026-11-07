@@ -44,7 +44,9 @@ once it is a week old. The page runs that every Sunday at 03:00, and any
 
 1. stops the dispatcher, so new jobs wait in Forgejo;
 2. waits for the old image's clones to finish their jobs (at most 6 hours;
-   any clone still running after that is stopped) and destroys them;
+   any clone still running after that is stopped) and destroys them. A
+   clone is a VM in the `nb-ci` pool within the pool's `clone_vmids`; any
+   other VM with a number in that range is left alone;
 3. has OpenTofu replace the template with a fresh VM from the pinned cloud
    image, bakes it with every update pending, and starts the dispatcher
    again.
@@ -54,7 +56,8 @@ the re-bake keeps failing. The ci stage's log in the page names the reason.
 
 ## Clean up by hand
 
-The dispatcher destroys stopped clones in its range. If it is down,
+The dispatcher destroys stopped clones in the `nb-ci` pool. If it is down,
+check that a VM is in that pool (`pvesh get /pools/nb-ci`), then
 `qm stop <vmid> && qm destroy <vmid> --purge` on the host. Then list
 leftover registrations in Forgejo (Site administration, Actions, Runners)
 and delete any named `nb-*` whose clone is gone.
