@@ -1209,7 +1209,8 @@ def test_dropping_a_kept_disk_detaches_it_then_unmounts_it_and_wipes_nothing(ctx
     assert index_of(calls, "pct shutdown 2023") < detach < index_of(calls, f"{apply.LEGACY} unmount data") < index_of(calls, "tofu init")
     assert c.reach.legacy == {} and c.reach.files_ct["mps"] == {}
     assert not [x for x in calls if "wipefs" in " ".join(x if isinstance(x, list) else [x])]
-    assert json.loads((c.home / "disks.json").read_text()) == {"mounts": []}
+    # No longer mounted, but still kept from a wipe until a conversion with a copy or discard_data.
+    assert json.loads((c.home / "disks.json").read_text()) == {"mounts": [], "unconverted": ["ata-SYNTHETIC_HDD_0002"]}
 
 
 def test_share_false_keeps_the_mount_but_no_guest(ctx, monkeypatch):
@@ -1240,7 +1241,8 @@ def test_a_refused_mount_stops_apply_before_tofu(ctx, monkeypatch):
 
 def test_the_pbs_disk_is_never_one_apply_kept(ctx, monkeypatch, tmp_path):
     """Safety rule 2 at apply: even if the probe missed the mount, a disk that
-    disks.json records as kept is not handed to nb-backup-disk."""
+    disks.json records as kept is not handed to nb-backup-disk, however often
+    the refused run is repeated."""
     monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
     c = ctx("mid")
     kept = json.dumps({"mounts": [{"disk": "ata-SYNTHETIC_HDD_0002", "name": "data"}]})
@@ -1249,13 +1251,20 @@ def test_the_pbs_disk_is_never_one_apply_kept(ctx, monkeypatch, tmp_path):
     # Through the whole stage: unmounting the dropped disk rewrites disks.json first.
     with pytest.raises(ApplyError, match="was kept as legacy and has no verified copy; it is not erased"):
         apply.stage_tofu(c)
+    assert json.loads((c.home / "disks.json").read_text())["unconverted"] == ["ata-SYNTHETIC_HDD_0002"]
+    # The same run again, and again from a fresh context, refuses too.
+    with pytest.raises(ApplyError, match="it is not erased"):
+        apply.stage_tofu(c)
+    with pytest.raises(ApplyError, match="it is not erased"):
+        apply.stage_tofu(ctx("mid", reach=c.reach))
     assert c.reach.backup_disk is None
-    # The owner's word that the files are elsewhere lets it go.
-    (c.home / "disks.json").write_text(kept)
+    # The owner's word that the files are elsewhere lets it go, and the disk
+    # is no longer protected once it is converted.
     config = fixture_config("mid") | {"disks": {"ata-SYNTHETIC_HDD_0002": {"use": "pbs", "wipe": True, "discard_data": True}}}
     c2 = ctx("mid", config=config, reach=c.reach)
     apply.stage_tofu(c2)
     assert c.reach.backup_disk == ["ata-SYNTHETIC_HDD_0002", "1"]
+    assert json.loads((c.home / "disks.json").read_text())["unconverted"] == []
 
 
 def test_a_full_apply_with_a_kept_disk(ctx, monkeypatch, tailnet):

@@ -79,7 +79,7 @@ class Context:
     log: list[str] = field(default_factory=list)
     files_stopped: bool = False  # apply stopped the files guest for a disk change
     legacy_mounted: bool = False  # a kept disk was mounted in this run
-    kept_before: list[dict] | None = None  # disks.json as this run found it
+    kept_before: set[str] | None = None  # disks disks.json protects, as this run found it
 
     @property
     def bare(self) -> dict:
@@ -359,6 +359,7 @@ def backup_disk(ctx: Context) -> None:
     keep_files(ctx, disk_id)
     wipe = "1" if ctx.model.get("disks", {}).get(disk_id, {}).get("wipe") else "0"
     out = host_out(ctx, "tofu", shlex.join(["/usr/local/sbin/nb-backup-disk", disk_id, wipe])).strip()
+    converted(ctx, disk_id)
     if out == "made":
         ctx.say(f"tofu: {disk_id} is now the {backups.DISK_STORAGE} storage for PBS")
 
@@ -372,6 +373,7 @@ def storage_disks(ctx: Context) -> None:
         keep_files(ctx, disk_id)
         wipe = "1" if ctx.model.get("disks", {}).get(disk_id, {}).get("wipe") else "0"
         out = host_out(ctx, "tofu", shlex.join([STORAGE_DISK, disk_id, wipe, disk["storage"]])).strip()
+        converted(ctx, disk_id)
         if out == "made":
             ctx.say(f"tofu: {disk_id} is now the LVM-thin storage {disk['storage']}")
 
@@ -383,7 +385,7 @@ def keep_files(ctx: Context, disk_id: str) -> None:
     owner discards it."""
     kept_before = kept_disks(ctx) if ctx.kept_before is None else ctx.kept_before
     pin = ctx.model.get("disks", {}).get(disk_id, {})
-    if any(m["disk"] == disk_id for m in kept_before) and not pin.get("discard_data"):
+    if disk_id in kept_before and not pin.get("discard_data"):
         names = [c["name"] for c in (ctx.bare["disks"][disk_id].get("converts") or {}).get("copies", [])]
         copied = {line.split()[0] for line in host_out(ctx, "tofu", f"{COPY} list").splitlines() if line.strip()}
         if not names or not set(names) <= copied:
@@ -410,10 +412,35 @@ DISKS_FILE = "disks.json"
 FILES = "files"
 
 
-def kept_disks(ctx: Context) -> list[dict]:
-    """What apply last mounted ($NULLBILL_HOME/disks.json)."""
+def read_disks(ctx: Context) -> dict:
     path = ctx.home / DISKS_FILE
-    return json.loads(path.read_text())["mounts"] if path.exists() else []
+    return json.loads(path.read_text()) if path.exists() else {"mounts": []}
+
+
+def kept_disks(ctx: Context) -> set[str]:
+    """Disks whose files apply keeps from a wipe ($NULLBILL_HOME/disks.json):
+    each disk it last mounted, and each it ever mounted that no conversion
+    has taken over since. A disk stays protected when a run stops keeping
+    it, so a refused wipe still refuses when the run is repeated."""
+    data = read_disks(ctx)
+    return {m["disk"] for m in data["mounts"]} | set(data.get("unconverted", []))
+
+
+def write_disks(ctx: Context, data: dict) -> None:
+    path = ctx.home / DISKS_FILE
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    tmp.replace(path)
+
+
+def converted(ctx: Context, disk_id: str) -> None:
+    """A conversion keep_files allowed is done: the disk holds no kept files."""
+    data = read_disks(ctx)
+    if disk_id in data.get("unconverted", []):
+        data["unconverted"] = [d for d in data["unconverted"] if d != disk_id]
+        write_disks(ctx, data)
+    if ctx.kept_before is not None:
+        ctx.kept_before.discard(disk_id)
 
 
 def files_vmid(ctx: Context) -> int:
@@ -585,10 +612,8 @@ def record_disks(ctx: Context, mounts: list[dict]) -> None:
         sizes = (found.get("filesystems") or [{}])[0]
         keys = ("disk", "n", "uuid", "fstype", "mode", "name", "mount")
         out.append({k: m[k] for k in keys} | {"used_bytes": sizes.get("used"), "size_bytes": sizes.get("size")})
-    path = ctx.home / DISKS_FILE
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"mounts": out}, indent=2, sort_keys=True) + "\n")
-    tmp.replace(path)
+    mounted = {m["disk"] for m in out}
+    write_disks(ctx, {"mounts": out, "unconverted": sorted(kept_disks(ctx) - mounted)})
 
 
 def mount_point(m: dict) -> str:
