@@ -75,7 +75,8 @@ them. Do it once Tailscale works:
    over Tailscale. The page accepts that press only when it arrives through
    the vpn guest, which is what proves the way in works.
 3. If you do not, the host puts the open firewall back by itself after 15
-   minutes, and the next setup run notices.
+   minutes, and the next setup run notices. If the host restarts before
+   you press it, it puts the open firewall back as it starts.
 
 Once closed, the page answers only from inside the NullBill network: over
 Tailscale and on the on-site screen. **Open it again** on the page gives
@@ -87,4 +88,13 @@ pct exec <nullbill vmid> -- env NULLBILL_HOME=/var/lib/nullbill /opt/nullbill/ve
 ```
 
 The nullbill container's VMID is in the plan (`guests.nullbill.vmid`) and
-in `pct list`.
+in `pct list`. If that fails too, put the open firewall back by hand at the
+host's keyboard:
+
+```sh
+cp /root/nullbill/cluster-lan-open.fw /etc/pve/firewall/cluster.fw
+```
+
+Then, once the nullbill container works, run the command above as well:
+until it records the home network as open, every setup run closes it
+again.

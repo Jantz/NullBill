@@ -387,6 +387,8 @@ def test_host_stage_runs_the_baseline_then_installs_the_lan_open_firewall(ctx):
     expected.add("/etc/pve/local/host.fw")
     # The open variant, kept on the host for the timer that undoes a close.
     expected.add(lan.SAVED_OPEN)
+    # The unit that opens the LAN at boot after a restart during a close.
+    expected.add(f"/etc/systemd/system/{lan.BOOT_UNIT}")
     assert set(reach.files) == expected
     assert reach.files["/etc/pve/local/host.fw"] == c.files["firewall/host.fw"]
     assert reach.files["/etc/pve/firewall/cluster.fw"] == c.files["firewall/cluster-lan-open.fw"]
@@ -925,6 +927,9 @@ def test_close_lan_arms_the_undo_before_closing_and_stays_closed_once_kept(ctx, 
     arm = host.index(lan.arm_command())
     closing = max(i for i, cmd in enumerate(host) if "/etc/pve/firewall/cluster.fw" in cmd)
     assert arm < closing, "the undo must be armed before the LAN closes"
+    # A restart before "Keep it closed" opens it at boot: the unit is enabled before arming.
+    assert reach.files[f"/etc/systemd/system/{lan.BOOT_UNIT}"] == lan.boot_unit()
+    assert host.index(f"systemctl daemon-reload && systemctl enable -q {lan.BOOT_UNIT}") < arm
     # The controller can reach the host at its mgmt address from now on.
     assert known.read_text() == "10.42.1.254 ssh-ed25519 AAAAhostkey\n"
     assert lan.state(tmp_path) == lan.CLOSING
@@ -942,6 +947,20 @@ def test_close_lan_arms_the_undo_before_closing_and_stays_closed_once_kept(ctx, 
     apply.stage_host(ctx(reach=reach, open_lan=True))
     assert reach.files[cluster] == c.files["firewall/cluster-lan-open.fw"]
     assert lan.state(tmp_path) == lan.OPEN
+
+
+def test_a_restart_during_a_close_opens_the_lan_at_boot():
+    """The timer is transient and gone after a restart; the marker on the
+    host's disk is not, and the boot unit opens the LAN while it is there."""
+    arm = lan.arm_command()
+    assert arm.index(f"touch {lan.MARKER}") < arm.index("systemd-run")
+    assert f"/bin/sh -c '{lan.REOPEN}'" in arm
+    assert lan.REOPEN == f"/bin/cp {lan.SAVED_OPEN} {lan.CLUSTER_FW} && /bin/rm -f {lan.MARKER}"
+    unit = lan.boot_unit()
+    assert f"ConditionPathExists={lan.MARKER}\n" in unit and f"ExecStart=/bin/sh -c '{lan.REOPEN}'\n" in unit
+    assert "After=pve-cluster.service" in unit and "WantedBy=multi-user.target" in unit
+    # Keeping it closed removes the marker, so the next boot leaves it closed.
+    assert lan.DISARM.startswith(f"rm -f {lan.MARKER} && ")
 
 
 def test_a_close_nobody_keeps_is_undone_and_the_controller_follows(ctx, tmp_path):
