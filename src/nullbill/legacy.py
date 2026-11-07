@@ -32,6 +32,9 @@ SKIPPED_TYPES = {
 SHARE_ROOT = "/srv/share"
 # uid and gid 1000 in an unprivileged container (PVE maps 0 to 100000).
 SHARE_UID = 1000
+# The one Samba user the files guest knows; its password is the secret
+# files_share_password, which the page shows the owner.
+SHARE_USER = "nbshare"
 HOST_ID_OFFSET = 100000
 # Keys of a disk pin that only mean something for a legacy disk.
 LEGACY_KEYS = ("mode", "partitions", "share", "name")

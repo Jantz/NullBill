@@ -14,4 +14,4 @@ docker build -q -t nullbill-guest-check "$out/context" >/dev/null
 tools/render-fixtures "$out/build" >/dev/null
 # nft -c needs CAP_NET_ADMIN; the container's own network namespace is the
 # only one it can touch, and -c changes nothing.
-docker run --rm --cap-add NET_ADMIN -v "$out/build:/build:ro" nullbill-guest-check small mid large
+docker run --rm --cap-add NET_ADMIN -v "$out/build:/build:ro" nullbill-guest-check small mid large large-legacy

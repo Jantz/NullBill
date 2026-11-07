@@ -806,9 +806,11 @@ def stage_files(ctx: Context) -> None:
         return
     shares = [{"name": m["share"], "read_only": m["mode"] == "ro"} for m in legacy.shares(ctx.bare)]
     password = ctx.secrets.ensure("files_share_password", lambda: secrets.token_urlsafe(24))
-    run_playbook(ctx, "files", "files.yml", FILES, {"files_shares": shares, "files_password": password})
+    variables = {"files_shares": shares, "files_user": legacy.SHARE_USER, "files_password": password}
+    run_playbook(ctx, "files", "files.yml", FILES, variables)
     address = ctx.bare["guests"][FILES]["ip"]
-    ctx.say(f"files: from your devices on the tailnet, open \\\\{address}\\<share> as user nbshare; the page shows the password")
+    where = f"\\\\{address}\\<share>"
+    ctx.say(f"files: from your devices on the tailnet, open {where} as user {legacy.SHARE_USER}; the page shows the password")
 
 
 def ssh_user_ca(ctx: Context, stage: str) -> str:

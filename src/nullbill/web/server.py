@@ -31,7 +31,7 @@ from pathlib import Path
 
 import yaml
 
-from nullbill import lan
+from nullbill import lan, legacy
 from nullbill.apply import NTFY, SPKI
 from nullbill.cli import plan_text
 from nullbill.errors import NullBillError
@@ -71,6 +71,7 @@ AGENT_ACTIONS = {"verify"}
 # SHA-256 here, never the token. Every agent request goes to the journal
 # with the agent's name.
 REMOTE_AGENTS = "web/remote-agents.json"
+DISK_CHOICES = {"legacy": "keep", "pbs": "erase", "ignore": "alone"}
 REMOTE_AGENT_NAME = re.compile(r"[a-z][a-z0-9-]{0,30}")
 # A Tailscale auth key logs the vpn guest in once; apply forgets it after.
 TAILSCALE_KEY = re.compile(r"tskey-auth-[A-Za-z0-9-]{8,200}")
@@ -374,6 +375,86 @@ class App:
             "owner_login": owner,
         }
 
+    # Disks besides the system disk: what the probe saw, and what the owner
+    # chose for each. Erasing one asks for the end of its name, here and not
+    # only on the page.
+    def facts(self) -> dict | None:
+        path = self.home / "probe" / "latest" / "facts.json"
+        return json.loads(path.read_text()) if path.is_file() else None
+
+    def disks(self) -> list[dict]:
+        pins = (self.config() or {}).get("disks") or {}
+        out = []
+        for disk in (self.facts() or {}).get("disks", []):
+            if disk.get("system"):
+                continue
+            pin = pins.get(disk["id"]) or {}
+            parts = [
+                {
+                    "n": p["n"],
+                    "size_mib": p["size_mib"],
+                    "what": legacy.describe(p),
+                    "label": p.get("label"),
+                    "keepable": p.get("fstype") in legacy.FILESYSTEMS and p.get("parttype") not in legacy.SKIPPED_TYPES,
+                }
+                for p in disk.get("partitions", [])
+            ]
+            out.append(
+                {
+                    "id": disk["id"],
+                    "size_gib": disk["size_gib"],
+                    "rotational": disk.get("rotational", False),
+                    "health": (disk.get("smart") or {}).get("health", "unknown"),
+                    "power_on_hours": (disk.get("smart") or {}).get("power_on_hours"),
+                    "partitions": parts,
+                    "choice": DISK_CHOICES.get(pin.get("use"), "alone"),
+                    "rw": pin.get("mode") == "rw",
+                    "confirm": disk["id"][-6:],
+                }
+            )
+        return out
+
+    def _disk_pins(self, config: dict, chosen: dict) -> dict:
+        pins = dict(config.get("disks") or {})
+        known = {d["id"]: d for d in self.disks()}
+        for disk_id, want in chosen.items():
+            if disk_id not in known:
+                raise NullBillError(f"{disk_id}: no such disk in the last probe; probe the server again")
+            choice, rw = str(want.get("choice", "alone")), bool(want.get("rw"))
+            current = known[disk_id]
+            if choice == current["choice"] and (choice != "keep" or rw == current["rw"]):
+                continue  # unchanged: keep the pin as it is, with any keys the page does not show
+            if choice == "alone":
+                pins.pop(disk_id, None)
+            elif choice == "keep":
+                old = pins.get(disk_id) if current["choice"] == "keep" else None
+                pin = {k: v for k, v in (old or {}).items() if k != "mode"} | {"use": "legacy"}
+                pins[disk_id] = pin | ({"mode": "rw"} if rw else {})
+            elif choice == "erase":
+                if str(want.get("confirm", "")).strip() != current["confirm"]:
+                    raise NullBillError(f"{disk_id}: type {current['confirm']}, the end of its name, to erase everything on it for backups")
+                pins[disk_id] = {"use": "pbs", "wipe": True}
+            else:
+                raise NullBillError(f"{disk_id}: choose leave it alone, keep its files or erase it")
+        return pins
+
+    def files(self) -> dict | None:
+        """Where the owner finds the kept disks' shares, once a plan has them."""
+        path = self.home / "plan.yaml"
+        plan = (yaml.safe_load(path.read_text()) or {}) if path.exists() else {}
+        ip = (plan.get("guests") or {}).get("files", {}).get("ip")
+        if not ip:
+            return None
+        shares = [m["share"] for m in legacy.shares(plan)]
+        has_password = bool(Secrets(self.codec(self.home)).data.get("files_share_password"))
+        return {"ip": ip, "shares": shares, "user": legacy.SHARE_USER, "password_set": has_password}
+
+    def files_password(self) -> str:
+        value = Secrets(self.codec(self.home)).data.get("files_share_password")
+        if not value:
+            raise NullBillError("run setup first; it makes the password")
+        return value
+
     def save_choices(self, body: dict) -> None:
         workloads = [w for w in body.get("workloads", []) if w in WORKLOADS]
         login = str(body.get("owner_login", "")).strip()
@@ -405,6 +486,12 @@ class App:
                 del host["console"]
         if not host:
             del config["host"]
+        if isinstance(body.get("disks"), dict):
+            pins = self._disk_pins(config, body["disks"])
+            if pins:
+                config["disks"] = pins
+            else:
+                config.pop("disks", None)
         build_model(config)  # validates against the schema before anything is written
         _write_private(self.home / "config.yaml", yaml.safe_dump(config, sort_keys=False))
 
@@ -596,6 +683,8 @@ class App:
             "install": self.install(),
             "probed": (self.home / "probe" / "latest" / "facts.json").is_file(),
             "choices": self.choices(),
+            "disks": self.disks(),
+            "files": self.files(),
             "workloads": WORKLOADS,
             "plan": self.plan(),
             "alerts": self.alerts() if has_password else None,
@@ -743,6 +832,8 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 if self.path == "/api/vpn":
                     app.save_tailscale_key(body)
                     return self.json(200, {"ok": True, "tailscale_key": app.tailscale_key()})
+                if self.path == "/api/files-password":
+                    return self.json(200, {"password": app.files_password()})
                 if self.path == "/api/alerts/test":
                     return self.json(200, {"ok": True, "sent": app.test_alerts()})
                 if self.path == "/api/jobs":

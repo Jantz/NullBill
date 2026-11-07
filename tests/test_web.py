@@ -527,3 +527,96 @@ def test_a_job_outlives_a_restart_of_the_page_and_shows_again(tmp_path):
     lost = web.App(home, command=slow)
     lost.load_jobs()
     assert lost.jobs[done.id].state() == "failed"
+
+
+def probed(app, cls="large"):
+    from fixturedata import write_raw
+
+    from nullbill.probe import parse
+
+    run = app.home / "probe" / "run1"
+    (run / "facts.json").parent.mkdir(parents=True, exist_ok=True)
+    (run / "facts.json").write_text(json.dumps(parse(write_raw(run / "raw", cls))))
+    (app.home / "probe" / "latest").symlink_to("run1")
+
+
+OWNER = {"workloads": ["agents", "linux-ci"], "owner_login": "owner-a@example.internal"}
+OLD = "ata-SYNTHETIC_HDD_0002"
+
+
+def pins(app):
+    return yaml.safe_load((app.home / "config.yaml").read_text()).get("disks")
+
+
+def test_the_other_disks_are_listed_with_their_partitions_and_health(site):
+    app, client = site
+    sign_in(app, client)
+    probed(app)
+    disks = {d["id"]: d for d in client.call("/api/state")[1]["disks"]}
+    assert "nvme-SYNTHETIC_NVME_0001" not in disks
+    old = disks[OLD]
+    assert old["choice"] == "alone" and old["health"] == "PASSED" and old["power_on_hours"] == 41000 and old["confirm"] == "D_0002"
+    assert [(p["n"], p["what"], p["label"], p["keepable"]) for p in old["partitions"]] == [
+        (1, "partition 1 (Microsoft reserved)", None, False),
+        (2, "partition 2 (ntfs)", "Data", True),
+    ]
+
+
+def test_keeping_a_disk_plans_the_share_and_shows_where_it_is(site):
+    app, client = site
+    sign_in(app, client)
+    probed(app)
+    status, data = client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "keep"}}})
+    assert status == 200 and data["plan"]["errors"] == [] and pins(app) == {OLD: {"use": "legacy"}}
+    state = client.call("/api/state")[1]
+    assert {d["id"]: d["choice"] for d in state["disks"]}[OLD] == "keep"
+    assert state["files"] == {"ip": "10.42.1.23", "shares": ["data"], "user": "nbshare", "password_set": False}
+    assert client.call("/api/files-password", {}) == (400, {"error": "run setup first; it makes the password"})
+    app.codec(app.home).data["files_share_password"] = "a-long-share-password"
+    assert client.call("/api/files-password", {}) == (200, {"password": "a-long-share-password"})
+    # Read-write, then back; keys the page does not show stay.
+    client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "keep", "rw": True}}})
+    assert pins(app) == {OLD: {"use": "legacy", "mode": "rw"}}
+    config = yaml.safe_load((app.home / "config.yaml").read_text())
+    config["disks"][OLD]["name"] = "old"
+    (app.home / "config.yaml").write_text(yaml.safe_dump(config))
+    client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "keep", "rw": True}}})
+    assert pins(app) == {OLD: {"use": "legacy", "mode": "rw", "name": "old"}}
+    client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "keep", "rw": False}}})
+    assert pins(app) == {OLD: {"use": "legacy", "name": "old"}}
+    # Saving the other choices alone leaves the disks as they are.
+    client.call("/api/choices", OWNER)
+    assert pins(app) == {OLD: {"use": "legacy", "name": "old"}}
+    client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "alone"}}})
+    assert pins(app) is None and client.call("/api/state")[1]["files"] is None
+
+
+def test_erasing_a_disk_needs_the_end_of_its_name(site):
+    app, client = site
+    sign_in(app, client)
+    probed(app)
+    status, data = client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "erase"}}})
+    assert status == 400 and "type D_0002, the end of its name" in data["error"]
+    assert client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "erase", "confirm": "0002"}}})[0] == 400
+    assert not (app.home / "config.yaml").exists()
+    status, data = client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "erase", "confirm": "D_0002"}}})
+    assert status == 200 and pins(app) == {OLD: {"use": "pbs", "wipe": True}}
+    # Chosen once, it stays chosen without typing the name again.
+    assert client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "erase"}}})[0] == 200
+    assert client.call("/api/choices", {**OWNER, "disks": {"ata-NOT_THERE": {"choice": "keep"}}})[0] == 400
+    assert client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "format"}}})[0] == 400
+    assert pins(app) == {OLD: {"use": "pbs", "wipe": True}}
+
+
+def test_a_disk_kept_and_mounted_cannot_be_erased_from_the_page(site):
+    """The plan refuses it: no erase until a verified copy exists."""
+    app, client = site
+    sign_in(app, client)
+    probed(app)
+    facts = app.home / "probe" / "latest" / "facts.json"
+    data = json.loads(facts.read_text())
+    disk = next(d for d in data["disks"] if d["id"] == OLD)
+    disk["partitions"][1]["mounts"] = ["/mnt/nb-legacy/data"]
+    facts.write_text(json.dumps(data))
+    status, result = client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "erase", "confirm": "D_0002"}}})
+    assert status == 200 and any("kept as legacy and mounted" in e for e in result["plan"]["errors"])

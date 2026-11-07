@@ -45,6 +45,91 @@ function renderWorkloads(state) {
   }
 }
 
+const CHOICES = {
+  alone: "Leave it alone",
+  keep: "Keep its files and share them to me",
+  erase: "Erase everything on it and use it for backups",
+};
+
+function gib(mib) { return mib >= 1024 ? `${(mib / 1024).toFixed(1)} GiB` : `${mib} MiB`; }
+
+function renderDisks(disks) {
+  const list = $("disk-list");
+  list.replaceChildren();
+  show("disks", disks.length > 0);
+  for (const disk of disks) {
+    const box = document.createElement("div");
+    box.className = "disk";
+    box.dataset.id = disk.id;
+    const hours = disk.power_on_hours ? `, ${disk.power_on_hours} hours in use` : "";
+    const title = document.createElement("p");
+    const name = document.createElement("b");
+    name.textContent = disk.id;
+    title.append(name, ` ${disk.size_gib} GiB ${disk.rotational ? "hard disk" : "SSD"}, health ${disk.health}${hours}`);
+    box.append(title);
+    if (disk.health === "FAILED") {
+      box.append(Object.assign(document.createElement("p"), {className: "errors",
+        textContent: "This disk reports that it is failing. Copy what you need off it soon."}));
+    }
+    const parts = document.createElement("ul");
+    for (const p of disk.partitions) {
+      const label = p.label ? ` "${p.label}"` : "";
+      parts.append(li(`${p.what}${label}, ${gib(p.size_mib)}${p.keepable ? "" : ", left alone"}`));
+    }
+    if (!disk.partitions.length) parts.append(li("no partitions"));
+    box.append(parts);
+    const keepable = disk.partitions.some((p) => p.keepable);
+    for (const [value, text] of Object.entries(CHOICES)) {
+      const label = document.createElement("label");
+      const input = Object.assign(document.createElement("input"), {type: "radio", name: `disk-${disk.id}`, value});
+      input.checked = disk.choice === value;
+      input.disabled = value === "keep" && !keepable && disk.choice !== "keep";
+      label.append(input, " " + text + (input.disabled ? " (no NTFS, exFAT or FAT partition on it)" : ""));
+      box.append(label);
+    }
+    const rw = document.createElement("label");
+    rw.className = "disk-rw";
+    const rwInput = Object.assign(document.createElement("input"), {type: "checkbox", checked: disk.rw});
+    rw.append(rwInput, " Let me change files on it (NTFS only). Shut Windows down fully on that disk first, with shutdown /s /t 0, or it stays read-only.");
+    const confirm = document.createElement("label");
+    confirm.className = "disk-confirm";
+    confirm.append(`Type ${disk.confirm}, the end of its name, to erase everything on it`,
+      Object.assign(document.createElement("input"), {autocomplete: "off"}));
+    box.append(rw, confirm);
+    const sync = () => {
+      const chosen = box.querySelector("input[type=radio]:checked");
+      rw.hidden = !chosen || chosen.value !== "keep";
+      confirm.hidden = !chosen || chosen.value !== "erase" || disk.choice === "erase";
+    };
+    box.addEventListener("change", sync);
+    sync();
+    list.append(box);
+  }
+}
+
+function diskChoices() {
+  const out = {};
+  for (const box of $("disk-list").querySelectorAll(".disk")) {
+    const chosen = box.querySelector("input[type=radio]:checked");
+    out[box.dataset.id] = {
+      choice: chosen ? chosen.value : "alone",
+      rw: box.querySelector(".disk-rw input").checked,
+      confirm: box.querySelector(".disk-confirm input").value,
+    };
+  }
+  return out;
+}
+
+function renderFiles(files) {
+  show("files-info", Boolean(files));
+  if (!files) return;
+  $("files-user").textContent = files.user;
+  $("files-shares").replaceChildren(...files.shares.map((share) =>
+    li(`\\\\${files.ip}\\${share}   or   smb://${files.ip}/${share}`)));
+  show("files-reveal", files.password_set);
+  $("files-password").textContent = files.password_set ? "" : "Setup makes the password on its next run.";
+}
+
 function renderPlan(plan) {
   const errors = $("plan-errors");
   errors.replaceChildren(...plan.errors.map((e) => Object.assign(document.createElement("li"), {textContent: e})));
@@ -158,6 +243,8 @@ async function refresh() {
   if (!state.has_password) return;
   $("probed").textContent = state.probed ? "Done." : "";
   renderWorkloads(state);
+  renderDisks(state.disks);
+  renderFiles(state.files);
   $("backups").checked = state.choices.backups;
   $("console").checked = state.choices.console;
   $("owner-login").value = state.choices.owner_login;
@@ -215,10 +302,15 @@ document.addEventListener("DOMContentLoaded", () => {
   $("choices-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const workloads = [...$("workloads").querySelectorAll("input:checked")].map((i) => i.value);
+    showError("");
     try {
-      const result = await api("/api/choices", {workloads, backups: $("backups").checked, console: $("console").checked, owner_login: $("owner-login").value});
+      const result = await api("/api/choices", {workloads, backups: $("backups").checked, console: $("console").checked,
+        owner_login: $("owner-login").value, disks: diskChoices()});
       renderPlan(result.plan);
       $("plan-details").open = true;
+      const state = await api("/api/state");
+      renderDisks(state.disks);
+      renderFiles(state.files);
     } catch (error) { showError(error); }
   });
   $("alerts-form").addEventListener("submit", async (event) => {
@@ -268,6 +360,11 @@ document.addEventListener("DOMContentLoaded", () => {
       const result = await api("/api/vpn", {key: $("tailscale-key").value});
       $("tailscale-key").value = "";
       renderVpn(result.tailscale_key);
+    } catch (error) { showError(error); }
+  });
+  $("files-reveal").addEventListener("click", async () => {
+    try {
+      $("files-password").textContent = (await api("/api/files-password", {})).password;
     } catch (error) { showError(error); }
   });
   $("test-alerts").addEventListener("click", async () => {
