@@ -47,6 +47,22 @@ answered items move to the decisions list at the bottom.
    board's manual. Recommendation: switch the screen on in the setup page
    only if you want it; it costs about 512 MB.
 
+10. **Disks from a previous OS** (docs/adr/0007-legacy-disks.md). A disk
+    with your files can be kept as it is and shared to you over the VPN.
+    - Approve `ntfs-3g` on the host and Samba in a new `files` guest?
+      Recommendation: yes; SMB is built into Windows and macOS, and ntfs-3g
+      is the only tool that spots a hibernated Windows disk.
+    - Zone for the `files` guest: mgmt (internet only through the proxy) or
+      services (direct)? Recommendation: mgmt, since it holds your personal
+      files and only the owner reaches it.
+    - Default when you choose "keep" on the page: read-only, or read-write
+      when the disk checks clean? Recommendation: read-only, with a
+      read-write switch for NTFS.
+    - SMB only, or SFTP as well? Recommendation: SMB only for now.
+    - Alerts on SMART changes for every non-system disk (smartctl is already
+      on the host)? Recommendation: yes, as the next change after the share
+      works; the plan already warns about a disk that is not healthy.
+
 ## Defaults picked for cosmetic choices
 
 - Zone subnets: `10.42.<index>.0/24`, pinnable through `network.base`.
