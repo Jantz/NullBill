@@ -84,7 +84,7 @@ the home network its access back. If Tailscale is down, press it on the
 on-site screen. Without one, sign in at the host's own keyboard and run:
 
 ```sh
-pct exec <nullbill vmid> -- env NULLBILL_HOME=/var/lib/nullbill /opt/nullbill/venv/bin/nullbill apply --open-lan
+pct exec <nullbill vmid> -- env LC_ALL=C.UTF-8 NULLBILL_HOME=/var/lib/nullbill /opt/nullbill/venv/bin/nullbill apply --open-lan
 ```
 
 The nullbill container's VMID is in the plan (`guests.nullbill.vmid`) and

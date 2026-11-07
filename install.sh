@@ -20,7 +20,10 @@ die() {
   printf 'nullbill install: %s\n' "$*" >&2
   exit 1
 }
-in_ct() { pct exec "$vmid" -- "$@"; }
+# pct exec passes this shell's locale on; Proxmox sets LANG=en_US.UTF-8,
+# which the container's Debian has not generated, and Ansible then refuses
+# to start. C.UTF-8 is built into every Debian.
+in_ct() { pct exec "$vmid" -- env LANG=C.UTF-8 LC_ALL=C.UTF-8 LANGUAGE= "$@"; }
 
 [ "$(id -u)" = 0 ] || die "run this as root"
 { [ -d /etc/pve ] && command -v pct >/dev/null; } || die "this is not a Proxmox VE host"

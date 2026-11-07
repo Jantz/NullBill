@@ -10,7 +10,7 @@ export NULLBILL_REPO=file:///src NULLBILL_REF=$1 NULLBILL_BRIDGE=eth0
 /usr/sbin/sshd
 in_ct() { docker exec "$NB_CT" "$@"; }
 
-bash /src/install.sh >/tmp/first.log 2>&1 || { cat /tmp/first.log; fail "first install"; }
+LANG=en_US.UTF-8 bash /src/install.sh >/tmp/first.log 2>&1 || { cat /tmp/first.log; fail "first install"; }
 code=$(sed -n 's/^Setup code: //p' /tmp/first.log)
 [[ $code =~ ^[0-9A-F]{4}(-[0-9A-F]{4}){3}$ ]] || { cat /tmp/first.log; fail "install prints a setup code"; }
 url=$(sed -n 's/^Open \(https:[^ ]*\) in a browser.*/\1/p' /tmp/first.log)
@@ -30,7 +30,7 @@ echo "ok   the page answers; the controller has its tools, a private home, and S
 # What apply adds when it closes the LAN: the host under its mgmt address.
 mgmt="10.42.1.254 $(cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub)"
 in_ct sh -c "echo '$mgmt' >>/root/.ssh/known_hosts"
-bash /src/install.sh >/tmp/second.log 2>&1 || { cat /tmp/second.log; fail "second install"; }
+LANG=en_US.UTF-8 bash /src/install.sh >/tmp/second.log 2>&1 || { cat /tmp/second.log; fail "second install"; }
 in_ct grep -qxF "$mgmt" /root/.ssh/known_hosts || fail "a second run keeps the host's mgmt address in known_hosts"
 [ "$(in_ct grep -c "^$(ip -4 -o addr show dev eth0 | awk '{print $4}' | cut -d/ -f1) " /root/.ssh/known_hosts)" = 1 ] ||
   fail "a second run keeps one line for the host's LAN address"

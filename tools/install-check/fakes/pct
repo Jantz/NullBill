@@ -16,7 +16,8 @@ case $cmd in
     echo "create $*" >>/var/log/fake-pct.log
     docker create --name "$NB_CT" --hostname nullbill --network "$NB_NET" -v "$NB_SRC:/src:ro" "$NB_CT_IMAGE" >/dev/null ;;
   start) docker start "$NB_CT" >/dev/null ;;
-  exec) shift 2; exec docker exec -i "$NB_CT" "$@" ;;
+  # Like lxc-attach, hand the caller's locale on to the container.
+  exec) shift 2; exec docker exec -i -e LANG -e LC_ALL -e LANGUAGE "$NB_CT" "$@" ;;
   push)
     docker cp "$2" "$NB_CT:$3" >/dev/null
     docker exec "$NB_CT" chmod "${5:-0644}" "$3" ;;
