@@ -81,8 +81,9 @@ NullBill needs Proxmox VE 9; version 8 reached its end of life in 2026-08.
    logs, backups, vpn, verify. The first run downloads images and packages and
    takes a while; tofu, ci and the first backup are the longest.
 9. Once Tailscale works: **Close the home network**, then **Keep it closed**
-   from the page opened over Tailscale ([vpn.md](vpn.md)). Until then
-   verify reports the open LAN as DEGRADED.
+   from the page opened over Tailscale ([vpn.md](vpn.md)). Without that
+   press, the host opens the home network again after 15 minutes, or when
+   it restarts. Until then verify reports the open LAN as DEGRADED.
 10. With backups: make the paper copy of the backup encryption key, as
    [pbs-encryption-key.md](pbs-encryption-key.md) describes.
 
@@ -91,6 +92,13 @@ NullBill needs Proxmox VE 9; version 8 reached its end of life in 2026-08.
 The log names the stage and the playbook or command. Copy the last 50
 lines of the log into the chat. Leave out anything you consider private;
 the log carries addresses on your network and guest names, not secrets.
+
+## After the server was off for a day or more
+
+The services' certificates last a day and renew themselves while the server
+runs. After a longer power cut, Forgejo, monitoring and the CI dispatcher
+stop working until you press **Run setup**, which replaces the expired
+certificates.
 
 ## What is not in this run yet
 
