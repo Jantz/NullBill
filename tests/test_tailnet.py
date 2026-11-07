@@ -88,3 +88,17 @@ def test_a_remote_agent_tag_reaches_the_page_and_nothing_else(facts):
     assert agent == [{"src": ["tag:nb-agent"], "dst": [page], "ip": ["tcp:8443"]}]
     (test,) = [t for t in p["tests"] if t["src"] == "tag:nb-agent"]
     assert test["accept"] == [f"{page}:8443"] and f"{bare['zones']['mgmt']['host_ip']}:22" in test["deny"]
+
+
+@pytest.mark.parametrize("cls", ["small", "mid", "large"])
+def test_every_group_the_policy_names_is_defined(facts, cls):
+    """Tailscale refuses a policy naming a group it does not define ("group
+    not found"), which a role nobody holds would be: the owner alone, as on
+    a first install, gets no grant for the default role."""
+    people = {"people": {"owner": {"role": "owner", "login": "owner-a@example.internal"}}}
+    plan, model = build(facts, cls, people)
+    model["people"] = people["people"]
+    pol = json.loads(render_tailnet(plan, model)["policy.json"])
+    named = {s for g in pol["grants"] for s in g["src"] if s.startswith("group:")}
+    named |= {o for owners in pol["tagOwners"].values() for o in owners}
+    assert named <= set(pol["groups"]) == {"group:nb-owner"}

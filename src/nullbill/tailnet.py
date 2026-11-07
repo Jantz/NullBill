@@ -62,8 +62,13 @@ def check_tailnet(plan_with_notes: dict, model: dict, errors: list[str]) -> Note
 
 
 def _grants(plan: dict, model: dict) -> list[dict]:
+    # Only roles someone holds: Tailscale refuses a policy that names a group
+    # it does not define, and an empty role has no group.
+    held = {p["role"] for p in model["people"].values()}
     by_dest: dict[tuple[str, tuple[str, ...]], list[str]] = {}
     for flow in _role_flows(plan, model):
+        if flow.ref.partition(":")[2] not in held:
+            continue
         ports = by_dest.setdefault((flow.ref.partition(":")[2], flow.dest_cidrs), [])
         if f"{flow.proto}:{flow.port}" not in ports:
             ports.append(f"{flow.proto}:{flow.port}")
