@@ -84,12 +84,44 @@ FailedLogins covers the share.
 **Not backed up.** PBS backs up guests; PVE never backs up a bind mount. The
 plan says so on every legacy disk.
 
-**Converting later** (Phases 2 and 3, each its own change): moving a disk
-away from `legacy` needs `wipe: true` and either `evacuate: <storage>`
-(apply copies the data there, checks counts, sizes and a sample of
-checksums, and stops on any difference) or `discard_data: true`. Until
-those exist, plan refuses any other use of a disk that is mounted as
-legacy.
+**Converting a kept disk** (Phase 2). Moving a mounted kept disk to
+`pbs` needs `wipe: true` and either `evacuate: <storage>` or
+`discard_data: true`; plan refuses anything else, and a pin with neither
+names both. `discard_data` is the owner's word that the files are elsewhere:
+plan says how many GiB are lost, and apply wipes after unmounting.
+
+`evacuate` copies first. plan sizes one volume per kept partition (the used
+bytes the probe read, plus 5 %, plus 1 GiB for ext4), refuses a storage that
+cannot hold container volumes or is not LVM or LVM-thin, and reserves the
+room before it sizes the CI pools, keeping 5 % of a thin pool free on the
+host as well, since a full thin pool stops every guest on it. apply's tofu
+stage then, before anything else touches the disk:
+
+1. stops the files guest and runs `nb-legacy-copy` on the host as a
+   transient systemd unit (an SSH drop does not stop it; a rerun waits for
+   it rather than starting a second copy);
+2. the script allocates a volume owned by the files guest, puts ext4 on it,
+   `rsync -aH --numeric-ids` the read-only mount into it, then compares both
+   trees entry by entry (type, size, link target) and the SHA-256 of a
+   sample of the files (at least 200 and at least 1 %, or all);
+3. only a copy that passes is recorded in `/var/lib/nullbill/kept-copies`.
+   A failed copy frees its volume and records nothing; a volume left by a
+   crash is freed by the next run;
+4. apply wipes the disk only if every copy the plan names for it is in that
+   record. Without one it stops and the disk stays as it was. The same check
+   holds when the disk's pin is changed by hand: a disk in `disks.json` is
+   never wiped without either a recorded copy or `discard_data`.
+
+The copy is mounted read-write in the files guest at the old share's name,
+with `backup=1`, so PBS backs it up from then on, and OpenTofu keeps the
+guest (`prevent_destroy`): destroying it would delete the copies. The kept
+disk itself is only read. Named data streams (ntfs-3g shows them as
+extended attributes, such as Windows' "downloaded from the internet" mark)
+are not copied, since ext4 cannot hold large ones. A ZFS guest storage is
+not supported yet: the page offers the copy only on LVM storage.
+
+**A storage disk** (Phase 3, its own change) adds `use: storage`, an
+LVM-thin pool on a pinned disk, which a copy can go to.
 
 ## Alternatives
 

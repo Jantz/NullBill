@@ -54,7 +54,7 @@ SH
   test ! -e "$dir" || fail "a refused disk left a mount point"
   echo "ok   kept disks: a missing disk, another filesystem or another UUID than planned are refused, and nothing is made"
 
-  # Read-only: mounted by UUID, owned by the share user, and not one byte written.
+  # Read-only: mounted by its by-id name, owned by the share user, and not one byte written.
   echo hello >/tmp/legacy/hello.txt
   mkdir -p /tmp/legacy/seed && mount -t ntfs-3g "$ntfs" /tmp/legacy/seed && cp /tmp/legacy/hello.txt /tmp/legacy/seed/ && umount /tmp/legacy/seed
   before=$(sum NTFS)
@@ -177,6 +177,8 @@ PY
   umount /tmp/legacy/seed
   echo "ok   a mount point with files in it, or a disk mounted elsewhere, is refused"
 
+  legacy_copy_checks "$ntfs" "$uuid"
+
   # exFAT and FAT stay read-only: their hibernation cannot be told.
   local exfat vfat
   exfat=$(image EXFAT 64M mkfs.exfat -L Old)
@@ -201,12 +203,108 @@ PY
   legacy_disk_cleanup
 }
 
+# nb-legacy-copy: the kept NTFS disk copied into a volume. pvesm and pvesh
+# stand-ins make each volume a loop device on a sparse file.
+legacy_copy_checks() {
+  local ntfs=$1 uuid=$2 dir=/tmp/legacy/mnt/old-hdd vols=/tmp/legacy/vols
+  mkdir -p "$vols" /tmp/legacy/copy-fake
+  cat >/tmp/legacy/pvesm <<'SH'
+#!/bin/bash
+# pvesm for the copy check: volumes are loop devices on files in $vols.
+set -eu
+vols=/tmp/legacy/vols
+echo "$*" >>/tmp/legacy/pvesm.log
+case $1 in
+  list) for f in "$vols"/*.img; do [ -e "$f" ] || continue; n=$(basename "$f" .img); echo "$2:$n raw images 1 ${n#vm-}"; done ;;
+  alloc) truncate -s "$5" "$vols/$4.img"; losetup -f --show "$vols/$4.img" >"$vols/$4.loop"; echo "successfully created '$2:$4'" ;;
+  path) cat "$vols/${2#*:}.loop" ;;
+  free) n=${2#*:}; losetup -d "$(cat "$vols/$n.loop")"; rm -f "$vols/$n.img" "$vols/$n.loop" ;;
+  *) exit 2 ;;
+esac
+SH
+  cat >/tmp/legacy/pvesh <<'SH'
+#!/bin/sh
+echo "{\"type\": \"${NB_FAKE_TYPE:-lvmthin}\", \"total\": 107374182400, \"avail\": ${NB_FAKE_AVAIL:-53687091200}}"
+SH
+  chmod +x /tmp/legacy/pvesm /tmp/legacy/pvesh
+  export NB_PVESM=/tmp/legacy/pvesm NB_PVESH=/tmp/legacy/pvesh NB_COPIES=/tmp/legacy/kept-copies NB_COPY_DIR=/tmp/legacy/copying
+  copy() { /usr/local/sbin/nb-legacy-copy copy old-hdd local-lvm 2023 1 ata-SYNTHETIC_NTFS; }
+  volumes() { find "$vols" -name '*.img' | wc -l; }
+
+  # Files worth copying: many small ones, a big one, odd names, a subdirectory.
+  mkdir -p /tmp/legacy/seed
+  # The hibernation check left hiberfil.sys behind; this test image may lose it.
+  mount -t ntfs-3g -o remove_hiberfile "$ntfs" /tmp/legacy/seed
+  mkdir -p "/tmp/legacy/seed/Fotos 2019/Urlaub"
+  for i in $(seq 1 450); do echo "photo $i" >"/tmp/legacy/seed/Fotos 2019/Urlaub/IMG_$i.jpg"; done
+  head -c 20000000 /dev/urandom >"/tmp/legacy/seed/Fotos 2019/video.mp4"
+  printf 'x' >"/tmp/legacy/seed/name with spaces & ümlauts.txt"
+  umount /tmp/legacy/seed
+  # ntfs-3g writes back after umount returns; wait until it has exited.
+  while grep -qsa 'legacy/[s]eed' /proc/[0-9]*/cmdline; do sleep 0.2; done
+  [ "$(keep NTFS "$uuid" ntfs ro)" = mounted ] || fail "kept disk for the copy"
+  local before
+  before=$(sum NTFS)
+
+  # Not enough room, another kind of storage, a missing disk: refused, nothing made.
+  if NB_FAKE_AVAIL=1073741824 copy 2>/tmp/legacy/err; then fail "copied onto a storage without room"; fi
+  grep -q "the copy needs 1 GiB and 5 % must stay free" /tmp/legacy/err || fail "room message: $(cat /tmp/legacy/err)"
+  if NB_FAKE_TYPE=zfspool copy 2>/tmp/legacy/err; then fail "copied onto ZFS"; fi
+  grep -q "is zfspool; a copy goes on LVM or LVM-thin storage" /tmp/legacy/err || fail "storage type message"
+  if /usr/local/sbin/nb-legacy-copy copy gone local-lvm 2023 1 X 2>/tmp/legacy/err; then fail "copied a disk that is not mounted"; fi
+  grep -q "is not mounted; is the disk connected" /tmp/legacy/err || fail "not mounted message"
+  [ "$(volumes)" = 0 ] || fail "a refused copy left a volume"
+  echo "ok   a copy is refused without room on LVM storage, or without the kept disk mounted, and makes nothing"
+
+  # A copy that does not match is freed and not recorded.
+  fake_rsync() { # what to do to the copy after the real rsync
+    # shellcheck disable=SC2016 # the fake's own variables
+    printf '#!/bin/sh\n/usr/bin/rsync "$@" || exit $?\nfor d in "$@"; do :; done\ncd "$d"\n%s\n' "$1" >/tmp/legacy/copy-fake/rsync
+  }
+  fake_rsync "rm -f 'Fotos 2019/Urlaub/IMG_7.jpg'"
+  chmod +x /tmp/legacy/copy-fake/rsync
+  if PATH=/tmp/legacy/copy-fake:$PATH copy 2>/tmp/legacy/err; then
+    fail "recorded a copy with a file missing: $(cat /tmp/legacy/err)"
+  fi
+  grep -q "the copy differs: missing \['Fotos 2019/Urlaub/IMG_7.jpg'\]" /tmp/legacy/err || fail "missing file message: $(cat /tmp/legacy/err)"
+  [ "$(volumes)" = 0 ] || fail "a failed copy left its volume"
+  test ! -e /tmp/legacy/kept-copies || fail "a failed copy was recorded"
+  # Same sizes, other bytes: only the hashes can tell.
+  fake_rsync "sed -i s/photo/PHOTO/ 'Fotos 2019/Urlaub/'*.jpg"
+  if PATH=/tmp/legacy/copy-fake:$PATH copy 2>/tmp/legacy/err; then fail "recorded a copy with changed files"; fi
+  grep -q "the copy differs: 'Fotos 2019/Urlaub/IMG_.*' has other contents" /tmp/legacy/err || fail "changed file message: $(cat /tmp/legacy/err)"
+  [ "$(volumes)" = 0 ] || fail "a failed copy left its volume"
+  echo "ok   a copy missing a file or holding a changed one is freed and never recorded"
+
+  # A copy cut short (apply's connection dropped) is freed by the next one.
+  /tmp/legacy/pvesm alloc local-lvm 2023 vm-2023-disk-0 1G >/dev/null
+  echo "old-hdd local-lvm:vm-2023-disk-0" >/tmp/legacy/kept-copies.pending
+  local out
+  out=$(copy 2>/tmp/legacy/err) || fail "copy: $(cat /tmp/legacy/err)"
+  grep -q "freed local-lvm:vm-2023-disk-0, left over from an unfinished copy" /tmp/legacy/err || fail "leftover not freed"
+  [ "$out" = "copied local-lvm:vm-2023-disk-0" ] || fail "copy printed $out"
+  [ "$(volumes)" = 1 ] || fail "volumes after the copy: $(volumes)"
+  test ! -e /tmp/legacy/kept-copies.pending || fail "the pending record outlived the copy"
+  grep -Eq '^old-hdd local-lvm:vm-2023-disk-0 1 453 2000[0-9]{4} ata-SYNTHETIC_NTFS$' /tmp/legacy/kept-copies || fail "record: $(cat /tmp/legacy/kept-copies)"
+  grep -q "453 files, .* bytes; 200 compared by SHA-256" /tmp/legacy/err || fail "sample size: $(tail -1 /tmp/legacy/err)"
+  [ "$(copy)" = "kept local-lvm:vm-2023-disk-0" ] || fail "second run did not keep the copy"
+  mkdir -p /tmp/legacy/check
+  mount -o ro "$(cat "$vols/vm-2023-disk-0.loop")" /tmp/legacy/check
+  diff -r "$dir" /tmp/legacy/check >/dev/null || fail "the copy differs from the kept disk"
+  [ "$(stat -c %u:%g "/tmp/legacy/check/Fotos 2019/video.mp4")" = 101000:101000 ] || fail "the copy is not owned by the share user"
+  umount /tmp/legacy/check
+  legacy unmount old-hdd >/dev/null
+  [ "$(sum NTFS)" = "$before" ] || fail "copying changed the kept disk"
+  /tmp/legacy/pvesm free local-lvm:vm-2023-disk-0
+  echo "ok   a verified copy is recorded once, equals the kept disk, keeps its owner, and the disk is unchanged"
+}
+
 # Loop devices belong to the kernel, not the container: detach them even
 # when a check fails, or each failed run leaks some. image runs in a
 # subshell, so the images, not a list, say which loops are ours.
 legacy_disk_cleanup() {
   findmnt -rno TARGET | grep '^/tmp/legacy/' | sort -r | xargs -r umount -l 2>/dev/null || true
-  for img in /tmp/legacy/*.img; do
+  for img in /tmp/legacy/*.img /tmp/legacy/vols/*.img; do
     [ -e "$img" ] || continue
     losetup -j "$img" | cut -d: -f1 | xargs -r -n1 losetup -d 2>/dev/null || true
   done

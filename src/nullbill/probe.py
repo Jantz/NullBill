@@ -19,7 +19,7 @@ COMMANDS: dict[str, tuple[str, bool]] = {
     "pveversion": ("pveversion", True),
     "lscpu": ("lscpu -J", True),
     "meminfo": ("cat /proc/meminfo", True),
-    "lsblk": ("lsblk -J -b -o NAME,SIZE,TYPE,ROTA,FSTYPE,PTTYPE,PARTTYPE,PARTN,LABEL,UUID,MOUNTPOINTS", True),
+    "lsblk": ("lsblk -J -b -o NAME,SIZE,TYPE,ROTA,FSTYPE,PTTYPE,PARTTYPE,PARTN,LABEL,UUID,FSUSED,MOUNTPOINTS", True),
     "disk-by-id": ("find /dev/disk/by-id -maxdepth 1 -type l -printf '%f %l\\n'", True),
     "storage": ("pvesh get /nodes/localhost/storage --output-format json", True),
     "lspci": ("lspci -Dnn", True),
@@ -32,6 +32,9 @@ COMMANDS: dict[str, tuple[str, bool]] = {
         'for d in $(lsblk -dnpo NAME,TYPE | awk \'$2 == "disk" {print $1}\'); do echo "== $d"; smartctl -j -H -A "$d"; done; true',
         False,
     ),
+    # Copies apply made of kept disks before converting them
+    # (nb-legacy-copy); none until then.
+    "copies": ("cat /var/lib/nullbill/kept-copies 2>/dev/null; true", False),
 }
 
 Runner = Callable[[str, str], tuple[int, str, str]]
@@ -146,9 +149,23 @@ def _partitions(dev: dict) -> list[dict]:
                 "label": child.get("label"),
                 "uuid": child.get("uuid"),
                 "mounts": mounts,
+                # Bytes in use; known only while mounted.
+                "used_bytes": int(child["fsused"]) if child.get("fsused") is not None else None,
             }
         )
     return sorted(parts, key=lambda p: p["n"] or 0)
+
+
+def _copies(text: str | None) -> list[dict]:
+    """nb-legacy-copy's records: NAME VOLUME SIZE_GIB FILES BYTES DISK per line."""
+    out = []
+    for line in (text or "").splitlines():
+        fields = line.split()
+        if len(fields) != 6 or line.startswith("#"):
+            continue
+        name, volume, size_gib, files, size, disk = fields
+        out.append({"name": name, "volume": volume, "size_gib": int(size_gib), "files": int(files), "bytes": int(size), "disk": disk})
+    return sorted(out, key=lambda c: c["name"])
 
 
 def _smart(text: str | None, ids: dict[str, str]) -> dict[str, dict]:
@@ -282,6 +299,7 @@ def parse(raw: Path) -> dict:
         "disks": _disks(texts["lsblk"], texts["disk-by-id"], texts["smart"]),
         "storage": _storage(texts["storage"]),
         "gpus": _gpus(texts["lspci"], texts["iommu"], texts["nvidia-smi"]),
+        "copies": _copies(texts["copies"]),
     }
 
 

@@ -48,8 +48,23 @@ function renderWorkloads(state) {
 const CHOICES = {
   alone: "Leave it alone",
   keep: "Keep its files and share them to me",
+  copy: "Copy its files onto the server, check the copy, then erase the disk and use it for backups",
   erase: "Erase everything on it and use it for backups",
 };
+
+// What each choice says for this disk, and why it cannot be picked, if so.
+function diskChoice(disk, value, keepable) {
+  if (value === "keep" && !keepable && disk.choice !== "keep") return [CHOICES.keep, "no NTFS, exFAT or FAT partition on it"];
+  if (value === "copy") {
+    const size = disk.used_gib === null ? "" : ` (about ${disk.used_gib} GiB, shared to you like now and backed up)`;
+    if (disk.choice === "copy") return [CHOICES.copy + size, ""];
+    if (!disk.copy_to) return [CHOICES.copy, "the server's storage is not LVM; see docs/runbooks/legacy-disk.md"];
+    if (disk.used_gib === null) return [CHOICES.copy, "how much it holds is unknown; probe the server again"];
+    return [CHOICES.copy + size, ""];
+  }
+  if (value === "erase" && disk.kept) return ["Erase everything on it without a copy (I have its files elsewhere) and use it for backups", ""];
+  return [CHOICES[value], ""];
+}
 
 function gib(mib) { return mib >= 1024 ? `${(mib / 1024).toFixed(1)} GiB` : `${mib} MiB`; }
 
@@ -79,12 +94,14 @@ function renderDisks(disks) {
     if (!disk.partitions.length) parts.append(li("no partitions"));
     box.append(parts);
     const keepable = disk.partitions.some((p) => p.keepable);
-    for (const [value, text] of Object.entries(CHOICES)) {
+    for (const value of Object.keys(CHOICES)) {
+      if (value === "copy" && !disk.kept && disk.choice !== "copy") continue;
+      const [text, why] = diskChoice(disk, value, keepable);
       const label = document.createElement("label");
       const input = Object.assign(document.createElement("input"), {type: "radio", name: `disk-${disk.id}`, value});
       input.checked = disk.choice === value;
-      input.disabled = value === "keep" && !keepable && disk.choice !== "keep";
-      label.append(input, " " + text + (input.disabled ? " (no NTFS, exFAT or FAT partition on it)" : ""));
+      input.disabled = Boolean(why);
+      label.append(input, " " + text + (why ? ` (${why})` : ""));
       box.append(label);
     }
     const rw = document.createElement("label");
@@ -99,7 +116,7 @@ function renderDisks(disks) {
     const sync = () => {
       const chosen = box.querySelector("input[type=radio]:checked");
       rw.hidden = !chosen || chosen.value !== "keep";
-      confirm.hidden = !chosen || chosen.value !== "erase" || disk.choice === "erase";
+      confirm.hidden = !chosen || !["erase", "copy"].includes(chosen.value) || disk.choice === chosen.value;
     };
     box.addEventListener("change", sync);
     sync();

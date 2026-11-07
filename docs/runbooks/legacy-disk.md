@@ -81,10 +81,30 @@ There is no alert for this between probes yet.
 Choose **Leave it alone** and run setup. The share goes away and the disk is
 unmounted; its files are not touched. Then you can take it out.
 
-Erasing a kept disk to use it for backups is refused while it is kept: first
-choose **Leave it alone** and run setup, make sure you have your files
-elsewhere, then choose **Erase everything on it** and type the end of its
-name. Copying the files off for you before erasing is not built yet.
+## Reuse it for backups
+
+To erase a kept disk and use it for the nightly backups, step 3 offers two
+choices for it. Both ask you to type the end of its name.
+
+- **Copy its files onto the server, check the copy, then erase the disk.**
+  Setup copies each kept partition to a new volume on the server's storage
+  (the page shows about how much room it takes), compares the copy with the
+  disk, and only then erases the disk. A copy of a full disk takes hours;
+  the run prints a line a minute, and the files guest is stopped meanwhile.
+  If anything differs, setup stops and the disk is left as it was. The copy
+  is shared under the same name as before, read-write, and is backed up
+  every night from then on.
+- **Erase everything on it without a copy.** For when you have its files
+  elsewhere. The plan says how many GiB are lost.
+
+The copy needs room: the files plus 5 %, and the plan shrinks the CI runners'
+space to make it. If it does not fit, the plan says so and nothing happens.
+Copying works when the server's storage is LVM, the Proxmox default; on a ZFS
+install, copy the files off yourself over the share, then choose the erase.
+
+What is not copied: Windows' alternate data streams (such as the "downloaded
+from the internet" mark) and NTFS permissions. Files, folders, links, sizes
+and dates are.
 
 ## By hand
 
@@ -100,5 +120,17 @@ disks:
     name: photos        # share name; default: the partition's label
 ```
 
+To reuse it for backups, replace that pin with:
+
+```yaml
+  ata-EXAMPLE_DISK:
+    use: pbs
+    wipe: true
+    evacuate: local-lvm   # copy first, to this storage; or:
+    # discard_data: true  # erase without a copy
+```
+
 On the host, `nb-legacy-disk list` shows what is kept and whether it is
-mounted.
+mounted, and `nb-legacy-copy list` the verified copies
+(name, volume, GiB, files, bytes, disk). `journalctl -u 'nb-legacy-copy-*'`
+shows a copy's progress.

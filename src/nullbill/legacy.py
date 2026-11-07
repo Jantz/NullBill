@@ -6,6 +6,7 @@ and the files guest shares it to the owner over SMB. Nothing here or in
 apply formats, wipes or repairs such a disk.
 """
 
+import math
 import re
 import shlex
 from typing import Any
@@ -135,6 +136,118 @@ def shares(plan: dict) -> list[dict]:
     return [m for m in mounts(plan) if "share" in m]
 
 
+# Converting a kept disk (Phase 2 of ADR 0007). A copy is an ext4 volume
+# on a PVE storage, owned by the files guest and mounted in it read-write
+# at SHARE_ROOT/<name>, with backup=1 so PBS backs it up from then on.
+CONVERT_TO = ("pbs",)
+CONVERT_KEYS = ("evacuate", "discard_data")
+# Storage types nb-legacy-copy puts a copy on (an ext4 volume it makes).
+COPY_STORAGE = ("lvmthin", "lvm")
+GIB = 2**30
+
+
+def kept_mounts(disk: dict) -> list[dict]:
+    """Partitions of a disk that apply keeps mounted under LEGACY_ROOT, with their name."""
+    out = []
+    for part in disk.get("partitions", []):
+        for mount in part["mounts"]:
+            if mount.startswith(LEGACY_ROOT + "/"):
+                out.append({**part, "name": mount.rsplit("/", 1)[1], "mount": mount})
+    return out
+
+
+def copy_size_gib(used_bytes: int) -> int:
+    """The copy's volume: the files plus 5 %, plus 1 GiB for ext4 itself."""
+    return math.ceil(used_bytes * 1.05 / GIB) + 1
+
+
+def reserved_gib(model: dict, facts: dict) -> dict[str, int]:
+    """GiB each storage gives to copies this apply makes, before the guests
+    are sized (plan_convert reports what is wrong with a conversion)."""
+    out: dict[str, int] = {}
+    pins = model.get("disks", {})
+    for disk in facts["disks"]:
+        pin = pins.get(disk["id"]) or {}
+        if pin.get("use") in CONVERT_TO and pin.get("evacuate") and not pin.get("discard_data"):
+            used = [k["used_bytes"] for k in kept_mounts(disk) if k["used_bytes"] is not None]
+            out[pin["evacuate"]] = out.get(pin["evacuate"], 0) + sum(copy_size_gib(u) for u in used)
+    return out
+
+
+def plan_convert(disk: dict, pin: dict, facts: dict, capacity: dict, errors: list[str]) -> dict:
+    """What converting a kept disk to pin['use'] takes: a verified copy on a
+    storage (evacuate), or the owner's word that the files are elsewhere
+    (discard_data). Anything missing is an error before apply changes a thing."""
+    where = f"disks.{disk['id']}"
+    kept = kept_mounts(disk)
+    at = ", ".join(k["mount"] for k in kept)
+    evacuate, discard = pin.get("evacuate"), pin.get("discard_data")
+    if not pin.get("wipe"):
+        errors.append(f"{where}: kept as legacy and mounted at {at}; converting it to {pin['use']} needs wipe: true")
+    if evacuate and discard:
+        errors.append(f"{where}: evacuate or discard_data, not both")
+        return {}
+    if not evacuate and not discard:
+        errors.append(
+            f"{where}: kept as legacy and mounted at {at}; converting it to {pin['use']} erases it: set evacuate: <PVE storage> "
+            "to copy its files there first, or discard_data: true if you have them elsewhere"
+        )
+        return {}
+    unknown = [str(k["n"]) for k in kept if k["used_bytes"] is None]
+    if unknown:
+        errors.append(f"{where}: how much partition {', '.join(unknown)} holds is unknown; probe again")
+        return {}
+    used = sum(k["used_bytes"] for k in kept)
+    if discard:
+        return {"from": "legacy", "discard_data": True, "lost_gib": math.ceil(used / GIB)}
+    storage = next((st for st in facts["storage"] if st["name"] == evacuate), None)
+    if storage is None:
+        errors.append(f"{where}.evacuate: no active PVE storage named {evacuate!r}")
+        return {}
+    if not {"images", "rootdir"} <= set(storage["content"]):
+        errors.append(f"{where}.evacuate: {evacuate} cannot hold container volumes (content images and rootdir)")
+        return {}
+    if storage["type"] not in COPY_STORAGE:
+        errors.append(f"{where}.evacuate: {evacuate} is {storage['type']}; a copy goes on LVM or LVM-thin storage (lvmthin, lvm)")
+        return {}
+    copies = [
+        {"name": k["name"], "partition": k["n"], "used_gib": math.ceil(k["used_bytes"] / GIB), "size_gib": copy_size_gib(k["used_bytes"])}
+        for k in kept
+    ]
+    need = sum(c["size_gib"] for c in copies)
+    # The guests' disks count against the same storage, provisioned in full:
+    # a thin pool that fills up stops every guest on it.
+    needed = getattr(capacity.get("needed_gib"), "value", capacity.get("needed_gib")) or 0
+    free = storage["avail_gib"] - (needed if capacity.get("storage") == evacuate else 0)
+    if need > free:
+        errors.append(
+            f"{where}.evacuate: the copy needs {need} GiB (the files and 5 %, plus 1 GiB each), "
+            f"{evacuate} has {max(free, 0)} GiB free after the guests' disks"
+        )
+        return {}
+    return {"from": "legacy", "evacuate": evacuate, "copies": copies}
+
+
+def convert_note(converts: dict) -> str:
+    if converts.get("discard_data"):
+        return f"Converts a kept disk: its files ({converts['lost_gib']} GiB) are not copied and are lost, as discard_data: true says."
+    names = ", ".join(c["name"] for c in converts["copies"])
+    return (
+        f"Converts a kept disk: apply first copies its files ({names}) to {converts['evacuate']}, checks the copy and "
+        "shares it from the files guest, backed up; only then is the disk wiped."
+    )
+
+
+def copies(plan: dict) -> list[dict]:
+    """Copies the files guest shares: made already (probed), or made by this apply."""
+    out = [{**c, "made": True} for c in plan.get("copies", [])]
+    for disk_id, disk in sorted(plan["disks"].items()):
+        for c in (disk.get("converts") or {}).get("copies", []):
+            storage = disk["converts"]["evacuate"]
+            out.append({"name": c["name"], "storage": storage, "size_gib": c["size_gib"], "disk": disk_id, "made": False})
+    return out
+
+
 def note(mounts_: list[dict], left: list[str]) -> str:
     modes = {m["mode"] for m in mounts_}
     how = "read-write" if modes == {"rw"} else "read-only"
@@ -158,7 +271,8 @@ def _labels(plan: dict) -> list[str]:
         labels.append(f"kept disk {m['name']} is mounted {m['mode']} on the host")
         if "share" in m:
             labels.append(f"files guest sees kept disk {m['name']} {m['mode']}")
-    if shares(plan):
+    labels += [f"files guest sees the copy {c['name']} rw" for c in copies(plan)]
+    if shares(plan) or copies(plan):
         labels.append(SAMBA_LABEL)
     return labels
 
@@ -202,7 +316,18 @@ def check(plan_with_notes: dict, target: str, run: Runner) -> list[Result]:
             results.append(Result("FAIL", label, f"{where} is {mode}"))
         else:
             results.append(Result("PASS", label))
-    if shares(plan):
+    for c in copies(plan):
+        label = f"files guest sees the copy {c['name']} rw"
+        where = f"{SHARE_ROOT}/{c['name']}"
+        rc, out, err = run(target, f"pct exec {vmid} -- findmnt -rno FSTYPE,OPTIONS --mountpoint {shlex.quote(where)}")
+        fstype, mode = _mounted(out)
+        if rc != 0 or not fstype:
+            results.append(Result("FAIL", label, (err.strip() or f"nothing mounted at {where}")[:120]))
+        elif (fstype, mode) != ("ext4", "rw"):
+            results.append(Result("FAIL", label, f"{where} is {fstype} {mode}"))
+        else:
+            results.append(Result("PASS", label))
+    if shares(plan) or copies(plan):
         script = "; ".join(f"testparm -s --parameter-name={shlex.quote(p)} 2>/dev/null" for p in SAMBA)
         rc, out, err = run(target, f"pct exec {vmid} -- sh -c {shlex.quote(script)}")
         got = dict(zip(SAMBA, out.split(), strict=False))

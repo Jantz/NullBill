@@ -14,6 +14,7 @@ import hashlib
 import hmac
 import http.server
 import json
+import math
 import os
 import re
 import secrets
@@ -36,6 +37,7 @@ from nullbill.apply import NTFY, SPKI
 from nullbill.cli import plan_text
 from nullbill.errors import NullBillError
 from nullbill.model import build_model
+from nullbill.plan import guest_storage
 from nullbill.secretfile import Codec, Secrets, Sops
 from nullbill.tailnet import render_tailnet
 
@@ -72,6 +74,7 @@ AGENT_ACTIONS = {"verify"}
 # with the agent's name.
 REMOTE_AGENTS = "web/remote-agents.json"
 DISK_CHOICES = {"legacy": "keep", "pbs": "erase", "ignore": "alone"}
+DISK_CHOICE_TEXT = "leave it alone, keep its files, copy its files and erase it, or erase it"
 REMOTE_AGENT_NAME = re.compile(r"[a-z][a-z0-9-]{0,30}")
 # A Tailscale auth key logs the vpn guest in once; apply forgets it after.
 TAILSCALE_KEY = re.compile(r"tskey-auth-[A-Za-z0-9-]{8,200}")
@@ -383,9 +386,11 @@ class App:
         return json.loads(path.read_text()) if path.is_file() else None
 
     def disks(self) -> list[dict]:
+        facts = self.facts() or {}
         pins = (self.config() or {}).get("disks") or {}
+        storage = guest_storage(facts) if facts.get("storage") else None
         out = []
-        for disk in (self.facts() or {}).get("disks", []):
+        for disk in facts.get("disks", []):
             if disk.get("system"):
                 continue
             pin = pins.get(disk["id"]) or {}
@@ -399,6 +404,11 @@ class App:
                 }
                 for p in disk.get("partitions", [])
             ]
+            kept = legacy.kept_mounts(disk)
+            choice = DISK_CHOICES.get(pin.get("use"), "alone")
+            if choice == "erase" and pin.get("evacuate"):
+                choice = "copy"
+            used = [k.get("used_bytes") for k in kept]
             out.append(
                 {
                     "id": disk["id"],
@@ -407,9 +417,13 @@ class App:
                     "health": (disk.get("smart") or {}).get("health", "unknown"),
                     "power_on_hours": (disk.get("smart") or {}).get("power_on_hours"),
                     "partitions": parts,
-                    "choice": DISK_CHOICES.get(pin.get("use"), "alone"),
+                    "choice": choice,
                     "rw": pin.get("mode") == "rw",
                     "confirm": disk["id"][-6:],
+                    # Mounted as a kept disk now: erasing it asks how its files are kept.
+                    "kept": bool(kept),
+                    "used_gib": math.ceil(sum(used) / legacy.GIB) if kept and None not in used else None,
+                    "copy_to": storage["name"] if storage and storage["type"] in legacy.COPY_STORAGE else None,
                 }
             )
         return out
@@ -430,12 +444,22 @@ class App:
                 old = pins.get(disk_id) if current["choice"] == "keep" else None
                 pin = {k: v for k, v in (old or {}).items() if k != "mode"} | {"use": "legacy"}
                 pins[disk_id] = pin | ({"mode": "rw"} if rw else {})
-            elif choice == "erase":
+            elif choice in ("erase", "copy"):
+                if choice == "copy" and not current["kept"]:
+                    raise NullBillError(f"{disk_id}: only a disk kept and mounted on the server can be copied before it is erased")
+                if choice == "copy" and not current["copy_to"]:
+                    raise NullBillError(f"{disk_id}: the guest storage is not LVM or LVM-thin, so the page cannot copy a disk there")
                 if str(want.get("confirm", "")).strip() != current["confirm"]:
                     raise NullBillError(f"{disk_id}: type {current['confirm']}, the end of its name, to erase everything on it for backups")
-                pins[disk_id] = {"use": "pbs", "wipe": True}
+                pin = {"use": "pbs", "wipe": True}
+                if choice == "copy":
+                    pin["evacuate"] = current["copy_to"]
+                elif current["kept"]:
+                    # The owner says the files are elsewhere: nothing is copied.
+                    pin["discard_data"] = True
+                pins[disk_id] = pin
             else:
-                raise NullBillError(f"{disk_id}: choose leave it alone, keep its files or erase it")
+                raise NullBillError(f"{disk_id}: choose {DISK_CHOICE_TEXT}")
         return pins
 
     def files(self) -> dict | None:
@@ -445,7 +469,7 @@ class App:
         ip = (plan.get("guests") or {}).get("files", {}).get("ip")
         if not ip:
             return None
-        shares = [m["share"] for m in legacy.shares(plan)]
+        shares = [m["share"] for m in legacy.shares(plan)] + [c["name"] for c in legacy.copies(plan)]
         has_password = bool(Secrets(self.codec(self.home)).data.get("files_share_password"))
         return {"ip": ip, "shares": shares, "user": legacy.SHARE_USER, "password_set": has_password}
 

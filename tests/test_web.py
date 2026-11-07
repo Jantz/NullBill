@@ -608,15 +608,49 @@ def test_erasing_a_disk_needs_the_end_of_its_name(site):
     assert pins(app) == {OLD: {"use": "pbs", "wipe": True}}
 
 
-def test_a_disk_kept_and_mounted_cannot_be_erased_from_the_page(site):
-    """The plan refuses it: no erase until a verified copy exists."""
-    app, client = site
-    sign_in(app, client)
-    probed(app)
+def kept_on_server(app, used_bytes=100 * 2**30, storage_type="lvmthin"):
+    """The old disk as apply leaves it: partition 2 mounted as data."""
     facts = app.home / "probe" / "latest" / "facts.json"
     data = json.loads(facts.read_text())
     disk = next(d for d in data["disks"] if d["id"] == OLD)
     disk["partitions"][1]["mounts"] = ["/mnt/nb-legacy/data"]
+    disk["partitions"][1]["used_bytes"] = used_bytes
+    for st in data["storage"]:
+        if st["name"] == "local-lvm":
+            st["type"] = storage_type
     facts.write_text(json.dumps(data))
-    status, result = client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "erase", "confirm": "D_0002"}}})
-    assert status == 200 and any("kept as legacy and mounted" in e for e in result["plan"]["errors"])
+
+
+def test_a_kept_disk_is_copied_or_given_up_before_it_is_erased(site):
+    """Safety rule 2 on the page: erasing a kept disk says how its files are kept."""
+    app, client = site
+    sign_in(app, client)
+    probed(app)
+    kept_on_server(app)
+    old = {d["id"]: d for d in client.call("/api/state")[1]["disks"]}[OLD]
+    assert old["kept"] and old["used_gib"] == 100 and old["copy_to"] == "local-lvm"
+    status, data = client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "copy"}}})
+    assert status == 400 and "type D_0002" in data["error"]
+    status, data = client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "copy", "confirm": "D_0002"}}})
+    assert status == 200 and data["plan"]["errors"] == []
+    assert pins(app) == {OLD: {"use": "pbs", "wipe": True, "evacuate": "local-lvm"}}
+    state = client.call("/api/state")[1]
+    assert {d["id"]: d["choice"] for d in state["disks"]}[OLD] == "copy"
+    assert state["files"]["shares"] == ["data"]
+    # Erasing it instead: the owner's word that the files are elsewhere.
+    status, data = client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "erase", "confirm": "D_0002"}}})
+    assert status == 200 and data["plan"]["errors"] == []
+    assert pins(app) == {OLD: {"use": "pbs", "wipe": True, "discard_data": True}}
+
+
+def test_a_disk_not_kept_cannot_be_copied(site):
+    app, client = site
+    sign_in(app, client)
+    probed(app)
+    status, data = client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "copy", "confirm": "D_0002"}}})
+    assert status == 400 and "only a disk kept and mounted on the server" in data["error"]
+    kept_on_server(app, storage_type="zfspool")
+    assert {d["id"]: d for d in client.call("/api/state")[1]["disks"]}[OLD]["copy_to"] is None
+    status, data = client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "copy", "confirm": "D_0002"}}})
+    assert status == 400 and "not LVM or LVM-thin" in data["error"]
+    assert not (app.home / "config.yaml").exists()

@@ -119,17 +119,20 @@
 
 # apply runs it before OpenTofu for each partition the plan keeps from a
 # previous OS (docs/adr/0007-legacy-disks.md).
-- name: Kept disk script
+- name: Kept disk scripts
   ansible.builtin.copy:
-    src: nb-legacy-disk
-    dest: /usr/local/sbin/nb-legacy-disk
+    src: "{{ item }}"
+    dest: "/usr/local/sbin/{{ item }}"
     mode: "0755"
+  loop: [nb-legacy-disk, nb-legacy-copy]
 
 # The NTFS driver for kept disks, with ntfs-3g.probe and ntfsinfo, which
 # tell a volume Windows left hibernated, unclean or marked for chkdsk.
-- name: ntfs-3g, when the plan keeps an NTFS disk
+# rsync copies a kept disk before it is converted (nb-legacy-copy); PVE
+# depends on it already.
+- name: ntfs-3g and rsync, when the plan keeps an NTFS disk
   ansible.builtin.apt:
-    name: [ntfs-3g]
+    name: [ntfs-3g, rsync]
     state: present
   when: host_baseline_ntfs | bool
 

@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 import shlex
@@ -61,9 +62,16 @@ class FakeReach:
         self.legacy = {}
         # OpenTofu makes the files guest (VMID 2023) on its first apply.
         self.files_ct = {"exists": False, "status": "running", "mps": {}, "reboots": 0}
+        # nb-legacy-copy: its records, the runs started, polls left per unit, and whether the next copy fails.
+        self.copies = {}
+        self.copy_runs = []
+        self.copy_active = {}
+        self.copy_fails = False
 
     def host(self, command, stdin=None, timeout=900):
         self.calls.append(("host", command))
+        if command.startswith((apply.COPY, "systemd-run ", "systemctl is-active nb-legacy-copy-", "journalctl -q -u nb-legacy-copy-")):
+            return self.copy(command)
         if "if cmp -s" in command:
             path = command.split('if cmp -s "$t" ')[1].split(";")[0]
             if self.files.get(path) == stdin:
@@ -138,6 +146,32 @@ class FakeReach:
         if command.startswith("pct exec "):
             return self.guest(shlex.split(command)[2], shlex.split(command)[4:])
         return 127, "", f"fake host: unexpected {command}"
+
+    def copy(self, command):
+        """nb-legacy-copy, run as a transient unit that stays active for two polls."""
+        argv = shlex.split(command)
+        if command == f"{apply.COPY} list":
+            return 0, "".join(line + "\n" for _, line in sorted(self.copies.items())), ""
+        if argv[0] == "systemd-run":
+            unit = argv[1].removeprefix("--unit=")
+            assert self.files_ct["status"] != "running" or not self.files_ct["exists"], "the files guest runs during a copy"
+            name, storage, vmid, size, disk = argv[argv.index(apply.COPY) + 2 :]
+            self.copy_runs.append((unit, name, storage, vmid, size, disk))
+            self.copy_active[unit] = 2
+            return 0, "", ""
+        unit = argv[2]
+        if argv[:2] == ["systemctl", "is-active"]:
+            if self.copy_active.get(unit, 0) == 0:
+                return 0, "inactive\n", ""  # the command ends in || true
+            self.copy_active[unit] -= 1
+            if self.copy_active[unit] == 0 and not self.copy_fails:
+                run = next(r for r in self.copy_runs if r[0] == unit)
+                n = len(self.copies)
+                self.copies[run[1]] = f"{run[1]} {run[2]}:vm-{run[3]}-disk-{n} {run[4]} 1200 107374182400 {run[5]}"
+            return 0, "active\n", ""
+        if self.copy_fails:
+            return 0, "nb-legacy-copy: the copy differs: missing ['IMG_7.jpg']\n", ""
+        return 0, "nb-legacy-copy: 51200 MiB copied\n", ""
 
     def kept(self, command):
         """nb-legacy-disk, findmnt and pct for the files guest (VMID 2023)."""
@@ -256,9 +290,9 @@ class FakeReach:
 
 @pytest.fixture
 def ctx(facts, tmp_path):
-    def make(fixture="mid", reach=None, config=None, **kw):
+    def make(fixture="mid", reach=None, config=None, probed=None, **kw):
         model = build_model(config or fixture_config(fixture))
-        plan = build_plan(model, facts(fixture))
+        plan = build_plan(model, probed or facts(fixture))
         files = render_all(plan, model)
         return Context(plan, model, tmp_path, TARGET, reach or FakeReach(), Secrets(MemoryCodec()), files, **kw)
 
@@ -1178,11 +1212,19 @@ def test_the_pbs_disk_is_never_one_apply_kept(ctx, monkeypatch, tmp_path):
     disks.json records as kept is not handed to nb-backup-disk."""
     monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
     c = ctx("mid")
-    (c.home / "disks.json").write_text(json.dumps({"mounts": [{"disk": "ata-SYNTHETIC_HDD_0002", "name": "data"}]}))
-    c.reach.legacy = {}
-    with pytest.raises(ApplyError, match="holds a disk kept as legacy"):
-        apply.backup_disk(c)
+    kept = json.dumps({"mounts": [{"disk": "ata-SYNTHETIC_HDD_0002", "name": "data"}]})
+    (c.home / "disks.json").write_text(kept)
+    c.reach.legacy = {"data": ("AB", "ro", "ntfs", "unmounted")}
+    # Through the whole stage: unmounting the dropped disk rewrites disks.json first.
+    with pytest.raises(ApplyError, match="was kept as legacy and has no verified copy; it is not erased"):
+        apply.stage_tofu(c)
     assert c.reach.backup_disk is None
+    # The owner's word that the files are elsewhere lets it go.
+    (c.home / "disks.json").write_text(kept)
+    config = fixture_config("mid") | {"disks": {"ata-SYNTHETIC_HDD_0002": {"use": "pbs", "wipe": True, "discard_data": True}}}
+    c2 = ctx("mid", config=config, reach=c.reach)
+    apply.stage_tofu(c2)
+    assert c.reach.backup_disk == ["ata-SYNTHETIC_HDD_0002", "1"]
 
 
 def test_a_full_apply_with_a_kept_disk(ctx, monkeypatch, tailnet):
@@ -1196,3 +1238,74 @@ def test_a_full_apply_with_a_kept_disk(ctx, monkeypatch, tailnet):
     assert "files.yml" in ran and ran.index("updates.yml") < ran.index("files.yml")
     shipped = [call[2] for call in c.reach.calls if call[0] == "playbook" and call[1] == "log-shipper.yml"]
     assert any("files" in hosts for hosts in shipped)
+
+
+def converting(facts, ctx, evacuate=True):
+    """The large host after a first apply kept its old disk: mounted, shared, recorded."""
+    probed = copy.deepcopy(facts("large"))
+    disk = next(d for d in probed["disks"] if d["id"] == OLD)
+    disk["partitions"][1] |= {"mounts": ["/mnt/nb-legacy/data"], "used_bytes": 100 * 2**30}
+    how = {"evacuate": "local-lvm"} if evacuate else {"discard_data": True}
+    config = fixture_config("large") | {"disks": {OLD: {"use": "pbs", "wipe": True, **how}}}
+    c = ctx("large", config=config, probed=probed)
+    c.reach.legacy = {"data": ("0123456789ABCDEF", "ro", "ntfs", "mounted")}
+    c.reach.files_ct |= {"exists": True, "mps": {"mp0": "/mnt/nb-legacy/data,mp=/srv/share/data,backup=0,ro=1"}}
+    (c.home / "disks.json").write_text(json.dumps({"mounts": [{"disk": OLD, "name": "data", "mount": "/mnt/nb-legacy/data"}]}))
+    return c
+
+
+def test_converting_a_kept_disk_copies_it_first_then_wipes_and_shares_the_copy(ctx, facts, monkeypatch):
+    monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
+    monkeypatch.setattr(apply, "sleep", lambda s: None)
+    c = converting(facts, ctx)
+    apply.stage_tofu(c)
+    apply.stage_files(c)
+    calls = host_calls(c)
+    stop = index_of(calls, "pct shutdown 2023")
+    run = index_of(calls, "systemd-run --unit=nb-legacy-copy-data")
+    unmount = index_of(calls, f"{apply.LEGACY} unmount data")
+    wipe = index_of(calls, "/usr/local/sbin/nb-backup-disk")
+    assert stop < run < unmount < wipe < index_of(calls, "tofu init")
+    assert c.reach.copy_runs == [("nb-legacy-copy-data", "data", "local-lvm", "2023", "106", OLD)]
+    assert c.reach.backup_disk == [OLD, "1"]
+    assert c.reach.files_ct["mps"] == {"mp0": "local-lvm:vm-2023-disk-0,mp=/srv/share/data,backup=1"}
+    assert c.reach.files_ct["status"] == "running" and c.reach.legacy == {}
+    (play,) = [call for call in c.reach.calls if call[0] == "playbook" and call[1] == "files.yml"]
+    assert play[3]["files_shares"] == [{"name": "data", "read_only": False}]
+    assert "tofu: data: 1200 files, 102400 MiB copied to local-lvm:vm-2023-disk-0 and checked" in c.log
+    assert "tofu: nb-legacy-copy: 51200 MiB copied" in c.log
+    # The next run, before a new probe: the copy is recorded, nothing is copied or changed again.
+    c.reach.calls.clear()
+    apply.stage_tofu(c)
+    host = [call[1] for call in c.reach.calls if call[0] == "host"]
+    assert len(c.reach.copy_runs) == 1 and not [x for x in host if x.startswith(("pct set", "pct shutdown"))]
+
+
+def test_a_copy_that_fails_leaves_the_kept_disk_as_it_was(ctx, facts, monkeypatch):
+    monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
+    monkeypatch.setattr(apply, "sleep", lambda s: None)
+    c = converting(facts, ctx)
+    c.reach.copy_fails = True
+    with pytest.raises(ApplyError, match="copying data failed; the kept disk is as it was and is not converted: .*IMG_7"):
+        apply.stage_tofu(c)
+    calls = [call[1] for call in c.reach.calls if call[0] == "host"]
+    assert not [x for x in calls if x.startswith((f"{apply.LEGACY} unmount", "/usr/local/sbin/nb-backup-disk"))]
+    assert c.reach.legacy == {"data": ("0123456789ABCDEF", "ro", "ntfs", "mounted")} and c.reach.backup_disk is None
+
+
+def test_a_copy_still_running_is_waited_for_not_started_twice(ctx, facts, monkeypatch):
+    monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
+    monkeypatch.setattr(apply, "sleep", lambda s: None)
+    c = converting(facts, ctx)
+    c.reach.copy_runs.append(("nb-legacy-copy-data", "data", "local-lvm", "2023", "106", OLD))
+    c.reach.copy_active["nb-legacy-copy-data"] = 3
+    apply.stage_tofu(c)
+    assert len(c.reach.copy_runs) == 1 and "data" in c.reach.copies
+
+
+def test_discarding_a_kept_disk_copies_nothing_and_wipes_it(ctx, facts, monkeypatch):
+    monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
+    c = converting(facts, ctx, evacuate=False)
+    apply.stage_tofu(c)
+    assert c.reach.copy_runs == [] and c.reach.backup_disk == [OLD, "1"] and c.reach.legacy == {}
+    assert "files" not in c.bare["guests"]

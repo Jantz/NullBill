@@ -26,7 +26,7 @@ class _Errors(list):
 FILES_WORKLOAD = "files"
 
 
-def _planned_services(model: dict, errors: _Errors) -> dict[str, dict]:
+def _planned_services(model: dict, errors: _Errors, facts: dict | None = None) -> dict[str, dict]:
     workloads = set(model.get("intent", {}).get("workloads", []))
     known = {s["workload"] for s in model["services"].values()} - {"core"}
     for unknown in sorted(workloads - known):
@@ -34,7 +34,13 @@ def _planned_services(model: dict, errors: _Errors) -> dict[str, dict]:
     if FILES_WORKLOAD in workloads:
         errors.append(f"intent.workloads: {FILES_WORKLOAD} is planned by itself once a disk is kept and shared (disks.<id>.use: legacy)")
         workloads.discard(FILES_WORKLOAD)
-    if any(p["use"] == "legacy" and p.get("share", True) for p in model.get("disks", {}).values()):
+    pins = model.get("disks", {})
+    if any(p["use"] == "legacy" and p.get("share", True) for p in pins.values()):
+        workloads.add(FILES_WORKLOAD)
+    # Copies of kept disks live in the files guest: those made already, and
+    # those this apply makes before it converts a kept disk.
+    kept = {d["id"] for d in (facts or {}).get("disks", []) if legacy.kept_mounts(d)}
+    if (facts or {}).get("copies") or any(p.get("evacuate") and i in kept for i, p in pins.items()):
         workloads.add(FILES_WORKLOAD)
     return {
         name: svc
@@ -144,12 +150,17 @@ def _engine(model: dict, gpus: list[str]) -> Note | None:
     return None
 
 
-def _storage(facts: dict, errors: _Errors) -> dict | None:
+def guest_storage(facts: dict) -> dict | None:
+    """The storage the guests' disks go on: the roomiest one that holds both."""
     usable = [s for s in facts["storage"] if {"images", "rootdir"} <= set(s["content"])]
-    if not usable:
+    return max(usable, key=lambda s: (s["avail_gib"], s["name"])) if usable else None
+
+
+def _storage(facts: dict, errors: _Errors) -> dict | None:
+    storage = guest_storage(facts)
+    if storage is None:
         errors.append("probe: no active storage holds both VM images and container root disks")
-        return None
-    return max(usable, key=lambda s: (s["avail_gib"], s["name"]))
+    return storage
 
 
 def _media(facts: dict, errors: _Errors) -> str | None:
@@ -218,7 +229,10 @@ def _size(model: dict, planned: dict, facts: dict, errors: _Errors) -> tuple[dic
         return sum(s["disk_gib"] * (counts[n] + 1 if n in counts else 1) for n, s in sizes.items())
 
     storage = _storage(facts, errors)
-    while storage and disk_needed() > storage["avail_gib"]:
+    # Copies of kept disks this apply makes stay on their storage for good.
+    reserved = legacy.reserved_gib(model, facts).get(storage["name"], 0) if storage else 0
+    room = storage["avail_gib"] - reserved if storage else 0
+    while storage and disk_needed() > room:
         shrinkable = [n for n in growing if counts[n] > 1]
         if not shrinkable:
             break
@@ -229,8 +243,9 @@ def _size(model: dict, planned: dict, facts: dict, errors: _Errors) -> tuple[dic
         if counts[name] > ci.MAX_CLONES:
             errors.append(f"{name}: {counts[name]} clones; its zone's DHCP range has {ci.MAX_CLONES} leases")
     disk = disk_needed()
-    if storage and disk > storage["avail_gib"]:
-        errors.append(f"disk: guests need {disk} GiB, storage {storage['name']} has {storage['avail_gib']} GiB free")
+    if storage and disk > room:
+        copies = f" besides {reserved} GiB for copies of kept disks" if reserved else ""
+        errors.append(f"disk: guests need {disk} GiB, storage {storage['name']} has {room} GiB free{copies}")
     allocated = sum(s["memory_mib"] * counts.get(n, 1) for n, s in sizes.items())
 
     memory = {
@@ -243,6 +258,7 @@ def _size(model: dict, planned: dict, facts: dict, errors: _Errors) -> tuple[dic
         "storage": storage["name"] if storage else None,
         "needed_gib": Note(disk, "Includes one golden template per pool."),
         "free_gib": storage["avail_gib"] if storage else None,
+        **({"copies_gib": Note(reserved, "Taken by the copies of kept disks apply makes before converting them.")} if reserved else {}),
         "media": Note(_media(facts, errors), "Holds the downloaded container template and cloud image."),
     }
     pool_counts = {n: Note(counts[n], f"Clones, {limits[n]}.") for n in pools}
@@ -285,13 +301,15 @@ def _console(model: dict, facts: dict, gpus: dict, errors: _Errors) -> Any:
     )
 
 
-def _disks(model: dict, facts: dict, errors: _Errors, want_pbs: bool) -> tuple[dict, str | None]:
+def _disks(model: dict, facts: dict, errors: _Errors, want_pbs: bool, capacity: dict | None = None) -> tuple[dict, str | None]:
     pins = model.get("disks", {})
     for disk_id in sorted(set(pins) - {d["id"] for d in facts["disks"]}):
         errors.append(f"disks.{disk_id}: no such disk in the probe")
     section: dict[str, Any] = {}
     pbs = None
-    names: dict[str, str] = {}
+    # Share names: kept partitions and copies of converted ones share one
+    # namespace in the files guest.
+    names: dict[str, str] = {c["name"]: f"the copy {c['volume']}" for c in facts.get("copies", [])}
     for disk in facts["disks"]:
         pin = pins.get(disk["id"])
         base = {"size_gib": disk["size_gib"], "signatures": disk["signatures"]}
@@ -308,13 +326,18 @@ def _disks(model: dict, facts: dict, errors: _Errors, want_pbs: bool) -> tuple[d
             for key in legacy.LEGACY_KEYS:
                 if key in pin:
                     errors.append(f"disks.{disk['id']}.{key}: only for use: legacy")
-        kept = [m for p in disk["partitions"] for m in p["mounts"] if m.startswith(legacy.LEGACY_ROOT + "/")]
+        if pin and pin["use"] not in legacy.CONVERT_TO:
+            for key in legacy.CONVERT_KEYS:
+                if key in pin:
+                    errors.append(f"disks.{disk['id']}.{key}: only for converting a kept disk to {' or '.join(legacy.CONVERT_TO)}")
+        kept = legacy.kept_mounts(disk)
+        converts = None
         if kept and pin and pin["use"] not in ("legacy", "ignore"):
-            errors.append(
-                f"disks.{disk['id']}: kept as legacy and mounted at {', '.join(kept)}; converting it to {pin['use']} "
-                "needs a verified copy of the data first, which is not built yet; keep use: legacy"
-            )
-            continue
+            converts = legacy.plan_convert(disk, pin, facts, capacity or {}, errors)
+            for c in converts.get("copies", []):
+                if c["name"] in names:
+                    errors.append(f"disks.{disk['id']}: the copy {c['name']!r} would take a share name {names[c['name']]} uses")
+                names[c["name"]] = disk["id"]
         if pin and pin["use"] == "legacy":
             mounts, left = legacy.plan_disk(disk["id"], disk, pin, errors)
             for m in mounts:
@@ -334,7 +357,11 @@ def _disks(model: dict, facts: dict, errors: _Errors, want_pbs: bool) -> tuple[d
                 errors.append(f"disks.{disk['id']}: a second PBS disk; {pbs} is already pinned")
             pbs = disk["id"]
             why = "Pinned for PBS; apply will wipe its signatures." if disk["signatures"] else "Pinned for PBS."
-            section[disk["id"]] = Note({**base, "use": "pbs"}, why + health)
+            entry = {**base, "use": "pbs"}
+            if converts:
+                entry["converts"] = converts
+                why = legacy.convert_note(converts) + " " + why
+            section[disk["id"]] = Note(entry, why + health)
         elif disk["signatures"]:
             why = "Carries signatures; only an explicit pin with wipe: true changes that."
             section[disk["id"]] = Note({**base, "use": "untouched"}, why + health)
@@ -344,6 +371,14 @@ def _disks(model: dict, facts: dict, errors: _Errors, want_pbs: bool) -> tuple[d
         else:
             section[disk["id"]] = Note({**base, "use": "unused"}, "Blank and not needed." + health)
     return section, pbs
+
+
+def _copies(facts: dict) -> dict[str, Note]:
+    """Copies of converted kept disks; no key at all until there is one."""
+    if not facts.get("copies"):
+        return {}
+    copies = [{k: c[k] for k in ("name", "volume", "size_gib", "files", "bytes", "disk")} for c in facts["copies"]]
+    return {"copies": Note(copies, "Copies of converted kept disks, shared from the files guest and backed up.")}
 
 
 def _health_note(smart: dict) -> str:
@@ -435,13 +470,13 @@ def build_plan(model: dict, facts: dict) -> dict:
     _check_refs(model, errors)
     errors.raise_if_any()
 
-    planned = _planned_services(model, errors)
+    planned = _planned_services(model, errors, facts)
     gpu_section, inference_gpus = _gpus(model, facts, planned, errors)
     if "inference" in planned and not inference_gpus:
         errors.append("intent asks for inference, but no host-shared GPU budgets VRAM to it")
     engine = _engine(model, inference_gpus) if "inference" in planned else None
     sizes, counts, capacity = _size(model, planned, facts, errors)
-    disk_section, pbs = _disks(model, facts, errors, want_pbs="pbs" in planned)
+    disk_section, pbs = _disks(model, facts, errors, want_pbs="pbs" in planned, capacity=capacity["disk"])
     errors.raise_if_any()
 
     console = _console(model, facts, gpu_section, errors)
@@ -487,6 +522,7 @@ def build_plan(model: dict, facts: dict) -> dict:
         "gpus": gpu_section or Note({}, "No discrete GPU."),
         "inference": {"engine": engine} if engine else Note({}, "Not planned."),
         "disks": disk_section,
+        **_copies(facts),
         "backups": _backups(planned, pbs),
         "flows": Note(_flows(model, planned, set(zones)), "Allowed flows; everything else is denied."),
         "people": {name: p["role"] for name, p in model["people"].items()},

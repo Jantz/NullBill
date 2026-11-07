@@ -20,7 +20,7 @@ EFI = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
 RECOVERY = "de94bba4-06d1-4d40-a16a-bfd50179d6ac"
 
 
-def part(n, fstype, parttype=DATA, label=None, uuid="UUID", mounts=()):
+def part(n, fstype, parttype=DATA, label=None, uuid="UUID", mounts=(), used_gib=None):
     return {
         "n": n,
         "size_mib": 1024,
@@ -29,6 +29,7 @@ def part(n, fstype, parttype=DATA, label=None, uuid="UUID", mounts=()):
         "label": label,
         "uuid": uuid and f"{uuid}{n}",
         "mounts": list(mounts),
+        "used_bytes": None if used_gib is None else used_gib * 2**30,
     }
 
 
@@ -281,3 +282,110 @@ def test_verify_without_a_target_skips_the_kept_disk(facts):
     results = run_verify(build_plan(model, facts("large")), model, None, None)
     skipped = [r.name for r in results if r.status == "SKIP" and "kept disk" in r.name]
     assert skipped == ["kept disk data is mounted ro on the host", "files guest sees kept disk data ro"]
+
+
+# Converting a kept disk (Phase 2)
+
+
+def mounted(facts, used_gib=100, **kw):
+    """The old disk as apply left it: partition 2 kept and mounted as data."""
+    return with_parts(facts, part(1, None, MSR), part(2, "ntfs", label="Data", mounts=["/mnt/nb-legacy/data"], used_gib=used_gib), **kw)
+
+
+def test_converting_needs_wipe_and_a_copy_or_the_owners_word(facts):
+    f = mounted(facts)
+    (message,) = errors(f, {OLD: {"use": "pbs", "wipe": True}})
+    assert "converting it to pbs erases it: set evacuate: <PVE storage>" in message and "discard_data: true" in message
+    messages = errors(f, {OLD: {"use": "pbs", "evacuate": "local-lvm"}})
+    assert f"disks.{OLD}: kept as legacy and mounted at /mnt/nb-legacy/data; converting it to pbs needs wipe: true" in messages
+    (message,) = errors(f, {OLD: {"use": "pbs", "wipe": True, "evacuate": "local-lvm", "discard_data": True}})
+    assert message == f"disks.{OLD}: evacuate or discard_data, not both"
+
+
+def test_discarding_says_how_much_is_lost(facts):
+    p = plan(mounted(facts, used_gib=300), {OLD: {"use": "pbs", "wipe": True, "discard_data": True}})
+    disk = p["disks"][OLD]
+    assert disk.value["converts"] == {"from": "legacy", "discard_data": True, "lost_gib": 300}
+    assert "its files (300 GiB) are not copied and are lost" in disk.why
+    assert p["backups"].value["status"] == "ok" and "files" not in p["guests"]
+
+
+def test_evacuating_plans_a_copy_shared_from_the_files_guest(facts):
+    p = plan(mounted(facts), {OLD: {"use": "pbs", "wipe": True, "evacuate": "local-lvm"}})
+    disk = p["disks"][OLD]
+    assert disk.value["converts"] == {
+        "from": "legacy",
+        "evacuate": "local-lvm",
+        "copies": [{"name": "data", "partition": 2, "used_gib": 100, "size_gib": 106}],
+    }
+    assert "copies its files (data) to local-lvm, checks the copy" in disk.why and "only then is the disk wiped" in disk.why
+    assert "files" in p["guests"] and "role:owner -> files tcp/445" in p["flows"].value
+    assert legacy.copies(strip_notes(p)) == [{"name": "data", "storage": "local-lvm", "size_gib": 106, "disk": OLD, "made": False}]
+    assert legacy.shares(strip_notes(p)) == []
+
+
+def test_evacuating_needs_room_on_a_storage_for_containers(facts):
+    f = mounted(facts, used_gib=1500)
+    messages = errors(f, {OLD: {"use": "pbs", "wipe": True, "evacuate": "local-lvm"}})
+    need = "the copy needs 1576 GiB (the files and 5 %, plus 1 GiB each)"
+    assert f"disks.{OLD}.evacuate: {need}, local-lvm has 1152 GiB free after the guests' disks" in messages
+    assert "disk: guests need 512 GiB, storage local-lvm has 88 GiB free besides 1576 GiB for copies of kept disks" in messages
+    # A copy that fits shrinks the CI pools instead: it stays on the storage for good.
+    p = plan(mounted(facts, used_gib=600), {OLD: {"use": "pbs", "wipe": True, "evacuate": "local-lvm"}})
+    assert p["disk"]["copies_gib"].value == 631 and p["disk"]["needed_gib"].value <= 1664 - 631
+    (message,) = errors(mounted(facts), {OLD: {"use": "pbs", "wipe": True, "evacuate": "local"}})
+    assert message == f"disks.{OLD}.evacuate: local cannot hold container volumes (content images and rootdir)"
+    (message,) = errors(mounted(facts), {OLD: {"use": "pbs", "wipe": True, "evacuate": "tank"}})
+    assert message == f"disks.{OLD}.evacuate: no active PVE storage named 'tank'"
+    f = mounted(facts)
+    f["storage"].append({**next(s for s in f["storage"] if s["name"] == "local-lvm"), "name": "tank", "type": "zfspool"})
+    (message,) = errors(f, {OLD: {"use": "pbs", "wipe": True, "evacuate": "tank"}})
+    assert message == f"disks.{OLD}.evacuate: tank is zfspool; a copy goes on LVM or LVM-thin storage (lvmthin, lvm)"
+    (message,) = errors(mounted(facts, used_gib=None), {OLD: {"use": "pbs", "wipe": True, "evacuate": "local-lvm"}})
+    assert message == f"disks.{OLD}: how much partition 2 holds is unknown; probe again"
+
+
+def test_convert_keys_belong_to_a_conversion(facts):
+    (message,) = errors(facts("large"), {OLD: {"use": "legacy", "evacuate": "local-lvm"}})
+    assert message == f"disks.{OLD}.evacuate: only for converting a kept disk to pbs"
+    # Once converted, the disk is no longer kept: the pin may keep its key.
+    p = plan(facts("large"), {OLD: {"use": "pbs", "wipe": True, "evacuate": "local-lvm"}})
+    assert "converts" not in p["disks"][OLD].value and "files" not in p["guests"]
+
+
+COPY = {"name": "data", "volume": "local-lvm:vm-2023-disk-1", "size_gib": 106, "files": 1200, "bytes": 107374182400, "disk": OLD}
+
+
+def test_a_copy_keeps_the_files_guest_and_its_name(facts):
+    f = copy.deepcopy(facts("large"))
+    f["copies"] = [COPY]
+    p = plan(f, {OLD: {"use": "pbs", "wipe": True, "evacuate": "local-lvm"}})
+    assert p["copies"].value == [COPY] and "files" in p["guests"]
+    assert legacy.copies(strip_notes(p)) == [{**COPY, "made": True}]
+    f2 = with_parts(lambda _: f, part(1, "ntfs", label="Data"), disk="ata-SYNTHETIC_HDD_0003")
+    messages = errors(f2, {"ata-SYNTHETIC_HDD_0003": {"use": "legacy"}})
+    taken = "share name 'data' is also used on the copy local-lvm:vm-2023-disk-1; set disks.<id>.name"
+    assert f"disks.ata-SYNTHETIC_HDD_0003: {taken}" in messages
+
+
+def test_probe_reads_used_bytes_and_copies():
+    from nullbill.probe import _copies
+
+    by_id = "ata-SYNTHETIC_HDD_0009 ../../sdb\n"
+    text = lsblk('["/mnt/nb-legacy/old"]').replace('"uuid": "AB",', '"uuid": "AB", "fsused": 5368709120,')
+    (disk,) = _disks(text, by_id)
+    assert disk["partitions"][0]["used_bytes"] == 5 * 2**30
+    assert _copies("data local-lvm:vm-2023-disk-1 106 1200 107374182400 ata-X\n# note\nbad line\n") == [
+        {"name": "data", "volume": "local-lvm:vm-2023-disk-1", "size_gib": 106, "files": 1200, "bytes": 107374182400, "disk": "ata-X"}
+    ]
+
+
+def test_verify_checks_a_copy_in_the_files_guest(facts):
+    f = copy.deepcopy(facts("large"))
+    f["copies"] = [COPY]
+    p = plan(f, {OLD: {"use": "pbs", "wipe": True, "evacuate": "local-lvm"}})
+    assert verdicts(p, answers(guest="ext4 rw,relatime")) == [
+        ("PASS", "files guest sees the copy data rw", ""),
+        ("PASS", "files guest's Samba takes SMB3 with encryption only, and no guests", ""),
+    ]
+    assert verdicts(p, answers(guest=""))[0] == ("FAIL", "files guest sees the copy data rw", "nothing mounted at /srv/share/data")

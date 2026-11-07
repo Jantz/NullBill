@@ -61,7 +61,8 @@ setup page and remote access.
 - A spare x86 PC on your home network, with
   [Proxmox VE](https://www.proxmox.com/en/downloads) 9 installed (PVE 8 is past its end of life).
   A second, empty disk is needed only for backups. A disk from your old
-  PC can go in as it is: NullBill keeps its files and shares them to you
+  PC can go in as it is: NullBill keeps its files and shares them to you,
+  and can later copy them onto the server before it reuses the disk
   ([legacy-disk.md](docs/runbooks/legacy-disk.md)).
 - Another device with a web browser, on the same network.
 - On your phone: the free [ntfy](https://ntfy.sh/) app, for alerts.
@@ -101,7 +102,7 @@ It runs these stages in order and stops at the first one that fails.
 |---|---|
 | render | Writes every config file from the plan. |
 | host | Hardens Proxmox: SSH by key only, audit log, the free update source, nightly security updates, the firewall. Sets up the on-site screen if chosen. |
-| tofu | Mounts any disk you kept from an old PC, then creates the zone networks and every container and VM ([OpenTofu](https://opentofu.org/)). |
+| tofu | Mounts any disk you kept from an old PC (or copies a kept disk onto the server and checks the copy before reusing the disk), then creates the zone networks and every container and VM ([OpenTofu](https://opentofu.org/)). |
 | router | Sets up the router guest: routing, firewall and DNS between zones. |
 | proxy | A web proxy that lets build guests reach only listed sites (package mirrors, GitHub and similar). |
 | updates | Nightly security updates and update monitoring on each guest. |

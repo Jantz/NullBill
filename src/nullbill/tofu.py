@@ -139,10 +139,15 @@ def _container(name: str, guest: dict, plan: dict, model: dict, storage: str) ->
         },
         "depends_on": [_bridge_ref(plan["zones"][zone]["bridge"])],
     }
-    if legacy.shares(plan) and name == "files":
+    if name == "files" and (legacy.shares(plan) or legacy.copies(plan)):
         # apply sets the kept disks' bind mount points as root over SSH: PVE
         # refuses bind mounts to API tokens (docs/adr/0007-legacy-disks.md).
+        # It attaches the copies of converted disks the same way.
         container["lifecycle"] = {"ignore_changes": ["mount_point"]}
+        if legacy.copies(plan):
+            # A copy is a volume of this container: destroying it would
+            # destroy the owner's only copy of those files.
+            container["lifecycle"]["prevent_destroy"] = True
     return _in_agent_pool(container, guest)
 
 

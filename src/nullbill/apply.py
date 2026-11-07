@@ -79,6 +79,7 @@ class Context:
     log: list[str] = field(default_factory=list)
     files_stopped: bool = False  # apply stopped the files guest for a disk change
     legacy_mounted: bool = False  # a kept disk was mounted in this run
+    kept_before: list[dict] | None = None  # disks.json as this run found it
 
     @property
     def bare(self) -> dict:
@@ -356,9 +357,19 @@ def backup_disk(ctx: Context) -> None:
         return
     disk_id, _ = backups.disk(ctx.plan)
     # The probe may have missed a kept disk's mount (the disk was out); what
-    # apply last mounted is the record that keeps its data from the wipe.
-    if any(m["disk"] == disk_id for m in kept_disks(ctx)):
-        raise ApplyError("tofu", f"{disk_id} holds a disk kept as legacy; converting it needs a verified copy first, so it is not erased")
+    # apply had mounted before this run keeps its data from the wipe, unless
+    # the plan converts it with a verified copy, or the owner discards it.
+    kept_before = kept_disks(ctx) if ctx.kept_before is None else ctx.kept_before
+    pin = ctx.model.get("disks", {}).get(disk_id, {})
+    if any(m["disk"] == disk_id for m in kept_before) and not pin.get("discard_data"):
+        names = [c["name"] for c in (ctx.bare["disks"][disk_id].get("converts") or {}).get("copies", [])]
+        copied = {line.split()[0] for line in host_out(ctx, "tofu", f"{COPY} list").splitlines() if line.strip()}
+        if not names or not set(names) <= copied:
+            raise ApplyError(
+                "tofu",
+                f"{disk_id} was kept as legacy and has no verified copy; it is not erased. Plug it in and probe again "
+                "to copy it (evacuate), or set discard_data: true if you have its files elsewhere",
+            )
     wipe = "1" if ctx.model.get("disks", {}).get(disk_id, {}).get("wipe") else "0"
     out = host_out(ctx, "tofu", shlex.join(["/usr/local/sbin/nb-backup-disk", disk_id, wipe])).strip()
     if out == "made":
@@ -368,6 +379,12 @@ def backup_disk(ctx: Context) -> None:
 # Disks kept from a previous OS (legacy.py): the host mounts them before
 # OpenTofu, and the files guest gets each as a bind mount point after.
 LEGACY = "/usr/local/sbin/nb-legacy-disk"
+COPY = "/usr/local/sbin/nb-legacy-copy"
+# A kept disk's copy runs as a transient unit on the host, so a dropped SSH
+# connection does not stop it; apply waits for it, at the pace of a slow
+# USB 2 disk, then leaves it running and says so.
+COPY_POLL_S = 60
+COPY_MIB_PER_S = 25
 DISKS_FILE = "disks.json"
 FILES = "files"
 
@@ -396,10 +413,51 @@ def stop_files(ctx: Context) -> None:
     ctx.files_stopped = True
 
 
+def copy_disks(ctx: Context) -> None:
+    """Before a kept disk the plan converts is unmounted or wiped: copy each
+    of its kept partitions to a volume of the files guest (evacuate), and
+    wait until nb-legacy-copy has checked and recorded each copy."""
+    todo = [(disk_id, d["converts"]) for disk_id, d in sorted(ctx.bare["disks"].items()) if (d.get("converts") or {}).get("evacuate")]
+    if not todo:
+        return
+    copied = {line.split()[0] for line in host_out(ctx, "tofu", f"{COPY} list").splitlines() if line.strip()}
+    vmid = str(files_vmid(ctx))
+    for disk_id, converts in todo:
+        for c in converts["copies"]:
+            if c["name"] in copied:
+                continue
+            # Nothing may change the files while they are copied.
+            stop_files(ctx)
+            unit = f"nb-legacy-copy-{c['name']}"
+            argv = [COPY, "copy", c["name"], converts["evacuate"], vmid, str(c["size_gib"]), disk_id]
+            if host_out(ctx, "tofu", f"systemctl is-active {unit} || true").strip() not in ("active", "activating"):
+                host_out(ctx, "tofu", shlex.join(["systemd-run", f"--unit={unit}", "--collect", "--quiet", "--no-block", *argv]))
+            where = f"{legacy.LEGACY_ROOT}/{c['name']} ({c['used_gib']} GiB)"
+            ctx.say(f"tofu: copying {where} to {converts['evacuate']} before {disk_id} is converted")
+            wait_copy(ctx, unit, c)
+
+
+def wait_copy(ctx: Context, unit: str, copy: dict) -> None:
+    """Until the copy's unit ends; then it must be recorded, or it failed."""
+    deadline = time.monotonic() + 1800 + copy["used_gib"] * 1024 // COPY_MIB_PER_S
+    while host_out(ctx, "tofu", f"systemctl is-active {unit} || true").strip() in ("active", "activating"):
+        if time.monotonic() > deadline:
+            raise ApplyError("tofu", f"{unit} is still copying on the host; run apply again once it is done (journalctl -u {unit})")
+        sleep(COPY_POLL_S)
+        last = host_out(ctx, "tofu", f"journalctl -q -u {unit} -n 1 -o cat || true").strip()
+        if last:
+            ctx.say(f"tofu: {last}")
+    records = {line.split()[0]: line for line in host_out(ctx, "tofu", f"{COPY} list").splitlines() if line.strip()}
+    if copy["name"] not in records:
+        why = host_out(ctx, "tofu", f"journalctl -q -u {unit} -n 5 -o cat || true").strip()
+        raise ApplyError("tofu", f"copying {copy['name']} failed; the kept disk is as it was and is not converted: {why}")
+    _, volume, _, files, size, _ = records[copy["name"]].split()
+    ctx.say(f"tofu: {copy['name']}: {files} files, {int(size) // 2**20} MiB copied to {volume} and checked")
+
+
 def legacy_disks(ctx: Context) -> None:
     """Mount each kept partition and unmount those the plan dropped. The
     host script refuses anything unsafe (nb-legacy-disk)."""
-    ctx.legacy_mounted = ctx.files_stopped = False
     want = {m["name"]: m for m in legacy.mounts(ctx.bare)}
     listed = {}
     for line in host_out(ctx, "tofu", f"{LEGACY} list 2>/dev/null || true").splitlines():
@@ -451,23 +509,30 @@ def _mp_fields(value: str) -> tuple[str, str, str]:
     return head, opts.get("mp", ""), opts.get("ro", "0")
 
 
-def files_mount_points(ctx: Context) -> tuple[dict[str, tuple[int, str]], set[int]] | None:
-    """The files guest's kept-disk mount points (host path -> index, value)
-    and every mpN index in use; None while no files guest of NullBill's
-    exists (a container of the owner's own may hold the VMID)."""
+MountPoints = dict[str, tuple[int, str]]
+
+
+def files_mount_points(ctx: Context) -> tuple[MountPoints, set[int], MountPoints] | None:
+    """The files guest's kept-disk bind mount points (host path -> index,
+    value), every mpN index in use, and its volume mount points (volume ->
+    index, value); None while no files guest of NullBill's exists (a
+    container of the owner's own may hold the VMID)."""
     vmid = files_vmid(ctx)
     rc, config, _ = ctx.reach.host(f"pct config {vmid}")
     if rc != 0 or "hostname: files" not in config.splitlines():
         return None
-    current = {}
+    current, volumes = {}, {}
     used = set()
     for line in config.splitlines():
         key, _, value = line.partition(": ")
         if key.startswith("mp") and key[2:].isdigit():
             used.add(int(key[2:]))
+            head = value.split(",", 1)[0]
             if value.startswith(legacy.LEGACY_ROOT + "/"):
-                current[value.split(",", 1)[0]] = (int(key[2:]), value)
-    return current, used
+                current[head] = (int(key[2:]), value)
+            elif not head.startswith("/"):
+                volumes[head] = (int(key[2:]), value)
+    return current, used, volumes
 
 
 def detach_stale(ctx: Context) -> None:
@@ -476,7 +541,7 @@ def detach_stale(ctx: Context) -> None:
     found = files_mount_points(ctx)
     if found is None:
         return
-    current, _ = found
+    current, _, _ = found
     keep = {m["mount"] for m in legacy.shares(ctx.bare)} if FILES in ctx.bare["guests"] else set()
     stale = [f"mp{current[path][0]}" for path in sorted(set(current) - keep)]
     if stale:
@@ -494,7 +559,7 @@ def attach_shares(ctx: Context) -> None:
     found = files_mount_points(ctx)
     if found is None:
         raise ApplyError("tofu", f"container {vmid} is not NullBill's files guest")
-    current, used = found
+    current, used, volumes = found
     want = legacy.shares(ctx.bare)
     sets = []
     for m in want:
@@ -507,12 +572,23 @@ def attach_shares(ctx: Context) -> None:
         line = mount_point(m)
         if not value or _mp_fields(value) != _mp_fields(line):
             sets.append(f"--mp{index} {shlex.quote(line)}")
+    # Copies of converted kept disks: volumes the files guest owns, backed
+    # up with it. apply never takes one off; that is the owner's call.
+    for record in host_out(ctx, "tofu", f"{COPY} list").splitlines():
+        if not record.strip():
+            continue
+        name, volume = record.split()[:2]
+        line = f"{volume},mp={legacy.SHARE_ROOT}/{name},backup=1"
+        index, value = volumes.get(volume) or (min(i for i in range(256) if i not in used), "")
+        used.add(index)
+        if not value or _mp_fields(value) != _mp_fields(line) or "backup=1" not in value.split(","):
+            sets.append(f"--mp{index} {shlex.quote(line)}")
     if not sets and not ctx.files_stopped and not ctx.legacy_mounted:
         return
     if sets:
         stop_files(ctx)
         host_out(ctx, "tofu", f"pct set {vmid} {' '.join(sets)}")
-        ctx.say(f"tofu: gave the files guest {len(want)} kept disk(s) as mount points")
+        ctx.say(f"tofu: gave the files guest {len(sets)} mount point(s) for kept disks and their copies")
     if files_running(ctx):
         # A disk mounted on the host after the guest started shows up in it
         # only once the guest starts again.
@@ -527,6 +603,9 @@ def stage_tofu(ctx: Context) -> None:
     work.mkdir(mode=0o700, exist_ok=True)
     (work / "main.tf.json").write_text(ctx.files["tofu/main.tf.json"])
     windows_iso(ctx, "tofu")
+    ctx.legacy_mounted = ctx.files_stopped = False
+    ctx.kept_before = kept_disks(ctx)
+    copy_disks(ctx)
     legacy_disks(ctx)
     backup_disk(ctx)
     run_tofu(ctx, "tofu", init=True, downloads=True)
@@ -805,6 +884,8 @@ def stage_files(ctx: Context) -> None:
     if not planned(ctx, FILES):
         return
     shares = [{"name": m["share"], "read_only": m["mode"] == "ro"} for m in legacy.shares(ctx.bare)]
+    # A copy of a converted disk is the owner's own ext4 volume: read-write.
+    shares += [{"name": c["name"], "read_only": False} for c in legacy.copies(ctx.bare)]
     password = ctx.secrets.ensure("files_share_password", lambda: secrets.token_urlsafe(24))
     variables = {"files_shares": shares, "files_user": legacy.SHARE_USER, "files_password": password}
     run_playbook(ctx, "files", "files.yml", FILES, variables)
