@@ -27,12 +27,18 @@ in_ct sops --version 2>/dev/null | grep -q 3.13.3 || fail "sops"
 in_ct age-keygen --version >/dev/null 2>&1 || fail "age"
 echo "ok   the page answers; the controller has its tools, a private home, and SSH to the host"
 
+# What apply adds when it closes the LAN: the host under its mgmt address.
+mgmt="10.42.1.254 $(cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub)"
+in_ct sh -c "echo '$mgmt' >>/root/.ssh/known_hosts"
 bash /src/install.sh >/tmp/second.log 2>&1 || { cat /tmp/second.log; fail "second install"; }
+in_ct grep -qxF "$mgmt" /root/.ssh/known_hosts || fail "a second run keeps the host's mgmt address in known_hosts"
+[ "$(in_ct grep -c "^$(ip -4 -o addr show dev eth0 | awk '{print $4}' | cut -d/ -f1) " /root/.ssh/known_hosts)" = 1 ] ||
+  fail "a second run keeps one line for the host's LAN address"
 grep -q "exists; keeping it" /tmp/second.log || fail "a second run keeps the container"
 [ "$(grep -c nullbill@ /root/.ssh/authorized_keys)" = 1 ] || fail "a second run adds no second key"
 grep -q "^Setup code: $code$" /tmp/second.log || fail "the setup code survives a re-run"
 [ "$(grep -c '^create' /var/log/fake-pct.log)" = 1 ] || fail "a second run creates nothing"
-echo "ok   a second run keeps the container, key and setup code"
+echo "ok   a second run keeps the container, key, setup code and the host keys NullBill trusts"
 
 # Signing in and choosing a password makes the ntfy topic in the sops file.
 jar=$(mktemp)

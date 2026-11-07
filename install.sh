@@ -72,8 +72,11 @@ say "Letting NullBill reach this host over SSH"
 key=$(in_ct cat /root/.ssh/id_ed25519.pub)
 grep -qxF "$key" /root/.ssh/authorized_keys 2>/dev/null || echo "$key" >>/root/.ssh/authorized_keys
 # The host's own key, so the container never trusts a key on first sight.
+# Other lines stay: once the LAN is closed, NullBill reaches this host at
+# its mgmt address, which apply added here.
 known=$(mktemp)
-echo "$host_ip $(cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub)" >"$known"
+in_ct sh -c 'cat /root/.ssh/known_hosts 2>/dev/null || true' | awk -v h="$host_ip" '$1 != h' >"$known"
+echo "$host_ip $(cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub)" >>"$known"
 pct push "$vmid" "$known" /root/.ssh/known_hosts --perms 0644
 info=$(mktemp)
 printf '{"host": "%s", "node": "%s", "bridge": "%s", "vmid": %s}\n' "$host_ip" "$(hostname)" "$bridge" "$vmid" >"$info"
