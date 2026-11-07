@@ -3,7 +3,9 @@
 # provider is fetched from the OpenTofu registry, which checks its signature.
 set -euo pipefail
 
-tofu version | head -1
+# sed reads to the end: head would close the pipe while tofu still writes
+# its update notice, and pipefail would end the check on SIGPIPE.
+tofu version | sed -n 1p
 # A throwaway passphrase: init and validate evaluate the encryption block.
 export TF_VAR_state_passphrase=throwaway-check-passphrase
 export TF_PLUGIN_CACHE_DIR=/tmp/plugins
