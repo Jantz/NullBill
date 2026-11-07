@@ -186,7 +186,7 @@ function renderAlerts(alerts) {
 }
 
 function renderAgent(kind) {
-  $("agent-result").textContent = kind ? `A ${kind} is saved.` : "Nothing saved yet.";
+  $("agent-result").textContent = kind ? `${kind === "API key" ? "An" : "A"} ${kind} is saved.` : "Nothing saved yet.";
 }
 
 function renderTailscaleClient(saved) {
