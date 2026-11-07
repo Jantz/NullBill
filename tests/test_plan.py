@@ -214,6 +214,15 @@ def test_gpu_without_vram_needs_answer(facts):
     assert plan_for(f, config)["gpus"]["0000:01:00.0"].value["vram_mib"] == 16384
 
 
+def test_an_unused_gpu_without_vram_does_not_stop_the_plan(facts):
+    """A host without the GPU's driver reports no VRAM; without inference
+    nothing budgets it, so the plan goes on."""
+    f = facts("mid")
+    f["gpus"][0]["vram_mib"] = None
+    config = {**fixture_config("mid"), "intent": {"workloads": ["agents", "windows-dev"]}}
+    assert plan_for(f, config)["gpus"]["0000:01:00.0"].value["vram_mib"] is None
+
+
 def test_inference_without_gpu_fails(facts):
     messages = errors_of(facts("small"), {"intent": {"workloads": ["inference"]}})
     assert messages[0] == "intent asks for inference, but no host-shared GPU budgets VRAM to it"

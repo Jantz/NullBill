@@ -108,7 +108,10 @@ def _gpus(model: dict, facts: dict, planned: dict, errors: _Errors) -> tuple[dic
         owner = pin.get("owner", "host-shared")
         vram = gpu["vram_mib"] or pin.get("vram_mib")
         entry: dict[str, Any] = {"name": gpu["name"], "owner": owner, "vram_mib": vram}
-        if vram is None:
+        # VRAM matters only to what budgets it: inference on a host-shared GPU.
+        # Without a driver on the host the probe cannot read it, and an unused
+        # GPU must not stop the plan.
+        if vram is None and not owner.startswith("vm:") and ("inference" in planned or "consumers" in pin):
             errors.append(f"gpus.{gpu['pci']}.vram_mib: the probe could not read VRAM for {gpu['name']}; answer it in config.yaml")
         if owner.startswith("vm:"):
             vm = owner[3:]
