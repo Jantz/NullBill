@@ -4,3 +4,10 @@
     state: restarted
     daemon_reload: true
   when: tls_cert_manage_services | bool
+
+# A replaced certificate reaches the service as a renewal does; the first
+# one too, harmlessly, where the service runs already.
+- name: Reload the service
+  ansible.builtin.command: "/usr/local/sbin/nb-cert-renewed-{{ tls_cert_name }}"
+  changed_when: true
+  when: tls_cert_manage_services | bool and tls_cert_existing.stat.exists

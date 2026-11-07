@@ -5,9 +5,10 @@ tls_cert_ca_url: https://step-ca.nullbill.internal
 # for clients on this guest.
 tls_cert_ca_root: ""
 # A one-time token apply makes with `step ca token <name> --san ...` and the
-# owner's provisioner. Used only when there is no certificate yet; renewal
-# authenticates with the current certificate, so nothing long-lived that can
-# mint certificates stays on the guest.
+# owner's provisioner. Used only when there is no valid certificate (none
+# yet, or one that ran out while the server was off); renewal authenticates
+# with the current certificate, so nothing long-lived that can mint
+# certificates stays on the guest.
 tls_cert_token: ""
 # Group that may read the key, e.g. postgres or www-data.
 tls_cert_group: root

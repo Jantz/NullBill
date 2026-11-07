@@ -51,3 +51,21 @@ test "$(stat -c '%a %U %G' "$key")" = "640 root forgejo" || fail "renew changed 
 grep -q -- "step ca renew --daemon .*--exec /usr/local/sbin/nb-cert-renewed-$name" "/etc/systemd/system/nb-cert-renew-$name.service" ||
   fail "renewer unit"
 pass "renewal with the certificate alone replaces it and keeps the key's mode"
+
+# The server was off for longer than the certificate lasts: an expired one
+# is replaced from the fresh token apply brings, and the next run keeps it.
+step certificate create "$name" "$crt" "$key" --profile self-signed --subtle --no-password --insecure \
+  --not-before=-2h --not-after=-1h --force >/dev/null 2>&1
+openssl x509 -checkend 0 -noout -in "$crt" >/dev/null && fail "the stand-in certificate is not expired"
+python3 - "$vars" "$(token)" <<'PY'
+import json, sys
+v = json.load(open(sys.argv[1]))
+v["tls_cert_token"] = sys.argv[2]
+json.dump(v, open(sys.argv[1], "w"))
+PY
+converge tls-cert.yml -e tls_cert_manage_services=false -e "@$vars"
+openssl verify -CAfile /etc/step-ca/certs/root_ca.crt -untrusted /etc/step-ca/certs/intermediate_ca.crt "$crt" | grep -q ": OK" ||
+  fail "an expired certificate was kept"
+openssl x509 -checkend 3600 -noout -in "$crt" >/dev/null || fail "the new certificate runs out within the hour"
+test "$(stat -c '%a %U %G' "$key")" = "640 root forgejo" || fail "key mode after replacing $(stat -c '%a %U %G' "$key")"
+pass "an expired certificate is replaced from a fresh token; a valid one is kept"

@@ -34,14 +34,24 @@
     path: "/etc/nullbill/tls/{{ tls_cert_name }}.crt"
   register: tls_cert_existing
 
-- name: A token for the first certificate
+# step-ca renews only a certificate that is still valid, so one that ran out
+# while the server was off (they last 24 h) is replaced from the fresh token
+# apply brings, as is one that runs out within the hour.
+- name: Is it valid for another hour
+  ansible.builtin.command: openssl x509 -checkend 3600 -noout -in "/etc/nullbill/tls/{{ tls_cert_name }}.crt"
+  register: tls_cert_valid
+  changed_when: false
+  failed_when: false
+  when: tls_cert_existing.stat.exists
+
+- name: A token for a new certificate
   ansible.builtin.assert:
     that: tls_cert_token | length > 0
-    fail_msg: "no certificate for {{ tls_cert_name }} yet and no tls_cert_token; apply makes one"
-  when: not tls_cert_existing.stat.exists
+    fail_msg: "no valid certificate for {{ tls_cert_name }} and no tls_cert_token; apply makes one"
+  when: not tls_cert_existing.stat.exists or tls_cert_valid.rc != 0
 
 # The token names the subject and SANs; the guest cannot ask for others.
-- name: First certificate from the one-time token
+- name: New certificate from the one-time token
   ansible.builtin.command:
     argv:
       - step
@@ -56,11 +66,14 @@
       - "{{ tls_cert_ca_url }}"
       - --root
       - /etc/nullbill/tls/root_ca.crt
-    creates: "/etc/nullbill/tls/{{ tls_cert_name }}.crt"
+      - --force
   environment:
     STEPPATH: /etc/nullbill/tls/step
   no_log: true
-  notify: Restart renewer
+  when: not tls_cert_existing.stat.exists or tls_cert_valid.rc != 0
+  notify:
+    - Restart renewer
+    - Reload the service
 
 # Made here when the service's package or role has not made it yet, so
 # apply can run this first on any guest.
