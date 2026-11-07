@@ -535,6 +535,40 @@ def test_shipper_certificates_are_kept_until_they_near_expiry(ctx):
     assert (c.home / "shipper-ca").stat().st_mode & 0o777 == 0o700
 
 
+def hashed(address, key):
+    import base64
+    import hashlib
+    import hmac
+
+    salt = b"0123456789abcdefghij"
+    digest = hmac.new(salt, address.encode(), hashlib.sha1).digest()
+    return f"|1|{base64.b64encode(salt).decode()}|{base64.b64encode(digest).decode()} ssh-ed25519 {key}\n"
+
+
+def test_a_vm_opentofu_made_again_has_its_old_host_key_forgotten(ctx):
+    c = ctx("small")
+    ctimes = {"2001": "ctime=1700000000"}
+
+    def host(command, stdin=None, timeout=900):
+        if command.startswith("qm config "):
+            return 0, f"name: x\nmeta: creation-qemu=10.0.2,{ctimes.get(command.split()[2], 'ctime=1')}\n", ""
+        return 0, "", ""
+
+    c.reach.host = host
+    known = c.home / "known_hosts"
+    # Hashed, as Debian's ssh_config makes them, and plain.
+    pinned = hashed("10.42.1.1", "AAAArouter") + "10.42.2.10 ssh-ed25519 AAAAother\n"
+    known.write_text(pinned)
+    apply.forget_remade_vms(c)  # first seen: forgotten, then pinned afresh on first sight
+    assert known.read_text() == "10.42.2.10 ssh-ed25519 AAAAother\n"
+    known.write_text(pinned)
+    apply.forget_remade_vms(c)  # the same VM: kept
+    assert known.read_text() == pinned
+    ctimes["2001"] = "ctime=1700000999"  # made again
+    apply.forget_remade_vms(c)
+    assert known.read_text() == "10.42.2.10 ssh-ed25519 AAAAother\n"
+
+
 def test_ci_stage_bakes_each_golden_image_once_then_runs_the_dispatcher(ctx):
     c = ctx("small")
     (c.home / "known_hosts").write_text("10.42.3.129 ssh-ed25519 AAAAold\n10.42.1.1 ssh-ed25519 AAAArouter\n")

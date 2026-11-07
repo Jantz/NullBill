@@ -9,9 +9,12 @@ host with `pct exec` (community.proxmox's proxmox_pct_remote connection),
 and VMs over SSH as `nullbill` with the host as jump host.
 """
 
+import base64
 import hashlib
+import hmac
 import json
 import os
+import re
 import secrets
 import shlex
 import shutil
@@ -776,6 +779,7 @@ def stage_tofu(ctx: Context) -> None:
     backup_disk(ctx)
     storage_disks(ctx)
     run_tofu(ctx, "tofu", init=True, downloads=True)
+    forget_remade_vms(ctx)
     move_copies(ctx)
     attach_shares(ctx)
     # The host reaches the zones through the router, not its LAN gateway.
@@ -1071,12 +1075,47 @@ def linux_pools(ctx: Context) -> dict[str, dict]:
     return {n: g for n, g in ctx.bare["guests"].items() if g["kind"] == "vm-pool" and g["zone"] != "windows"}
 
 
+def _names(field: str, address: str) -> bool:
+    """Does a known_hosts host field name this address? ssh may have hashed
+    it (HashKnownHosts, on in Debian's ssh_config): |1|salt|HMAC-SHA1."""
+    for name in field.split(","):
+        if name.startswith("|1|"):
+            try:
+                salt, digest = (base64.b64decode(p) for p in name[3:].split("|", 1))
+            except ValueError:
+                continue
+            if hmac.compare_digest(hmac.new(salt, address.encode(), hashlib.sha1).digest(), digest):
+                return True
+        elif name == address:
+            return True
+    return False
+
+
 def forget_host_key(ctx: Context, address: str) -> None:
-    """A golden image is a new machine each time it is baked."""
+    """A golden image is a new machine each time it is baked, and a VM
+    OpenTofu makes again boots with new host keys."""
     known = ctx.home / "known_hosts"
     if known.exists():
         lines = known.read_text().splitlines(keepends=True)
-        known.write_text("".join(line for line in lines if line.split(" ", 1)[0] != address))
+        known.write_text("".join(line for line in lines if not _names(line.split(" ", 1)[0], address)))
+
+
+def forget_remade_vms(ctx: Context) -> None:
+    """Forget the pinned host key of each VM OpenTofu made, or made again,
+    since the last apply: its creation time (PVE's meta ctime) changed."""
+    path = ctx.home / "vm-ctimes.json"
+    known = json.loads(path.read_text()) if path.exists() else {}
+    now = {}
+    for name, guest in ctx.bare["guests"].items():
+        if guest["kind"] != "vm":
+            continue
+        config = host_out(ctx, "tofu", f"qm config {guest['vmid']}")
+        now[name] = next((m.split("=", 1)[1] for m in re.findall(r"ctime=\d+", config)), "")
+        if now[name] != known.get(name):
+            for address in guest.get("ips", {}).values() if "ips" in guest else [guest.get("ip")]:
+                if address:
+                    forget_host_key(ctx, address)
+    path.write_text(json.dumps(now, indent=2) + "\n")
 
 
 CLUSTER_VMS = "pvesh get /cluster/resources --type vm --output-format json"
