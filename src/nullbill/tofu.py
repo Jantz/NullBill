@@ -241,6 +241,11 @@ def _vm(name: str, guest: dict, plan: dict, model: dict, storage: str) -> dict:
             ],
             "initialization": {
                 "datastore_id": storage,
+                # On SCSI, not the default ide2: on q35, PVE puts IDE drives
+                # on the ICH9 AHCI controller, which Debian's cloud kernel
+                # has no driver for. Cloud-init then finds no NoCloud drive
+                # and leaves the guest with no addresses, user or host keys.
+                "interface": "scsi1",
                 "ip_config": ip_config,
                 # The router resolves through its uplink's DHCP until its own
                 # dnsmasq runs; every other guest asks the router.

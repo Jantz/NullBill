@@ -107,6 +107,17 @@ def test_windows_vms_use_inbox_drivers_and_linux_vms_the_guest_agent(facts):
             assert vm["agent"] == {"enabled": True, "trim": True, "wait_for_ip": {"disabled": True}}
 
 
+def test_linux_vms_get_their_cloud_init_drive_on_scsi(facts):
+    # Debian's cloud kernel cannot see q35's AHCI controller, where PVE puts ide2.
+    for size in ("small", "mid", "large"):
+        config, plan, _ = rendered(facts, size)
+        for name, vm in config["resource"]["proxmox_virtual_environment_vm"].items():
+            if plan["guests"][name]["zone"] != "windows":
+                assert vm["machine"] == "q35" and vm["scsi_hardware"] == "virtio-scsi-single"
+                assert vm["initialization"]["interface"] == "scsi1"
+                assert "scsi1" not in [d["interface"] for d in vm["disk"]]
+
+
 def test_a_gpu_passed_to_a_vm_goes_through_a_pci_mapping(facts):
     model = build_model({**fixture_config("large"), "gpus": {"0000:65:00.0": {"owner": "vm:windows-dev"}}})
     plan = build_plan(model, facts("large"))

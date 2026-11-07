@@ -1663,6 +1663,7 @@ WantedBy=multi-user.target
         ],
         "initialization": {
           "datastore_id": "local-lvm",
+          "interface": "scsi1",
           "ip_config": [
             {
               "ipv4": {
@@ -1767,6 +1768,7 @@ WantedBy=multi-user.target
         ],
         "initialization": {
           "datastore_id": "local-lvm",
+          "interface": "scsi1",
           "ip_config": [
             {
               "ipv4": {
@@ -1852,6 +1854,7 @@ WantedBy=multi-user.target
         ],
         "initialization": {
           "datastore_id": "local-lvm",
+          "interface": "scsi1",
           "ip_config": [
             {
               "ipv4": {
