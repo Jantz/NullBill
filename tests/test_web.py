@@ -194,7 +194,7 @@ def test_choices_write_config_and_probe_gives_a_plan(site):
     policy = json.loads(state["plan"]["tailnet_policy"])
     assert policy["groups"] == {"group:nb-owner": ["owner-a@example.internal"]} and "tag:nb-vpn" in policy["tagOwners"]
     # Backups back on: the services key goes away again.
-    client.call("/api/choices", {"workloads": ["agents", "linux-ci"], "backups": True, "owner_login": "owner-a@example.internal"})
+    client.call("/api/choices", {"workloads": ["agents", "linux-ci", "media"], "backups": True, "owner_login": "owner-a@example.internal"})
     assert "services" not in yaml.safe_load((app.home / "config.yaml").read_text())
     assert fixture_config("small")["intent"] == yaml.safe_load((app.home / "config.yaml").read_text())["intent"]
     # The on-site screen: on, then off again leaves no host key behind.
@@ -385,21 +385,28 @@ def test_services_list_what_the_plan_runs_and_reveal_only_their_passwords(site):
     (app.home / "plan.yaml").write_text(golden.read_text())
     services = client.call("/api/state")[1]["services"]
     items = {s["name"]: s for s in services["items"]}
-    assert list(items) == ["proxmox", "grafana", "forgejo", "workspace", "operator", "linux-runner"]
+    assert list(items) == ["proxmox", "grafana", "forgejo", "jellyfin", "workspace", "operator", "linux-runner"]
     assert items["proxmox"]["url"] == "https://10.42.1.254:8006" and items["proxmox"]["watch"] == "pve"
     assert items["grafana"]["url"] == "http://10.42.1.14:3000"
     assert (items["grafana"]["user"], items["grafana"]["password"]) == ("admin", "grafana")
     assert (items["forgejo"]["url"], items["forgejo"]["user"]) == ("https://10.42.2.17/", "nullbill-admin")
     assert items["workspace"]["addresses"] == ["ssh root@10.42.3.19"] and "pct enter 2019" in items["workspace"]["how"]
     assert "pct enter 2016" in items["operator"]["how"]
+    jellyfin = items["jellyfin"]
+    assert (jellyfin["url"], jellyfin["user"], jellyfin["password"]) == ("http://10.42.7.24:8096/", "nullbill-admin", "jellyfin")
+    assert jellyfin["watch"] == "jellyfin" and "Keep a disk" in jellyfin["how"]
     background = ["router", "internet proxy", "certificate authority", "PostgreSQL", "CI dispatcher", "Tailscale entry", "backup server"]
     assert services["background"] == background
     legacy_plan = yaml.safe_load((golden.parent / "large-legacy.plan.yaml").read_text())
     (app.home / "plan.yaml").write_text(yaml.safe_dump(legacy_plan))
     files = next(s for s in client.call("/api/state")[1]["services"]["items"] if s["name"] == "files")
     assert files["addresses"] == ["\\\\10.42.1.23\\data"] and files["password"] == "files"
+    jellyfin = next(s for s in client.call("/api/state")[1]["services"]["items"] if s["name"] == "jellyfin")
+    assert "a folder under /media/data" in jellyfin["how"]
     secrets = app.codec(app.home).data
     secrets |= {"grafana_admin_password": "grafana-pw", "forgejo_admin_password": "forgejo-pw", "page_password": "never"}
+    secrets["jellyfin_admin_password"] = "jellyfin-pw"
+    assert client.call("/api/password-reveal", {"name": "jellyfin"}) == (200, {"password": "jellyfin-pw"})
     assert client.call("/api/password-reveal", {"name": "grafana"}) == (200, {"password": "grafana-pw"})
     assert client.call("/api/password-reveal", {"name": "forgejo"}) == (200, {"password": "forgejo-pw"})
     for name in ("page_password", "grafana_admin_password", "tailscale_client_secret", ""):

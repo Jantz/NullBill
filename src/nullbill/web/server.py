@@ -48,7 +48,7 @@ SESSION_S = 12 * 3600
 MIN_PASSWORD = 12
 LOCKOUT_FAILURES = 10
 LOCKOUT_S = 300
-WORKLOADS = ["agents", "linux-ci", "inference", "windows-ci", "windows-dev"]
+WORKLOADS = ["agents", "linux-ci", "inference", "media", "windows-ci", "windows-dev"]
 ACTIONS = {"probe", "apply", "verify"}
 # Closing the LAN to Proxmox (nullbill/lan.py), run as apply's host stage.
 LAN_ACTIONS = {"close-lan": ["apply", "--close-lan"], "keep-lan-closed": ["apply", "--confirm-lan"], "open-lan": ["apply", "--open-lan"]}

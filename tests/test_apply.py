@@ -82,6 +82,11 @@ class FakeReach:
         self.inference_ct = {"devs": {}, "status": "running", "memory": [], "restarts": 0}
         # Containers that were given step-ca's root.
         self.trusted = []
+        # The Jellyfin guest (VMID 2024), which OpenTofu makes, and the host's
+        # render nodes by PCI address. nb-jellyfin's runs.
+        self.media_ct = {"exists": False, "status": "running", "mps": {}, "devs": {}, "restarts": 0}
+        self.render_nodes = {"0000:00:02.0": "/dev/dri/renderD128"}
+        self.jellyfin = []
 
     def host(self, command, stdin=None, timeout=900):
         self.calls.append(("host", command))
@@ -142,6 +147,11 @@ class FakeReach:
             return 0, f"{self.gpu_minors.setdefault(pci, len(self.gpu_minors))}\n", ""
         if command.split()[:3] in (["pct", c, "2020"] for c in ("config", "set", "status", "reboot", "start", "shutdown")):
             return self.inference(command)
+        if command.split()[:3] in (["pct", c, "2024"] for c in ("config", "set", "status", "reboot", "start", "shutdown")):
+            return self.media(command)
+        if command.startswith("readlink -e /dev/dri/by-path/pci-"):
+            pci = command.split("pci-", 1)[1].split("-render")[0]
+            return 0, self.render_nodes.get(pci, "") + "\n", ""
         if command.startswith("pct config "):
             return 0, "hostname: nullbill\n" + "".join(f"net{n}: {v}\n" for n, v in sorted(self.nets.items())), ""
         if command.startswith("pct set 2002 --net1 "):
@@ -249,6 +259,40 @@ class FakeReach:
                 ct["devs"][int(flag.removeprefix("--dev"))] = value
         return 0, "", ""
 
+    def media(self, command):
+        """pct for the Jellyfin guest (VMID 2024)."""
+        argv = shlex.split(command)
+        ct = self.media_ct
+        if argv[1] == "config":
+            if not ct["exists"]:
+                return 2, "", "Configuration file 'nodes/pve/lxc/2024.conf' does not exist\n"
+            lines = [f"{k}: {v}" for k, v in sorted(ct["mps"].items())] + [f"dev{n}: {v}" for n, v in sorted(ct["devs"].items())]
+            return 0, "hostname: jellyfin\n" + "".join(line + "\n" for line in lines), ""
+        if argv[1] == "status":
+            return 0, f"status: {ct['status']}\n", ""
+        if argv[1] in ("start", "reboot"):
+            ct["status"] = "running"
+            ct["restarts"] += 1
+            return 0, "", ""
+        if argv[1] == "shutdown":
+            ct["status"] = "stopped"
+            return 0, "", ""
+        args = argv[3:]
+        for flag, value in zip(args[::2], args[1::2], strict=True):
+            if flag == "--delete":
+                for key in value.split(","):
+                    if key.startswith("mp"):
+                        assert ct["status"] == "stopped", "mount points change only while the Jellyfin guest is stopped"
+                        del ct["mps"][key]
+                    else:
+                        del ct["devs"][int(key.removeprefix("dev"))]
+            elif flag.startswith("--mp"):
+                assert ct["status"] == "stopped", "mount points change only while the Jellyfin guest is stopped"
+                ct["mps"][flag[2:]] = value
+            else:
+                ct["devs"][int(flag.removeprefix("--dev"))] = value
+        return 0, "", ""
+
     def kept(self, command):
         """nb-legacy-disk, findmnt and pct for the files guest (VMID 2023)."""
         argv = shlex.split(command)
@@ -323,6 +367,12 @@ class FakeReach:
             return 0, "ecdsa-sha2-nistp256 AAAAuserca\n", ""
         if argv[:5] == ["/usr/local/sbin/nb-forgejo", "admin", "user", "generate-access-token", "--username"]:
             return 0, f"forgejo-token-{argv[7]}\n", ""
+        if vmid == "2024" and argv[0] == apply.NB_JELLYFIN:
+            self.jellyfin.append(argv[1:])
+            first = argv[1] == "setup" and sum(a[0] == "setup" for a in self.jellyfin) == 1
+            return 0, ("changed\n" if first or argv[1] == "encoding" else "same\n") if argv[1] != "wait" else "", ""
+        if vmid == "2024" and argv == ["cat", "/etc/nullbill/jellyfin-admin-password"]:
+            return 0, "jellyfin-password\n", ""
         if argv == ["tailscale", "status", "--json"]:
             return 0, json.dumps({"BackendState": self.tailnet, "Self": {"DNSName": "nullbill.example-tailnet.ts.net."}}), ""
         return 127, "", f"fake guest {vmid}: unexpected {argv}"
@@ -336,6 +386,7 @@ class FakeReach:
             return self.vm(argv[-2], argv[-1])
         if argv[:2] == ["tofu", "apply"] and not any(a.startswith("-target=") for a in argv):
             self.files_ct["exists"] = True
+            self.media_ct["exists"] = True
         if argv[:2] == ["tofu", "apply"] and any(a.startswith("-replace=") for a in argv):
             self.templates.clear()  # OpenTofu made a fresh, plain VM
         for start, left in self.flaky.items():
@@ -1676,3 +1727,92 @@ def test_guests_in_proxied_zones_fetch_pinned_downloads_through_the_proxy(ctx):
     apply.stage_ca(c)
     (hosts,) = [call[2] for call in c.reach.calls if call[0] == "playbook" and call[1] == "step-ca.yml"]
     assert hosts["step-ca"]["downloads_proxy"] == proxy
+
+
+# Jellyfin (docs/adr/0009-media-server.md).
+def media_config(**media):
+    config = fixture_config("small")
+    return {**config, "media": media} if media else config
+
+
+def made_by_tofu(c):
+    c.reach.media_ct["exists"] = True
+    return c
+
+
+def test_media_stage_gives_jellyfin_the_integrated_graphics_once_and_keeps_its_password(ctx):
+    c = made_by_tofu(ctx("small"))
+    apply.stage_media(c)
+    ct = c.reach.media_ct
+    assert ct["devs"] == {0: "/dev/dri/renderD128,gid=1000,mode=0660"} and ct["restarts"] == 1
+    (play,) = [call for call in c.reach.calls if call[0] == "playbook"]
+    assert play[1] == "jellyfin.yml" and list(play[2]) == ["jellyfin"]
+    assert play[3] == {"jellyfin_proxy": "http://10.42.2.10:3128"}
+    assert c.reach.jellyfin == [["wait"], ["setup", "nullbill-admin"], ["encoding", "qsv", "/dev/dri/renderD128"]]
+    calls = host_calls(c)
+    # The device first, so Jellyfin starts with it; setup right after the role starts it.
+    assert index_of(calls, "pct set 2024 --dev0 ") < index_of(calls, "pct exec 2024 -- /usr/local/sbin/nb-jellyfin wait")
+    assert c.secrets.data["jellyfin_admin_password"] == "jellyfin-password"
+    assert "media: finished Jellyfin's first-run setup; its admin is nullbill-admin" in c.log
+    assert c.log[-1].startswith("media: from your devices on the tailnet Jellyfin is http://10.42.7.24:8096")
+    # Again: the device is in place, nothing restarts.
+    c.reach.calls.clear()
+    apply.stage_media(c)
+    assert ct["restarts"] == 1
+    assert not [x for x in host_calls(c) if isinstance(x, str) and x.startswith(("pct set 2024", "pct reboot 2024"))]
+
+
+def test_media_pinned_to_the_cpu_takes_the_graphics_off(ctx, facts):
+    c = made_by_tofu(ctx("small"))
+    apply.stage_media(c)
+    c.model = build_model(media_config(transcode="cpu"))
+    c.plan = build_plan(c.model, facts("small"))
+    assert c.bare["media"]["transcode"] == "cpu"
+    apply.stage_media(c)
+    assert c.reach.media_ct["devs"] == {} and c.reach.media_ct["restarts"] == 2
+    assert c.reach.jellyfin[-1] == ["encoding", "none"]
+
+
+def test_media_stage_stops_when_the_host_shows_no_render_node(ctx):
+    c = made_by_tofu(ctx("small"))
+    c.reach.render_nodes = {}
+    with pytest.raises(apply.ApplyError, match="no render node for the integrated graphics at 0000:00:02.0.*media.transcode: cpu"):
+        apply.stage_media(c)
+    assert not [call for call in c.reach.calls if call[0] == "playbook"]
+
+
+def test_media_stage_does_nothing_without_the_media_workload(ctx):
+    c = ctx("mid")
+    apply.stage_media(c)
+    assert c.reach.calls == []
+
+
+def media_legacy_config(**pin):
+    config = legacy_config(**pin)
+    return {**config, "intent": {"workloads": [*config["intent"]["workloads"], "media"]}}
+
+
+def test_jellyfin_gets_each_kept_disk_read_only_and_lets_go_before_the_host_unmounts_it(ctx, monkeypatch):
+    monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
+    c = ctx("large", config=media_legacy_config(mode="rw"))
+    apply.stage_tofu(c)
+    ct = c.reach.media_ct
+    # Read-write for the files guest, read-only for Jellyfin.
+    assert c.reach.files_ct["mps"] == {"mp0": "/mnt/nb-legacy/data,mp=/srv/share/data,backup=0,ro=0"}
+    assert ct["mps"] == {"mp0": "/mnt/nb-legacy/data,mp=/media/data,backup=0,ro=1"}
+    assert ct["status"] == "running" and ct["restarts"] == 1
+    calls = host_calls(c)
+    assert index_of(calls, "tofu init") < index_of(calls, "pct shutdown 2024") < index_of(calls, "pct set 2024 --mp0 ")
+    # Nothing changed: Jellyfin keeps running.
+    c.reach.calls.clear()
+    apply.stage_tofu(c)
+    assert ct["restarts"] == 1
+    assert not [x for x in host_calls(c) if isinstance(x, str) and x.startswith(("pct set 2024", "pct shutdown 2024"))]
+    # The disk is no longer kept: Jellyfin lets go of it before the host unmounts it.
+    replan(c, media_legacy_config(use="ignore"))
+    c.reach.calls.clear()
+    apply.stage_tofu(c)
+    calls = host_calls(c)
+    unmount = index_of(calls, f"{apply.LEGACY} unmount data")
+    assert index_of(calls, "pct shutdown 2024") < index_of(calls, "pct set 2024 --delete mp0") < unmount
+    assert ct["mps"] == {} and ct["status"] == "running"

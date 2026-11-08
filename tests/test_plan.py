@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 from conftest import CLASSES, fixture_config
+from fixturedata import legacy_config
 
 from nullbill.cli import plan_text
 from nullbill.errors import NullBillError
@@ -28,11 +29,6 @@ def test_golden(cls, facts):
     if os.environ.get("UPDATE_GOLDEN"):
         path.write_text(text)
     assert text == path.read_text()
-
-
-def legacy_config() -> dict:
-    """The large class with its old NTFS disk kept and shared."""
-    return {**fixture_config("large"), "disks": {"ata-SYNTHETIC_HDD_0002": {"use": "legacy"}}}
 
 
 def test_golden_legacy(facts):

@@ -1,4 +1,4 @@
 intent:
-  workloads: [agents, linux-ci]
+  workloads: [agents, linux-ci, media]
 people:
   owner-a: {role: owner, login: owner-a@example.internal}

@@ -240,6 +240,8 @@ inference:
   # Host-shared GPUs that budget VRAM to inference.
   gpus:
     - '0000:01:00.0'
+# Not planned.
+media: {}
 disks:
   # Blank, so it becomes the PBS datastore.
   ata-SYNTHETIC_HDD_0002:

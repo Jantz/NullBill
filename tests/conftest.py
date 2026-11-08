@@ -58,7 +58,7 @@ def service_answers(plan: dict, wrong: str = "") -> dict[str, str]:
     the check labelled `wrong` gets a wrong answer."""
     import shlex
 
-    from nullbill import ci, forge, llm
+    from nullbill import ci, forge, llm, media
     from nullbill.render import strip_notes
 
     bare = strip_notes(plan)
@@ -71,6 +71,8 @@ def service_answers(plan: dict, wrong: str = "") -> dict[str, str]:
     }
     if llm.enabled(bare):
         answers |= {cmd: ("nope" if label == wrong else want) + "\n" for label, cmd, want in llm.commands(bare)}
+    if media.enabled(bare):
+        answers |= {cmd: ("nope" if label == wrong else want) + "\n" for label, cmd, want in media.commands(bare)}
     return answers
 
 

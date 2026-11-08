@@ -8,18 +8,18 @@ host:
   # Left to PVE itself on a host under 24 GiB; pin with host.reserve_small.
   reserve_mib: 3072
   # VMs in full, containers at 50% of their limit.
-  guests_mib: 10240
+  guests_mib: 11264
   # Every guest's memory limit added up; containers take theirs only as they use it.
-  limits_mib: 13824
+  limits_mib: 15872
   # Not assigned to any guest.
-  unallocated_mib: 2536
+  unallocated_mib: 1512
   # Off. host.console.enabled shows the NullBill page on a monitor plugged into the server.
   console:
     enabled: false
 disk:
   storage: local-lvm
   # Includes one golden template per pool.
-  needed_gib: 248
+  needed_gib: 264
   free_gib: 350
   # Holds the downloaded container template and cloud image.
   media: local
@@ -47,6 +47,11 @@ zones:
     subnet: 10.42.6.0/24
     gateway: 10.42.6.1
     egress: direct
+  media:
+    bridge: vmbr107
+    subnet: 10.42.7.0/24
+    gateway: 10.42.7.1
+    egress: proxy
 guests:
   router:
     kind: vm
@@ -62,6 +67,7 @@ guests:
       services: 10.42.2.1
       build: 10.42.3.1
       access: 10.42.6.1
+      media: 10.42.7.1
   nullbill:
     kind: lxc
     zone: mgmt
@@ -144,13 +150,21 @@ guests:
     disk_gib: 4
     vmid: 2018
     ip: 10.42.2.18
+  jellyfin:
+    kind: lxc
+    zone: media
+    cores: 2
+    memory_mib: 2048
+    disk_gib: 16
+    vmid: 2024
+    ip: 10.42.7.24
   linux-runner:
     kind: vm-pool
     zone: build
     cores: 2
     memory_mib: 2048
     disk_gib: 32
-    # Clones, limited by host threads.
+    # Clones, limited by memory.
     count: 2
     template_vmid: 2030
     # Clones take DHCP leases from this range.
@@ -173,6 +187,13 @@ guests:
 gpus: {}
 # Not planned.
 inference: {}
+media:
+  # The host's integrated Intel graphics, with Quick Sync; apply passes their render node to Jellyfin.
+  transcode:
+    gpu: '0000:00:02.0'
+    name: Intel Corporation Synthetic Integrated Graphics
+  # No kept disk to play yet (disks.<id>.use: legacy); Jellyfin starts with an empty library.
+  library: []
 disks:
   # Holds PVE; never touched.
   ata-SYNTHETIC_SSD_0001:
@@ -200,6 +221,7 @@ flows:
   - service:monitoring -> nullbill tcp/9100
   - zone:mgmt -> egress-proxy tcp/3128
   - zone:build -> egress-proxy tcp/3128
+  - zone:media -> egress-proxy tcp/3128
   - service:monitoring -> egress-proxy tcp/9100
   - service:monitoring -> vpn tcp/9100
   - zone:* -> step-ca tcp/443
@@ -227,6 +249,8 @@ flows:
   - zone:build -> runner-dispatcher tcp/8443
   - service:monitoring -> runner-dispatcher tcp/8443
   - service:monitoring -> runner-dispatcher tcp/9100
+  - role:owner -> jellyfin tcp/8096
+  - service:monitoring -> jellyfin tcp/9100
   - host -> linux-runner tcp/22
   - service:operator -> linux-runner tcp/22
   - role:default -> workspace tcp/22

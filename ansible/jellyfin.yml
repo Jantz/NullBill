@@ -1,0 +1,8 @@
+# Jellyfin in the media container, with the kept disks read-only under
+# /media (docs/adr/0009-media-server.md). apply's media stage runs this,
+# then finishes Jellyfin's first-run setup with nb-jellyfin.
+- name: Media server
+  hosts: all
+  become: false
+  roles:
+    - jellyfin

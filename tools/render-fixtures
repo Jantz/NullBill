@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Render apply's build directory for every fixture class into OUT/<class>,
 the large class with a GPU passed to a VM into OUT/large-gpu-vm, and with
-its old disk kept and shared (the files guest) into OUT/large-legacy.
+its old disk kept, shared (the files guest) and played (Jellyfin) into
+OUT/large-legacy.
 
 Used by the container checks, which parse the rendered files with the real
 tools. Run from the repo root with the package installed.
@@ -11,7 +12,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests"))
-from conftest import CLASSES, fixture_config, write_raw  # noqa: E402
+from fixturedata import CLASSES, fixture_config, legacy_config, write_raw  # noqa: E402
 
 from nullbill.artifacts import render_all, write_build  # noqa: E402
 from nullbill.model import build_model  # noqa: E402
@@ -21,7 +22,7 @@ from nullbill.probe import parse  # noqa: E402
 out = Path(sys.argv[1])
 variants = [(cls, cls, fixture_config(cls)) for cls in CLASSES]
 variants.append(("large-gpu-vm", "large", {**fixture_config("large"), "gpus": {"0000:65:00.0": {"owner": "vm:windows-dev"}}}))
-variants.append(("large-legacy", "large", {**fixture_config("large"), "disks": {"ata-SYNTHETIC_HDD_0002": {"use": "legacy"}}}))
+variants.append(("large-legacy", "large", legacy_config()))
 for name, cls, config in variants:
     model = build_model(config)
     facts = parse(write_raw(out / "raw" / name, cls))

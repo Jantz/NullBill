@@ -59,6 +59,12 @@ answered items move to the decisions list at the bottom.
     - Alerts on SMART changes for every non-system disk (smartctl is already
       on the host)? Recommendation: yes, as the next change after the share
       works; the plan already warns about a disk that is not healthy.
+11. **Jellyfin on the TV** (docs/adr/0009-media-server.md). Jellyfin is
+    reachable over Tailscale only. A TV without Tailscale needs the router
+    guest to forward port 8096 from your home network, which lets every
+    device on that network reach Jellyfin's sign-in. Recommendation: use
+    Jellyfin's app with Tailscale where the TV has it (Android TV, Fire TV,
+    Apple TV); ask for the forward only for a TV that cannot.
 
 ## Defaults picked for cosmetic choices
 
@@ -67,7 +73,7 @@ answered items move to the decisions list at the bottom.
 - Addresses: router `.1`, service `.<id>`, pool clones `.128/26`, PVE host
   `.254` on mgmt. VMIDs are `2000 + id`. DNS domain `nullbill.internal`.
 - Zone egress: services and access go out directly (never into private
-  ranges); mgmt, build, inference and windows only through the proxy.
+  ranges); mgmt, build, inference, windows and media only through the proxy.
 - Proxy allow-list: Debian, Proxmox, Ubuntu, PyPI, npm, crates.io, Go,
   GitHub, Docker Hub, GHCR, Hugging Face and Windows Update, in
   `catalog.yaml` under `proxy.allow`. mgmt guests use the proxy too, so they
@@ -77,7 +83,7 @@ answered items move to the decisions list at the bottom.
 - DNS: dnsmasq on the router, one instance for direct zones that forwards
   upstream and one for the other zones that answers internal names only.
 - Tailnet access: the owner reaches the PVE host (8006, 22), router SSH,
-  Forgejo, the workspace, Grafana, the model gateway and Windows RDP; the
+  Forgejo, the workspace, Grafana, the model gateway, Jellyfin and Windows RDP; the
   default role reaches Forgejo (443, 22) and workspace SSH. Each grant
   follows a service port, and the policy carries tests that Tailscale runs
   on every push, so a policy that lets a default user reach the host is
@@ -121,6 +127,9 @@ answered items move to the decisions list at the bottom.
 - Inference engine: llama.cpp with its Vulkan backend, the model picked from
   catalog.yaml's `models` by VRAM (docs/adr/0008-local-models.md); vLLM is
   not built.
+- Media server: Jellyfin's latest release (12.4) from its repository, admin
+  `nullbill-admin`, the kept disks read-only, Quick Sync on integrated
+  Intel graphics, libraries added by you (docs/adr/0009-media-server.md).
 - Plan output: YAML with a comment above each decision.
 - Updates: unattended-upgrades on the host (Debian security only) and on
   every Linux guest (Debian security and point releases, as Debian's own
@@ -136,6 +145,7 @@ answered items move to the decisions list at the bottom.
 
 ## Decisions
 
+- Jellyfin, built into NullBill (owner, 2026-11-08).
 - Disks from a previous OS (question 10): `ntfs-3g` on the host and Samba
   in a `files` guest, approved (owner, 2026-11-07;
   docs/adr/0007-legacy-disks.md).

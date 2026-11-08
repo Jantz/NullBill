@@ -67,6 +67,10 @@ zones:
     index: 6
     description: VPN entry. The only way into the other zones.
     egress: direct
+  media:
+    index: 7
+    description: The media server, alone, with the kept disks read-only.
+    egress: proxy
 
 roles:
   owner:
@@ -116,7 +120,7 @@ services:
     workload: core
     floor: {cores: 1, memory_mib: 512, disk_gib: 4}
     ports:
-      - {port: 3128, proto: tcp, from: ["zone:mgmt", "zone:build", "zone:inference", "zone:windows"]}
+      - {port: 3128, proto: tcp, from: ["zone:mgmt", "zone:build", "zone:inference", "zone:windows", "zone:media"]}
   vpn:
     id: 11
     kind: lxc
@@ -205,6 +209,25 @@ services:
     floor: {cores: 1, memory_mib: 512, disk_gib: 4}
     ports:
       - {port: 445, proto: tcp, from: ["role:owner"]}
+  jellyfin:
+    id: 24
+    kind: lxc
+    zone: media
+    workload: media
+    description: Jellyfin, which plays the files on the disks kept from a previous OS (read-only) to the owner's devices. Not agent-managed.
+    # Jellyfin's apt repository and plugin catalogue, and where it looks up
+    # titles, posters and album details (docs/adr/0009-media-server.md).
+    proxy_allow:
+      - repo.jellyfin.org
+      - api.themoviedb.org
+      - image.tmdb.org
+      - musicbrainz.org
+      - coverartarchive.org
+      - .archive.org
+    # Transcoding takes the cores; the library's index and artwork the disk.
+    floor: {cores: 2, memory_mib: 2048, disk_gib: 16}
+    ports:
+      - {port: 8096, proto: tcp, from: ["role:owner"]}
   linux-runner:
     id: 30
     kind: vm-pool

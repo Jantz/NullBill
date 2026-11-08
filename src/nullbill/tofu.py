@@ -9,7 +9,7 @@ variables and environment, never part of the rendered files.
 
 import json
 
-from nullbill import agent, backups, ci, legacy
+from nullbill import agent, backups, ci, legacy, media
 from nullbill.flows import mac
 from nullbill.render import strip_notes
 
@@ -152,6 +152,10 @@ def _container(name: str, guest: dict, plan: dict, model: dict, storage: str) ->
             # A copy is a volume of this container: destroying it would
             # destroy the owner's only copy of those files.
             container["lifecycle"]["prevent_destroy"] = True
+    if name == media.JELLYFIN:
+        # apply sets the kept disks' bind mounts and the integrated GPU's
+        # render node as root, as for the files guest and inference.
+        container["lifecycle"] = {"ignore_changes": ["mount_point", "device_passthrough"]}
     return _in_agent_pool(container, guest)
 
 

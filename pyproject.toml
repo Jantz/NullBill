@@ -29,6 +29,7 @@ target-version = "py311"
 # The Python scripts roles install, which have no .py suffix.
 extend-include = [
   "ansible/roles/host_baseline/files/nb-backup-metrics",
+  "ansible/roles/jellyfin/files/nb-jellyfin",
   "ansible/roles/log_shipper/files/nb-log-shipper",
   "ansible/roles/operator/files/nb-log-tool-use",
   "ansible/roles/pbs/files/pbs-configure",

@@ -29,6 +29,7 @@ STAGE_TEXT = {
     "forgejo": "Set up Forgejo (Git and CI)",
     "inference": "Set up the local AI model and its gateway",
     "files": "Share your kept disks",
+    "media": "Set up Jellyfin",
     "ci": "Build the CI runner images",
     "agents": "Set up the coding agent",
     "logs": "Send logs to the log store",
@@ -89,6 +90,16 @@ ADVICE = [
         r"llama\.cpp finds no GPU|does not list the card",
         "The AI container cannot see the graphics card. Restart the server once and run setup again; if it stops "
         "here again, copy the details and report them.",
+    ),
+    (
+        r"no render node for the integrated graphics",
+        "Jellyfin was to use the processor's graphics, but the server shows none now. Probe the server again in step 2 "
+        "and run setup again; Jellyfin then transcodes on the processor itself.",
+    ),
+    (
+        r"Jellyfin refuses nullbill-admin|first-run setup was done without NullBill",
+        "Setup cannot sign in to Jellyfin as nullbill-admin. If you changed its password in Jellyfin, change it back, "
+        "or run setup once with the new one in the Jellyfin guest's /etc/nullbill/jellyfin-admin-password (docs/runbooks/media.md).",
     ),
     (
         r"signatures.*wipe|has signatures",

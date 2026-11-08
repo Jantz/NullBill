@@ -4,7 +4,7 @@ plan allows pass and everything else is refused.
 Checks are built from the plan, so a service added by YAML is verified the
 same way as the catalog's. They run over SSH as `pct exec` in one container
 per zone; backups.py adds backup age and a restore test, llm.py the local
-model through the model gateway. A check that cannot run reports SKIP,
+model through the model gateway, media.py Jellyfin. A check that cannot run reports SKIP,
 never PASS.
 """
 
@@ -15,7 +15,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
-from nullbill import agent, backups, ci, forge, lan, legacy, llm
+from nullbill import agent, backups, ci, forge, lan, legacy, llm, media
 from nullbill.errors import NullBillError
 from nullbill.flows import HOST, HOST_PORTS, resolve_flows
 from nullbill.probe import Runner
@@ -236,6 +236,7 @@ def run_verify(
             *ci.skipped(plan, reason),
             *llm.skipped(plan, reason),
             *legacy.skipped(plan, reason),
+            *media.skipped(plan, reason),
         )
         return results
     name = model["verify"]["public_name"]
@@ -268,4 +269,5 @@ def run_verify(
     add(*ci.check(plan, target, run))
     add(*llm.check(plan, target, run))
     add(*legacy.check(plan, target, run))
+    add(*media.check(plan, target, run))
     return results

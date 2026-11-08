@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from nullbill import backups, ci, lan, legacy, llm
+from nullbill import backups, ci, lan, legacy, llm, media
 from nullbill.artifacts import write_build
 from nullbill.errors import NullBillError
 from nullbill.flows import mac
@@ -84,6 +84,7 @@ class Context:
     run: Runner | None = None  # verify's runner; the real one is ssh_run
     log: list[str] = field(default_factory=list)
     files_stopped: bool = False  # apply stopped the files guest for a disk change
+    media_stopped: bool = False  # likewise the Jellyfin guest
     legacy_mounted: bool = False  # a kept disk was mounted in this run
     kept_before: set[str] | None = None  # disks disks.json protects, as this run found it
 
@@ -638,8 +639,10 @@ def legacy_disks(ctx: Context) -> None:
     gone = sorted(set(listed) - set(want))
     changed = [n for n in want if n in listed and listed[n] != (want[n]["uuid"], want[n]["mode"], want[n]["fstype"], "mounted")]
     detach_stale(ctx)
+    detach_media(ctx)
     if gone or changed:
         stop_files(ctx)
+        stop_media(ctx)
     for name in gone:
         host_out(ctx, "tofu", shlex.join([LEGACY, "unmount", name]))
         ctx.say(f"tofu: stopped keeping {legacy.LEGACY_ROOT}/{name}; its disk is left as it is")
@@ -663,6 +666,95 @@ def record_disks(ctx: Context, mounts: list[dict]) -> None:
         out.append({k: m[k] for k in keys} | {"used_bytes": sizes.get("used"), "size_bytes": sizes.get("size")})
     mounted = {m["disk"] for m in out}
     write_disks(ctx, {"mounts": out, "unconverted": sorted(kept_disks(ctx) - mounted)})
+
+
+def media_vmid(ctx: Context) -> int:
+    return ctx.model["network"]["vmid_base"] + ctx.model["services"][media.JELLYFIN]["id"]
+
+
+def media_mount_points(ctx: Context) -> tuple["MountPoints", set[int]] | None:
+    """The Jellyfin guest's kept-disk bind mount points (host path -> index,
+    value) and every mpN index in use; None while no Jellyfin guest of
+    NullBill's exists."""
+    rc, config, _ = ctx.reach.host(f"pct config {media_vmid(ctx)}")
+    if rc != 0 or f"hostname: {media.JELLYFIN}" not in config.splitlines():
+        return None
+    current, used = {}, set()
+    for line in config.splitlines():
+        key, _, value = line.partition(": ")
+        if key.startswith("mp") and key[2:].isdigit():
+            used.add(int(key[2:]))
+            if value.startswith(legacy.LEGACY_ROOT + "/"):
+                current[value.split(",", 1)[0]] = (int(key[2:]), value)
+    return current, used
+
+
+def media_running(ctx: Context) -> bool:
+    rc, out, _ = ctx.reach.host(f"pct status {media_vmid(ctx)}")
+    return rc == 0 and "running" in out
+
+
+def stop_media(ctx: Context) -> None:
+    """Like stop_files, for Jellyfin, which bind-mounts the same kept disks."""
+    if ctx.media_stopped:
+        return
+    found = media_mount_points(ctx)
+    if found is None or not found[0]:
+        return
+    if media_running(ctx):
+        host_out(ctx, "tofu", f"pct shutdown {media_vmid(ctx)} --timeout 60 --forceStop 1")
+        ctx.say("tofu: stopped the Jellyfin guest while its disks change")
+    ctx.media_stopped = True
+
+
+def detach_media(ctx: Context) -> None:
+    """Before the host unmounts anything or OpenTofu removes the guest: take
+    each kept disk the plan no longer shares off the Jellyfin guest."""
+    found = media_mount_points(ctx)
+    if found is None:
+        return
+    current, _ = found
+    keep = {m["mount"] for m in legacy.shares(ctx.bare)} if media.enabled(ctx.bare) else set()
+    stale = [f"mp{current[path][0]}" for path in sorted(set(current) - keep)]
+    if stale:
+        stop_media(ctx)
+        host_out(ctx, "tofu", f"pct set {media_vmid(ctx)} --delete {','.join(stale)}")
+        ctx.say(f"tofu: took {len(stale)} kept disk(s) off the Jellyfin guest")
+
+
+def attach_media(ctx: Context) -> None:
+    """Each shared kept disk as a read-only bind mount point of the Jellyfin
+    guest, set as root like the files guest's, then a start so it sees them."""
+    if not media.enabled(ctx.bare):
+        return
+    vmid = media_vmid(ctx)
+    found = media_mount_points(ctx)
+    if found is None:
+        raise ApplyError("tofu", f"container {vmid} is not NullBill's Jellyfin guest")
+    current, used = found
+    sets = []
+    for m in legacy.shares(ctx.bare):
+        if m["mount"] in current:
+            index, value = current[m["mount"]]
+        else:
+            index = min(i for i in range(256) if i not in used)
+            used.add(index)
+            value = ""
+        line = media.mount_point(m)
+        if not value or _mp_fields(value) != _mp_fields(line):
+            sets.append(f"--mp{index} {shlex.quote(line)}")
+    if sets:
+        if not ctx.media_stopped and media_running(ctx):
+            host_out(ctx, "tofu", f"pct shutdown {vmid} --timeout 60 --forceStop 1")
+        ctx.media_stopped = True
+        host_out(ctx, "tofu", f"pct set {vmid} {' '.join(sets)}")
+        ctx.say(f"tofu: gave the Jellyfin guest {len(sets)} kept disk(s), read-only")
+    # A disk mounted on the host after the guest started shows up in it only
+    # once the guest starts again.
+    if not ctx.media_stopped and not (ctx.legacy_mounted and legacy.shares(ctx.bare)):
+        return
+    host_out(ctx, "tofu", f"pct reboot {vmid} --timeout 60" if media_running(ctx) else f"pct start {vmid}")
+    ctx.media_stopped = False
 
 
 def mount_point(m: dict) -> str:
@@ -791,6 +883,7 @@ def stage_tofu(ctx: Context) -> None:
     forget_remade_vms(ctx)
     move_copies(ctx)
     attach_shares(ctx)
+    attach_media(ctx)
     # The host reaches the zones through the router, not its LAN gateway.
     host_files(ctx, "tofu", "/etc/systemd/system", {ROUTES_UNIT: routes_unit(ctx)})
     host_out(ctx, "tofu", f"systemctl daemon-reload && systemctl enable -q {ROUTES_UNIT} && systemctl restart {ROUTES_UNIT}")
@@ -1167,6 +1260,61 @@ def stage_files(ctx: Context) -> None:
     address = ctx.bare["guests"][FILES]["ip"]
     where = f"\\\\{address}\\<share>"
     ctx.say(f"files: from your devices on the tailnet, open {where} as user {legacy.SHARE_USER}; the page shows the password")
+
+
+def give_render_node(ctx: Context, vmid: int) -> str | None:
+    """The integrated GPU's render node as the container's devN, when the plan
+    transcodes there, set as root (as give_gpu); none when it does not. The
+    node's path, or None."""
+    pci = media.igpu(ctx.bare)
+    node = None
+    want = []
+    if pci:
+        node = host_out(ctx, "media", media.render_node(pci)).strip()
+        if not node:
+            raise ApplyError(
+                "media",
+                f"the host has no render node for the integrated graphics at {pci}; "
+                "probe again, or set media.transcode: cpu to transcode on the CPU",
+            )
+        want = [media.device(node)]
+    current = media.current_devices(host_out(ctx, "media", f"pct config {vmid}"))
+    if sorted(current.values()) == want:
+        return node
+    if current:
+        host_out(ctx, "media", f"pct set {vmid} --delete {','.join(f'dev{n}' for n in sorted(current))}")
+    if want:
+        host_out(ctx, "media", f"pct set {vmid} --dev0 {shlex.quote(want[0])}")
+    running = "status: running" in host_out(ctx, "media", f"pct status {vmid}")
+    host_out(ctx, "media", f"pct reboot {vmid} --timeout 120" if running else f"pct start {vmid}")
+    what = "gave the Jellyfin guest the integrated graphics" if want else "took the graphics off the Jellyfin guest"
+    ctx.say(f"media: {what} and restarted it")
+    return node
+
+
+NB_JELLYFIN = "/usr/local/sbin/nb-jellyfin"
+
+
+def stage_media(ctx: Context) -> None:
+    """Jellyfin in its guest: the integrated graphics when it transcodes there,
+    the role, then nb-jellyfin finishes its first-run setup at once (until
+    then anyone who reaches it could make themselves its admin) and sets
+    how it transcodes."""
+    if not media.enabled(ctx.bare):
+        return
+    guest = ctx.bare["guests"][media.JELLYFIN]
+    node = give_render_node(ctx, guest["vmid"])
+    run_playbook(ctx, "media", "jellyfin.yml", media.JELLYFIN, {"jellyfin_proxy": proxy_url(ctx, media.JELLYFIN)})
+    guest_out(ctx, "media", media.JELLYFIN, [NB_JELLYFIN, "wait"])
+    if guest_out(ctx, "media", media.JELLYFIN, [NB_JELLYFIN, "setup", media.ADMIN_USER]).strip() == "changed":
+        ctx.say(f"media: finished Jellyfin's first-run setup; its admin is {media.ADMIN_USER}")
+    encoding = ["qsv", node] if node else ["none"]
+    if guest_out(ctx, "media", media.JELLYFIN, [NB_JELLYFIN, "encoding", *encoding]).strip() == "changed":
+        ctx.say(f"media: Jellyfin transcodes {'with Quick Sync on the integrated graphics' if node else 'on the CPU'}")
+    password = guest_out(ctx, "media", media.JELLYFIN, ["cat", media.PASSWORD_FILE]).strip()
+    ctx.secrets.set("jellyfin_admin_password", password)
+    url = f"http://{guest['ip']}:{media.PORT}"
+    ctx.say(f"media: from your devices on the tailnet Jellyfin is {url}; sign in as {media.ADMIN_USER}, the page shows the password")
 
 
 def ssh_user_ca(ctx: Context, stage: str) -> str:
@@ -1638,6 +1786,7 @@ STAGES: list[Stage] = [
     ("forgejo", stage_forgejo),
     ("inference", stage_inference),
     ("files", stage_files),
+    ("media", stage_media),
     ("ci", stage_ci),
     ("agents", stage_agents),
     ("logs", stage_logs),

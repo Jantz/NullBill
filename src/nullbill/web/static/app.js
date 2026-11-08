@@ -8,6 +8,7 @@ const LABELS = {
   "agents": ["AI agents", "The operator and a workspace container for coding agents."],
   "linux-ci": ["Linux CI runners", "Run Forgejo Actions jobs in throwaway Linux VMs."],
   "inference": ["Local AI models on the GPU", "Needs more memory."],
+  "media": ["Media server (Jellyfin)", "Plays the films, series and music on the disks you keep below, on your devices over Tailscale."],
   "windows-ci": ["Windows CI runners", "Needs a Windows ISO and more memory."],
   "windows-dev": ["A Windows desktop VM", "Upload the Windows 11 ISO in Proxmox first; you install Windows in it."],
 };

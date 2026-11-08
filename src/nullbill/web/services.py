@@ -6,7 +6,7 @@ the plan; passwords are the secrets apply keeps, revealed on request only.
 so the page can say whether it answers.
 """
 
-from nullbill import legacy
+from nullbill import legacy, media
 
 
 def shares(plan: dict) -> list[str]:
@@ -21,6 +21,7 @@ PASSWORDS = {
     "forgejo": "forgejo_admin_password",
     "files": "files_share_password",
     "model-gateway": "model_gateway_key",
+    "jellyfin": "jellyfin_admin_password",
 }
 
 # Guests that run on their own and have nothing for the owner to open.
@@ -91,6 +92,26 @@ def _entries(plan: dict, guests: dict) -> list[dict]:
                 "user": "nbshare",
                 "password": "files",
                 "watch": "files",
+            }
+        )
+    if ip(media.JELLYFIN):
+        library = media.library(plan)
+        folders = ", ".join(f"{media.MEDIA_ROOT}/{n}" for n in library)
+        out.append(
+            {
+                "name": media.JELLYFIN,
+                "title": "Jellyfin",
+                "what": "Films, series and music from the disks you kept, in the browser or Jellyfin's apps for phones and TVs.",
+                "url": f"http://{ip(media.JELLYFIN)}:{media.PORT}/",
+                "user": media.ADMIN_USER,
+                "password": media.JELLYFIN,
+                "how": (
+                    f"In Jellyfin open Dashboard, Libraries, Add, and pick a folder under {folders}. "
+                    "The disks stay read-only; Jellyfin keeps its own data."
+                    if library
+                    else "Keep a disk with your media in step 3 and run setup again; Jellyfin then shows it under /media."
+                ),
+                "watch": media.JELLYFIN,
             }
         )
     if ip("workspace"):

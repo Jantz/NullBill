@@ -248,6 +248,8 @@ inference:
   gpus:
     - '0000:17:00.0'
     - 0000:65:00.0
+# Not planned.
+media: {}
 disks:
   # Carries signatures; only an explicit pin with wipe: true changes that.
   ata-SYNTHETIC_HDD_0002:

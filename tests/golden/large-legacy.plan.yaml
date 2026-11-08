@@ -8,18 +8,18 @@ host:
   # Left to PVE itself; pin with host.reserve.memory_mib.
   reserve_mib: 4096
   # VMs in full, containers at 50% of their limit.
-  guests_mib: 89600
+  guests_mib: 90624
   # Every guest's memory limit added up; containers take theirs only as they use it.
-  limits_mib: 94720
+  limits_mib: 96768
   # Not assigned to any guest.
-  unallocated_mib: 163921
+  unallocated_mib: 162897
   # Off. host.console.enabled shows the NullBill page on a monitor plugged into the server.
   console:
     enabled: false
 disk:
   storage: local-lvm
   # Includes one golden template per pool.
-  needed_gib: 1632
+  needed_gib: 1648
   free_gib: 1664
   # Holds the downloaded container template and cloud image.
   media: local
@@ -57,6 +57,11 @@ zones:
     subnet: 10.42.6.0/24
     gateway: 10.42.6.1
     egress: direct
+  media:
+    bridge: vmbr107
+    subnet: 10.42.7.0/24
+    gateway: 10.42.7.1
+    egress: proxy
 guests:
   router:
     kind: vm
@@ -74,6 +79,7 @@ guests:
       inference: 10.42.4.1
       windows: 10.42.5.1
       access: 10.42.6.1
+      media: 10.42.7.1
   nullbill:
     kind: lxc
     zone: mgmt
@@ -164,6 +170,14 @@ guests:
     disk_gib: 4
     vmid: 2023
     ip: 10.42.1.23
+  jellyfin:
+    kind: lxc
+    zone: media
+    cores: 2
+    memory_mib: 2048
+    disk_gib: 16
+    vmid: 2024
+    ip: 10.42.7.24
   linux-runner:
     kind: vm-pool
     zone: build
@@ -256,6 +270,12 @@ inference:
   gpus:
     - '0000:17:00.0'
     - 0000:65:00.0
+media:
+  # No integrated Intel graphics in the probe; switch them on in the firmware to transcode there.
+  transcode: cpu
+  # Kept disks, read-only. Add each folder as a library in Jellyfin.
+  library:
+    - /media/data
 disks:
   # Kept as it is: mounted read-only under /mnt/nb-legacy and shared to the owner over the VPN as data (docs/runbooks/legacy-disk.md). Not backed up by NullBill; keep a copy elsewhere. Left alone: partition 1 (Microsoft reserved).
   ata-SYNTHETIC_HDD_0002:
@@ -300,6 +320,7 @@ flows:
   - zone:build -> egress-proxy tcp/3128
   - zone:inference -> egress-proxy tcp/3128
   - zone:windows -> egress-proxy tcp/3128
+  - zone:media -> egress-proxy tcp/3128
   - service:monitoring -> egress-proxy tcp/9100
   - service:monitoring -> vpn tcp/9100
   - zone:* -> step-ca tcp/443
@@ -330,6 +351,8 @@ flows:
   - service:monitoring -> runner-dispatcher tcp/9100
   - role:owner -> files tcp/445
   - service:monitoring -> files tcp/9100
+  - role:owner -> jellyfin tcp/8096
+  - service:monitoring -> jellyfin tcp/9100
   - host -> linux-runner tcp/22
   - service:operator -> linux-runner tcp/22
   - role:default -> workspace tcp/22

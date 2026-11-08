@@ -233,3 +233,23 @@ def test_results_are_told_in_order_as_they_come_with_probes_run_side_by_side(fac
     results = run_verify(plan, model, "root@pve.internal", slow, lambda h, p: "timeout", lambda n: PUBLIC, say=told.append)
     assert told == results
     assert 1 < most[0] <= verify.PARALLEL
+
+
+def test_jellyfin_is_checked_inside_its_guest(facts):
+    plan, model = setup(facts, "small")
+    results = run_verify(plan, model, "root@pve.internal", firewall(plan, model), lambda h, p: "timeout", lambda n: PUBLIC)
+    by = statuses(results)
+    assert by["FAIL"] == []
+    names = [r.name for r in by["PASS"]]
+    for name in (
+        "vpn (access) reaches jellyfin tcp/8096",
+        "jellyfin (media) is refused deb.debian.org directly by IP",
+        "jellyfin (media) is refused a bare IP by the proxy",
+        "jellyfin answers with its first-run setup done",
+        "jellyfin shows nothing without sign-in",
+        "jellyfin transcodes with Quick Sync",
+        "jellyfin's transcoder opens the integrated graphics",
+    ):
+        assert name in names
+    skipped = run_verify(plan, model, None, firewall(plan, model))
+    assert "jellyfin answers with its first-run setup done" in [r.name for r in statuses(skipped)["SKIP"]]

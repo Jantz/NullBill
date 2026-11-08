@@ -424,7 +424,7 @@ certificates.
   runners yet. Installing Windows in the desktop VM is done by hand
   ([windows-desktop.md](windows-desktop.md)). Local AI models are set up by
   setup itself ([local-models.md](local-models.md)); turn Secure Boot off
-  first if you tick them.
+  first if you tick them. So is Jellyfin ([media.md](media.md)).
 - Your devices do not resolve the services' names
   (`forgejo.nullbill.internal`) over Tailscale yet, and the certificate
   authority is not limited to those names, so your devices should not

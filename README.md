@@ -27,6 +27,9 @@ is that first run.
   You get an alert when something waits for you.
 - **An on-site screen**, optional: the setup page on a monitor plugged into
   the server.
+- **Jellyfin**, optional: the films, series and music on a disk you kept,
+  on your phone, TV app or browser
+  ([media.md](docs/runbooks/media.md)).
 
 ## How it works, in short
 

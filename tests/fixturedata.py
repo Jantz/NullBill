@@ -24,3 +24,10 @@ def write_raw(raw: Path, fixture: str) -> Path:
 
 def fixture_config(fixture: str) -> dict:
     return yaml.safe_load((FIXTURES / f"{fixture}.config.yaml").read_text()) or {}
+
+
+def legacy_config() -> dict:
+    """The large class with its old NTFS disk kept, shared and played by Jellyfin."""
+    config = fixture_config("large")
+    workloads = [*config["intent"]["workloads"], "media"]
+    return {**config, "intent": {**config["intent"], "workloads": workloads}, "disks": {"ata-SYNTHETIC_HDD_0002": {"use": "legacy"}}}

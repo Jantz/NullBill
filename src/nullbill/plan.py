@@ -7,10 +7,10 @@ of them, so the owner sees every problem in one run.
 import ipaddress
 from typing import Any
 
-from nullbill import backups, ci, legacy
+from nullbill import backups, ci, legacy, media
 from nullbill.errors import NullBillError
 from nullbill.proxy import allows
-from nullbill.render import Note
+from nullbill.render import Note, strip_notes
 from nullbill.tailnet import check_tailnet
 
 SIZE_KEYS = ("cores", "memory_mib", "disk_gib")
@@ -570,6 +570,8 @@ def build_plan(model: dict, facts: dict) -> dict:
     errors.raise_if_any()
 
     console = _console(model, facts, gpu_section, errors)
+    shares = [m["share"] for m in legacy.shares(strip_notes({"disks": disk_section}))]
+    media_section = media.plan_section(model, facts, planned, shares, errors)
     errors.raise_if_any()
 
     zones = _zones(model, planned)
@@ -618,6 +620,7 @@ def build_plan(model: dict, facts: dict) -> dict:
         }
         if engine and llm
         else Note({}, "Not planned."),
+        "media": media_section,
         "disks": disk_section,
         **_copies(facts),
         "backups": _backups(planned, pbs),

@@ -305,6 +305,13 @@ $defs:
           engine: {enum: [llama.cpp]}
           # A name from models.
           model: {$ref: "#/$defs/model_name"}
+      media:
+        type: object
+        additionalProperties: false
+        properties:
+          # Jellyfin transcodes on the host's integrated Intel graphics when
+          # the probe finds them (auto), or on the CPU.
+          transcode: {enum: [auto, cpu]}
 
   model:
     type: object
