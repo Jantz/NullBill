@@ -67,6 +67,11 @@
     dest: "{{ inference_headers_dir }}/src"
     version: "{{ inference_vulkan_headers_tag }}"
     depth: 1
+    # A second run over the shallow clone of a tag makes the module's fetch
+    # fail ("'NoneType' object has no attribute 'startswith'", ansible-core
+    # 2.19). dest is per tag, so a new pin clones afresh; the assert below
+    # still checks the commit.
+    update: false
   environment: "{{ inference_git_env }}"
   register: inference_headers_git
 
@@ -91,6 +96,11 @@
     dest: "{{ inference_llama_dir }}/src"
     version: "{{ inference_llama_tag }}"
     depth: 1
+    # A second run over the shallow clone of a tag makes the module's fetch
+    # fail ("'NoneType' object has no attribute 'startswith'", ansible-core
+    # 2.19). dest is per tag, so a new pin clones afresh; the assert below
+    # still checks the commit.
+    update: false
   environment: "{{ inference_git_env }}"
   register: inference_llama_git
 
