@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from nullbill import backups, ci, lan, legacy
+from nullbill import backups, ci, lan, legacy, llm
 from nullbill.artifacts import write_build
 from nullbill.errors import NullBillError
 from nullbill.flows import mac
@@ -908,6 +908,7 @@ TLS = {
     "monitoring": ("www-data", "systemctl reload nginx"),
     "forgejo": ("www-data", "systemctl reload nginx"),
     "runner-dispatcher": ("nb-dispatcher", "systemctl restart nb-dispatcher"),
+    llm.GATEWAY: ("www-data", "systemctl reload nginx"),
 }
 
 
@@ -1013,7 +1014,7 @@ ROOT_CA = "/etc/nullbill/tls/root_ca.crt"  # tls_cert writes it on every guest i
 def tls_targets(ctx: Context) -> list[str]:
     """Endpoints that speak TLS from the first byte, so blackbox can see their
     certificates renew; PostgreSQL negotiates TLS inside its own protocol."""
-    ports = {"step-ca": 443, "monitoring": 3100, "forgejo": 443, "runner-dispatcher": 8443}
+    ports = {"step-ca": 443, "monitoring": 3100, "forgejo": 443, "runner-dispatcher": 8443, llm.GATEWAY: llm.GATEWAY_PORT}
     return [f"{fqdn(ctx, n)}:{p}" for n, p in ports.items() if planned(ctx, n)]
 
 
@@ -1058,6 +1059,99 @@ def stage_forgejo(ctx: Context) -> None:
     # Changed at first login; kept so the owner has it for that login.
     password = guest_out(ctx, "forgejo", "forgejo", ["cat", "/etc/forgejo/admin-password"]).strip()
     ctx.secrets.set("forgejo_admin_password", password)
+
+
+# The container's memory limit while llama.cpp builds: one file of its
+# Vulkan backend took 1.8 GiB to compile (a measured peak, /usr/bin/time -v
+# in a Debian 12 container), more than the inference floor leaves.
+BUILD_MEMORY_MIB = 4096
+
+
+def give_gpu(ctx: Context, vmid: int, gpus: list[str]) -> None:
+    """The inference cards' device nodes as devN entries of the container,
+    set as root over SSH (PVE gives device passthrough to root@pam alone),
+    then a restart so the container sees them."""
+    minors = []
+    for pci in gpus:
+        info = f"/proc/driver/nvidia/gpus/{pci.lower()}/information"
+        out = host_out(ctx, "inference", f"awk '/^Device Minor:/ {{print $3}}' {info} 2>/dev/null || true")
+        if not out.strip().isdigit():
+            raise ApplyError("inference", f"the NVIDIA driver does not list the card at {pci}; nvidia-smi on the host shows what it sees")
+        minors.append(int(out))
+    want = llm.wanted_devices(minors)
+    current = llm.current_devices(host_out(ctx, "inference", f"pct config {vmid}"))
+    if sorted(current.values()) == sorted(want):
+        return
+    if current:
+        host_out(ctx, "inference", f"pct set {vmid} --delete {','.join(f'dev{n}' for n in sorted(current))}")
+    host_out(ctx, "inference", f"pct set {vmid} " + " ".join(f"--dev{n} {shlex.quote(v)}" for n, v in enumerate(want)))
+    running = "status: running" in host_out(ctx, "inference", f"pct status {vmid}")
+    host_out(ctx, "inference", f"pct reboot {vmid} --timeout 120" if running else f"pct start {vmid}")
+    ctx.say(f"inference: gave the inference container {len(minors)} graphics card(s) and restarted it")
+
+
+def trust_ca(ctx: Context, stage: str, names: list[str]) -> None:
+    """step-ca's root in each guest's system store, so its clients check the
+    certificates NullBill's services present."""
+    root = ca_root(ctx, stage)
+    install = "cat > /usr/local/share/ca-certificates/nullbill-root.crt && update-ca-certificates >/dev/null"
+    for name in names:
+        guest_out(ctx, stage, name, ["sh", "-c", install], stdin=root)
+
+
+def stage_inference(ctx: Context) -> None:
+    """NVIDIA's driver on the host, the card in the inference container,
+    llama.cpp serving the planned model there, and LiteLLM in front."""
+    if not llm.enabled(ctx.bare):
+        return
+    section = ctx.bare["inference"]
+    name, model = llm.model(ctx.bare, ctx.model)
+    version, sha256 = llm.nvidia_pin()
+    guest = ctx.bare["guests"][llm.INFERENCE]
+    vmid = guest["vmid"]
+    loaded = host_out(ctx, "inference", "cat /sys/module/nvidia/version 2>/dev/null || true").strip()
+    if loaded and loaded != version:
+        # The container holds the old driver open, and its user space must
+        # change along with it.
+        host_out(ctx, "inference", f"pct shutdown {vmid} --timeout 120 --forceStop 1")
+        ctx.say(f"inference: stopped the inference container to replace NVIDIA's driver {loaded} with {version}")
+    run_playbook(ctx, "inference", "nvidia-host.yml", None)
+    give_gpu(ctx, vmid, section["gpus"])
+    if "status: running" not in host_out(ctx, "inference", f"pct status {vmid}"):
+        host_out(ctx, "inference", f"pct start {vmid}")
+    backend_key = ctx.secrets.ensure("inference_key", lambda: secrets.token_urlsafe(32))
+    variables = {
+        "inference_nvidia_version": version,
+        "inference_nvidia_sha256": sha256,
+        "inference_model_name": name,
+        "inference_model_url": model["url"],
+        "inference_model_sha256": model["sha256"],
+        "inference_context": model["context"],
+        "inference_listen": guest["ip"],
+        "inference_port": llm.INFERENCE_PORT,
+        "inference_api_key": backend_key,
+    }
+    ctx.say(f"inference: {name}; the first run builds llama.cpp and downloads the model, which takes a while")
+    lift = guest["memory_mib"] < BUILD_MEMORY_MIB
+    if lift:
+        host_out(ctx, "inference", f"pct set {vmid} --memory {BUILD_MEMORY_MIB}")
+    try:
+        run_playbook(ctx, "inference", "inference.yml", llm.INFERENCE, variables)
+    finally:
+        if lift:
+            host_out(ctx, "inference", f"pct set {vmid} --memory {guest['memory_mib']}")
+    gateway = {
+        "model_gateway_domain": fqdn(ctx, llm.GATEWAY),
+        "model_gateway_port": llm.GATEWAY_PORT,
+        "model_gateway_key": ctx.secrets.ensure("model_gateway_key", lambda: "sk-" + secrets.token_urlsafe(32)),
+        "model_gateway_model": name,
+        "model_gateway_backend": f"http://{fqdn(ctx, llm.INFERENCE)}:{llm.INFERENCE_PORT}/v1",
+        "model_gateway_backend_key": backend_key,
+    }
+    run_playbook(ctx, "inference", "model-gateway.yml", llm.GATEWAY, gateway)
+    trust_ca(ctx, "inference", llm.gateway_clients(ctx.bare, ctx.model))
+    url = f"https://{fqdn(ctx, llm.GATEWAY)}:{llm.GATEWAY_PORT}/v1"
+    ctx.say(f"inference: the model gateway serves {name} (also as local) at {url}; the page shows its key")
 
 
 def stage_files(ctx: Context) -> None:
@@ -1542,6 +1636,7 @@ STAGES: list[Stage] = [
     ("postgres", stage_postgres),
     ("monitoring", stage_monitoring),
     ("forgejo", stage_forgejo),
+    ("inference", stage_inference),
     ("files", stage_files),
     ("ci", stage_ci),
     ("agents", stage_agents),

@@ -1,0 +1,7 @@
+# NVIDIA's Linux driver, the release
+# https://download.nvidia.com/XFree86/Linux-x86_64/latest.txt named on
+# 2026-11-08; the checksum is NVIDIA's own .run.sha256sum next to it. The
+# inference container installs the same release's user space, which must
+# match the kernel module exactly.
+nvidia_host_version: 595.104.02
+nvidia_host_sha256: e421c202e4c79f58c3c7f3161bbe71454ebb3d88936f88205a0e327cd04c59ca

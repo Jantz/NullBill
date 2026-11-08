@@ -3,8 +3,9 @@ plan allows pass and everything else is refused.
 
 Checks are built from the plan, so a service added by YAML is verified the
 same way as the catalog's. They run over SSH as `pct exec` in one container
-per zone; backups.py adds backup age and a restore test. A check that cannot
-run reports SKIP, never PASS.
+per zone; backups.py adds backup age and a restore test, llm.py the local
+model through the model gateway. A check that cannot run reports SKIP,
+never PASS.
 """
 
 import shlex
@@ -14,7 +15,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
-from nullbill import agent, backups, ci, forge, lan, legacy
+from nullbill import agent, backups, ci, forge, lan, legacy, llm
 from nullbill.errors import NullBillError
 from nullbill.flows import HOST, HOST_PORTS, resolve_flows
 from nullbill.probe import Runner
@@ -233,6 +234,7 @@ def run_verify(
             *agent.skipped(plan, reason),
             *forge.skipped(plan, reason),
             *ci.skipped(plan, reason),
+            *llm.skipped(plan, reason),
             *legacy.skipped(plan, reason),
         )
         return results
@@ -264,5 +266,6 @@ def run_verify(
     add(*agent.check(plan, target, run))
     add(*forge.check(plan, target, run))
     add(*ci.check(plan, target, run))
+    add(*llm.check(plan, target, run))
     add(*legacy.check(plan, target, run))
     return results

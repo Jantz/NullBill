@@ -27,6 +27,7 @@ STAGE_TEXT = {
     "postgres": "Set up the database",
     "monitoring": "Set up monitoring and alerts",
     "forgejo": "Set up Forgejo (Git and CI)",
+    "inference": "Set up the local AI model and its gateway",
     "files": "Share your kept disks",
     "ci": "Build the CI runner images",
     "agents": "Set up the coding agent",
@@ -74,6 +75,21 @@ ADVICE = [
     ),
     (r"could not read VRAM", "In step 3, give the graphics card's memory in GB, as on its box, then press Save and plan."),
     (r"no host-shared GPU budgets VRAM", "Untick Local AI models in step 3, then press Save and plan."),
+    (
+        r"nouveau driver holds the graphics card",
+        "Restart the server once (in Proxmox: the node, then Reboot), then press Run setup again. "
+        "The card's old driver lets go of it only at a restart.",
+    ),
+    (
+        r"NVIDIA driver did not load|Secure Boot",
+        "The graphics card's driver would not load, most likely because Secure Boot is on. Turn Secure Boot off in the "
+        "server's BIOS, start it again and run setup again (docs/runbooks/local-models.md).",
+    ),
+    (
+        r"llama\.cpp finds no GPU|does not list the card",
+        "The AI container cannot see the graphics card. Restart the server once and run setup again; if it stops "
+        "here again, copy the details and report them.",
+    ),
     (
         r"signatures.*wipe|has signatures",
         "A disk holds data. In step 3, choose what to do with it, and type the end of its name to erase it.",

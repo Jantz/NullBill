@@ -118,7 +118,9 @@ answered items move to the decisions list at the bottom.
 - CI: a job runs on its own throwaway clone, directly as the user `runner`
   (no Docker), with the label `linux`. A job may run for at most 6 hours.
   Set both per pool through the dispatcher's pool entries (#22).
-- Inference engine: llama.cpp for one GPU, vLLM for several; pinnable.
+- Inference engine: llama.cpp with its Vulkan backend, the model picked from
+  catalog.yaml's `models` by VRAM (docs/adr/0008-local-models.md); vLLM is
+  not built.
 - Plan output: YAML with a comment above each decision.
 - Updates: unattended-upgrades on the host (Debian security only) and on
   every Linux guest (Debian security and point releases, as Debian's own

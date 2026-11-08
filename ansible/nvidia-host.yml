@@ -1,0 +1,8 @@
+# NVIDIA's driver on the PVE host, for a card the host shares with the
+# inference container. apply's inference stage runs it, then gives the
+# container the card's device nodes.
+- name: NVIDIA driver on the PVE host
+  hosts: all
+  become: false
+  roles:
+    - nvidia_host

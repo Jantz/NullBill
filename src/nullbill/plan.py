@@ -145,6 +145,10 @@ def _gpus(model: dict, facts: dict, planned: dict, errors: _Errors) -> tuple[dic
             errors.append(f"gpus.{gpu['pci']}: VRAM budgets total {sum(consumers.values())} MiB, the GPU has {vram} MiB")
         entry["consumers"] = consumers
         if "inference" in consumers:
+            # The host driver and the container's user space are NVIDIA's
+            # (ansible/roles/nvidia_host, inference).
+            if gpu["vendor"] != "nvidia":
+                errors.append(f"gpus.{gpu['pci']}: local models run on NVIDIA cards only so far; {gpu['name']} is {gpu['vendor']}")
             inference_gpus.append(gpu["pci"])
         section[gpu["pci"]] = Note(entry, "Owned by the host and shared; consumers list their VRAM budget in MiB.")
     return section, inference_gpus
@@ -158,6 +162,27 @@ def _engine(model: dict, gpus: list[str]) -> Note | None:
         if rule["min_gpus"] <= len(gpus) <= rule.get("max_gpus", len(gpus)):
             return Note(rule["engine"], f"Chosen for {len(gpus)} inference GPU(s) by the catalog engine table.")
     return None
+
+
+def _model(model: dict, gpus: dict, inference_gpus: list[str], errors: _Errors) -> Note | None:
+    """The local model: pinned, or the largest from the catalog's models
+    that fits the VRAM the inference GPUs budget to inference."""
+    budget = sum(gpus[pci].value["consumers"].get("inference", 0) for pci in inference_gpus)
+    models = model["models"]
+    pinned = model.get("inference", {}).get("model")
+    if pinned:
+        if pinned not in models:
+            errors.append(f"inference.model: {pinned!r} is not in models; known: {', '.join(sorted(models))}")
+            return None
+        if models[pinned]["vram_mib"] > budget:
+            errors.append(f"inference.model: {pinned} needs {models[pinned]['vram_mib']} MiB of VRAM, inference has {budget} MiB")
+        return Note(pinned, "Pinned in config.yaml.")
+    fits = [name for name, m in models.items() if m["vram_mib"] <= budget]
+    if not fits:
+        errors.append(f"inference: no model in models fits the {budget} MiB of VRAM inference has")
+        return None
+    best = max(fits, key=lambda name: (models[name]["vram_mib"], name))
+    return Note(best, f"The largest of the catalog's models that fits the {budget} MiB of VRAM inference has.")
 
 
 def guest_storage(facts: dict) -> dict | None:
@@ -539,6 +564,7 @@ def build_plan(model: dict, facts: dict) -> dict:
     if "inference" in planned and not inference_gpus:
         errors.append("intent asks for inference, but no host-shared GPU budgets VRAM to it")
     engine = _engine(model, inference_gpus) if "inference" in planned else None
+    llm = _model(model, gpu_section, inference_gpus, errors) if "inference" in planned and inference_gpus else None
     sizes, counts, capacity = _size(model, planned, facts, errors)
     disk_section, pbs = _disks(model, facts, errors, want_pbs="pbs" in planned, capacity=capacity["disk"])
     errors.raise_if_any()
@@ -584,7 +610,14 @@ def build_plan(model: dict, facts: dict) -> dict:
         "zones": Note(zones, "Uplink-less bridges; the router guest routes between them."),
         "guests": guests,
         "gpus": gpu_section or Note({}, "No discrete GPU."),
-        "inference": {"engine": engine} if engine else Note({}, "Not planned."),
+        "inference": {
+            "engine": engine,
+            "model": llm,
+            "model_mib": Note(model["models"][llm.value]["size_mib"], "The model file; verify expects most of it in VRAM."),
+            "gpus": Note(inference_gpus, "Host-shared GPUs that budget VRAM to inference."),
+        }
+        if engine and llm
+        else Note({}, "Not planned."),
         "disks": disk_section,
         **_copies(facts),
         "backups": _backups(planned, pbs),

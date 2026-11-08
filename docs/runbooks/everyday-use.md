@@ -22,6 +22,7 @@ is `10.42.<zone index>.<service id>`; its number is `2000 + <service id>`.
 | Kept disk share | `\\10.42.1.23\<share>` | `nbshare`, **Show password** on the page |
 | Workspace | SSH to `10.42.3.19` | see [Workspace](#workspace) |
 | Coding agent | inside the operator guest (2016) | see [Coding agent](#coding-agent) |
+| Model gateway (local AI) | `https://model-gateway.nullbill.internal:4000/v1`, with a hosts line for `10.42.4.21` | the API key from **Show password** on the Services card (or **Show the key** in step 3); see [local-models.md](local-models.md) |
 | Windows desktop | Remote Desktop to `10.42.5.22` | the account you make when installing ([windows-desktop.md](windows-desktop.md)) |
 
 The other guests have nothing for you to open: the router, the internet

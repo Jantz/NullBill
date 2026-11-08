@@ -1,0 +1,138 @@
+- name: Keys and model are set
+  ansible.builtin.assert:
+    that:
+      - model_gateway_key is match('sk-[A-Za-z0-9_-]{20,}$')
+      - model_gateway_backend_key | length >= 16
+      - "'\n' not in model_gateway_backend_key"
+      - model_gateway_model | length > 0
+    fail_msg: apply supplies both keys from sops and the model from the plan
+
+- name: Certificate from the tls_cert role
+  ansible.builtin.stat:
+    path: "/etc/nullbill/tls/{{ model_gateway_tls_name }}.key"
+  register: model_gateway_tls_key
+
+- name: The certificate and step-ca's root are in place
+  ansible.builtin.assert:
+    that: model_gateway_tls_key.stat.exists and model_gateway_tls_key.stat.gr_name == "www-data"
+    fail_msg: "run tls-cert.yml for {{ model_gateway_tls_name }} with tls_cert_group=www-data first"
+
+# curl: nullbill verify asks the model through the gateway from here (llm.py).
+- name: Python and nginx from Debian
+  ansible.builtin.apt:
+    name: [python3-venv, nginx-light, ca-certificates, curl]
+    update_cache: true
+
+- name: litellm user
+  ansible.builtin.user:
+    name: litellm
+    system: true
+    home: /var/lib/litellm
+    create_home: false
+    shell: /usr/sbin/nologin
+    password: "!"
+
+- name: State directory
+  ansible.builtin.file:
+    path: /var/lib/litellm
+    state: directory
+    owner: litellm
+    group: litellm
+    mode: "0750"
+
+# A new version or lock gets a new virtualenv; the unit switches over.
+- name: Where this version lives
+  ansible.builtin.set_fact:
+    model_gateway_venv: "/opt/litellm/{{ model_gateway_version }}-{{ (lookup('ansible.builtin.file', 'requirements.txt') | hash('sha256'))[:12] }}"
+
+- name: Install directory
+  ansible.builtin.file:
+    path: /opt/litellm
+    state: directory
+    mode: "0755"
+
+- name: The pinned dependencies
+  ansible.builtin.copy:
+    src: requirements.txt
+    dest: "/opt/litellm/requirements-{{ model_gateway_version }}.txt"
+    mode: "0644"
+
+# A virtualenv cannot be moved (its scripts name their interpreter by
+# path), so a half-made one is made again; the marker is written last.
+- name: LiteLLM in its own virtualenv, every file checked against its hash
+  ansible.builtin.shell: |
+    set -e
+    rm -rf {{ model_gateway_venv }}
+    python3 -m venv {{ model_gateway_venv }}
+    {{ model_gateway_venv }}/bin/pip install --quiet --no-deps --only-binary=:all: --require-hashes \
+      -r /opt/litellm/requirements-{{ model_gateway_version }}.txt
+    touch {{ model_gateway_venv }}/.nullbill-installed
+  args:
+    executable: /bin/bash
+    creates: "{{ model_gateway_venv }}/.nullbill-installed"
+  environment: "{{ {'https_proxy': downloads_proxy} if downloads_proxy | default('') else {} }}"
+  register: model_gateway_pip
+  until: model_gateway_pip is succeeded
+  retries: "{{ downloads_retries }}"
+  delay: "{{ downloads_delay }}"
+  notify: Restart litellm
+
+- name: Settings directory
+  ansible.builtin.file:
+    path: /etc/litellm
+    state: directory
+    owner: root
+    group: litellm
+    mode: "0750"
+
+- name: Gateway settings
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: /etc/litellm/config.yaml
+    owner: root
+    group: litellm
+    mode: "0640"
+  notify: Restart litellm
+
+- name: Keys
+  ansible.builtin.template:
+    src: env.j2
+    dest: /etc/litellm/env
+    owner: root
+    group: litellm
+    mode: "0640"
+  no_log: true
+  notify: Restart litellm
+
+- name: litellm unit
+  ansible.builtin.template:
+    src: litellm.service.j2
+    dest: /etc/systemd/system/litellm.service
+    mode: "0644"
+  notify: Restart litellm
+
+- name: No default nginx site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Reload nginx
+
+- name: HTTPS in front of LiteLLM
+  ansible.builtin.template:
+    src: nullbill-model-gateway.conf.j2
+    dest: /etc/nginx/conf.d/nullbill-model-gateway.conf
+    mode: "0644"
+  notify: Reload nginx
+
+- name: nginx accepts its configuration
+  ansible.builtin.command: nginx -t
+  changed_when: false
+
+- name: Run LiteLLM and nginx
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+  loop: [litellm, nginx]
+  when: model_gateway_manage_services | bool

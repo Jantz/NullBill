@@ -1,0 +1,25 @@
+# LiteLLM's proxy with every dependency pinned by hash (files/requirements.txt,
+# for Debian 12's Python 3.11). Made with uv from files/requirements.in:
+#   uv pip compile requirements.in --generate-hashes --python-version 3.11 \
+#     --python-platform x86_64-manylinux_2_36 -o requirements.txt
+# pip installs it with --require-hashes and wheels only, so a changed or
+# newly published file fails the install instead of running.
+model_gateway_version: 1.108.3
+
+# The name clients use. nginx serves HTTPS on model_gateway_port with the
+# certificate tls_cert keeps renewed for it (group www-data); LiteLLM itself
+# listens on localhost only.
+model_gateway_domain: model-gateway.nullbill.internal
+model_gateway_tls_name: "{{ model_gateway_domain }}"
+model_gateway_port: 4000
+
+# The key clients send (Authorization: Bearer). apply keeps it in sops and
+# the page shows it. LiteLLM wants it to start with sk-.
+model_gateway_key: ""
+
+# The local model on the inference guest (llama.cpp), and the key it asks for.
+model_gateway_model: ""
+model_gateway_backend: http://inference.nullbill.internal:8080/v1
+model_gateway_backend_key: ""
+
+model_gateway_manage_services: true

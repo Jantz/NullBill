@@ -58,17 +58,20 @@ def service_answers(plan: dict, wrong: str = "") -> dict[str, str]:
     the check labelled `wrong` gets a wrong answer."""
     import shlex
 
-    from nullbill import ci, forge
+    from nullbill import ci, forge, llm
     from nullbill.render import strip_notes
 
     bare = strip_notes(plan)
     checks = [(label, guest, cmd, want) for label, guest, cmd, want in forge._checks(bare)] if forge.enabled(bare) else []
     if ci.enabled(bare):
         checks += [(label, "runner-dispatcher", cmd, want) for label, cmd, want in ci._service_checks(bare)]
-    return {
+    answers = {
         f"pct exec {bare['guests'][guest]['vmid']} -- bash -c {shlex.quote(cmd)}": ("nope" if label == wrong else want) + "\n"
         for label, guest, cmd, want in checks
     }
+    if llm.enabled(bare):
+        answers |= {cmd: ("nope" if label == wrong else want) + "\n" for label, cmd, want in llm.commands(bare)}
+    return answers
 
 
 def agent_api(

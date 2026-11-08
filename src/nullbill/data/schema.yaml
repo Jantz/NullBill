@@ -10,6 +10,11 @@ $defs:
     type: string
     pattern: "^[a-z][a-z0-9-]{0,30}$"
 
+  # A local model's name, as clients of the model gateway ask for it.
+  model_name:
+    type: string
+    pattern: "^[a-z][a-z0-9.-]{0,40}$"
+
   ref:
     # zone:<name>, service:<name>, role:<name>; zone:* means every zone;
     # host is the PVE host itself.
@@ -188,7 +193,8 @@ $defs:
         properties:
           min_gpus: {type: integer, minimum: 1}
           max_gpus: {type: integer, minimum: 1}
-          engine: {enum: [llama.cpp, vllm]}
+          engine: {enum: [llama.cpp]}
+    models: {type: object, propertyNames: {$ref: "#/$defs/model_name"}, additionalProperties: {$ref: "#/$defs/llm"}}
     tailnet:
       type: object
       additionalProperties: false
@@ -223,6 +229,17 @@ $defs:
       additionalProperties: false
       properties:
         allow: {type: array, uniqueItems: true, items: {$ref: "#/$defs/domain_pattern"}}
+
+  # A local model llama.cpp serves (catalog.yaml's models).
+  llm:
+    type: object
+    additionalProperties: false
+    properties:
+      url: {type: string, pattern: "^https://"}
+      sha256: {type: string, pattern: "^[0-9a-f]{64}$"}
+      size_mib: {type: integer, minimum: 1}
+      vram_mib: {type: integer, minimum: 1}
+      context: {type: integer, minimum: 512}
 
   image:
     type: object
@@ -266,6 +283,7 @@ $defs:
       updates: {$ref: "#/$defs/common/updates"}
       images: {$ref: "#/$defs/common/images"}
       verify: {$ref: "#/$defs/common/verify"}
+      models: {$ref: "#/$defs/common/models"}
       gpus:
         # Keyed by PCI address as the probe reports it.
         type: object
@@ -284,11 +302,13 @@ $defs:
         type: object
         additionalProperties: false
         properties:
-          engine: {enum: [llama.cpp, vllm]}
+          engine: {enum: [llama.cpp]}
+          # A name from models.
+          model: {$ref: "#/$defs/model_name"}
 
   model:
     type: object
-    required: [network, host, zones, roles, services, people, engines, proxy, tailnet, images, verify, updates]
+    required: [network, host, zones, roles, services, people, engines, models, proxy, tailnet, images, verify, updates]
     properties:
       network: {$ref: "#/$defs/common/network", required: [base, domain, vmid_base]}
       host:
@@ -315,6 +335,11 @@ $defs:
                 floor: {required: [cores, memory_mib, disk_gib]}
       people: {$ref: "#/$defs/common/people"}
       engines: {$ref: "#/$defs/common/engines"}
+      models:
+        type: object
+        propertyNames: {$ref: "#/$defs/model_name"}
+        additionalProperties:
+          allOf: [{$ref: "#/$defs/llm"}, {required: [url, sha256, size_mib, vram_mib, context]}]
       proxy:
         allOf:
           - {$ref: "#/$defs/common/proxy"}

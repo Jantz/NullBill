@@ -33,7 +33,7 @@ from pathlib import Path
 
 import yaml
 
-from nullbill import lan, legacy
+from nullbill import lan, legacy, llm
 from nullbill.apply import NTFY, SPKI
 from nullbill.cli import plan_text
 from nullbill.errors import NullBillError
@@ -526,6 +526,19 @@ class App:
             raise NullBillError("run setup first; it makes the password")
         return value
 
+    def gateway(self) -> dict | None:
+        """Where the model gateway answers and which model it serves, once a
+        plan has local models."""
+        path = self.home / "plan.yaml"
+        plan = (yaml.safe_load(path.read_text()) or {}) if path.exists() else {}
+        guest = (plan.get("guests") or {}).get(llm.GATEWAY, {})
+        model = (plan.get("inference") or {}).get("model")
+        if not guest.get("ip") or not model:
+            return None
+        has_key = bool(Secrets(self.codec(self.home)).data.get("model_gateway_key"))
+        name = f"{llm.GATEWAY}.{plan['domain']}"
+        return {"url": f"https://{name}:{llm.GATEWAY_PORT}/v1", "name": name, "ip": guest["ip"], "model": model, "key_set": has_key}
+
     def save_choices(self, body: dict) -> None:
         workloads = [w for w in body.get("workloads", []) if w in WORKLOADS]
         login = str(body.get("owner_login", "")).strip()
@@ -822,6 +835,7 @@ class App:
             "gpus": self.gpus(),
             "files": self.files(),
             "services": self.services(),
+            "gateway": self.gateway(),
             "workloads": WORKLOADS,
             "plan": self.plan(),
             "alerts": self.alerts() if has_password else None,

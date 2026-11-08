@@ -1,0 +1,195 @@
+- name: The model and the gateway's key are set
+  ansible.builtin.assert:
+    that:
+      - inference_api_key | length >= 16
+      - inference_model_name | length > 0
+      - inference_model_url is match('https://')
+      - inference_model_sha256 is match('^[0-9a-f]{64}$')
+    fail_msg: apply supplies the model from the plan and the key from sops
+
+- name: Paths
+  ansible.builtin.set_fact:
+    inference_llama_dir: "/opt/llama.cpp/{{ inference_llama_tag }}"
+    inference_headers_dir: "/opt/vulkan-headers/{{ inference_vulkan_headers_tag }}"
+    inference_server: "/opt/llama.cpp/{{ inference_llama_tag }}/build/bin/llama-server"
+    inference_model_path: "/var/lib/llama/models/{{ inference_model_url | basename }}"
+    # git and the downloads reach the internet through egress-proxy in the
+    # inference zone (apply sets downloads_proxy).
+    inference_git_env: "{{ {'https_proxy': downloads_proxy} if downloads_proxy | default('') else {} }}"
+
+# NVIDIA's installer wants kmod's modprobe even when it installs no
+# module, and checks for the GL loader its Vulkan driver shares with OpenGL.
+- name: Build tools, Vulkan, and what NVIDIA's user space needs
+  ansible.builtin.apt:
+    name: [cmake, g++, make, git, ca-certificates, curl, libvulkan-dev, libvulkan1, glslc, glslang-tools, spirv-headers, kmod, libgl1, libegl1]
+    install_recommends: false
+    update_cache: true
+
+- name: Download cache
+  ansible.builtin.file:
+    path: /var/cache/nullbill
+    state: directory
+    mode: "0755"
+
+- name: NVIDIA's driver at the host's version
+  when: inference_nvidia_version | length > 0
+  block:
+    - name: NVIDIA's installer
+      ansible.builtin.include_role:
+        name: downloads
+        tasks_from: fetch
+      vars:
+        downloads_url: "https://download.nvidia.com/XFree86/Linux-x86_64/{{ inference_nvidia_version }}/NVIDIA-Linux-x86_64-{{ inference_nvidia_version }}.run"
+        downloads_dest: "/var/cache/nullbill/NVIDIA-Linux-x86_64-{{ inference_nvidia_version }}.run"
+        downloads_checksum: "sha256:{{ inference_nvidia_sha256 }}"
+
+    # User space only: the container shares the host's kernel module. The
+    # installer replaces an earlier release it installed.
+    - name: NVIDIA's user-space driver, without kernel modules
+      ansible.builtin.command:
+        argv:
+          - sh
+          - "/var/cache/nullbill/NVIDIA-Linux-x86_64-{{ inference_nvidia_version }}.run"
+          - --silent
+          - --no-questions
+          - --ui=none
+          - --no-kernel-modules
+          - --no-x-check
+          - --no-nouveau-check
+          - --no-systemd
+          - --no-wine-files
+        creates: "/usr/lib/x86_64-linux-gnu/libnvidia-glcore.so.{{ inference_nvidia_version }}"
+      notify: Restart llama-server
+
+- name: Khronos' Vulkan headers at the pinned tag
+  ansible.builtin.git:
+    repo: "{{ inference_vulkan_headers_repo }}"
+    dest: "{{ inference_headers_dir }}/src"
+    version: "{{ inference_vulkan_headers_tag }}"
+    depth: 1
+  environment: "{{ inference_git_env }}"
+  register: inference_headers_git
+
+- name: The headers' tag is still the pinned commit
+  ansible.builtin.assert:
+    that: inference_headers_git.after == inference_vulkan_headers_commit
+    fail_msg: "{{ inference_vulkan_headers_tag }} is {{ inference_headers_git.after }} upstream, not {{ inference_vulkan_headers_commit }}"
+
+- name: Install the headers
+  ansible.builtin.shell: |
+    set -e
+    cmake -S src -B build -DCMAKE_INSTALL_PREFIX={{ inference_headers_dir }}
+    cmake --install build
+  args:
+    chdir: "{{ inference_headers_dir }}"
+    executable: /bin/bash
+    creates: "{{ inference_headers_dir }}/include/vulkan/vulkan.hpp"
+
+- name: llama.cpp at the pinned tag
+  ansible.builtin.git:
+    repo: "{{ inference_llama_repo }}"
+    dest: "{{ inference_llama_dir }}/src"
+    version: "{{ inference_llama_tag }}"
+    depth: 1
+  environment: "{{ inference_git_env }}"
+  register: inference_llama_git
+
+- name: The tag is still the pinned commit
+  ansible.builtin.assert:
+    that: inference_llama_git.after == inference_llama_commit
+    fail_msg: "{{ inference_llama_tag }} is {{ inference_llama_git.after }} upstream, not {{ inference_llama_commit }}"
+
+# The server only: no web UI (its download is off), no model downloads
+# (LLAMA_CURL off: the model is fetched and checked here). One file of the
+# Vulkan backend takes over 1.5 GiB to compile, so apply lifts the
+# container's memory limit while this role runs. A build that stops part
+# way resumes on the next run; the marker is written last.
+- name: Build llama-server with the Vulkan backend (takes a while the first time)
+  ansible.builtin.shell: |
+    set -e
+    cmake -S src -B build -DCMAKE_BUILD_TYPE=Release -DGGML_VULKAN=ON \
+      -DVulkan_INCLUDE_DIR={{ inference_headers_dir }}/include \
+      -DLLAMA_CURL=OFF -DLLAMA_OPENSSL=OFF -DLLAMA_USE_PREBUILT_UI=OFF \
+      -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF
+    cmake --build build --target llama-server -j {{ inference_build_jobs }}
+    touch build/.nullbill-built
+  args:
+    chdir: "{{ inference_llama_dir }}"
+    executable: /bin/bash
+    creates: "{{ inference_llama_dir }}/build/.nullbill-built"
+  notify: Restart llama-server
+
+- name: llama user
+  ansible.builtin.user:
+    name: llama
+    system: true
+    home: /var/lib/llama
+    create_home: false
+    shell: /usr/sbin/nologin
+    password: "!"
+
+- name: Model directory
+  ansible.builtin.file:
+    path: /var/lib/llama/models
+    state: directory
+    owner: root
+    group: llama
+    mode: "0750"
+
+- name: "The model, {{ inference_model_name }}"
+  ansible.builtin.include_role:
+    name: downloads
+    tasks_from: fetch
+  vars:
+    downloads_url: "{{ inference_model_url }}"
+    downloads_dest: "{{ inference_model_path }}"
+    downloads_checksum: "sha256:{{ inference_model_sha256 }}"
+
+- name: Settings directory
+  ansible.builtin.file:
+    path: /etc/llama
+    state: directory
+    owner: root
+    group: llama
+    mode: "0750"
+
+- name: The gateway's key
+  ansible.builtin.copy:
+    content: "{{ inference_api_key }}\n"
+    dest: /etc/llama/api-key
+    owner: root
+    group: llama
+    mode: "0640"
+  no_log: true
+  notify: Restart llama-server
+
+- name: Devices llama.cpp can use
+  ansible.builtin.command:
+    argv: [runuser, -u, llama, --, "{{ inference_server }}", --list-devices]
+  environment: "{{ {'GGML_VK_VISIBLE_DEVICES': inference_vulkan_devices} if inference_vulkan_devices else {} }}"
+  register: inference_devices
+  changed_when: false
+
+- name: llama.cpp sees the graphics card
+  ansible.builtin.assert:
+    that: inference_devices.stdout is search('Vulkan[0-9]+:')
+    fail_msg: >-
+      llama.cpp finds no GPU in this container. On the host, nvidia-smi must list the card,
+      and pct config must show its /dev/nvidia* nodes; apply's inference stage sets both.
+      It found: {{ inference_devices.stdout }}
+  when: inference_require_gpu | bool
+
+- name: llama-server unit
+  ansible.builtin.template:
+    src: llama-server.service.j2
+    dest: /etc/systemd/system/llama-server.service
+    mode: "0644"
+  notify: Restart llama-server
+
+- name: Run llama-server
+  ansible.builtin.systemd_service:
+    name: llama-server
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: inference_manage_services | bool

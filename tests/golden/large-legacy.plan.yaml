@@ -247,7 +247,15 @@ gpus:
       inference: 49140
 inference:
   # Chosen for 2 inference GPU(s) by the catalog engine table.
-  engine: vllm
+  engine: llama.cpp
+  # The largest of the catalog's models that fits the 98280 MiB of VRAM inference has.
+  model: qwen3.6-27b
+  # The model file; verify expects most of it in VRAM.
+  model_mib: 16038
+  # Host-shared GPUs that budget VRAM to inference.
+  gpus:
+    - '0000:17:00.0'
+    - 0000:65:00.0
 disks:
   # Kept as it is: mounted read-only under /mnt/nb-legacy and shared to the owner over the VPN as data (docs/runbooks/legacy-disk.md). Not backed up by NullBill; keep a copy elsewhere. Left alone: partition 1 (Microsoft reserved).
   ata-SYNTHETIC_HDD_0002:
@@ -328,6 +336,7 @@ flows:
   - role:owner -> workspace tcp/22
   - service:operator -> workspace tcp/22
   - service:monitoring -> workspace tcp/9100
+  - service:model-gateway -> inference tcp/8080
   - service:operator -> inference tcp/22
   - service:monitoring -> inference tcp/9100
   - zone:build -> model-gateway tcp/4000

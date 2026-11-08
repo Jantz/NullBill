@@ -1,0 +1,9 @@
+# LiteLLM in the model-gateway container: one OpenAI-compatible API over
+# HTTPS on 4000 for the build zone and the owner, in front of the local
+# model. apply runs tls-cert.yml for its name first (tls_cert_group=www-data,
+# reload nginx).
+- name: Model gateway
+  hosts: all
+  become: false
+  roles:
+    - model_gateway

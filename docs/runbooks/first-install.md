@@ -420,9 +420,11 @@ certificates.
 
 ## What this run does not cover yet
 
-- Local AI models and Windows CI runners: NullBill makes their guests but
-  does not set up the GPU driver, the model server or the runners yet. Installing Windows in the desktop VM is done by
-  hand ([windows-desktop.md](windows-desktop.md)).
+- Windows CI runners: NullBill makes their guests but does not set up the
+  runners yet. Installing Windows in the desktop VM is done by hand
+  ([windows-desktop.md](windows-desktop.md)). Local AI models are set up by
+  setup itself ([local-models.md](local-models.md)); turn Secure Boot off
+  first if you tick them.
 - Your devices do not resolve the services' names
   (`forgejo.nullbill.internal`) over Tailscale yet, and the certificate
   authority is not limited to those names, so your devices should not

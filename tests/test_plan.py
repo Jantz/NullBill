@@ -328,3 +328,31 @@ def test_containers_count_at_their_share_so_16_gib_holds_every_workload_but_wind
     # Counted in full, the same guests would not fit.
     full = {**config, "host": {**config["host"], "container_share_pct": 100}}
     assert errors_of(f, full)[0].startswith("memory: planned guests need")
+
+
+def test_the_largest_listed_model_that_fits_the_card_is_chosen(facts):
+    f = facts("mid")
+    f["gpus"][0]["vram_mib"] = None
+    sizes = {"0000:01:00.0": {"vram_mib": 12282}}
+    plan = plan_for(f, {**fixture_config("mid"), "gpus": sizes})
+    assert plan["inference"]["model"].value == "qwen3.5-9b"
+    assert plan["inference"]["model_mib"].value == 5417
+    pinned = plan_for(f, {**fixture_config("mid"), "gpus": sizes, "inference": {"model": "qwen3.5-4b"}})
+    assert pinned["inference"]["model"].value == "qwen3.5-4b"
+
+
+def test_a_model_pin_must_be_listed_and_fit(facts):
+    f = facts("mid")
+    f["gpus"][0]["vram_mib"] = 8192
+    too_big = errors_of(f, {**fixture_config("mid"), "inference": {"model": "qwen3.6-27b"}})
+    assert "inference.model: qwen3.6-27b needs 20480 MiB of VRAM, inference has 8192 MiB" in too_big
+    unknown = errors_of(f, {**fixture_config("mid"), "inference": {"model": "gpt-9"}})
+    assert unknown[0].startswith("inference.model: 'gpt-9' is not in models; known: qwen3.5-4b, qwen3.5-9b")
+    f["gpus"][0]["vram_mib"] = 2048
+    assert "inference: no model in models fits the 2048 MiB of VRAM inference has" in errors_of(f, fixture_config("mid"))
+
+
+def test_local_models_need_an_nvidia_card(facts):
+    f = facts("mid")
+    f["gpus"][0]["vendor"] = "amd"
+    assert any("local models run on NVIDIA cards only so far" in m for m in errors_of(f, fixture_config("mid")))

@@ -194,21 +194,21 @@ def test_a_service_nullbill_does_not_serve_yet_is_degraded_when_nothing_answers(
     plan, model = setup(facts, "large")
     run = firewall(plan, model)
     allowed = [p for p in probes(plan, model, PUBLIC)[0] if p.expect == "open"]
-    silent = {
-        f"pct exec {p.vmid} -- bash -c {shlex.quote(p.command)}" for p in allowed if " model-gateway " in p.name or " forgejo " in p.name
-    }
-    assert any(" model-gateway " in p.name for p in allowed)
+    quiet = (" windows-dev ", " forgejo ", " model-gateway ")
+    silent = {f"pct exec {p.vmid} -- bash -c {shlex.quote(p.command)}" for p in allowed if any(q in p.name for q in quiet)}
+    assert any(" windows-dev " in p.name for p in allowed)
 
     def nothing_listens(target, command):
         rc, out, err = run(target, command)
         return (rc, "rc=124\n", err) if command in silent else (rc, out, err)
 
     by = statuses(run_verify(plan, model, "root@pve.internal", nothing_listens, lambda h, p: "timeout", lambda n: PUBLIC))
-    degraded = [r for r in by["DEGRADED"] if " model-gateway " in r.name]
-    assert degraded and all("LiteLLM" in r.detail for r in degraded)
-    # A service NullBill installs still fails when nothing answers.
+    degraded = [r for r in by["DEGRADED"] if " windows-dev " in r.name]
+    assert degraded and all("Remote Desktop" in r.detail for r in degraded)
+    # Services NullBill installs still fail when nothing answers.
     assert any(" forgejo " in r.name for r in by["FAIL"])
-    assert not any(" model-gateway " in r.name for r in by["FAIL"])
+    assert any(" model-gateway " in r.name for r in by["FAIL"])
+    assert not any(" windows-dev " in r.name for r in by["FAIL"])
 
 
 def test_results_are_told_in_order_as_they_come_with_probes_run_side_by_side(facts):

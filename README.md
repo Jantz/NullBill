@@ -46,8 +46,9 @@ is that first run.
   backups, the certificate authority or NullBill itself.
 - **Sized to your hardware.** NullBill reads the hardware first, then plans
   what fits. A plan that does not fit fails with the reason, before anything
-  is changed. On 16 GB of memory it fits the agents, Linux CI and the
-  services; local AI models and Windows need more.
+  is changed. On 16 GB of memory it fits the services, the agents, one
+  Linux CI runner, a local AI model on the graphics card and a Windows
+  desktop.
 - **Checked, not assumed.** `verify` tries every allowed connection and
   every forbidden one from inside each zone. Allowed must work, forbidden
   must fail. A check that cannot run says SKIP, never PASS.
@@ -139,7 +140,9 @@ It runs these stages in order and stops at the first one that fails.
 
 ## Not done yet
 
-- Windows and local AI models.
+- Windows CI runners. Local AI models run one model on one NVIDIA card
+  (several cards split it); vLLM and paid cloud models behind the gateway
+  are not built.
 
 [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) lists the decisions still open, and
 [`docs/milestones/`](docs/milestones/) what each milestone finished.

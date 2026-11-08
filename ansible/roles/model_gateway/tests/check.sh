@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# Container check for the model_gateway role, run by tools/check-roles:
+# converge twice, run LiteLLM and nginx as their units do in front of a
+# stand-in for llama-server, and prove over HTTPS that only the gateway's
+# key gets an answer, that the model is offered under its own name and as
+# "local", and that the gateway passes the inference key on.
+set -euo pipefail
+# shellcheck source=tools/role-check/role-check.sh
+source /usr/local/lib/role-check.sh
+
+name="model-gateway.nullbill.internal"
+test_pki /tmp/pki "$name"
+apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nginx-light >/dev/null 2>&1
+install -d -m 0755 /etc/nullbill/tls
+install -m 0644 /tmp/pki/ca.crt /etc/nullbill/tls/root_ca.crt
+install -m 0644 /tmp/pki/loki.crt "/etc/nullbill/tls/$name.crt"
+install -m 0640 -g www-data /tmp/pki/loki.key "/etc/nullbill/tls/$name.key"
+echo "127.0.0.1 $name inference.nullbill.internal" >>/etc/hosts
+
+key=sk-check-gateway-key-0123456789
+backend_key=check-inference-key-0123456789
+cat >/tmp/vars.json <<EOF
+{"model_gateway_manage_services": false, "model_gateway_key": "$key",
+ "model_gateway_backend_key": "$backend_key", "model_gateway_model": "qwen3.5-9b"}
+EOF
+converge model-gateway.yml -e @/tmp/vars.json
+
+systemd-analyze verify /etc/systemd/system/litellm.service >/tmp/unit.log 2>&1 || { cat /tmp/unit.log; fail "litellm unit"; }
+[ "$(stat -c '%U:%G %a' /etc/litellm/env)" = "root:litellm 640" ] || fail "keys root:litellm 0640"
+pass "the litellm unit passes systemd-analyze; its keys are root's, readable by litellm"
+
+# llama-server's OpenAI API, as far as the gateway uses it: one answer, and
+# only for the inference key. It records the model asked for.
+cat >/tmp/backend.py <<'PY'
+import json, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+KEY = sys.argv[1]
+
+class Handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        if self.headers.get("Authorization") != f"Bearer {KEY}":
+            self.send_response(401)
+            self.end_headers()
+            return
+        with open("/tmp/backend-asked", "a") as f:
+            f.write(body["model"] + "\n")
+        answer = {"id": "x", "object": "chat.completion", "created": 0, "model": body["model"],
+                  "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "hello from llama"}}],
+                  "usage": {"prompt_tokens": 1, "completion_tokens": 3, "total_tokens": 4}}
+        data = json.dumps(answer).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+HTTPServer(("127.0.0.1", 8080), Handler).serve_forever()
+PY
+python3 /tmp/backend.py "$backend_key" >/tmp/backend.log 2>&1 &
+
+# LiteLLM as its unit runs it, then nginx.
+exec_start=$(sed -n 's/^ExecStart=//p' /etc/systemd/system/litellm.service)
+set -a
+# shellcheck disable=SC1091
+. /etc/litellm/env
+set +a
+# shellcheck disable=SC2086 # the unit's command line, split as systemd does
+(cd /var/lib/litellm && runuser -u litellm -- env HOME=/var/lib/litellm $exec_start >/tmp/litellm.log 2>&1 &)
+nginx
+url="https://$name:4000"
+for _ in $(seq 90); do curl -fsS --cacert /tmp/pki/ca.crt "$url/health/liveliness" >/dev/null 2>&1 && break; sleep 1; done
+curl -fsS --cacert /tmp/pki/ca.crt "$url/health/liveliness" >/dev/null || { tail -30 /tmp/litellm.log; fail "the gateway answers over HTTPS"; }
+pass "LiteLLM answers over HTTPS with the step-ca certificate"
+
+ask() { # key model
+  curl -sS --cacert /tmp/pki/ca.crt -o /tmp/answer.json -w '%{http_code}' "$url/v1/chat/completions" \
+    -H "Authorization: Bearer $1" -H 'Content-Type: application/json' \
+    -d "{\"model\": \"$2\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}"
+}
+code=$(ask sk-wrong-key qwen3.5-9b)
+[ "${code:0:1}" != 2 ] || fail "a wrong key got an answer"
+code=$(curl -sS --cacert /tmp/pki/ca.crt -o /dev/null -w '%{http_code}' "$url/v1/models")
+[ "${code:0:1}" != 2 ] || fail "no key got the model list"
+test ! -e /tmp/backend-asked || fail "a refused request reached the model"
+pass "without the gateway's key nothing gets through"
+
+for model in qwen3.5-9b local; do
+  [ "$(ask "$key" "$model")" = 200 ] || { cat /tmp/answer.json; tail -20 /tmp/litellm.log; fail "the key gets an answer from $model"; }
+  grep -q 'hello from llama' /tmp/answer.json || { cat /tmp/answer.json; fail "the answer is the model's"; }
+done
+[ "$(sort -u /tmp/backend-asked)" = qwen3.5-9b ] || { cat /tmp/backend-asked; fail "the backend is asked for its own model name"; }
+curl -fsS --cacert /tmp/pki/ca.crt -H "Authorization: Bearer $key" "$url/v1/models" >/tmp/models.json
+python3 -c 'import json; ids={m["id"] for m in json.load(open("/tmp/models.json"))["data"]}; assert ids == {"qwen3.5-9b", "local"}, ids' \
+  || fail "models listed as qwen3.5-9b and local"
+pass "with the key, qwen3.5-9b and local both reach the model with the inference key"

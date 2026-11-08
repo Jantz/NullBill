@@ -233,6 +233,13 @@ gpus:
 inference:
   # Chosen for 1 inference GPU(s) by the catalog engine table.
   engine: llama.cpp
+  # The largest of the catalog's models that fits the 24564 MiB of VRAM inference has.
+  model: qwen3.6-27b
+  # The model file; verify expects most of it in VRAM.
+  model_mib: 16038
+  # Host-shared GPUs that budget VRAM to inference.
+  gpus:
+    - '0000:01:00.0'
 disks:
   # Blank, so it becomes the PBS datastore.
   ata-SYNTHETIC_HDD_0002:
@@ -302,6 +309,7 @@ flows:
   - role:owner -> workspace tcp/22
   - service:operator -> workspace tcp/22
   - service:monitoring -> workspace tcp/9100
+  - service:model-gateway -> inference tcp/8080
   - service:operator -> inference tcp/22
   - service:monitoring -> inference tcp/9100
   - zone:build -> model-gateway tcp/4000

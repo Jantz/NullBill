@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from conftest import fixture_config
 
-from nullbill import apply, backups, ci, lan
+from nullbill import apply, backups, ci, lan, llm
 from nullbill.apply import ApplyError, Context, connection, run_apply
 from nullbill.artifacts import render_all
 from nullbill.errors import NullBillError
@@ -75,6 +75,13 @@ class FakeReach:
         # VMs as /cluster/resources lists them, for retiring CI clones.
         self.vms = []
         self.isos = []
+        # NVIDIA's driver: each card's device minor, and cards it does not list.
+        self.gpu_minors = {}
+        self.unlisted_gpus = set()
+        # The inference container (VMID 2020): its devN entries, memory limits set, restarts.
+        self.inference_ct = {"devs": {}, "status": "running", "memory": [], "restarts": 0}
+        # Containers that were given step-ca's root.
+        self.trusted = []
 
     def host(self, command, stdin=None, timeout=900):
         self.calls.append(("host", command))
@@ -128,6 +135,13 @@ class FakeReach:
             return self.kept(command)
         if command.startswith(("pct reboot 2023", "pct set 2023 ")) or command == "pct config 2023":
             return self.kept(command)
+        if command.startswith("awk '/^Device Minor:/"):
+            pci = command.split("/proc/driver/nvidia/gpus/")[1].split("/")[0]
+            if pci in self.unlisted_gpus:
+                return 0, "", ""
+            return 0, f"{self.gpu_minors.setdefault(pci, len(self.gpu_minors))}\n", ""
+        if command.split()[:3] in (["pct", c, "2020"] for c in ("config", "set", "status", "reboot", "start", "shutdown")):
+            return self.inference(command)
         if command.startswith("pct config "):
             return 0, "hostname: nullbill\n" + "".join(f"net{n}: {v}\n" for n, v in sorted(self.nets.items())), ""
         if command.startswith("pct set 2002 --net1 "):
@@ -209,6 +223,32 @@ class FakeReach:
             return 0, "nb-legacy-copy: the copy differs: missing ['IMG_7.jpg']\n", ""
         return 0, "nb-legacy-copy: 51200 MiB copied\n", ""
 
+    def inference(self, command):
+        """pct for the inference container (VMID 2020)."""
+        argv = shlex.split(command)
+        ct = self.inference_ct
+        if argv[1] == "config":
+            return 0, "hostname: inference\n" + "".join(f"dev{n}: {v}\n" for n, v in sorted(ct["devs"].items())), ""
+        if argv[1] == "status":
+            return 0, f"status: {ct['status']}\n", ""
+        if argv[1] in ("start", "reboot"):
+            ct["status"] = "running"
+            ct["restarts"] += 1
+            return 0, "", ""
+        if argv[1] == "shutdown":
+            ct["status"] = "stopped"
+            return 0, "", ""
+        args = argv[3:]
+        for flag, value in zip(args[::2], args[1::2], strict=True):
+            if flag == "--delete":
+                for key in value.split(","):
+                    del ct["devs"][int(key.removeprefix("dev"))]
+            elif flag == "--memory":
+                ct["memory"].append(int(value))
+            else:
+                ct["devs"][int(flag.removeprefix("--dev"))] = value
+        return 0, "", ""
+
     def kept(self, command):
         """nb-legacy-disk, findmnt and pct for the files guest (VMID 2023)."""
         argv = shlex.split(command)
@@ -264,6 +304,9 @@ class FakeReach:
         """Containers, reached with pct exec: step-ca answers for its CA."""
         if argv == ["sh", "-c", "systemctl stop nb-dispatcher 2>/dev/null || true"]:
             self.dispatcher_stopped = True
+            return 0, "", ""
+        if argv[:2] == ["sh", "-c"] and "update-ca-certificates" in argv[2]:
+            self.trusted.append(vmid)
             return 0, "", ""
         if vmid == "2002" and argv[:2] == ["sh", "-c"]:
             self.nullbill.append(argv[2])
@@ -1220,6 +1263,67 @@ def test_a_full_apply_runs_every_stage_against_the_stand_ins(ctx, monkeypatch, t
     run_apply(c)
     assert "ci-runner.yml" not in [call[1] for call in c.reach.calls if call[0] == "playbook"]
     assert c.secrets.data == secrets
+
+
+def inference_runs(c):
+    return [(call[1], call[2], call[3]) for call in c.reach.calls if call[0] == "playbook"]
+
+
+def test_inference_stage_gives_the_container_the_card_once_and_room_to_build(ctx):
+    c = ctx("mid")
+    apply.stage_inference(c)
+    runs = inference_runs(c)
+    assert [r[0] for r in runs] == ["nvidia-host.yml", "inference.yml", "model-gateway.yml"]
+    assert list(runs[0][1]) == ["pve"] and list(runs[1][1]) == ["inference"] and list(runs[2][1]) == ["model-gateway"]
+    ct = c.reach.inference_ct
+    want = ["/dev/nvidia0", "/dev/nvidiactl", "/dev/nvidia-uvm", "/dev/nvidia-uvm-tools"]
+    assert [v.split(",")[0] for _, v in sorted(ct["devs"].items())] == want
+    assert all(v.endswith(",gid=44,mode=0660") for v in ct["devs"].values())
+    assert ct["restarts"] == 1
+    memory = c.bare["guests"]["inference"]["memory_mib"]
+    assert ct["memory"] == ([apply.BUILD_MEMORY_MIB, memory] if memory < apply.BUILD_MEMORY_MIB else [])
+    version, sha256 = llm.nvidia_pin()
+    model = c.model["models"][c.bare["inference"]["model"]]
+    inference, gateway = runs[1][2], runs[2][2]
+    assert inference["inference_nvidia_version"] == version and inference["inference_nvidia_sha256"] == sha256
+    assert (inference["inference_model_url"], inference["inference_model_sha256"]) == (model["url"], model["sha256"])
+    assert inference["inference_listen"] == c.bare["guests"]["inference"]["ip"]
+    assert inference["inference_api_key"] == gateway["model_gateway_backend_key"] == c.secrets.data["inference_key"]
+    assert gateway["model_gateway_key"] == c.secrets.data["model_gateway_key"] and gateway["model_gateway_key"].startswith("sk-")
+    assert gateway["model_gateway_backend"] == "http://inference.nullbill.internal:8080/v1"
+    assert gateway["model_gateway_model"] == c.bare["inference"]["model"]
+    # Clients in the build zone check the gateway's certificate.
+    assert c.reach.trusted == ["2019"]
+    # Again: the card is in place, nothing restarts, the keys stay.
+    secrets = dict(c.secrets.data)
+    c.reach.calls.clear()
+    apply.stage_inference(c)
+    assert ct["restarts"] == 1
+    assert not [x for x in host_calls(c) if isinstance(x, str) and x.startswith("pct set 2020 --dev")]
+    assert c.secrets.data == secrets
+
+
+def test_a_new_driver_stops_the_inference_container_before_the_host_installs_it(ctx):
+    c = ctx("mid")
+    c.reach.files["/sys/module/nvidia/version"] = "580.95.05\n"
+    apply.stage_inference(c)
+    calls = [call[1] for call in c.reach.calls if call[0] in ("host", "playbook")]
+    assert calls.index("pct shutdown 2020 --timeout 120 --forceStop 1") < calls.index("nvidia-host.yml")
+    assert c.reach.inference_ct["status"] == "running"
+
+
+def test_a_card_the_driver_does_not_list_stops_apply_with_where_to_look(ctx):
+    c = ctx("mid")
+    c.reach.unlisted_gpus.add("0000:01:00.0")
+    with pytest.raises(ApplyError, match="does not list the card at 0000:01:00.0; nvidia-smi"):
+        apply.stage_inference(c)
+    assert "inference.yml" not in [r[0] for r in inference_runs(c)]
+
+
+def test_inference_stage_does_nothing_without_local_models(ctx):
+    c = ctx("small")
+    apply.stage_inference(c)
+    assert c.reach.calls == []
 
 
 def test_a_host_that_stops_answering_fails_the_stage_instead_of_crashing(monkeypatch, tmp_path):

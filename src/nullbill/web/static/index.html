@@ -137,6 +137,15 @@
           </div>
           <code id="files-password"></code>
         </div>
+        <div id="gateway-info" class="subcard" hidden>
+          <h3>Your local AI model</h3>
+          <p>Once setup has run, <b id="gateway-model"></b> answers on the model gateway, an OpenAI-compatible API at <code id="gateway-url"></code>. Ask for it by that name or as <code>local</code>, with the key below as the API key. Your coding agents in the workspace reach it as it is. From a device signed in to your Tailscale, first add the line <code id="gateway-hosts"></code> to its hosts file; see <a href="https://github.com/Jantz/NullBill/blob/main/docs/runbooks/local-models.md" rel="noopener noreferrer" target="_blank">local-models.md</a>.</p>
+          <div class="actions">
+            <button type="button" id="gateway-reveal" class="secondary">Show the key</button>
+            <p class="feedback" id="gateway-result" role="status" aria-live="polite"></p>
+          </div>
+          <code id="gateway-key"></code>
+        </div>
       </section>
 
       <section class="card step" id="step-4" data-step="4" data-title="Check the plan">

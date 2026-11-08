@@ -139,6 +139,10 @@ def _container(name: str, guest: dict, plan: dict, model: dict, storage: str) ->
         },
         "depends_on": [_bridge_ref(plan["zones"][zone]["bridge"])],
     }
+    if model["services"][name].get("gpu"):
+        # apply gives it the GPU's device nodes as root over SSH (PVE allows
+        # device passthrough to root@pam alone; ansible/roles/inference).
+        container["lifecycle"] = {"ignore_changes": ["device_passthrough"]}
     if name == "files" and (legacy.shares(plan) or legacy.copies(plan)):
         # apply sets the kept disks' bind mount points as root over SSH: PVE
         # refuses bind mounts to API tokens (docs/adr/0007-legacy-disks.md).

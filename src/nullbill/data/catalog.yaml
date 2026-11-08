@@ -239,13 +239,17 @@ services:
     # memory holds the server and the file cache it loads from, which the
     # kernel takes back under pressure.
     floor: {cores: 2, memory_mib: 2048, disk_gib: 64}
+    # NVIDIA's driver, whose user-space half must match the host's
+    # (ansible/roles/inference).
+    proxy_allow: [download.nvidia.com]
+    ports:
+      - {port: 8080, proto: tcp, from: ["service:model-gateway"]}
   model-gateway:
     id: 21
     kind: lxc
     zone: inference
     workload: inference
-    description: LiteLLM.
-    listener: NullBill does not install the model gateway (LiteLLM) yet
+    description: LiteLLM, one OpenAI-compatible API in front of the local model.
     floor: {cores: 1, memory_mib: 512, disk_gib: 4}
     ports:
       - {port: 4000, proto: tcp, from: ["zone:build", "role:owner"]}
@@ -269,11 +273,37 @@ services:
       - {port: 3389, proto: tcp, from: ["role:owner"]}
 
 # Inference engine by the number of host-shared GPUs given to inference.
-# llama.cpp serves quantised models on one GPU with CPU offload; vLLM's
-# tensor parallelism is what multi-GPU hosts need. Pin with inference.engine.
+# llama.cpp serves quantised models and splits one across several cards by
+# layer. vLLM, whose tensor parallelism suits several cards better, is not
+# built yet. Pin with inference.engine.
 engines:
-  - {min_gpus: 1, max_gpus: 1, engine: llama.cpp}
-  - {min_gpus: 2, engine: vllm}
+  - {min_gpus: 1, engine: llama.cpp}
+
+# Local models llama.cpp may serve: GGUF files on Hugging Face, pinned to
+# a repository commit and by SHA-256 (both from the Hub's API, such as
+# https://huggingface.co/api/models/unsloth/Qwen3.5-9B-GGUF/tree/main).
+# plan picks the one with the largest vram_mib that fits the VRAM given to
+# inference; pin another with inference.model. vram_mib is the file plus
+# room for `context` tokens of cache: a choice, not a measurement.
+models:
+  qwen3.5-4b:
+    url: https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf
+    sha256: 00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4
+    size_mib: 2613
+    vram_mib: 4096
+    context: 32768
+  qwen3.5-9b:
+    url: https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/3885219b6810b007914f3a7950a8d1b469d598a5/Qwen3.5-9B-Q4_K_M.gguf
+    sha256: 03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8
+    size_mib: 5417
+    vram_mib: 8192
+    context: 32768
+  qwen3.6-27b:
+    url: https://huggingface.co/unsloth/Qwen3.6-27B-GGUF/resolve/82d411acf4a06cfb8d9b073a5211bf410bfc29bf/Qwen3.6-27B-Q4_K_M.gguf
+    sha256: 5ed60d0af4650a854b1755bd392f9aef4872643dc25a254bc68043fa638392a0
+    size_mib: 16038
+    vram_mib: 20480
+    context: 32768
 
 # Domains egress-proxy forwards to, for zones with egress: proxy. A leading
 # dot also matches subdomains. Only HTTPS CONNECT and plain HTTP to these

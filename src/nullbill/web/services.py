@@ -20,6 +20,7 @@ PASSWORDS = {
     "grafana": "grafana_admin_password",
     "forgejo": "forgejo_admin_password",
     "files": "files_share_password",
+    "model-gateway": "model_gateway_key",
 }
 
 # Guests that run on their own and have nothing for the owner to open.
@@ -135,13 +136,18 @@ def _entries(plan: dict, guests: dict) -> list[dict]:
                 "how": "Turn on Actions in a repository's settings and add .forgejo/workflows/<name>.yml.",
             }
         )
-    if "inference" in guests:
+    model = (plan.get("inference") or {}).get("model")
+    if ip("model-gateway") and model:
+        name = f"model-gateway.{plan.get('domain', 'nullbill.internal')}"
         out.append(
             {
-                "name": "inference",
-                "title": "Local AI",
-                "what": "NullBill makes this guest but does not install the model server yet.",
-                "watch": "inference",
+                "name": "model-gateway",
+                "title": "Local AI model",
+                "what": f"{model} on your graphics card, behind an OpenAI-compatible API. Ask for it as local.",
+                "addresses": [f"https://{name}:4000/v1", f"Hosts line for your device: {ip('model-gateway')} {name}"],
+                "password": "model-gateway",
+                "password_note": "This is the API key. Your coding agents in the workspace reach the API as it is (local-models.md).",
+                "watch": "model-gateway",
             }
         )
     return out

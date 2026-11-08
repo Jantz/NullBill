@@ -288,6 +288,16 @@ function onChoicesChanged() {
   steps();
 }
 
+function renderGateway(gateway) {
+  show("gateway-info", Boolean(gateway));
+  if (!gateway) return;
+  $("gateway-model").textContent = gateway.model;
+  $("gateway-url").textContent = gateway.url;
+  $("gateway-hosts").textContent = `${gateway.ip} ${gateway.name}`;
+  show("gateway-reveal", gateway.key_set);
+  $("gateway-key").textContent = gateway.key_set ? "" : "Setup makes the key on its next run.";
+}
+
 function renderFiles(files) {
   show("files-info", Boolean(files));
   if (!files) return;
@@ -601,6 +611,7 @@ async function refresh() {
   if (!choicesDirty() || disksChanged) renderChoices(st);
   renderHardware(st.hardware);
   renderFiles(st.files);
+  renderGateway(st.gateway);
   renderServices(st);
   renderPlan(st.plan);
   renderAlerts(st.alerts);
@@ -995,6 +1006,10 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("files-reveal").addEventListener("click", () => press($("files-reveal"), "files-result", "Fetching…", async () => {
     $("files-password").textContent = (await api("/api/password-reveal", {name: "files"})).password;
+    return "";
+  }));
+  $("gateway-reveal").addEventListener("click", () => press($("gateway-reveal"), "gateway-result", "Fetching…", async () => {
+    $("gateway-key").textContent = (await api("/api/password-reveal", {name: "model-gateway"})).password;
     return "";
   }));
 

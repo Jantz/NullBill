@@ -1,0 +1,9 @@
+# llama.cpp in the inference container, serving the planned local model on
+# the host-shared GPU to the model gateway. apply's inference stage runs
+# nvidia-host.yml on the host and gives this container the card's device
+# nodes first.
+- name: Local model server
+  hosts: all
+  become: false
+  roles:
+    - inference

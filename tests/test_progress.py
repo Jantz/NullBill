@@ -29,7 +29,7 @@ def test_a_finished_apply_has_every_stage_done_with_its_time():
     steps = view["steps"]
     assert [s["name"] for s in steps] == [PREPARE] + [n for n, _ in STAGES]
     assert all(s["status"] == "done" for s in steps)
-    assert steps[0]["seconds"] == 2 and steps[1]["seconds"] == 10 and steps[-1]["seconds"] == 200 - 170
+    assert steps[0]["seconds"] == 2 and steps[1]["seconds"] == 10 and steps[-1]["seconds"] == 200 - 10 * (len(STAGES) - 1)
     assert view["verify"]["counts"] == {"PASS": 1, "FAIL": 0, "SKIP": 1, "DEGRADED": 1}
     assert view["verify"]["problems"] == [{"status": "DEGRADED", "text": "backups: no second disk"}]
     assert "error" not in view
