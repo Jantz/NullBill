@@ -15,7 +15,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
-from nullbill import agent, backups, ci, forge, lan, legacy, llm, media
+from nullbill import agent, backups, ci, forge, hostroot, lan, legacy, llm, media
 from nullbill.errors import NullBillError
 from nullbill.flows import HOST, HOST_PORTS, resolve_flows
 from nullbill.probe import Runner
@@ -196,6 +196,18 @@ def resolve_ipv4(name: str) -> str:
     return socket.getaddrinfo(name, 443, socket.AF_INET, socket.SOCK_STREAM)[0][4][0]
 
 
+def _agent_root(target: str, run: Runner) -> Result:
+    """The owner may give the runtime agent root on the host (hostroot.py);
+    while that lasts, every check of what the agent cannot do is moot."""
+    name = "the agent has no root on the PVE host"
+    rc, out, err = run(target, f"cat {hostroot.KEYS}")
+    if rc != 0:
+        return Result("FAIL", name, f"cannot read {hostroot.KEYS}: {(err or out).strip()[:120]}")
+    if hostroot.granted(out):
+        return Result("DEGRADED", name, "it has: the owner's switch on the page (step 7) is on")
+    return Result("PASS", name)
+
+
 def run_verify(
     plan: dict,
     model: dict,
@@ -264,6 +276,8 @@ def run_verify(
     else:
         add(*_lan(lan_host or target.rpartition("@")[2], connect))
     add(*backups.check(plan, target, run, now))
+    if "operator" in bare["guests"]:
+        add(_agent_root(target, run))
     add(*agent.check(plan, target, run))
     add(*forge.check(plan, target, run))
     add(*ci.check(plan, target, run))

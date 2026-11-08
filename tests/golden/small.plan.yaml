@@ -263,6 +263,7 @@ flows:
   - service:runner-dispatcher -> the PVE host tcp/8006
   - role:owner -> the PVE host tcp/22
   - service:nullbill -> the PVE host tcp/22
+  - service:operator -> the PVE host tcp/22
   - service:monitoring -> the PVE host tcp/9100
 people:
   owner-a: owner

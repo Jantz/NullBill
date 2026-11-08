@@ -36,6 +36,7 @@ STAGE_TEXT = {
     "backups": "Set up backups",
     "vpn": "Join your Tailscale network",
     "verify": "Run the checks",
+    "upgrade": "Update NullBill",
 }
 # Which stages each kind of job runs, in order.
 JOB_STAGES = {
@@ -48,6 +49,7 @@ JOB_TEXT = {
     "probe": "Look at the hardware",
     "apply": "Set up the server",
     "verify": "Run the checks",
+    "upgrade": "Update NullBill",
     "close-lan": "Close the home network",
     "keep-lan-closed": "Keep the home network closed",
     "open-lan": "Open the home network again",

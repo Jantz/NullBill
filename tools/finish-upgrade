@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# The second half of `nullbill upgrade` (src/nullbill/upgrade.py), from the
+# commit it moved to. systemd runs it as a transient unit, so it may write
+# /usr and /etc and restart the page without ending itself.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+tools/setup-controller
+unit=/etc/systemd/system/nullbill-web.service
+if ! cmp -s tools/nullbill-web.service "$unit"; then
+  install -m 0644 tools/nullbill-web.service "$unit"
+  systemctl daemon-reload
+fi
+# KillMode=process: the restart ends the page's server only, not the job
+# that started this upgrade.
+systemctl restart nullbill-web

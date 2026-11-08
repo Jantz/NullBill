@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from conftest import fixture_config
 
-from nullbill import apply, backups, ci, lan, llm
+from nullbill import apply, backups, ci, hostroot, lan, llm
 from nullbill.apply import ApplyError, Context, connection, run_apply
 from nullbill.artifacts import render_all
 from nullbill.errors import NullBillError
@@ -44,6 +44,7 @@ class FakeReach:
         # ending in $), and how often it fails before it works.
         self.flaky = dict(flaky or {})
         self.files = {}
+        self.agent_root = []
         self.tokens = []
         self.envs = []
         self.fail_playbook = fail_playbook
@@ -131,6 +132,9 @@ class FakeReach:
             return 0, "", ""
         if command == "cat /etc/ssh/ssh_host_ed25519_key.pub":
             return 0, "ssh-ed25519 AAAAhostkey root@pve\n", ""
+        if command.startswith(f"set -e; f={hostroot.KEYS}; "):
+            self.agent_root.append(command)
+            return 0, "", ""
         if command.startswith(("systemctl ", "mkdir -p ")):
             return 0, "", ""
         if command.startswith("rm -f "):
@@ -361,6 +365,8 @@ class FakeReach:
             return 0, f"token-for-{argv[5]}\n", ""
         if argv in (["cat", "/etc/grafana/admin-password"], ["cat", "/etc/forgejo/admin-password"]):
             return 0, f"password-of-{vmid}\n", ""
+        if argv == ["cat", "/home/agent/.ssh/nb-host.pub"]:
+            return 0, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIagent nullbill-agent-root\n", ""
         if argv == ["cat", "/etc/step-ca/secrets/agent-password"]:
             return 0, "agent-password\n", ""
         if argv == ["cat", "/etc/step-ca/certs/ssh_user_ca_key.pub"]:
@@ -809,6 +815,32 @@ def test_agents_stage_signs_in_the_operator_and_opens_agent_guests(ctx, stored):
     guests = {g["name"]: g for g in operator["operator_guests"]}
     assert guests["workspace"]["agent_managed"] and not guests["router"]["agent_managed"]
     assert guests["router"]["ip"] == "10.42.1.1" and guests["monitoring"]["fqdn"] == "monitoring.nullbill.internal"
+    # `ssh pve`: the host's mgmt address and its own key, pinned.
+    assert operator["operator_host_ip"] == c.bare["zones"]["mgmt"]["host_ip"]
+    assert operator["operator_host_key"] == "ssh-ed25519 AAAAhostkey"
+    # The agent's key is kept for the page's switch, which is off: the host is not touched.
+    assert hostroot.public_key(c.home) == "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIagent"
+    assert c.reach.agent_root == []
+    # No GitHub token yet: the agent can clone but not push.
+    assert operator["operator_github_token"] == "" and "operator_git_email" not in operator
+    assert "owner-a@example.internal" in operator["operator_denylist"]
+
+
+def test_agents_stage_keeps_the_agents_root_key_on_the_host_while_the_switch_is_on(ctx):
+    c = ctx("small")
+    c.secrets.set("anthropic_api_key", "sk-ant-credential")
+    c.secrets.data |= {"agent_github_token": "github_pat_x", "agent_github_login": "owner-a", "agent_github_id": "1000"}
+    (c.home / "denylist.txt").write_text("# mine\nserial-AB12CD\nab\n")
+    (c.home / hostroot.SWITCH).parent.mkdir(parents=True, exist_ok=True)
+    (c.home / hostroot.SWITCH).write_text('{"enabled": true}\n')
+    apply.stage_agents(c)
+    operator = next(call[3] for call in c.reach.calls if call[0] == "playbook" and call[1] == "operator.yml")
+    assert operator["operator_github_token"] == "github_pat_x"
+    assert operator["operator_git_email"] == "1000+owner-a@users.noreply.github.com"
+    # The owner's own entries join, except ones too short to mean anything.
+    assert "serial-AB12CD" in operator["operator_denylist"] and "ab" not in operator["operator_denylist"]
+    want = hostroot.command(hostroot.line("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIagent", c.bare["guests"]["operator"]["ip"]))
+    assert c.reach.agent_root == [want]
 
 
 def test_logs_stage_gives_each_shipper_its_own_certificate(ctx):

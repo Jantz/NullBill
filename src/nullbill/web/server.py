@@ -33,23 +33,26 @@ from pathlib import Path
 
 import yaml
 
-from nullbill import lan, legacy, llm
-from nullbill.apply import NTFY, SPKI
-from nullbill.cli import plan_text
+from nullbill import hostroot, lan, legacy, llm
+from nullbill.apply import NTFY, SPKI, STAGES
+from nullbill.cli import plan_text, reach_target
 from nullbill.errors import NullBillError
 from nullbill.model import build_model
 from nullbill.plan import guest_storage
+from nullbill.probe import ssh_run
 from nullbill.secretfile import Codec, Secrets, Sops
 from nullbill.tailnet import render_tailnet
 from nullbill.web import progress
 from nullbill.web.services import PASSWORDS, services, shares
 
 SESSION_S = 12 * 3600
+APPLY_STAGES = [name for name, _ in STAGES]
 MIN_PASSWORD = 12
 LOCKOUT_FAILURES = 10
 LOCKOUT_S = 300
 WORKLOADS = ["agents", "linux-ci", "inference", "media", "windows-ci", "windows-dev"]
-ACTIONS = {"probe", "apply", "verify"}
+# upgrade moves NullBill itself to main's newest commit (nullbill/upgrade.py).
+ACTIONS = {"probe", "apply", "verify", "upgrade"}
 # Closing the LAN to Proxmox (nullbill/lan.py), run as apply's host stage.
 LAN_ACTIONS = {"close-lan": ["apply", "--close-lan"], "keep-lan-closed": ["apply", "--confirm-lan"], "open-lan": ["apply", "--open-lan"]}
 # The page's own weekly job: the ci stage bakes each golden image again once
@@ -57,7 +60,7 @@ LAN_ACTIONS = {"close-lan": ["apply", "--close-lan"], "keep-lan-closed": ["apply
 # nightly backups; skipped for the week if another job runs then.
 SCHEDULED = {"rebake-ci": ["apply", "--stage", "ci"]}
 REBAKE_WEEKDAY, REBAKE_HOUR = 6, 3
-SCHEDULE_CHECK_S = 300
+SCHEDULE_CHECK_S = 60
 # An optional Healthchecks.io check notices silence; alerts go to NTFY.
 HEALTHCHECKS = re.compile(r"https://hc-ping\.com/[A-Za-z0-9_-]{8,}(/[a-z0-9_-]+)?")
 # The agent CLI signs in with an Anthropic API key or a Claude subscription
@@ -69,6 +72,13 @@ AGENT_CREDENTIALS = {"sk-ant-api": ("anthropic_api_key", "API key"), "sk-ant-oat
 # anything else, read other jobs' logs, or use the owner's API.
 AGENT_TOKEN = "web/agent-token.sha256"
 AGENT_ACTIONS = {"verify"}
+# The owner's switch on the page (docs/adr/0003-agent-access.md): while it
+# is on, the runtime agent has root on the PVE host (nullbill/hostroot.py)
+# and may also run setup (all of it or one stage) and update NullBill
+# through this API, and read every job's log. Each job it starts here, and
+# how it ended, goes to the owner's ntfy topic; if that send fails, the job
+# does not start.
+POWER_ACTIONS = {"apply", "upgrade"}
 # Remote agents, such as one on the owner's laptop, get the same verify-only
 # API with a token each that the owner makes and revokes on the page. Their
 # requests arrive through the vpn guest, as everything from the tailnet does,
@@ -82,6 +92,10 @@ DISK_USES = {"backups": "pbs", "storage": "storage"}
 DISK_CHOICE_TEXT = "leave it alone, keep its files, copy its files and erase it, or erase it"
 REMOTE_AGENT_NAME = re.compile(r"[a-z][a-z0-9-]{0,30}")
 # A Tailscale auth key logs the vpn guest in once; apply forgets it after.
+# A fine-grained GitHub token for the agent's pull requests.
+GITHUB_TOKEN = re.compile(r"github_pat_[A-Za-z0-9_]{20,255}")
+GITHUB_API = "https://api.github.com/"
+GITHUB_REPO = "Jantz/NullBill"
 TAILSCALE_KEY = re.compile(r"tskey-auth-[A-Za-z0-9-]{8,200}")
 TAILSCALE_CLIENT_ID = re.compile(r"[A-Za-z0-9]{6,64}")
 TAILSCALE_CLIENT_SECRET = re.compile(r"tskey-client-[A-Za-z0-9-]{8,200}")
@@ -112,6 +126,12 @@ def post(url: str, body: str = "", headers: dict | None = None) -> None:
 
 def fetch_json(url: str) -> dict:
     with urllib.request.urlopen(url, timeout=5) as response:
+        return json.load(response)
+
+
+def github_json(url: str, token: str) -> dict:
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json", "User-Agent": "nullbill"}
+    with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=15) as response:
         return json.load(response)
 
 
@@ -146,6 +166,7 @@ class Job:
     started: float
     process: subprocess.Popen | None = None
     rc: int | None = None
+    by: str = "owner"
 
     @property
     def rc_file(self) -> Path:
@@ -191,6 +212,9 @@ class App:
     codec: Callable[[Path], Codec] = Sops
     send: Callable[..., None] = post
     fetch: Callable[[str], dict] = fetch_json
+    github: Callable[[str, str], dict] = github_json
+    # The page reaches the host over SSH for the agent's switch.
+    host_run: Callable[[str, str], tuple[int, str, str]] = ssh_run
 
     # Files under NULLBILL_HOME.
     @property
@@ -382,6 +406,34 @@ class App:
             store = Secrets(self.codec(self.home))
             store.data |= {"tailscale_client_id": client_id, "tailscale_client_secret": secret}
             store.codec.save(store.data)
+
+    # A GitHub token the agent opens pull requests on NullBill's repository
+    # with; apply copies it to the operator. Its owner's login and id make
+    # the noreply identity the agent's commits use.
+    def agent_github(self) -> str | None:
+        return Secrets(self.codec(self.home)).data.get("agent_github_login") or None
+
+    def save_agent_github(self, body: dict) -> str | None:
+        token = re.sub(r"\s", "", str(body.get("token", "")))
+        if token and not GITHUB_TOKEN.fullmatch(token):
+            raise NullBillError("paste the token GitHub shows once you generate it (github_pat_...)")
+        found: dict = {}
+        if token:
+            try:
+                user = self.github(GITHUB_API + "user", token)
+                repo = self.github(GITHUB_API + "repos/" + GITHUB_REPO, token)
+            except (OSError, ValueError) as exc:
+                raise NullBillError(f"GitHub did not accept the token: {exc}") from exc
+            if not (repo.get("permissions") or {}).get("push"):
+                raise NullBillError(f"the token cannot push to {GITHUB_REPO}; give it Contents and Pull requests, read and write")
+            found = {"agent_github_token": token, "agent_github_login": str(user["login"]), "agent_github_id": str(user["id"])}
+        with self.lock:
+            if any(job.state() == "running" for job in self.jobs.values()):
+                raise NullBillError("wait until the running job finishes")
+            store = Secrets(self.codec(self.home))
+            store.data = {k: v for k, v in store.data.items() if not k.startswith("agent_github_")} | found
+            store.codec.save(store.data)
+        return found.get("agent_github_login")
 
     # Config and plan.
     def config(self) -> dict | None:
@@ -709,6 +761,72 @@ class App:
         listed = sorted(self.jobs.values(), key=lambda j: j.started, reverse=True)
         return [{"id": j.id, "action": j.action, "state": j.state(), "rc": j.rc, "started": j.started} for j in listed]
 
+    # What the runtime agent may do beyond verify: the owner's switch.
+    def agent_powers(self) -> bool:
+        return hostroot.enabled(self.home)
+
+    def host_target(self) -> str | None:
+        """Where the page reaches the host over SSH, as apply does."""
+        configured = ((self.config() or {}).get("target") or {}).get("ssh")
+        path = self.home / "plan.yaml"
+        if not configured or not path.exists():
+            return None
+        return reach_target(self.home, configured, yaml.safe_load(path.read_text()) or {})
+
+    def set_agent_powers(self, body: dict) -> None:
+        """On: the agent's key gets root on the host. Off: the key is taken
+        out first, and the switch is off even when that fails."""
+        enabled = body.get("enabled")
+        if not isinstance(enabled, bool):
+            raise NullBillError("send enabled: true or false")
+        key, operator, target = hostroot.public_key(self.home), self.guest_ip("operator"), self.host_target()
+        if enabled and not (key and operator and target):
+            raise NullBillError("the agent's key comes from the operator: choose Agents in step 3 and run setup first")
+        rc, _, err = self.host_run(target, hostroot.command(hostroot.line(key, operator) if enabled else None)) if target else (0, "", "")
+        if rc != 0 and enabled:
+            raise NullBillError(f"could not give the agent's key root on the host: {err.strip()[:200] or f'exit {rc}'}")
+        _write_private(self.home / hostroot.SWITCH, json.dumps({"enabled": enabled, "changed": time.time()}) + "\n")
+        print(f"nullbill-web: agent root on the host: {'on' if enabled else 'off'}", file=sys.stderr, flush=True)
+        if rc != 0:
+            raise NullBillError(
+                f"the agent can no longer run setup here, but taking its key off the host failed ({err.strip()[:200] or f'exit {rc}'}); "
+                "stop the operator container in Proxmox to cut it off now"
+            )
+
+    def may(self, agent: str, action: str, read: bool = False) -> bool:
+        """May this agent start this action, or with read, read its jobs' logs?"""
+        if action in AGENT_ACTIONS:
+            return True
+        if agent != "operator" or not self.agent_powers():
+            return False
+        return read or action in POWER_ACTIONS
+
+    def tell(self, message: str, tag: str) -> None:
+        """One message to the owner's ntfy topic, or NullBillError."""
+        topic = Secrets(self.codec(self.home)).data.get("ntfy_topic")
+        if not topic:
+            raise NullBillError("the owner has no ntfy topic yet, so they could not be told; set a password on the page first")
+        try:
+            self.send(NTFY + topic, message, {"Title": "NullBill agent", "Tags": tag})
+        except OSError as exc:
+            raise NullBillError(f"could not tell the owner through ntfy ({exc}); nothing started") from exc
+
+    def tell_agent_jobs(self) -> None:
+        """How each job an agent started ended, once."""
+        for job in list(self.jobs.values()):
+            if job.by == "owner" or job.state() == "running":
+                continue
+            meta = json.loads(job.meta_file.read_text())
+            if meta.get("told"):
+                continue
+            ended = "finished" if job.state() == "done" else f"failed (exit {job.rc})"
+            try:
+                self.tell(f"{progress.JOB_TEXT.get(job.action, job.action)}, started by the agent, {ended}.", "robot")
+            except NullBillError as exc:
+                print(f"nullbill-web: {exc}", file=sys.stderr, flush=True)
+                continue
+            _write_private(job.meta_file, json.dumps(meta | {"told": time.time()}))
+
     def via_vpn(self, client: str) -> bool:
         return client.removeprefix("::ffff:") == self.network()[1]
 
@@ -728,7 +846,10 @@ class App:
             now = time.time()
             job_id = time.strftime("%Y%m%dT%H%M%S", time.localtime(now)) + f"{int(now * 1000) % 1000:03d}-{action}"
             args = fixed[action] if action in fixed else [action] + (["--stage", stage] if stage else [])
-            job = Job(job_id, action, args, jobs / f"{job_id}.log", time.time())
+            job = Job(job_id, action, args, jobs / f"{job_id}.log", time.time(), by=by)
+            if by != "owner":
+                # Before the job exists: an action the owner is not told of does not run.
+                self.tell(f"The agent started: {progress.JOB_TEXT.get(action, action)}{f' (stage {stage})' if stage else ''}", "robot")
             env = os.environ | {"NULLBILL_HOME": str(self.home), "PYTHONUNBUFFERED": "1", "ANSIBLE_FORCE_COLOR": "0"}
             fd = os.open(job.log, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "w") as out:
@@ -749,7 +870,7 @@ class App:
             job_id = meta_file.stem
             log = meta_file.with_suffix(".log")
             if job_id not in self.jobs and log.exists():
-                self.jobs[job_id] = Job(job_id, meta["action"], meta["args"], log, meta["started"])
+                self.jobs[job_id] = Job(job_id, meta["action"], meta["args"], log, meta["started"], by=meta.get("by", "owner"))
 
     def rebake_due(self, now: float) -> bool:
         """Sunday's 03:00 hour, once a week, after a first apply made the CI pools."""
@@ -766,6 +887,7 @@ class App:
         return any(g.get("kind") == "vm-pool" and g.get("zone") != "windows" for g in guests.values())
 
     def scheduled(self, now: float) -> Job | None:
+        self.tell_agent_jobs()
         if not self.rebake_due(now):
             return None
         try:
@@ -843,6 +965,8 @@ class App:
             "tailscale_key": self.tailscale_key(),
             "tailscale_client": self.tailscale_client(),
             "remote_agents": sorted(self.remote_agents()),
+            "agent_powers": self.agent_powers(),
+            "agent_github": self.agent_github(),
             "lan": {"state": lan.state(self.home), "via_vpn": self.via_vpn(client), "minutes": lan.REVERT_AFTER_S // 60},
             "job": self.job_view(latest) | {"text": ""} if latest else None,
         }
@@ -937,13 +1061,14 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
             return agent
 
         def agent_get(self, path: str, query: str) -> None:
-            if not self.agent_authed():
+            agent = self.agent_authed()
+            if not agent:
                 return
             if path == "/api/agent/jobs":
                 return self.json(200, app.agent_jobs())
             match = re.fullmatch(r"/api/agent/jobs/([0-9T]+-[a-z-]+)", path)
             job = app.jobs.get(match[1]) if match else None
-            if job is not None and job.action in AGENT_ACTIONS:
+            if job is not None and app.may(agent, job.action, read=True):
                 return self.json(200, app.job_view(job, offset(query)))
             return self.json(404, {"error": "not found"})
 
@@ -961,12 +1086,17 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 body = json.loads(self.rfile.read(length) or b"{}")
             except ValueError:
                 return self.json(400, {"error": "body is not JSON"})
-            if self.path == "/api/agent/verify":
+            if match := re.fullmatch(r"/api/agent/(verify|apply|upgrade)", self.path):
                 agent = self.agent_authed()
                 if not agent:
                     return
+                if not app.may(agent, match[1]):
+                    return self.json(403, {"error": "the owner has not let the agent run setup and updates (page, step 7)"})
+                stage = body.get("stage") if match[1] == "apply" else None
+                if stage is not None and stage not in APPLY_STAGES:
+                    return self.json(400, {"error": f"no stage {stage!r}; stages: {', '.join(APPLY_STAGES)}"})
                 try:
-                    return self.json(200, app.job_view(app.start("verify", client=self.client(), by=agent)))
+                    return self.json(200, app.job_view(app.start(match[1], stage, client=self.client(), by=agent)))
                 except NullBillError as exc:
                     return self.json(409, {"error": "; ".join(exc.messages)})
             if self.path == "/api/login":
@@ -991,6 +1121,11 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 if self.path == "/api/agent":
                     app.save_agent_credential(body)
                     return self.json(200, {"ok": True, "agent_credential": app.agent_credential()})
+                if self.path == "/api/agent-github":
+                    return self.json(200, {"ok": True, "agent_github": app.save_agent_github(body)})
+                if self.path == "/api/agent-powers":
+                    app.set_agent_powers(body)
+                    return self.json(200, {"ok": True, "agent_powers": app.agent_powers()})
                 if self.path == "/api/remote-agents":
                     return self.json(200, app.add_remote_agent(body))
                 if self.path == "/api/remote-agents/revoke":

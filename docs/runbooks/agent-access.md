@@ -30,7 +30,41 @@ References: <https://pve.proxmox.com/pve-docs/chapter-pveum.html>,
 - **Repair**: start, stop, restart and snapshot agent-managed guests, and
   run commands on them as the unprivileged `agent` user.
 - **Configure**: anything beyond that it proposes to you, as the change to
-  make on the page or the commands to run; it cannot apply it.
+  make on the page or the commands to run, unless you let it manage the
+  server (below).
+
+## Let it manage the server
+
+On the page under step 6, **Let the agent manage the server**, press
+**Turn on**. You chose this over the confined default
+(docs/adr/0003-agent-access.md); it lasts until you press **Turn off**.
+While it is on, the agent also:
+
+- has root on Proxmox: `ssh pve '<command>'`, one command per session,
+  only from the operator's address, each command written to the host's
+  journal (and Loki) before it runs;
+- runs setup and updates through the page: `nb-page apply`,
+  `nb-page apply <stage>`, `nb-page upgrade` (NullBill to the newest commit
+  on main), and reads every job's output. Each of those jobs shows on the
+  page like your own, and your ntfy topic gets a message when it starts
+  and when it ends;
+- proposes fixes to NullBill as pull requests, if you saved a GitHub token
+  in the same step (fine-grained, NullBill's repository only, Contents and
+  Pull requests read and write). Its commits use your GitHub noreply
+  address. It never pushes to main; you merge.
+
+Its rules tell it to ask you before anything that deletes data or cannot
+be undone, and before a host reboot. That is the model's cooperation, not a
+control: with root it could do anything. verify shows
+`the agent has no root on the PVE host` as DEGRADED while this is on.
+
+**Turn off** takes its key off Proxmox at once. If the page cannot reach
+Proxmox then, it says so; stop the operator container (below) to cut the
+agent off anyway.
+
+A typical session: `claude`, then ask it to check the server and fix what
+it finds, or to update everything: it runs `nb-page upgrade`, then
+`nb-page apply`, then `nb-page verify`, and tells you what changed.
 
 For long work, start it inside `tmux` (`tmux new -s agent`, detach with
 Ctrl-b d, `tmux attach -t agent` later) so it keeps running when you close the
@@ -73,6 +107,8 @@ in `jobs/<id>.json`). **Revoke** on the page refuses the token at once.
 
 ## Read what it did
 
+Commands it ran as root on Proxmox: `{job="commands", host="pve"} |= "ssh: "`.
+
 In Grafana (`http://<monitoring address>:3000` over Tailscale, normally
 `http://10.42.1.14:3000`; Explore, Loki) or with
 `curl -G https://<monitoring address>:3100/loki/api/v1/query_range`:
@@ -89,8 +125,10 @@ In Grafana (`http://<monitoring address>:3000` over Tailscale, normally
 Each step works alone; do them in this order when you want it stopped now.
 
 1. Stop the container: `pct stop <operator vmid>` on the host. Nothing the
-   agent holds works without it: its token, certificates and API key are
-   only there.
+   agent holds works without it: its token, certificates, host key and API
+   key are only there. Then turn the switch off on the page, or remove the
+   line ending in `nullbill-agent-root` from `/root/.ssh/authorized_keys`
+   on the host yourself.
 2. Revoke the PVE token: `pveum user token remove nb-agent@pve operator`.
    `nullbill apply` creates a new one later.
 3. Stop new SSH certificates: on step-ca, replace
@@ -99,7 +137,8 @@ Each step works alone; do them in this order when you want it stopped now.
    `systemctl restart step-ca`. Certificates already issued expire within
    1 h; to end them at once, remove `/etc/ssh/nullbill_user_ca.pub` on the
    agent-managed guests and `systemctl reload ssh`.
-4. Revoke the model API key in the Anthropic console.
+4. Revoke the model API key in the Anthropic console, and the GitHub token
+   in GitHub's settings.
 
 To bring it back, re-run `nullbill apply`: the step_ca role restores the
 provisioner and its password, and apply copies the new password, token and

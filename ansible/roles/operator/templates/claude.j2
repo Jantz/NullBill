@@ -6,4 +6,10 @@ if [ -r "$token" ]; then
   CLAUDE_CODE_OAUTH_TOKEN=$(cat "$token")
   export CLAUDE_CODE_OAUTH_TOKEN
 fi
+# gh reads the owner's GitHub token for NullBill's repository from GH_TOKEN.
+github=/etc/nullbill/agent/github-token
+if [ -r "$github" ]; then
+  GH_TOKEN=$(cat "$github")
+  export GH_TOKEN
+fi
 exec /opt/claude-code/{{ operator_claude_code_version }}/package/claude "$@"

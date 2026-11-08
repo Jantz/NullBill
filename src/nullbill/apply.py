@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from nullbill import backups, ci, lan, legacy, llm, media
+from nullbill import backups, ci, hostroot, lan, legacy, llm, media
 from nullbill.artifacts import write_build
 from nullbill.errors import NullBillError
 from nullbill.flows import mac
@@ -1542,10 +1542,66 @@ def stage_agents(ctx: Context) -> None:
         "operator_step_password": guest_out(ctx, "agents", "step-ca", ["cat", f"{STEP}/secrets/agent-password"]).strip(),
     }
     variables |= agent_page(ctx) | {"operator_guests": agent_map(ctx), "operator_domain": ctx.bare["domain"]}
+    variables |= agent_host(ctx) | agent_repo(ctx)
     run_playbook(ctx, "agents", "operator.yml", "operator", variables)
+    keep_agent_key(ctx)
     key = ssh_user_ca(ctx, "agents")
     for name in agent_guests(ctx):
         run_playbook(ctx, "agents", "agent-ssh.yml", name, {"agent_ssh_user_ca_key": key})
+
+
+def agent_host(ctx: Context) -> dict:
+    """`ssh pve` on the operator: the host's mgmt address and its own key."""
+    key = host_out(ctx, "agents", "cat /etc/ssh/ssh_host_ed25519_key.pub").split()
+    return {"operator_host_ip": ctx.bare["zones"]["mgmt"]["host_ip"], "operator_host_key": " ".join(key[:2])}
+
+
+def agent_repo(ctx: Context) -> dict:
+    """NullBill's repository for the agent's pull requests: the owner's
+    GitHub token and noreply identity (saved on the page), and identifiers
+    of this server its pre-push hook refuses."""
+    data = ctx.secrets.data
+    login, user_id = data.get("agent_github_login", ""), data.get("agent_github_id", "")
+    out = {"operator_denylist": agent_denylist(ctx), "operator_github_token": data.get("agent_github_token", "")}
+    if login and user_id:
+        out |= {"operator_git_name": login, "operator_git_email": f"{user_id}+{login}@users.noreply.github.com"}
+    origin = subprocess.run(["git", "-C", str(REPO_ROOT), "remote", "get-url", "origin"], capture_output=True, text=True, check=False)
+    if origin.returncode == 0 and origin.stdout.strip().startswith("https://"):
+        out["operator_repo_url"] = origin.stdout.strip()
+    return out
+
+
+def agent_denylist(ctx: Context) -> list[str]:
+    """What identifies this server or its owner and must never reach the
+    public repository: the host's LAN address, people's logins, disk ids
+    (they hold serials), partition UUIDs and labels, and the owner's own
+    $NULLBILL_HOME/denylist.txt."""
+    entries = {ctx.lan_host or ""}
+    entries |= {p.get("login", "") for p in ctx.model.get("people", {}).values()}
+    facts_path = ctx.home / "probe" / "latest" / "facts.json"
+    facts = json.loads(facts_path.read_text()) if facts_path.exists() else {}
+    for disk in facts.get("disks") or []:
+        entries.add(disk.get("id", ""))
+        for part in disk.get("partitions") or []:
+            entries |= {str(part.get("uuid") or ""), str(part.get("label") or "")}
+    own = ctx.home / "denylist.txt"
+    if own.exists():
+        entries |= {line.strip() for line in own.read_text().splitlines() if not line.lstrip().startswith("#")}
+    # Short entries (a label like "Data") would refuse ordinary words.
+    return sorted(e for e in entries if len(e) >= 6)
+
+
+def keep_agent_key(ctx: Context) -> None:
+    """The agent's public key for the page's root switch, and the host's
+    authorized_keys line again while the switch is on: setup may have made
+    the operator, and its key, anew."""
+    key = guest_out(ctx, "agents", "operator", ["cat", "/home/agent/.ssh/nb-host.pub"]).strip()
+    path = ctx.home / hostroot.PUBLIC_KEY
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path.write_text(key + "\n")
+    if hostroot.enabled(ctx.home):
+        host_out(ctx, "agents", hostroot.command(hostroot.line(hostroot.public_key(ctx.home) or "", ctx.bare["guests"]["operator"]["ip"])))
+        ctx.say("agents: the agent has root on the host (the page's switch is on)")
 
 
 # The page keeps the SHA-256 of the agent's token, never the token itself.

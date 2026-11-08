@@ -42,3 +42,23 @@ operator_domain: nullbill.internal
 
 # From ansible/roles/step_ca, for step-cli.
 step_cli_version: 0.30.1-1
+
+# The PVE host as the agent reaches it with `ssh pve`: its mgmt address and
+# its ed25519 host key ("ssh-ed25519 AAAA..."). Empty: no `ssh pve`.
+operator_host_ip: ""
+operator_host_key: ""
+
+# NullBill's repository, where the agent proposes fixes as pull requests:
+# its URL, a GitHub token the owner made for it (fine-grained, this
+# repository only, contents and pull requests), the owner's noreply
+# identity its commits use, and identifiers of this server that must never
+# reach the public repository (the pre-push hook's deny-list). No token:
+# the agent can still clone and read, not push.
+operator_repo_url: https://github.com/Jantz/NullBill
+operator_github_token: ""
+operator_git_name: ""
+operator_git_email: ""
+operator_denylist: []
+# gitleaks for the repository's hooks, as CI pins it.
+operator_gitleaks_version: 8.21.2
+operator_gitleaks_sha256: 5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba

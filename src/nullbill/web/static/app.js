@@ -379,6 +379,21 @@ function renderAgent(kind) {
   $("agent-label").textContent = kind ? "Replace it with a new API key or subscription token" : "API key or subscription token";
 }
 
+function renderAgentPowers(on) {
+  const note = $("agent-powers-state");
+  note.className = on ? "note warn" : "note";
+  note.textContent = on ? "On: the agent has root on Proxmox." : "Off: the agent can look and run the checks, and restart or snapshot its own guests.";
+  $("agent-powers").textContent = on ? "Turn off" : "Turn on";
+  $("agent-powers").classList.toggle("secondary", on);
+}
+
+function renderAgentGithub(login) {
+  const saved = $("agent-github-saved");
+  saved.hidden = !login;
+  saved.textContent = login ? `✓ A token for ${login} is saved; the agent's commits use your GitHub noreply address. Paste a new one to replace it.` : "";
+  show("agent-github-remove", Boolean(login));
+}
+
 function renderTailscaleClient(saved) { show("tailscale-client-saved", saved); }
 
 function renderVpn(waiting) {
@@ -617,6 +632,8 @@ async function refresh() {
   renderPlan(st.plan);
   renderAlerts(st.alerts);
   renderAgent(st.agent_credential);
+  renderAgentPowers(st.agent_powers);
+  renderAgentGithub(st.agent_github);
   renderTailscaleClient(st.tailscale_client);
   renderVpn(st.tailscale_key);
   renderRemoteAgents(st.remote_agents, st.remote_agents_ready);
@@ -662,7 +679,9 @@ function follow(first, watched) {
   const node = $("job-template").content.firstElementChild.cloneNode(true);
   slotFor(first.action).append(node);
   job = {id: first.id, view: first, node, offset: 0, timer: null, watched, misses: 0};
-  node.querySelector(".job-retry").addEventListener("click", () => startJob(first.action === "verify" ? "verify" : "apply", node.querySelector(".job-copy-result")));
+  const again = ["verify", "upgrade"].includes(first.action) ? first.action : "apply";
+  if (again === "upgrade") node.querySelector(".job-retry").textContent = "Update again";
+  node.querySelector(".job-retry").addEventListener("click", () => startJob(again, node.querySelector(".job-copy-result")));
   node.querySelector(".job-copy").addEventListener("click", () => copyDetails(node));
   tick(job);
 }
@@ -849,7 +868,7 @@ async function copyDetails(node) {
 }
 
 const STARTING = {
-  probe: "Starting the probe…", apply: "Starting setup…", verify: "Starting the checks…",
+  probe: "Starting the probe…", apply: "Starting setup…", verify: "Starting the checks…", upgrade: "Starting the update…",
   "close-lan": "Closing…", "keep-lan-closed": "Keeping it closed…", "open-lan": "Opening…",
 };
 
@@ -956,6 +975,35 @@ document.addEventListener("DOMContentLoaded", () => {
     }, field);
   });
 
+  $("agent-powers").addEventListener("click", () => {
+    const on = !state.agent_powers;
+    press($("agent-powers"), "agent-powers-result", on ? "Giving the agent root on Proxmox…" : "Taking the agent's key off Proxmox…", async () => {
+      try {
+        state.agent_powers = (await api("/api/agent-powers", {enabled: on})).agent_powers;
+      } finally {
+        if (!on) state.agent_powers = false;  // off even when the key could not be taken off
+        renderAgentPowers(state.agent_powers);
+      }
+      return on ? "On. The agent can now manage the server." : "Off. The agent's key is off Proxmox.";
+    });
+  });
+  $("agent-github-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const field = $("agent-github-token");
+    press(event.submitter || event.target.querySelector("button"), "agent-github-result", "Checking with GitHub…", async () => {
+      if (!field.value.trim()) throw new ApiError("Paste the token into the field first.", 400);
+      const result = await api("/api/agent-github", {token: field.value});
+      field.value = "";
+      state.agent_github = result.agent_github;
+      renderAgentGithub(result.agent_github);
+      return `Saved: GitHub knows it as ${result.agent_github}. Run setup in step 8 so the agent gets it.`;
+    }, field);
+  });
+  $("agent-github-remove").addEventListener("click", () => press($("agent-github-remove"), "agent-github-result", "Removing…", async () => {
+    state.agent_github = (await api("/api/agent-github", {token: ""})).agent_github;
+    renderAgentGithub(state.agent_github);
+    return "Removed. Run setup so the agent's copy goes too; revoke it on GitHub as well.";
+  }));
   $("tailscale-client-form").addEventListener("submit", (event) => {
     event.preventDefault();
     const id = $("tailscale-client-id");

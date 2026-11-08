@@ -39,7 +39,13 @@ class Page(http.server.BaseHTTPRequestHandler):
         body = json.dumps(data).encode()
         self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(body)
     def do_POST(self):
-        self.reply({"id": "20261105T100000000-verify", "state": "running", "text": "", "offset": 0}) if self.path == "/api/agent/verify" else self.reply({})
+        body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        if self.path == "/api/agent/apply":
+            open("/tmp/apply-body", "wb").write(body)
+        if self.path in ("/api/agent/verify", "/api/agent/apply"):
+            self.reply({"id": "20261105T100000000-verify", "state": "running", "text": "", "offset": 0})
+        else:
+            self.reply({})
     def do_GET(self):
         if self.path.startswith("/api/agent/jobs/20261105T100000000-verify"):
             self.reply({"state": "failed", "rc": 1, "text": "PASS one\nFAIL two\n", "offset": 18})
@@ -55,7 +61,15 @@ PY
 vars=$(mktemp)
 python3 - "$vars" "$spki" <<'PY'
 import json, sys
+host_key = " ".join(open("/etc/ssh/ssh_host_ed25519_key.pub").read().split()[:2])
 json.dump({
+    # This container stands in for the PVE host, too.
+    "operator_host_ip": "127.0.0.1",
+    "operator_host_key": host_key,
+    "operator_github_token": "github_pat_throwaway",
+    "operator_git_name": "owner-a",
+    "operator_git_email": "1000+owner-a@users.noreply.github.com",
+    "operator_denylist": ["serial-AB12CD34", "192.0.2.10"],
     "operator_pve_token": "nb-agent@pve!operator=00000000-0000-0000-0000-000000000000",
     "operator_pve_ca": "throwaway, not a certificate",
     "operator_ca_root": open("/etc/step-ca/certs/root_ca.crt").read(),
@@ -126,10 +140,45 @@ if su - agent -c 'ssh -i ~/.ssh/nb-agent -o IdentitiesOnly=yes -o BatchMode=yes 
 fi
 pass "nb-ssh logs in to an agent-managed guest as agent with a reused certificate, never as root"
 
+# Root on "the host" once the page's switch puts the agent's key there,
+# with the line hostroot.line makes: from the operator, every command
+# recorded first.
+test "$(stat -c '%a %U' /home/agent/.ssh/nb-host)" = "600 agent" || fail "the agent's host key is not the agent's alone"
+if su - agent -c 'ssh -o BatchMode=yes pve true' 2>/dev/null; then fail "ssh pve worked before the switch"; fi
+install -d -m 0700 /root/.ssh
+echo "from=\"127.0.0.1\",command=\"/usr/local/sbin/nb-agent-command\",no-agent-forwarding,no-X11-forwarding $(cut -d' ' -f1,2 /home/agent/.ssh/nb-host.pub) nullbill-agent-root" >>/root/.ssh/authorized_keys
+out=$(su - agent -c "ssh -o BatchMode=yes pve 'id -un; echo root-marker'" 2>/tmp/pve.log) || { cat /tmp/pve.log /tmp/sshd.log; fail "ssh pve"; }
+test "$out" = "root
+root-marker" || fail "ssh pve ran as '$out'"
+journalctl -t nb-cmd -o json --no-pager | python3 -c '
+import json, sys
+sys.exit(not [e for e in map(json.loads, sys.stdin) if e["MESSAGE"] == "ssh: id -un; echo root-marker" and e["_UID"] == "0"])' ||
+  fail "the host command is not in the journal before it ran"
+if su - agent -c 'ssh -o BatchMode=yes pve' </dev/null >/dev/null 2>&1; then fail "ssh pve opened a shell without a command"; fi
+sed -i '/ nullbill-agent-root$/d' /root/.ssh/authorized_keys
+if su - agent -c 'ssh -o BatchMode=yes pve true' 2>/dev/null; then fail "ssh pve worked after the switch went off"; fi
+sed -i 's/^127.0.0.1 ssh-ed25519 .*/127.0.0.1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOtherHostOtherHostOtherHostOtherHostOther/' /etc/ssh/ssh_known_hosts
+echo "from=\"127.0.0.1\",command=\"/usr/local/sbin/nb-agent-command\" $(cut -d' ' -f1,2 /home/agent/.ssh/nb-host.pub) nullbill-agent-root" >>/root/.ssh/authorized_keys
+if su - agent -c 'ssh -o BatchMode=yes pve true' 2>/dev/null; then fail "ssh pve trusted a host key that is not the pinned one"; fi
+sed -i '/ nullbill-agent-root$/d' /root/.ssh/authorized_keys
+converge operator.yml -e "@$vars"
+pass "with the switch's line the agent runs one recorded command at a time as root on the pinned host, and nothing without it"
+
+test "$(su - agent -c 'git config user.email')" = "1000+owner-a@users.noreply.github.com" || fail "the agent's git identity"
+printf 'protocol=https\nhost=github.com\n\n' | su - agent -c 'git credential fill' | grep -qx 'password=github_pat_throwaway' ||
+  fail "git does not get the GitHub token"
+test "$(stat -c '%a %U %G' /etc/nullbill/agent/github-token)" = "640 root agent" || fail "GitHub token mode"
+test "$(stat -c '%a %U %G' /etc/nullbill/agent/denylist.txt)" = "640 root agent" || fail "deny-list mode"
+grep -qx 'serial-AB12CD34' /etc/nullbill/agent/denylist.txt || fail "deny-list entries"
+python3 -c 'import json; s = json.load(open("/etc/claude-code/managed-settings.json")); assert s["env"]["NULLBILL_HOME"] == "/etc/nullbill/agent"' ||
+  fail "the repository hooks would not find the deny-list"
+gitleaks version | grep -q "$(sed -n 's/^operator_gitleaks_version: //p' /ansible/roles/operator/defaults/main.yml)" || fail "gitleaks"
+pass "git pushes with the owner's GitHub token and noreply identity, and the hooks have gitleaks and this server's deny-list"
+
 grep -qxF '| workspace | workspace.nullbill.internal (10.42.3.20) | build | lxc | 2020 | yes |' /etc/claude-code/CLAUDE.md ||
   fail "the agent's rules list the guests it may act on"
-grep -qxF '| router | router.nullbill.internal (10.42.1.1) | mgmt | vm | 2001 | read only |' /etc/claude-code/CLAUDE.md ||
-  fail "the agent's rules list the router as read only"
+grep -qxF '| router | router.nullbill.internal (10.42.1.1) | mgmt | vm | 2001 | no, through the host |' /etc/claude-code/CLAUDE.md ||
+  fail "the agent's rules list the router as reached through the host"
 code=0
 out=$(su - agent -c 'nb-page verify') || code=$?
 if [ "$code" != 1 ] || ! grep -qx "FAIL two" <<<"$out"; then
@@ -137,10 +186,13 @@ if [ "$code" != 1 ] || ! grep -qx "FAIL two" <<<"$out"; then
   fail "nb-page verify: exit $code, output '$out'"
 fi
 su - agent -c 'nb-page jobs' | grep -q "verify.failed.1" || fail "nb-page jobs"
+code=0
+su - agent -c 'nb-page apply ci' >/dev/null || code=$?
+test "$code" = 1 && test "$(cat /tmp/apply-body)" = '{"stage":"ci"}' || fail "nb-page apply ci: exit $code, sent $(cat /tmp/apply-body)"
 sed -i 's#sha256//[^'"'"']*#sha256//AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=#' /usr/local/bin/nb-page
 if su - agent -c 'nb-page jobs' >/dev/null 2>&1; then fail "nb-page talked to a page whose key is not the pinned one"; fi
 converge operator.yml -e "@$vars"
-pass "the agent runs verify through the page, whose key it pins, and its rules list the guests"
+pass "the agent runs verify and setup through the page, whose key it pins, and its rules list the guests"
 
 # A Claude subscription token instead of an API key.
 python3 - "$vars" <<'PY'
@@ -156,4 +208,5 @@ python3 -c 'import json, sys; sys.exit("apiKeyHelper" in json.load(open("/etc/cl
   fail "the key helper stayed with a token"
 sed 's#^exec .*#exec env#' /usr/local/bin/claude >/tmp/claude-env
 su agent -c 'sh /tmp/claude-env' | grep -qx CLAUDE_CODE_OAUTH_TOKEN=throwaway-token || fail "the wrapper does not pass the token"
+su agent -c 'sh /tmp/claude-env' | grep -qx GH_TOKEN=github_pat_throwaway || fail "the wrapper does not pass the GitHub token to gh"
 pass "with a subscription token instead, the CLI gets it in its environment and no API key is left"

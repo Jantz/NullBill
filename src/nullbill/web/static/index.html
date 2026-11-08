@@ -199,6 +199,28 @@
             <p class="feedback" id="agent-result" role="status" aria-live="polite"></p>
           </div>
         </form>
+        <div class="subcard">
+          <h3>Let the agent manage the server</h3>
+          <p>With this on, the agent in the operator container gets root on Proxmox, so it can find and fix problems, update Proxmox and the services, and run setup and <b>Update NullBill</b> itself. It asks you before anything that deletes data, such as removing a guest, a disk or a backup. You get a message on your alert topic for each setup run or update it starts. Every command it runs is logged before it runs; see <a href="https://github.com/Jantz/NullBill/blob/main/docs/runbooks/agent-access.md" rel="noopener noreferrer" target="_blank">agent-access.md</a> to read the log or talk to it. Turning this off takes its key off Proxmox at once.</p>
+          <p id="agent-powers-state" class="note"></p>
+          <div class="actions">
+            <button type="button" id="agent-powers">Turn on</button>
+            <p class="feedback" id="agent-powers-result" role="status" aria-live="polite"></p>
+          </div>
+        </div>
+        <form id="agent-github-form" class="subcard" novalidate>
+          <h3>Fixes to NullBill as pull requests</h3>
+          <p>Optional. When the agent finds a bug in NullBill, it can propose the fix on GitHub for you to merge. On GitHub, open <b>Settings, Developer settings, Personal access tokens, Fine-grained tokens</b> and press <b>Generate new token</b>. Pick <b>Only select repositories</b> with NullBill's repository, and under <b>Repository permissions</b> set <b>Contents</b> and <b>Pull requests</b> to <b>Read and write</b>. Paste the token here and run setup.</p>
+          <p id="agent-github-saved" class="note ok" hidden></p>
+          <label>GitHub token
+            <input id="agent-github-token" type="password" autocomplete="off" placeholder="github_pat_...">
+          </label>
+          <div class="actions">
+            <button type="submit">Save</button>
+            <button type="button" id="agent-github-remove" class="secondary" hidden>Remove it</button>
+            <p class="feedback" id="agent-github-result" role="status" aria-live="polite"></p>
+          </div>
+        </form>
       </section>
 
       <section class="card step" id="step-7" data-step="7" data-title="Reach it from anywhere">
@@ -261,9 +283,11 @@
         <div class="actions">
           <button type="button" data-action="apply">Run setup</button>
           <button type="button" data-action="verify" class="secondary">Run checks</button>
+          <button type="button" data-action="upgrade" class="secondary">Update NullBill</button>
           <p class="feedback" id="apply-result" role="status" aria-live="polite"></p>
         </div>
-        <div class="job-slot" data-for="apply verify rebake-ci"></div>
+        <p class="hint"><b>Update NullBill</b> moves this page and setup to NullBill's newest version; press <b>Run setup</b> after it, so the server follows.</p>
+        <div class="job-slot" data-for="apply verify rebake-ci upgrade"></div>
       </section>
 
       <section class="card step" id="step-9" data-step="9" data-title="Close the home network">

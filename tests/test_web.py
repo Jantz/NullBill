@@ -504,7 +504,9 @@ def test_the_runtime_agent_may_run_verify_and_read_its_output_only(site):
     assert agent.call(f"/api/agent/jobs/{owner_job['id']}")[0] == 404
     assert agent.call("/api/state")[1] == {"auth": False, "has_password": True}
     assert agent.call("/api/jobs", {"action": "apply"})[0] == 401
-    assert agent.call("/api/agent/apply", {})[0] == 401
+    # Setup and updates wait for the owner's switch.
+    assert agent.call("/api/agent/apply", {})[0] == 403
+    assert agent.call("/api/agent/upgrade", {})[0] == 403
 
 
 def test_a_remote_agent_gets_the_same_verify_only_api_through_the_vpn_guest(site, capfd):
@@ -534,7 +536,7 @@ def test_a_remote_agent_gets_the_same_verify_only_api_through_the_vpn_guest(site
     assert json.loads((app.home / "jobs" / f"{job['id']}.json").read_text())["by"] == "remote:laptop"
     # Verify only, as for the operator.
     assert agent.call("/api/jobs", {"action": "apply"})[0] == 401
-    assert agent.call("/api/agent/apply", {})[0] == 401
+    assert agent.call("/api/agent/apply", {})[0] == 403
     assert "nullbill-web: agent remote:laptop from 127.0.0.1: POST /api/agent/verify" in capfd.readouterr().err
     # The operator's token does not work from the vpn guest, nor a remote one from elsewhere.
     (app.home / "web" / "agent-token.sha256").write_text(web.hashlib.sha256(b"agent-token").hexdigest() + "\n")
@@ -759,3 +761,104 @@ def test_the_owner_gives_the_gpu_memory_the_probe_could_not_read(site):
     # Cleared again, the pin goes.
     client.call("/api/choices", {**choices, "gpus": {"0000:01:00.0": ""}})
     assert "gpus" not in yaml.safe_load((app.home / "config.yaml").read_text())
+
+
+AGENT_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIagent"
+
+
+def test_the_owners_switch_gives_the_agent_root_on_the_host_and_setup_through_the_page(site):
+    app, client = site
+    sign_in(app, client)
+    host = []
+    app.host_run = lambda target, command: host.append((target, command)) or (0, "", "")
+    agent = Client(client.port, app.home / "web" / "cert.pem")
+    agent.tls, agent.bearer = client.tls, "agent-token"
+    (app.home / "web" / "agent-token.sha256").write_text(web.hashlib.sha256(b"agent-token").hexdigest() + "\n")
+    (app.home / "config.yaml").write_text("target:\n  ssh: root@192.0.2.10\n")
+    (app.home / "plan.yaml").write_text("zones:\n  mgmt:\n    host_ip: 10.42.1.254\nguests:\n  operator:\n    ip: 127.0.0.1\n")
+    # No key until setup made the operator.
+    assert client.call("/api/agent-powers", {"enabled": True})[0] == 400 and host == []
+    (app.home / web.hostroot.PUBLIC_KEY).write_text(AGENT_KEY + " nullbill-agent-root\n")
+    assert client.call("/api/agent-powers", {"enabled": "yes"})[0] == 400
+    assert client.call("/api/agent-powers", {"enabled": True}) == (200, {"ok": True, "agent_powers": True})
+    assert host == [("root@192.0.2.10", web.hostroot.command(web.hostroot.line(AGENT_KEY, "127.0.0.1")))]
+    assert client.call("/api/state")[1]["agent_powers"] is True
+
+    # The agent runs one stage; the owner hears of it before it starts, and how it ended.
+    assert agent.call("/api/agent/apply", {"stage": "nope"})[0] == 400
+    status, job = agent.call("/api/agent/apply", {"stage": "ci"})
+    assert status == 200 and job["args"] == ["apply", "--stage", "ci"]
+    url, body, headers = app.send[-1]
+    assert url.startswith(web.NTFY) and body == "The agent started: Set up the server (stage ci)" and headers["Tags"] == "robot"
+    seen = wait(client, job["id"])
+    assert agent.call(f"/api/agent/jobs/{job['id']}")[1]["text"] == seen["text"] == "ran apply --stage ci\n"
+    app.tell_agent_jobs()
+    app.tell_agent_jobs()
+    assert [b for _, b, _ in app.send[1:]] == ["Set up the server, started by the agent, failed (exit 3)."]
+    assert json.loads((app.home / "jobs" / f"{job['id']}.json").read_text())["by"] == "operator"
+    # It reads the owner's jobs too while the switch is on.
+    owner = client.call("/api/jobs", {"action": "probe"})[1]
+    wait(client, owner["id"])
+    assert agent.call(f"/api/agent/jobs/{owner['id']}")[0] == 200
+    # When the owner cannot be told, nothing starts.
+    app.send.fail = True
+    assert agent.call("/api/agent/upgrade", {})[0] == 409
+    app.send.fail = False
+    status, job = agent.call("/api/agent/upgrade", {})
+    assert status == 200 and job["args"] == ["upgrade"]
+    wait(client, job["id"])
+
+    # Off: the key comes out of the host first, and the API closes again.
+    assert client.call("/api/agent-powers", {"enabled": False}) == (200, {"ok": True, "agent_powers": False})
+    assert host[-1] == ("root@192.0.2.10", web.hostroot.command(None))
+    assert agent.call("/api/agent/apply", {})[0] == 403
+    assert agent.call(f"/api/agent/jobs/{owner['id']}")[0] == 404
+    # Off even when the host cannot be reached, and the owner is told what to do.
+    app.host_run = lambda target, command: (255, "", "ssh: connect to host 192.0.2.10 port 22: No route to host")
+    assert client.call("/api/agent-powers", {"enabled": True})[0] == 400
+    assert not app.agent_powers()
+    (app.home / web.hostroot.SWITCH).write_text('{"enabled": true}\n')
+    status, data = client.call("/api/agent-powers", {"enabled": False})
+    assert status == 400 and "stop the operator container" in data["error"] and not app.agent_powers()
+
+
+def test_a_remote_agent_never_gets_setup_even_with_the_switch_on(site):
+    app, client = site
+    sign_in(app, client)
+    (app.home / "plan.yaml").write_text("guests:\n  vpn:\n    ip: 127.0.0.1\n  nullbill:\n    ip: 10.42.1.2\n")
+    made = client.call("/api/remote-agents", {"name": "laptop"})[1]
+    (app.home / web.hostroot.SWITCH).write_text('{"enabled": true}\n')
+    agent = Client(client.port, app.home / "web" / "cert.pem")
+    agent.tls, agent.bearer = client.tls, made["token"]
+    assert agent.call("/api/agent/apply", {})[0] == 403
+    assert agent.call("/api/agent/upgrade", {})[0] == 403
+
+
+def test_the_agents_github_token_is_checked_with_github_and_never_shown(site):
+    app, client = site
+    sign_in(app, client)
+    asked = []
+
+    def github(url, token):
+        asked.append((url, token))
+        if token.endswith("bad"):
+            raise OSError("HTTP Error 401: Unauthorized")
+        if url.endswith("/user"):
+            return {"login": "owner-a", "id": 1000}
+        return {"permissions": {"push": not token.endswith("read")}}
+
+    app.github = github
+    good = "github_pat_" + "A" * 40
+    assert client.call("/api/agent-github", {"token": "hunter2"})[0] == 400
+    assert client.call("/api/agent-github", {"token": good[:-3] + "bad"})[0] == 400
+    status, data = client.call("/api/agent-github", {"token": good[:-4] + "read"})
+    assert status == 400 and "cannot push" in data["error"]
+    assert client.call("/api/agent-github", {"token": f" {good}\n"}) == (200, {"ok": True, "agent_github": "owner-a"})
+    assert asked[-1] == (web.GITHUB_API + "repos/" + web.GITHUB_REPO, good)
+    stored = app.codec(app.home).data
+    assert (stored["agent_github_token"], stored["agent_github_id"]) == (good, "1000")
+    state = json.dumps(client.call("/api/state")[1])
+    assert good not in state and '"agent_github": "owner-a"' in state
+    # Removed: every agent_github_ value goes.
+    assert client.call("/api/agent-github", {"token": ""}) == (200, {"ok": True, "agent_github": None})
+    assert not [k for k in app.codec(app.home).data if k.startswith("agent_github")]

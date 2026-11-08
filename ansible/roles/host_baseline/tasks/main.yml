@@ -110,6 +110,15 @@
     dest: /usr/local/sbin/nb-pve-api-cert
     mode: "0755"
 
+# The runtime agent's root key on the host runs every command through it
+# (src/nullbill/hostroot.py), so each is in the journal, which the log
+# shipper sends to Loki, before it runs.
+- name: Agent command recorder
+  ansible.builtin.copy:
+    src: "{{ role_path }}/../agent_ssh/files/nb-agent-command"
+    dest: /usr/local/sbin/nb-agent-command
+    mode: "0755"
+
 # apply runs them before OpenTofu when the plan gives PBS a disk of its own,
 # or pins a disk as storage (docs/adr/0007-legacy-disks.md, phase 3).
 - name: Backup and storage disk scripts

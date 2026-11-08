@@ -39,7 +39,9 @@ host:
   ports:
     # The runner dispatcher's token may only clone runners (ci.py).
     - {port: 8006, proto: tcp, from: ["role:owner", "service:nullbill", "service:operator", "service:runner-dispatcher"]}
-    - {port: 22, proto: tcp, from: ["role:owner", "service:nullbill"]}
+    # The operator: the runtime agent's root key, while the owner's switch
+    # on the page puts it in authorized_keys (nullbill/hostroot.py).
+    - {port: 22, proto: tcp, from: ["role:owner", "service:nullbill", "service:operator"]}
     - {port: 9100, proto: tcp, from: ["service:monitoring"]}
 
 zones:
@@ -173,7 +175,7 @@ services:
     kind: lxc
     zone: mgmt
     workload: core
-    description: Holds the agent CLI and token. Owner only. Reaches the PVE API, CA, Loki, Prometheus, the page's verify and SSH on agent-managed guests.
+    description: Holds the agent CLI and token. Owner only. Reaches the PVE API and SSH, CA, Loki, Prometheus, the page and SSH on agent-managed guests.
     # The agent CLI's model API (docs/adr/0002-agent-cli.md), for this guest only.
     proxy_allow: [api.anthropic.com]
     floor: {cores: 1, memory_mib: 512, disk_gib: 8}

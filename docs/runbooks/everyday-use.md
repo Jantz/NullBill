@@ -70,12 +70,16 @@ no longer works.
   a security update's reboot. **Run checks** (step 8) runs every check
   again; **Run setup** applies a change you made in steps 3 to 7 and
   replaces certificates that expired while the server was off.
+  **Update NullBill** (step 8) moves the page and setup to NullBill's
+  newest version; press **Run setup** after it. You no longer need to run
+  `install.sh` again for that.
 - **Alerts** come to the ntfy topic from step 5. Each names what fired;
   Grafana and the page say more.
 - **Proxmox** is for what NullBill does not do: a guest's console, start
   and stop, snapshots and the host's own updates (Proxmox packages update
-  by hand: **Updates**, **Refresh**, **Upgrade**). Leave NullBill's guests'
-  network, firewall and disks to setup; change them through the page.
+  by hand: **Updates**, **Refresh**, **Upgrade**, or ask the coding agent
+  once it may manage the server). Leave NullBill's guests' network,
+  firewall and disks to setup; change them through the page.
 - **Grafana**: no dashboards ship yet. **Explore** with **Prometheus**
   (for example `node_memory_MemAvailable_bytes` or `up`) or with **Loki**
   (`{job="commands"}` for every agent command, `{job="auth"}` for SSH
@@ -132,8 +136,11 @@ The agent runs in the operator guest. In the Proxmox Shell:
 `pct enter 2016`, `su - agent`, `tmux new -s agent`, `claude`. Detach with
 Ctrl-b d and come back with `tmux attach -t agent`; it keeps running while
 the Shell is closed. What it may do, how to read what it did and how to cut
-it off: [agent-access.md](agent-access.md). Agents on your other computers
-get a token on the page's step 7.
+it off: [agent-access.md](agent-access.md). With **Let the agent manage the
+server** on (step 6), it has root on Proxmox and runs setup and updates
+itself; ask it to "check the server and fix what you find" or "update
+everything". Agents on your other computers get a token on the page's
+step 7.
 
 ## Files
 

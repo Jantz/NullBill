@@ -56,6 +56,11 @@ play >/tmp/second.log 2>&1 || { cat /tmp/second.log; fail "second run"; }
 grep -Eq 'localhost +: ok=[0-9]+ +changed=0 ' /tmp/second.log || { tail -5 /tmp/second.log; fail "second run changed something"; }
 echo "ok   second run changes nothing"
 
+# The agent's root key runs every command through it (src/nullbill/hostroot.py).
+test -x /usr/local/sbin/nb-agent-command || fail "nb-agent-command is not installed"
+cmp -s /usr/local/sbin/nb-agent-command /ansible/roles/agent_ssh/files/nb-agent-command || fail "nb-agent-command differs from agent_ssh's"
+echo "ok   the agent command recorder is in place"
+
 effective=$(/usr/sbin/sshd -T)
 for want in "passwordauthentication no" "kbdinteractiveauthentication no" "permitrootlogin without-password"; do
   grep -qx "$want" <<<"$effective" || fail "sshd: $want"

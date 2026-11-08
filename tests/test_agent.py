@@ -59,14 +59,19 @@ def test_agent_managed_in_mgmt_is_refused(facts):
         build_plan(model, facts("small"))
 
 
-def test_operator_reaches_only_the_api_on_the_host(facts):
+def test_operator_reaches_the_api_and_ssh_on_the_host_and_no_other_guest_ssh(facts):
     plan, model = planned(facts, "small")
     files = render_all(plan, model)
     host = files["firewall/host.fw"]
     assert "IN ACCEPT -source +nb-svc-operator -p tcp -dport 8006" in host
-    assert "-source +nb-svc-operator -p tcp -dport 22" not in host
-    # Only the nullbill container, which runs apply, reaches the host's SSH.
+    # The nullbill container runs apply; the operator's key works only while
+    # the owner's switch puts it in authorized_keys (nullbill/hostroot.py).
     assert "IN ACCEPT -source +nb-svc-nullbill -p tcp -dport 22" in host
+    assert "IN ACCEPT -source +nb-svc-operator -p tcp -dport 22" in host
+    assert [line for line in host.splitlines() if "-dport 22 " in line and "nb-svc-" in line] == [
+        "IN ACCEPT -source +nb-svc-nullbill -p tcp -dport 22 # service:nullbill",
+        "IN ACCEPT -source +nb-svc-operator -p tcp -dport 22 # service:operator",
+    ]
     # The management ipset, which opens every PVE port, stays the VPN alone.
     cluster = files["firewall/cluster.fw"]
     vpn = strip_notes(plan)["guests"]["vpn"]["ip"]
@@ -78,7 +83,7 @@ def test_verify_probes_the_operator(facts):
     names = [p.name for p in probes(plan, model, PUBLIC)[0]]
     for expected in (
         "operator (mgmt) reaches the PVE host tcp/8006",
-        "operator (mgmt) is refused the PVE host tcp/22",
+        "operator (mgmt) reaches the PVE host tcp/22",
         "operator (mgmt) reaches workspace tcp/22",
         "operator (mgmt) reaches monitoring tcp/9090",
         "operator (mgmt) is refused forgejo tcp/22",

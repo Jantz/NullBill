@@ -119,6 +119,9 @@ def agent_api(
     def run(target, command):
         # The operator is set up, nb-ssh reaches the managed guest as agent
         # (uid 1001) and not the router, and Loki holds the command.
+        if command == "cat /root/.ssh/authorized_keys":
+            # The owner's switch is off: no agent line (tests/test_hostroot.py has it on).
+            return 0, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA nullbill@nullbill\n", ""
         if "test -s /etc/nullbill/agent/pve-token || echo unset" in command:
             return 0, "" if operator_ready else "unset\n", ""
         marker = re.search(r"nb-verify-[0-9a-f]+", command)

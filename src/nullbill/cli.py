@@ -130,6 +130,13 @@ def cmd_verify(_args: argparse.Namespace) -> int:
     return 1 if counts["FAIL"] else 0
 
 
+def cmd_upgrade(_args: argparse.Namespace) -> int:
+    from nullbill.upgrade import upgrade
+
+    upgrade(REPO_ROOT, nullbill_home(), say=lambda line: print(line, flush=True))
+    return 0
+
+
 def cmd_web(args: argparse.Namespace) -> int:
     from nullbill.web.server import serve
 
@@ -154,6 +161,8 @@ def main(argv: list[str] | None = None) -> int:
     apply.set_defaults(func=cmd_apply)
     verify = sub.add_parser("verify", help="probe allowed and denied flows from each zone and the LAN; exits 1 on FAIL")
     verify.set_defaults(func=cmd_verify)
+    upgrade = sub.add_parser("upgrade", help="move this controller's NullBill to main's newest commit and restart the page")
+    upgrade.set_defaults(func=cmd_upgrade)
     web = sub.add_parser("web", help="serve the setup and status page over HTTPS")
     web.add_argument("--listen", default="0.0.0.0:8443", help="address:port (default 0.0.0.0:8443)")
     web.set_defaults(func=cmd_web)
