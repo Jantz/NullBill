@@ -129,8 +129,6 @@ services:
     zone: mgmt
     workload: core
     floor: {cores: 1, memory_mib: 256, disk_gib: 2}
-    # Smallstep's apt repository (ansible/roles/step_ca).
-    proxy_allow: [packages.smallstep.com]
     ports:
       - {port: 443, proto: tcp, from: ["zone:*"]}
   postgres:
@@ -172,9 +170,8 @@ services:
     zone: mgmt
     workload: core
     description: Holds the agent CLI and token. Owner only. Reaches the PVE API, CA, Loki, Prometheus, the page's verify and SSH on agent-managed guests.
-    # The agent CLI's model API (docs/adr/0002-agent-cli.md) and step-cli's
-    # apt repository, for this guest only.
-    proxy_allow: [api.anthropic.com, packages.smallstep.com]
+    # The agent CLI's model API (docs/adr/0002-agent-cli.md), for this guest only.
+    proxy_allow: [api.anthropic.com]
     floor: {cores: 1, memory_mib: 512, disk_gib: 8}
   forgejo:
     id: 17
@@ -284,6 +281,11 @@ proxy:
   allow:
     - .debian.org           # deb.debian.org, security.debian.org
     - .proxmox.com          # download.proxmox.com for PBS
+    # Smallstep's apt repository for step-ca and step-cli, which every guest
+    # with a certificate installs (ansible/roles/step_ca, tls_cert). It
+    # answers with a redirect to pkgs.infra.smallstep.com.
+    - packages.smallstep.com
+    - pkgs.infra.smallstep.com
     - .ubuntu.com
     - .pypi.org
     - files.pythonhosted.org

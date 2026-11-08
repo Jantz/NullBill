@@ -65,14 +65,15 @@ def test_squid_admits_proxy_zones_only(facts):
 
 
 def test_config_allow_list_replaces_catalog(facts):
-    plan, model = planned(facts, "small", proxy={"allow": [".example.org", "deb.debian.org"]})
+    allow = [".example.org", "deb.debian.org", ".smallstep.com"]
+    plan, model = planned(facts, "small", proxy={"allow": allow})
     conf = render_proxy(plan, model)["etc/squid/squid.conf"]
-    assert "acl allowed dstdomain -n .example.org deb.debian.org\n" in conf
+    assert "acl allowed dstdomain -n .example.org deb.debian.org .smallstep.com\n" in conf
 
 
 def test_verify_name_must_be_on_the_allow_list(facts):
     with pytest.raises(NullBillError) as exc:
-        planned(facts, "small", proxy={"allow": [".example.org"]})
+        planned(facts, "small", proxy={"allow": [".example.org", ".smallstep.com"]})
     assert exc.value.messages == ["verify.public_name: deb.debian.org is not on proxy.allow, so verify could not prove the proxy works"]
 
 
@@ -81,11 +82,23 @@ def test_operator_alone_reaches_the_model_api(facts):
     conf = render_proxy(plan, model)["etc/squid/squid.conf"]
     operator = strip_notes(plan)["guests"]["operator"]["ip"]
     assert f"acl from_operator src {operator}/32\n" in conf
-    assert "acl allowed_operator dstdomain -n api.anthropic.com packages.smallstep.com\n" in conf
+    assert "acl allowed_operator dstdomain -n api.anthropic.com\n" in conf
     assert "api.anthropic.com" not in re.search(r"^acl allowed dstdomain .+$", conf, re.M)[0]
     access = re.findall(r"^http_access .+$", conf, re.M)
     assert access.index("http_access deny private") < access.index("http_access allow from_operator allowed_operator")
     assert access[-1] == "http_access deny all"
+
+
+def test_every_proxied_guest_reaches_smallsteps_repository_and_its_redirect(facts):
+    # packages.smallstep.com answers 307 to pkgs.infra.smallstep.com, and
+    # tls_cert installs step-cli from it on monitoring, pbs and the rest.
+    plan, model = planned(facts, "mid")
+    conf = render_proxy(plan, model)["etc/squid/squid.conf"]
+    allowed = re.search(r"^acl allowed dstdomain .+$", conf, re.M)[0].split()
+    assert "packages.smallstep.com" in allowed and "pkgs.infra.smallstep.com" in allowed
+    with pytest.raises(NullBillError) as exc:
+        planned(facts, "small", proxy={"allow": [".debian.org", "packages.smallstep.com"]})
+    assert exc.value.messages == ["proxy.allow: pkgs.infra.smallstep.com is missing; guests behind the proxy install step-ca and step-cli from it"]
 
 
 @pytest.mark.parametrize("service", ["forgejo", "linux-runner"])

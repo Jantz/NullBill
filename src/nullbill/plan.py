@@ -25,6 +25,10 @@ class _Errors(list):
 # Planned by itself when a disk is kept and shared, never by intent.
 FILES_WORKLOAD = "files"
 
+# Smallstep's apt repository, which every guest with a certificate installs
+# from, and the name it redirects to (catalog.yaml's proxy.allow).
+SMALLSTEP_NAMES = ("packages.smallstep.com", "pkgs.infra.smallstep.com")
+
 
 def _planned_services(model: dict, errors: _Errors, facts: dict | None = None) -> dict[str, dict]:
     workloads = set(model.get("intent", {}).get("workloads", []))
@@ -83,6 +87,9 @@ def _check_refs(model: dict, errors: _Errors) -> None:
     public = model["verify"]["public_name"]
     if not allows(model["proxy"]["allow"], public):
         errors.append(f"verify.public_name: {public} is not on proxy.allow, so verify could not prove the proxy works")
+    for name in SMALLSTEP_NAMES:
+        if not allows(model["proxy"]["allow"], name):
+            errors.append(f"proxy.allow: {name} is missing; guests behind the proxy install step-ca and step-cli from it")
     ids: dict[int, str] = {}
     for name, svc in model["services"].items():
         if svc["id"] in ids:
