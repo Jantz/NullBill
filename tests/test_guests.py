@@ -98,7 +98,8 @@ def test_every_proxied_guest_reaches_smallsteps_repository_and_its_redirect(fact
     assert "packages.smallstep.com" in allowed and "pkgs.infra.smallstep.com" in allowed
     with pytest.raises(NullBillError) as exc:
         planned(facts, "small", proxy={"allow": [".debian.org", "packages.smallstep.com"]})
-    assert exc.value.messages == ["proxy.allow: pkgs.infra.smallstep.com is missing; guests behind the proxy install step-ca and step-cli from it"]
+    missing = "proxy.allow: pkgs.infra.smallstep.com is missing; guests behind the proxy install step-ca and step-cli from it"
+    assert exc.value.messages == [missing]
 
 
 @pytest.mark.parametrize("service", ["forgejo", "linux-runner"])
