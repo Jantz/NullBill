@@ -188,7 +188,9 @@ fi
 su - agent -c 'nb-page jobs' | grep -q "verify.failed.1" || fail "nb-page jobs"
 code=0
 su - agent -c 'nb-page apply ci' >/dev/null || code=$?
-test "$code" = 1 && test "$(cat /tmp/apply-body)" = '{"stage":"ci"}' || fail "nb-page apply ci: exit $code, sent $(cat /tmp/apply-body)"
+if [ "$code" != 1 ] || [ "$(cat /tmp/apply-body)" != '{"stage":"ci"}' ]; then
+  fail "nb-page apply ci: exit $code, sent $(cat /tmp/apply-body)"
+fi
 sed -i 's#sha256//[^'"'"']*#sha256//AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=#' /usr/local/bin/nb-page
 if su - agent -c 'nb-page jobs' >/dev/null 2>&1; then fail "nb-page talked to a page whose key is not the pinned one"; fi
 converge operator.yml -e "@$vars"
