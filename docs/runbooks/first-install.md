@@ -395,6 +395,12 @@ Tailscale.
    `smb://<address>/<name>`. [legacy-disk.md](legacy-disk.md) lists the
    other systems.
 
+## 14. Use it
+
+[everyday-use.md](everyday-use.md) lists what runs, its address over
+Tailscale, how to sign in to Grafana, Forgejo, the workspace and the coding
+agent the first time, and what you manage where.
+
 ## If a stage fails
 
 The page marks the stage that stopped in red and says what went wrong, the
@@ -417,12 +423,12 @@ certificates.
 - Local AI models and Windows CI runners: NullBill makes their guests but
   does not set up the GPU driver, the model server or the runners yet. Installing Windows in the desktop VM is done by
   hand ([windows-desktop.md](windows-desktop.md)).
-- Signing in to Forgejo and Grafana yourself. Setup makes their admin
-  passwords and keeps them encrypted on the server, but the page does not
-  show them yet. Your devices do not resolve the services' names
-  (`forgejo.nullbill.internal`) over Tailscale yet, and they do not trust
-  NullBill's own certificate authority yet. This run checks the services
-  from inside the server.
+- The page does not show Forgejo's and Grafana's admin passwords yet; read
+  them in the Proxmox Shell ([everyday-use.md](everyday-use.md#passwords)).
+  Your devices do not resolve the services' names
+  (`forgejo.nullbill.internal`) over Tailscale yet, and the certificate
+  authority is not limited to those names, so your devices should not
+  trust it; open the services by address and accept the warning.
 - Taking the certificate authority's root key offline
   ([step-ca-root-key.md](step-ca-root-key.md)). It is written for a separate
   controller computer; it is not needed for the test.

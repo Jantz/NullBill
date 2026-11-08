@@ -33,8 +33,8 @@ References: <https://pve.proxmox.com/pve-docs/chapter-pveum.html>,
   make on the page or the commands to run; it cannot apply it.
 
 For long work, start it inside `tmux` (`tmux new -s agent`, detach with
-Ctrl-b d, `tmux attach -t agent` later) so it keeps running when your SSH
-connection ends.
+Ctrl-b d, `tmux attach -t agent` later) so it keeps running when you close the
+Shell.
 
 ## Agents on other computers
 
@@ -73,8 +73,9 @@ in `jobs/<id>.json`). **Revoke** on the page refuses the token at once.
 
 ## Read what it did
 
-In Grafana (`http://monitoring.nullbill.internal:3000` over the VPN, Explore, Loki) or with
-`curl -G https://monitoring.nullbill.internal:3100/loki/api/v1/query_range`:
+In Grafana (`http://<monitoring address>:3000` over Tailscale, normally
+`http://10.42.1.14:3000`; Explore, Loki) or with
+`curl -G https://<monitoring address>:3100/loki/api/v1/query_range`:
 
 - `{job="commands"}`: every agent CLI tool call (`tool Bash: ...`) and
   every command over SSH (`ssh: ...`).
@@ -107,7 +108,7 @@ key to the operator (issue #22).
 ## Without the agent
 
 Everything the agent does, you can do yourself with your own access:
-`nullbill verify` from the controller, `pct`/`qm` on the host, the PVE web
-UI, and SSH to guests with your key. Roll back a snapshot yourself
+**Run checks** on the page, `pct`/`qm` in the Proxmox Shell, the PVE web
+UI, and `pct enter <vmid>` into a guest. Roll back a snapshot yourself
 (`pct rollback`/`qm rollback`); the agent can take snapshots but cannot
 roll back.
