@@ -52,4 +52,33 @@ elif TF_VAR_state_passphrase=a-different-passphrase tofu -chdir="$work" plan -in
 else
   echo "ok   state is encrypted and a wrong passphrase cannot read it"
 fi
+# apply's full run: a saved plan, encrypted too, read back by tofu show -json
+# (apply.guest_removals reads type, name, address and actions), then applied.
+python3 - "$work/main.tf.json" <<'PY'
+import json, sys
+config = json.load(open(sys.argv[1]))
+config["resource"]["terraform_data"] = {"other": {"input": "kept"}}
+json.dump(config, open(sys.argv[1], "w"))
+PY
+if ! (cd "$work" && tofu plan -input=false -no-color -out=nullbill.tfplan >/tmp/plan.log 2>&1); then
+  cat /tmp/plan.log
+  echo "FAIL saved plan"
+  fail=1
+elif grep -q nullbill-state-marker "$work/nullbill.tfplan"; then
+  echo "FAIL plan file holds plaintext"
+  fail=1
+elif ! tofu -chdir="$work" show -json nullbill.tfplan | python3 -c '
+import json, sys
+changes = {c["address"]: (c["type"], c["name"], c["change"]["actions"]) for c in json.load(sys.stdin)["resource_changes"]}
+assert changes["terraform_data.marker"] == ("terraform_data", "marker", ["delete"]), changes
+'; then
+  echo "FAIL tofu show -json of the saved plan"
+  fail=1
+elif ! (cd "$work" && tofu apply -input=false -no-color nullbill.tfplan >/tmp/apply.log 2>&1); then
+  cat /tmp/apply.log
+  echo "FAIL applying the saved plan"
+  fail=1
+else
+  echo "ok   a saved plan is encrypted, tofu show -json names what it deletes, and it applies"
+fi
 exit "$fail"

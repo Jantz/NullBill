@@ -20,6 +20,31 @@ converge updates.yml -e updates_manage_services=false -e updates_guest_agent=tru
 dpkg -s qemu-guest-agent >/dev/null 2>&1 || fail "guest agent installed in a VM"
 pass "the QEMU guest agent goes into VMs only"
 
+# PVE derives cloud-init's instance from a VM's cloud-init settings; a new
+# instance makes new host keys unless the role's drop-in says otherwise.
+keep=/etc/cloud/cloud.cfg.d/90-nullbill-host-keys.cfg
+converge updates.yml -e updates_manage_services=false -e updates_keep_host_keys=true
+test ! -e $keep || fail "no cloud-init drop-in without cloud-init"
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cloud-init openssh-server >/tmp/cloud-init-install.log 2>&1 || { cat /tmp/cloud-init-install.log; fail "cloud-init installed"; }
+rm -f /etc/ssh/ssh_host_*
+seed=/var/lib/cloud/seed/nocloud
+mkdir -p $seed
+printf '#cloud-config\n{}\n' >$seed/user-data
+boot() { # instance-id: one boot's cloud-init, printing the ed25519 host key's fingerprint
+  rm -rf /run/cloud-init
+  printf 'instance-id: %s\n' "$1" >$seed/meta-data
+  cloud-init init --local >>/tmp/cloud-init.out 2>&1 || true
+  cloud-init init >>/tmp/cloud-init.out 2>&1 || true
+  ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub | cut -d' ' -f2
+}
+first=$(boot one)
+[ "$(boot two)" != "$first" ] || fail "cloud-init makes new keys for a new instance by default"
+converge updates.yml -e updates_manage_services=false -e updates_keep_host_keys=true
+kept=$(boot three)
+[ "$(boot four)" = "$kept" ] || fail "host keys kept across a new instance"
+grep -qx 'ssh_deletekeys: false' $keep || fail "drop-in written"
+pass "in a VM, cloud-init keeps the SSH host keys when PVE gives it a new instance"
+
 origins=$(unattended-upgrade --dry-run --debug 2>&1 | grep "Allowed origins are:")
 [[ $origins == "Allowed origins are: origin=Debian,codename=bookworm-security,label=Debian-Security, origin=Debian,codename=bookworm,label=Debian" ]] || fail "unattended origins: $origins"
 apt-config dump Unattended-Upgrade::Automatic-Reboot | grep -qx 'Unattended-Upgrade::Automatic-Reboot "true";' || fail "guests reboot after updates"

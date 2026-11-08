@@ -53,6 +53,11 @@ PVE_HOST_FIREWALL = "/etc/pve/local"
 # account needed); the page makes the topic, apply hands it to monitoring.
 NTFY = "https://ntfy.sh/"
 DOWNLOAD_RESOURCE = "proxmox_download_file"
+GUEST_RESOURCES = ("proxmox_virtual_environment_vm", "proxmox_virtual_environment_container")
+# The full apply's saved plan, encrypted like the state (tofu.ENCRYPTION).
+PLAN_FILE = "nullbill.tfplan"
+# Guests the last apply stopped before deleting, until the owner confirms.
+REMOVALS = "removals.json"
 
 
 class Reach(Protocol):
@@ -91,6 +96,8 @@ class Context:
     legacy_mounted: bool = False  # a kept disk was mounted in this run
     kept_before: set[str] | None = None  # disks disks.json protects, as this run found it
     full: bool = False  # run every playbook, even where its inputs are unchanged (applied.py)
+    remove_guests: bool = False  # the owner confirmed deleting the guests REMOVALS names
+    pinned: set[str] = field(default_factory=set)  # VMs whose host key this run checked through PVE
 
     @property
     def bare(self) -> dict:
@@ -121,9 +128,9 @@ def connection(ctx: Context, name: str | None) -> dict:
             "ansible_python_interpreter": "/usr/bin/python3",
         } | _download_proxy(ctx, name)
     # A pool is reached at its golden image's reserved lease while apply bakes it.
-    address = guest["ips"][guest["zone"]] if "ips" in guest else guest.get("ip") or guest["template_ip"]
+    address = vm_address(guest)
     # VM host keys are new on first boot; pin each on first sight in a file
-    # of NullBill's own, not the owner's known_hosts.
+    # of NullBill's own, not the owner's known_hosts (pin_host_key).
     known = shlex.quote(str(ctx.home / "known_hosts"))
     return {
         "ansible_host": address,
@@ -132,6 +139,61 @@ def connection(ctx: Context, name: str | None) -> dict:
         "ansible_ssh_common_args": f"-o ProxyJump={ctx.target} -o UserKnownHostsFile={known} -o StrictHostKeyChecking=accept-new",
         "ansible_python_interpreter": "/usr/bin/python3",
     } | _download_proxy(ctx, name)
+
+
+def vm_address(guest: dict) -> str:
+    """Where the controller reaches a VM over SSH. A pool is reached at its
+    golden image's reserved lease while apply bakes it."""
+    return guest["ips"][guest["zone"]] if "ips" in guest else guest.get("ip") or guest["template_ip"]
+
+
+HOST_KEY = re.compile(r"ssh-ed25519 [A-Za-z0-9+/]+={0,2}")
+AGENT_WAIT_S = 120
+
+
+def agent_host_key(vmid: int) -> str:
+    """Host command printing the VM's ed25519 host key as the VM's own guest
+    agent reads it, the channel PVE has into the VM, or nothing when the
+    agent does not answer (not installed yet, or the VM is still booting)."""
+    ping = f"qm guest cmd {vmid} ping >/dev/null 2>&1"
+    wait = f"end=$((SECONDS + {AGENT_WAIT_S})); until {ping} || [ $SECONDS -ge $end ]; do sleep 5; done"
+    read = f"{ping} && qm guest exec {vmid} --timeout 15 -- cat /etc/ssh/ssh_host_ed25519_key.pub"
+    return f"qm status {vmid} | grep -q 'status: running' || exit 0; {wait}; {read} || true"
+
+
+def pin_host_key(ctx: Context, stage: str, name: str) -> None:
+    """Before reaching a VM over SSH: when the key pinned for it is not the
+    one the VM itself holds, pin the VM's. A VM's host keys change without
+    OpenTofu making it again when cloud-init sees a new instance (PVE derives
+    the instance from the cloud-init settings, such as the router's NICs, and
+    VMs from before the updates role kept their keys regenerate them). The
+    key comes over the guest agent, through the host apply already trusts,
+    so an impostor on the zone's network is still refused. Without an
+    answering agent the pin stays, and ssh decides."""
+    guest = ctx.bare["guests"][name]
+    if guest["kind"] != "vm" or name in ctx.pinned:
+        return
+    ctx.pinned.add(name)
+    address = vm_address(guest)
+    known = ctx.home / "known_hosts"
+    lines = known.read_text().splitlines() if known.exists() else []
+    pinned = [line for line in lines if line.strip() and _names(line.split(" ", 1)[0], address)]
+    if not pinned:
+        return  # first sight: ssh pins it (StrictHostKeyChecking=accept-new)
+    rc, out, _ = ctx.reach.host(agent_host_key(guest["vmid"]))
+    try:
+        found = HOST_KEY.search(json.loads(out).get("out-data", "")) if rc == 0 and out.strip() else None
+    except (ValueError, AttributeError):
+        found = None
+    if found is None:
+        return
+    key = found.group(0)
+    if any(" ".join(line.split()[1:3]) == key for line in pinned):
+        return
+    forget_host_key(ctx, address)
+    with known.open("a") as out_file:
+        out_file.write(f"{address} {key}\n")
+    ctx.say(f"{stage}: {name} has a new SSH host key; pinned the one its guest agent reads inside the VM")
 
 
 def _download_proxy(ctx: Context, name: str) -> dict:
@@ -169,6 +231,9 @@ def run_playbooks(
     good run had the same inputs is left out, unless it is in force.
     fresh: host vars made anew for each run (a one-time token), passed on
     but not part of the inputs."""
+    for name in targets:
+        if name is not None:
+            pin_host_key(ctx, stage, name)  # before any SSH to it, marks included
     hosts = {name or "pve": connection(ctx, name) | extra for name, extra in targets.items()}
     names = {name or "pve": name for name in targets}
     full = always or ctx.full or (ctx.home / FULL_NEXT).exists()
@@ -470,7 +535,6 @@ def run_tofu(ctx: Context, stage: str, init: bool, replace: tuple[str, ...] = ()
     if downloads:
         targets = sorted(json.loads(ctx.files["tofu/main.tf.json"])["resource"].get(DOWNLOAD_RESOURCE, {}))
         steps.append(([*apply_argv, *(f"-target={DOWNLOAD_RESOURCE}.{t}" for t in targets)], env, True))
-    steps.append(([*apply_argv, *(f"-replace={a}" for a in replace)], env, False))
     for argv, extra, retried in steps:
         what = " ".join(argv[:2]) + (" (downloads)" if any(a.startswith("-target=") for a in argv) else "")
         for pause in (*DOWNLOAD_RETRY_S, None) if retried else (None,):
@@ -482,6 +546,75 @@ def run_tofu(ctx: Context, stage: str, init: bool, replace: tuple[str, ...] = ()
                 raise ApplyError(stage, f"{what} failed (exit {rc})")
             ctx.say(f"{stage}: {what} failed (exit {rc}); trying again in {pause} s")
             sleep(pause)
+    # The full apply, of a saved plan that deletes no guest the owner did not
+    # confirm: an unticked box under What to run must not take a VM's disk with it.
+    planned = work / PLAN_FILE
+    try:
+        ctx.say(f"{stage}: tofu plan")
+        argv = ["tofu", "plan", "-input=false", "-no-color", f"-out={PLAN_FILE}", *(f"-replace={a}" for a in replace)]
+        rc, _ = ctx.reach.local(argv, work, env)
+        if rc != 0:
+            raise ApplyError(stage, f"tofu plan failed (exit {rc})")
+        rc, shown = ctx.reach.local(["tofu", "show", "-json", PLAN_FILE], work, env, capture=True)
+        if rc != 0:
+            raise ApplyError(stage, f"tofu show failed (exit {rc})")
+        check_removals(ctx, stage, guest_removals(json.loads(shown or "{}"), replace))
+        ctx.say(f"{stage}: tofu apply")
+        rc, _ = ctx.reach.local(["tofu", "apply", "-input=false", "-no-color", PLAN_FILE], work, env)
+        if rc != 0:
+            raise ApplyError(stage, f"tofu apply failed (exit {rc})")
+    finally:
+        planned.unlink(missing_ok=True)
+
+
+def guest_removals(shown: dict, replace: tuple[str, ...] = ()) -> list[str]:
+    """Guests a saved plan (tofu show -json) deletes, made again or not,
+    besides those apply replaces on purpose (a CI pool's golden image)."""
+    return sorted(
+        {
+            change["name"]
+            for change in shown.get("resource_changes") or []
+            if change.get("type") in GUEST_RESOURCES
+            and "delete" in change.get("change", {}).get("actions", [])
+            and change.get("address") not in replace
+        }
+    )
+
+
+def check_removals(ctx: Context, stage: str, removing: list[str]) -> None:
+    """Stop before OpenTofu deletes a guest, unless the owner confirmed
+    deleting exactly those (the page's Delete them, apply --remove-guests).
+    The names wait in REMOVALS for that confirmation."""
+    path = ctx.home / REMOVALS
+    confirmed = set(json.loads(path.read_text()).get("guests", [])) if path.exists() and ctx.remove_guests else set()
+    if not removing:
+        path.unlink(missing_ok=True)
+        return
+    disks = "its disk" if len(removing) == 1 else "their disks"
+    if set(removing) <= confirmed:
+        ctx.say(f"{stage}: deleting {_and(removing)} with everything on {disks}, as you confirmed")
+        path.unlink()
+        return
+    planned = ctx.bare["guests"]
+    gone = [n for n in removing if n not in planned]
+    remade = [n for n in removing if n in planned]
+    why = []
+    if gone:
+        why.append(f"{_and(gone)} {'is' if len(gone) == 1 else 'are'} no longer in the plan (a box under What to run is not ticked)")
+    if remade:
+        why.append(f"OpenTofu would have to make {_and(remade)} again")
+    path.write_text(json.dumps({"guests": removing}, indent=2) + "\n")
+    raise ApplyError(
+        stage,
+        f"setup would delete {_and(removing)} with everything on {disks}, "
+        f"because {' and '.join(why)}; nothing was deleted. "
+        "To keep it, tick it again under Setup, What to run and press Save and plan; "
+        "to delete it, press Delete and run setup on the Setup page, under Build",
+    )
+
+
+def _and(names: list[str]) -> str:
+    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
 
 
 def backup_disk(ctx: Context) -> None:
@@ -1041,6 +1174,7 @@ def update_guests(ctx: Context) -> dict[str | None, dict]:
             "updates_auto_reboot": name not in owner_reboots,
             "updates_reboot_time": ctx.bare["updates"]["reboot_at"],
             "updates_guest_agent": guest["kind"] == "vm",
+            "updates_keep_host_keys": guest["kind"] == "vm",
         }
     return guests
 
@@ -1768,6 +1902,7 @@ def stage_logs(ctx: Context) -> None:
 def vm_out(ctx: Context, stage: str, name: str, command: str) -> str:
     """Run a command on a VM as nullbill over SSH, through the host as
     Ansible reaches it, and return its output."""
+    pin_host_key(ctx, stage, name)
     conn = connection(ctx, name)
     argv = ["ssh", "-o", "BatchMode=yes", *shlex.split(conn["ansible_ssh_common_args"]), f"nullbill@{conn['ansible_host']}", command]
     rc, out = ctx.reach.local(argv, ctx.home, {}, capture=True)

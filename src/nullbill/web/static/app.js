@@ -19,7 +19,7 @@ const LABELS = {
 const VIEWS = ["overview", "services", "setup", "access", "agents", "alerts", "activity"];
 // Jobs that open Activity when they start; the others show their progress
 // in the bar at the top while the owner stays where they pressed.
-const OPENS_ACTIVITY = new Set(["apply", "verify", "upgrade"]);
+const OPENS_ACTIVITY = new Set(["apply", "verify", "upgrade", "remove-guests"]);
 const SERVICE_ICONS = {
   proxmox: "proxmox", grafana: "chart", forgejo: "git", files: "folder", jellyfin: "film",
   workspace: "agents", operator: "bot", "windows-dev": "window", "linux-runner": "cog", "model-gateway": "chip",
@@ -545,6 +545,11 @@ function checklist(st) {
     items.push(["agents/agent", "Sign in the coding agent",
       st.agent_credential ? ["done", `Signed in with ${st.agent_credential === "API key" ? "an" : "a"} ${st.agent_credential}.`] : ["attention", "Needs an API key or subscription token."]]);
   }
+  const removals = st.removals || [];
+  if (removals.length) {
+    items.push(["setup/build", "Keep or delete what setup would remove",
+      ["attention", `Setup stopped before deleting ${andList(removals)}.`]]);
+  }
   items.push(["activity", "Run setup",
     ["apply", "rebake-ci"].includes(running) ? ["running", "Running now."]
       : !apply ? ["todo", "Press Run setup at the top."]
@@ -635,6 +640,14 @@ function renderReady() {
   if (!state.tailscale_client) ok(false, "No Tailscale OAuth client (Remote access). Setup runs, but the server stays off Tailscale.");
   if (state.config_changed) ok(false, "You changed the choices since the last setup run; run it so the server follows.");
   $("ready-list").replaceChildren(...items);
+  const removals = state.removals || [];
+  show("removals", removals.length > 0);
+  $("removals-names").textContent = andList(removals);
+  $("removals-disks").textContent = removals.length > 1 ? "their disks" : "its disk";
+}
+
+function andList(names) {
+  return names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names.join("");
 }
 
 // Overview: health from monitoring, and the facts around it.
@@ -899,7 +912,7 @@ function gateJobButtons() {
 const JOB_NAMES = {
   probe: "Reading the hardware", apply: "Setup", verify: "Checks", upgrade: "Update of NullBill",
   "close-lan": "Closing the home network", "keep-lan-closed": "Keeping the home network closed",
-  "open-lan": "Reopening the home network", "rebake-ci": "Rebuild of the CI images",
+  "open-lan": "Reopening the home network", "rebake-ci": "Rebuild of the CI images", "remove-guests": "Setup",
 };
 
 function renderHistory(lastJobs) {
@@ -1093,7 +1106,7 @@ function drawJob(current, view) {
     node.querySelector(".job-detail-text").textContent = lines.join("\n");
     node.querySelector(".job-advice").textContent = e.advice;
     const retry = node.querySelector(".job-retry");
-    retry.hidden = !["apply", "verify", "rebake-ci", "upgrade"].includes(view.action);
+    retry.hidden = !["apply", "verify", "rebake-ci", "upgrade", "remove-guests"].includes(view.action);
     retry.textContent = view.action === "verify" ? "Run the checks again" : view.action === "upgrade" ? "Update again" : "Run setup again";
   }
   // Finished.
@@ -1111,6 +1124,7 @@ function drawJob(current, view) {
       "keep-lan-closed": ["The home network stays closed", "Proxmox now answers only over Tailscale."],
       "open-lan": ["The home network is open again", "Proxmox answers on your home network."],
       "rebake-ci": ["The CI images are rebuilt", ""],
+      "remove-guests": ["Setup finished", "The guests you chose to delete are gone, and everything else in the plan is in place."],
     }[view.action] || ["Finished", ""];
     node.querySelector(".job-ok-title").textContent = text[0];
     node.querySelector(".job-ok-text").textContent = text[1];
@@ -1168,7 +1182,7 @@ async function copyDetails(node) {
 
 const STARTING = {
   probe: "Starting…", apply: "Starting setup…", verify: "Starting the checks…", upgrade: "Starting the update…",
-  "close-lan": "Closing…", "keep-lan-closed": "Keeping it closed…", "open-lan": "Opening…",
+  "close-lan": "Closing…", "keep-lan-closed": "Keeping it closed…", "open-lan": "Opening…", "remove-guests": "Starting setup…",
 };
 
 async function startJob(action, button, feedback) {

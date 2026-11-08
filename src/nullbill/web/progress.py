@@ -54,6 +54,7 @@ JOB_TEXT = {
     "keep-lan-closed": "Keep the home network closed",
     "open-lan": "Open the home network again",
     "rebake-ci": "Rebuild the CI runner images",
+    "remove-guests": "Delete what you confirmed and set up the server",
 }
 STAGE_LINE = re.compile(re.escape(STAGE_MARK) + r"([a-z-]+), (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)$")
 TASK = re.compile(r"^TASK \[(?:([^:\]]+) : )?(.+?)\] \**$")
@@ -97,6 +98,17 @@ ADVICE = [
         r"no render node for the integrated graphics",
         "Jellyfin was to use the processor's graphics, but the server shows none now. Read the hardware again under Setup "
         "and run setup again; Jellyfin then transcodes on the processor itself.",
+    ),
+    (
+        r"setup would delete .* nothing was deleted",
+        "Nothing was deleted. To keep what it names, tick it again under Setup, What to run, press Save and plan, then run setup. "
+        "To delete it with everything on its disk, press Delete and run setup on the Setup page, under Build.",
+    ),
+    (
+        r"REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed",
+        "A VM answered with a new SSH key, and setup could not read that key inside the VM through Proxmox, "
+        "because the VM's guest agent did not answer. Run setup again in a few minutes. "
+        "If it stops here again, copy the details and report them.",
     ),
     (
         r"Jellyfin refuses nullbill-admin|first-run setup was done without NullBill",

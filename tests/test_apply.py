@@ -17,6 +17,7 @@ from nullbill.plan import build_plan
 from nullbill.results import Result
 from nullbill.secretfile import Secrets
 from nullbill.tailnet import routes
+from nullbill.web import progress
 
 TARGET = "root@pve.internal"
 
@@ -51,6 +52,9 @@ class FakeReach:
         self.fail_local = fail_local
         self.fresh = True
         self.templates = set()
+        self.tofu_changes = []  # resource_changes the next tofu show reports
+        self.replacing = False
+        self.agent_keys = {}  # vmid -> the host key its guest agent reads
         self.nets = {0: "name=eth0,bridge=vmbr0,hwaddr=02:4E:42:00:00:99,ip=dhcp,type=veth"}
         self.nullbill = []
         self.tailnet = "NeedsLogin"
@@ -122,6 +126,10 @@ class FakeReach:
             return 0, "6.12.40-1-pve\n", ""
         if command == apply.CLUSTER_VMS:
             return 0, json.dumps(self.vms), ""
+        if "qm guest exec " in command:
+            vmid = int(command.split("qm guest exec ")[1].split()[0])
+            key = self.agent_keys.get(vmid)
+            return 0, json.dumps({"exitcode": 0, "exited": 1, "out-data": f"{key} root@guest\n"}) if key else "", ""
         if command.startswith("qm stop ") and "qm destroy " in command:
             vmid = int(command.split()[2])
             self.vms = [vm for vm in self.vms if vm["vmid"] != vmid]
@@ -421,11 +429,15 @@ class FakeReach:
             return self.openssl(argv[1:], cwd)
         if argv[0] == "ssh":
             return self.vm(argv[-2], argv[-1])
+        if argv[:2] == ["tofu", "plan"]:
+            self.replacing = any(a.startswith("-replace=") for a in argv)
+        if argv[:2] == ["tofu", "show"]:
+            return 0, json.dumps({"format_version": "1.2", "resource_changes": self.tofu_changes})
         if argv[:2] == ["tofu", "apply"] and not any(a.startswith("-target=") for a in argv):
             self.files_ct["exists"] = True
             self.media_ct["exists"] = True
-        if argv[:2] == ["tofu", "apply"] and any(a.startswith("-replace=") for a in argv):
-            self.templates.clear()  # OpenTofu made a fresh, plain VM
+            if self.replacing:
+                self.templates.clear()  # OpenTofu made a fresh, plain VM
         for start, left in self.flaky.items():
             line = " ".join(argv)
             if left and (line == start[:-1] if start.endswith("$") else line.startswith(start)):
@@ -796,6 +808,124 @@ def test_a_vm_opentofu_made_again_has_its_old_host_key_forgotten(ctx):
     assert known.read_text() == "10.42.2.10 ssh-ed25519 AAAAother\n"
 
 
+PLAN = ["tofu", "plan", "-input=false", "-no-color", "-out=nullbill.tfplan"]
+ROUTER_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIRouterNewKeyFromInsideTheVMxxxxxxxxxxxx"
+
+
+def test_a_vm_with_new_host_keys_is_pinned_afresh_through_its_guest_agent(ctx):
+    """cloud-init made the router new keys (its NICs changed, so PVE gave it a
+    new instance): the key its guest agent reads inside the VM replaces the
+    pin, and an impostor's key never would."""
+    c = ctx("small")
+    known = c.home / "known_hosts"
+    known.write_text(hashed("10.42.1.1", "AAAAold") + "10.42.2.10 ssh-ed25519 AAAAother\n")
+    c.reach.agent_keys[2001] = ROUTER_KEY
+    apply.run_playbook(c, "router", "router.yml", "router")
+    assert known.read_text() == f"10.42.2.10 ssh-ed25519 AAAAother\n10.42.1.1 {ROUTER_KEY}\n"
+    assert "router: router has a new SSH host key; pinned the one its guest agent reads inside the VM" in c.log
+    command = next(call[1] for call in c.reach.calls if call[0] == "host" and "qm guest exec" in call[1])
+    assert command.startswith("qm status 2001 | grep -q 'status: running' || exit 0;")
+    assert "qm guest exec 2001 --timeout 15 -- cat /etc/ssh/ssh_host_ed25519_key.pub" in command
+    # Once a run, and the same key again changes nothing.
+    calls = len(c.reach.calls)
+    apply.run_playbook(c, "router", "router.yml", "router")
+    assert not [call for call in c.reach.calls[calls:] if call[0] == "host"]
+    c.pinned.clear()
+    apply.run_playbook(c, "router", "router.yml", "router")
+    assert known.read_text().count("10.42.1.1") == 1 and len([line for line in c.log if "new SSH host key" in line]) == 1
+
+
+def test_a_host_key_is_left_to_ssh_without_a_pin_or_an_answering_agent(ctx):
+    c = ctx("small")
+    known = c.home / "known_hosts"
+    apply.run_playbook(c, "router", "router.yml", "router")
+    assert not [call for call in c.reach.calls if call[0] == "host"]  # first sight: accept-new pins it
+    known.write_text("10.42.1.1 ssh-ed25519 AAAAold\n")
+    c.pinned.clear()
+    apply.run_playbook(c, "router", "router.yml", "router")  # no agent yet: the pin stays
+    assert known.read_text() == "10.42.1.1 ssh-ed25519 AAAAold\n"
+    # Containers are reached through pct, without host keys.
+    c.pinned.clear()
+    calls = len(c.reach.calls)
+    apply.run_playbook(c, "proxy", "egress-proxy.yml", "egress-proxy")
+    assert not [call for call in c.reach.calls[calls:] if call[0] == "host"]
+
+
+def test_updates_keep_host_keys_in_vms_only(ctx):
+    c = ctx("small")
+    guests = apply.update_guests(c)
+    assert guests["router"]["updates_keep_host_keys"] is True
+    assert guests["egress-proxy"]["updates_keep_host_keys"] is False
+
+
+def removal(name, kind="vm", actions=("delete",)):
+    return {
+        "address": f"proxmox_virtual_environment_{kind}.{name}",
+        "type": f"proxmox_virtual_environment_{kind}",
+        "name": name,
+        "change": {"actions": list(actions)},
+    }
+
+
+def test_tofu_stops_before_deleting_a_guest_until_the_owner_confirms(ctx):
+    """A box unticked under What to run took the Windows desktop and its disk with it:
+    now setup stops, deletes nothing, and waits for Delete and run setup."""
+    c = ctx("small")
+    bridge = {
+        "address": "proxmox_network_linux_bridge.vmbr105",
+        "type": "proxmox_network_linux_bridge",
+        "name": "vmbr105",
+        "change": {"actions": ["delete"]},
+    }
+    c.reach.tofu_changes = [removal("windows-dev"), bridge, removal("router", actions=("update",))]
+    with pytest.raises(ApplyError) as stopped:
+        apply.stage_tofu(c)
+    message = str(stopped.value)
+    assert message == (
+        "apply stopped at tofu: setup would delete windows-dev with everything on its disk, because windows-dev is no longer "
+        "in the plan (a box under What to run is not ticked); nothing was deleted. To keep it, tick it again under Setup, "
+        "What to run and press Save and plan; to delete it, press Delete and run setup on the Setup page, under Build"
+    )
+    assert progress.advice(message).startswith("Nothing was deleted.")
+    local = [call[1] for call in c.reach.calls if call[0] == "local"]
+    assert ["tofu", "apply", "-input=false", "-no-color", "nullbill.tfplan"] not in local
+    assert json.loads((c.home / "removals.json").read_text()) == {"guests": ["windows-dev"]}
+    assert not (c.home / "tofu" / "nullbill.tfplan").exists()
+    # Run setup again without confirming: still nothing.
+    with pytest.raises(ApplyError, match="setup would delete windows-dev"):
+        apply.stage_tofu(c)
+    # Confirmed, but the plan now deletes more than the owner saw: refused.
+    c.remove_guests = True
+    c.reach.tofu_changes = [removal("windows-dev"), removal("forgejo", kind="container", actions=("delete", "create"))]
+    with pytest.raises(
+        ApplyError,
+        match="setup would delete forgejo and windows-dev with everything on their disks, because "
+        r"windows-dev is no longer in the plan \(.*\) and OpenTofu would have to make forgejo again",
+    ):
+        apply.stage_tofu(c)
+    # Confirmed for exactly what it deletes: applied, and the list is done.
+    c.reach.tofu_changes = [removal("windows-dev")]
+    c.reach.calls.clear()
+    apply.stage_tofu(c)
+    assert "tofu: deleting windows-dev with everything on its disk, as you confirmed" in c.log
+    assert ["tofu", "apply", "-input=false", "-no-color", "nullbill.tfplan"] in [call[1] for call in c.reach.calls if call[0] == "local"]
+    assert not (c.home / "removals.json").exists()
+
+
+def test_a_plan_that_deletes_no_guest_clears_a_waiting_removal(ctx):
+    c = ctx("small")
+    (c.home / "removals.json").write_text('{"guests": ["windows-dev"]}\n')
+    apply.stage_tofu(c)  # the owner ticked it again
+    assert not (c.home / "removals.json").exists()
+
+
+def test_a_golden_image_apply_replaces_on_purpose_is_no_removal():
+    shown = {"resource_changes": [removal("linux-runner", actions=("delete", "create")), removal("windows-dev")]}
+    assert apply.guest_removals(shown, ("proxmox_virtual_environment_vm.linux-runner",)) == ["windows-dev"]
+    assert apply.guest_removals(shown) == ["linux-runner", "windows-dev"]
+    assert apply.guest_removals({"resource_changes": None}) == []
+
+
 def test_ci_stage_bakes_each_golden_image_once_then_runs_the_dispatcher(ctx):
     c = ctx("small")
     (c.home / "known_hosts").write_text("10.42.3.129 ssh-ed25519 AAAAold\n10.42.1.1 ssh-ed25519 AAAArouter\n")
@@ -856,8 +986,8 @@ def test_ci_stage_bakes_each_golden_image_once_then_runs_the_dispatcher(ctx):
     drain = next(h for h in host if "qm status" in h)
     assert "for v in 6000;" in drain and c.reach.timeouts[-1] > ci.MAX_JOB_S
     assert "qm stop 6000 2>/dev/null; qm destroy 6000 --purge" in host and c.reach.vms == []
-    tofu = [call[1] for call in c.reach.calls if call[0] == "local" and call[1][:2] == ["tofu", "apply"]]
-    assert tofu == [["tofu", "apply", "-auto-approve", "-input=false", "-no-color", "-replace=proxmox_virtual_environment_vm.linux-runner"]]
+    tofu = [call[1] for call in c.reach.calls if call[0] == "local" and call[1][:2] == ["tofu", "plan"]]
+    assert tofu == [[*PLAN, "-replace=proxmox_virtual_environment_vm.linux-runner"]]
     assert [call[1] for call in c.reach.calls if call[0] == "playbook"] == [
         "ci-runner.yml",
         "agent-ssh.yml",
@@ -899,15 +1029,15 @@ def test_a_bake_that_stopped_partway_starts_again_from_a_fresh_vm(ctx):
     c.reach.fail_playbook = None
     c.reach.calls.clear()
     apply.stage_ci(c)
-    tofu = [call[1] for call in c.reach.calls if call[0] == "local" and call[1][:2] == ["tofu", "apply"]]
-    assert tofu == [["tofu", "apply", "-auto-approve", "-input=false", "-no-color", "-replace=proxmox_virtual_environment_vm.linux-runner"]]
+    tofu = [call[1] for call in c.reach.calls if call[0] == "local" and call[1][:2] == ["tofu", "plan"]]
+    assert tofu == [[*PLAN, "-replace=proxmox_virtual_environment_vm.linux-runner"]]
     assert [call[1] for call in c.reach.calls if call[0] == "playbook"][0] == "ci-runner.yml"
     assert "/root/nullbill/linux-runner.baking" not in c.reach.files
     assert any("stopped partway" in line for line in c.log)
     # A clean bake leaves no mark, so the next run replaces nothing.
     c.reach.calls.clear()
     apply.stage_ci(c)
-    assert not [call for call in c.reach.calls if call[0] == "local" and call[1][:2] == ["tofu", "apply"]]
+    assert not [call for call in c.reach.calls if call[0] == "local" and call[1][:2] in (["tofu", "plan"], ["tofu", "apply"])]
 
 
 def test_agents_stage_waits_for_a_credential(ctx):
@@ -1326,14 +1456,16 @@ def test_tofu_stage_runs_init_and_apply_with_everything_in_the_environment(ctx):
     c = ctx("small")
     apply.stage_tofu(c)
     local = [call for call in c.reach.calls if call[0] == "local"]
-    assert [call[1][:2] for call in local] == [["tofu", "init"], ["tofu", "apply"], ["tofu", "apply"]]
-    # The image downloads first, on their own, then everything.
+    assert [call[1][:2] for call in local] == [["tofu", "init"], ["tofu", "apply"], ["tofu", "plan"], ["tofu", "show"], ["tofu", "apply"]]
+    # The image downloads first, on their own, then everything, from a saved plan.
     downloads = json.loads(c.files["tofu/main.tf.json"])["resource"]["proxmox_download_file"]
     assert local[1][1][5:] == [f"-target=proxmox_download_file.{name}" for name in sorted(downloads)]
-    assert local[2][1] == ["tofu", "apply", "-auto-approve", "-input=false", "-no-color"]
+    assert local[2][1] == ["tofu", "plan", "-input=false", "-no-color", "-out=nullbill.tfplan"]
+    assert local[3][1] == ["tofu", "show", "-json", "nullbill.tfplan"]
+    assert local[4][1] == ["tofu", "apply", "-input=false", "-no-color", "nullbill.tfplan"]
     assert all(call[2] == c.home / "tofu" for call in local)
     assert (c.home / "tofu" / "main.tf.json").read_text() == c.files["tofu/main.tf.json"]
-    init_env, _, env = c.reach.envs
+    init_env, _, env, _, _ = c.reach.envs
     assert "SSL_CERT_FILE" not in init_env
     assert env["SSL_CERT_FILE"] == str(c.home / "pve-root-ca.pem")
     assert env["PROXMOX_VE_API_TOKEN"].startswith("root@pam!nullbill=uuid-")
@@ -1394,7 +1526,7 @@ def test_tofu_downloads_are_retried_with_growing_pauses_and_then_give_up(ctx, mo
 
 def test_full_tofu_apply_is_not_retried(ctx, monkeypatch):
     monkeypatch.setattr(apply, "sleep", lambda s: pytest.fail("slept"))
-    c = ctx("small", reach=FakeReach(flaky={"tofu apply -auto-approve -input=false -no-color$": 1}))
+    c = ctx("small", reach=FakeReach(flaky={"tofu apply -input=false -no-color nullbill.tfplan$": 1}))
     with pytest.raises(ApplyError, match=r"tofu: tofu apply failed \(exit 1\)"):
         apply.stage_tofu(c)
 

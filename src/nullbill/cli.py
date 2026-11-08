@@ -97,6 +97,7 @@ def cmd_apply(args: argparse.Namespace) -> int:
         full=args.full,
         lan_host=split_target(configured)[1],
         run=ssh_run,
+        remove_guests=args.remove_guests,
     )
     if args.confirm_lan:
         confirm_lan(ctx)
@@ -160,6 +161,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     apply.add_argument("--confirm-lan", action="store_true", help="keep the LAN closed: stop the timer that would reopen it")
     apply.add_argument("--open-lan", action="store_true", help="give the LAN access to 8006 and 22 again")
+    apply.add_argument(
+        "--remove-guests", action="store_true", help="delete the guests (and their disks) the last apply stopped before deleting"
+    )
     apply.set_defaults(func=cmd_apply)
     verify = sub.add_parser("verify", help="probe allowed and denied flows from each zone and the LAN; exits 1 on FAIL")
     verify.set_defaults(func=cmd_verify)

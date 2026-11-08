@@ -433,6 +433,20 @@ def test_services_list_what_the_plan_runs_and_reveal_only_their_passwords(site):
     assert anonymous.call("/api/password-reveal", {"name": "grafana"})[0] == 401
 
 
+def test_deleting_guests_runs_only_for_what_setup_stopped_before_deleting(site):
+    """Delete and run setup: only while apply waits on the owner's word."""
+    app, client = site
+    sign_in(app, client)
+    assert client.call("/api/state")[1]["removals"] == []
+    status, data = client.call("/api/jobs", {"action": "remove-guests"})
+    assert status == 400 and "not waiting to delete anything" in data["error"]
+    (app.home / "removals.json").write_text('{"guests": ["windows-dev"]}\n')
+    assert client.call("/api/state")[1]["removals"] == ["windows-dev"]
+    status, job = client.call("/api/jobs", {"action": "remove-guests"})
+    assert status == 200 and job["args"] == ["apply", "--remove-guests"]
+    wait(client, job["id"])
+
+
 def test_closing_the_lan_needs_the_page_over_tailscale_and_then_shuts_the_lan_out(site, monkeypatch):
     from nullbill import lan
 

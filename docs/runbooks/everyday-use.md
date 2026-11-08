@@ -88,6 +88,16 @@ no longer works.
   (`{job="commands"}` for every agent command, `{job="auth"}` for SSH
   sign-ins).
 
+## Remove a workload
+
+On the **Setup** page, untick it under **What to run** and press **Save and
+plan**, then **Run setup**. Setup stops before it deletes a guest and names
+what it would delete: deleting a guest erases its disk, such as the Windows
+desktop VM with Windows and your files in it. **Build** on the Setup page
+then shows **Delete and run setup**. Press it to delete them. To keep them, tick the workload again, press **Save and plan**, and
+run setup. Setup never deletes a guest you did not confirm, even one it
+would have to make again after a change.
+
 ## Turn it off and on
 
 In the Proxmox web UI select the node and press **Shutdown** or

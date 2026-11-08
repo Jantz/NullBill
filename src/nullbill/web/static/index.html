@@ -312,6 +312,17 @@
           </div>
           <p class="muted">Setup runs one stage after another, shows each one at the top of the page and in full under Activity, and runs the checks at the end. If it stops, fix what it names and run it again; finished parts are kept. The first run downloads images and packages and takes a while.</p>
           <ul id="ready-list" class="ready"></ul>
+          <div id="removals" class="callout danger" hidden>
+            <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
+            <div>
+              <h3>Setup stopped before deleting <span id="removals-names"></span></h3>
+              <p>Deleting erases everything on <span id="removals-disks">its disk</span>, and it cannot be undone. To keep it, tick it again under <b>What to run</b>, press <b>Save and plan</b>, then <b>Run setup</b>.</p>
+              <div class="row">
+                <button type="button" class="btn danger" data-action="remove-guests"><span>Delete and run setup</span></button>
+                <p class="feedback" role="status"></p>
+              </div>
+            </div>
+          </div>
           <div class="row">
             <button type="button" class="btn primary" data-action="apply"><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg><span>Run setup</span></button>
             <p class="feedback" id="build-result" role="status"></p>

@@ -39,6 +39,23 @@
     state: started
   when: updates_guest_agent | bool and updates_manage_services | bool
 
+- name: Is cloud-init configured here
+  ansible.builtin.stat:
+    path: /etc/cloud/cloud.cfg.d
+  register: updates_cloud_cfg
+  when: updates_keep_host_keys | bool
+
+- name: cloud-init keeps the SSH host keys on a new instance
+  ansible.builtin.copy:
+    dest: /etc/cloud/cloud.cfg.d/90-nullbill-host-keys.cfg
+    content: |
+      # Managed by NullBill (updates role): the host keys apply pinned stay.
+      ssh_deletekeys: false
+    owner: root
+    group: root
+    mode: "0644"
+  when: updates_keep_host_keys | bool and updates_cloud_cfg.stat.isdir | default(false)
+
 - name: needrestart
   ansible.builtin.apt:
     name: needrestart

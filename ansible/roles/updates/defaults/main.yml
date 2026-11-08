@@ -20,3 +20,9 @@ updates_apt_proxy: ""
 updates_manage_services: true
 # True in VMs, whose PVE config has the guest agent on; containers need none.
 updates_guest_agent: false
+# In a VM: cloud-init keeps the SSH host keys when it sees a new instance.
+# PVE makes the instance from the VM's cloud-init settings, so a changed
+# NIC or address would otherwise give the VM new keys at its next boot, and
+# apply would refuse the VM as an impostor. A CI pool's golden image is not
+# a guest this role runs on: each clone still makes keys of its own.
+updates_keep_host_keys: false

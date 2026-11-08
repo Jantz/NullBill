@@ -34,7 +34,7 @@ from pathlib import Path
 import yaml
 
 from nullbill import hostroot, lan, legacy, llm
-from nullbill.apply import NTFY, SPKI, STAGES
+from nullbill.apply import NTFY, REMOVALS, SPKI, STAGES
 from nullbill.cli import plan_text, reach_target
 from nullbill.errors import NullBillError
 from nullbill.model import build_model
@@ -59,6 +59,8 @@ LAN_ACTIONS = {"close-lan": ["apply", "--close-lan"], "keep-lan-closed": ["apply
 # it is a week old (nullbill/ci.py). Sunday 03:00 local time, after the
 # nightly backups; skipped for the week if another job runs then.
 SCHEDULED = {"rebake-ci": ["apply", "--stage", "ci"]}
+# Deleting the guests the last apply stopped before deleting (apply.REMOVALS).
+REMOVE_ACTIONS = {"remove-guests": ["apply", "--remove-guests"]}
 REBAKE_WEEKDAY, REBAKE_HOUR = 6, 3
 SCHEDULE_CHECK_S = 60
 # An optional Healthchecks.io check notices silence; alerts go to NTFY.
@@ -591,6 +593,14 @@ class App:
         name = f"{llm.GATEWAY}.{plan['domain']}"
         return {"url": f"https://{name}:{llm.GATEWAY_PORT}/v1", "name": name, "ip": guest["ip"], "model": model, "key_set": has_key}
 
+    def removals(self) -> list[str]:
+        """Guests the last setup stopped before deleting, until the owner confirms."""
+        path = self.home / REMOVALS
+        try:
+            return [str(n) for n in json.loads(path.read_text()).get("guests", [])] if path.is_file() else []
+        except (ValueError, AttributeError):
+            return []
+
     def save_choices(self, body: dict) -> None:
         workloads = [w for w in body.get("workloads", []) if w in WORKLOADS]
         login = str(body.get("owner_login", "")).strip()
@@ -834,9 +844,11 @@ class App:
     def start(self, action: str, stage: str | None = None, client: str = "", by: str = "owner") -> Job:
         if action == "keep-lan-closed" and not self.via_vpn(client):
             raise NullBillError("press Keep it closed on the page opened over Tailscale; that press is what shows Tailscale works")
-        fixed = LAN_ACTIONS | SCHEDULED
+        fixed = LAN_ACTIONS | SCHEDULED | REMOVE_ACTIONS
         if action not in ACTIONS and action not in fixed:
             raise NullBillError(f"unknown action {action!r}")
+        if action in REMOVE_ACTIONS and not self.removals():
+            raise NullBillError("setup is not waiting to delete anything")
         with self.lock:
             if any(j.state() == "running" for j in self.jobs.values()):
                 raise NullBillError("another job is still running")
@@ -966,6 +978,7 @@ class App:
             "files": self.files(),
             "services": self.services(),
             "gateway": self.gateway(),
+            "removals": self.removals(),
             "workloads": WORKLOADS,
             "plan": self.plan(),
             "alerts": self.alerts() if has_password else None,
