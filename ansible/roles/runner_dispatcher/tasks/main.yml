@@ -19,9 +19,11 @@
     that: runner_dispatcher_tls_key.stat.exists and runner_dispatcher_tls_key.stat.gr_name == "nb-dispatcher"
     fail_msg: "run tls-cert.yml for {{ runner_dispatcher_tls_name }} with tls_cert_group=nb-dispatcher first"
 
-- name: python3
+- name: python3 and curl
   ansible.builtin.apt:
-    name: python3
+    # curl: nullbill verify audits the dispatcher's PVE token and its
+    # handoff port from inside this guest (pveapi.py, ci.py).
+    name: [python3, curl]
     update_cache: true
 
 - name: Dispatcher user

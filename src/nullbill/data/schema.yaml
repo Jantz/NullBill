@@ -83,6 +83,10 @@ $defs:
       # proxy.allow. Only for fixed-address guests in egress: proxy zones.
       proxy_allow: {type: array, uniqueItems: true, items: {$ref: "#/$defs/domain_pattern"}}
       gpu: {type: boolean}
+      # Set when NullBill does not put the program behind ports in place:
+      # who does, or why nothing does yet. verify reports a flow to such a
+      # port that finds nothing listening as DEGRADED with this text.
+      listener: {type: string, minLength: 1}
       floor: {$ref: "#/$defs/size"}
       grow: {type: integer, minimum: 1}
       # vm-pool: the labels a CI job names in runs-on to land on this pool.

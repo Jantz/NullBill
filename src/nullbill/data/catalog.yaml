@@ -245,6 +245,7 @@ services:
     zone: inference
     workload: inference
     description: LiteLLM.
+    listener: NullBill does not install the model gateway (LiteLLM) yet
     floor: {cores: 1, memory_mib: 512, disk_gib: 4}
     ports:
       - {port: 4000, proto: tcp, from: ["zone:build", "role:owner"]}
@@ -262,6 +263,7 @@ services:
     zone: windows
     workload: windows-dev
     description: RDP dev VM.
+    listener: you install Windows and turn on Remote Desktop (docs/runbooks/windows-desktop.md)
     floor: {cores: 2, memory_mib: 4096, disk_gib: 96}
     ports:
       - {port: 3389, proto: tcp, from: ["role:owner"]}

@@ -22,9 +22,10 @@
     name: openssh-server
     state: absent
 
+# curl: nullbill verify checks Forgejo over HTTPS from inside this guest (forge.py).
 - name: git and nginx from Debian
   ansible.builtin.apt:
-    name: [git, nginx-light, ca-certificates]
+    name: [git, nginx-light, ca-certificates, curl]
     update_cache: true
 
 # Go's TLS reads the system store, so Forgejo verifies PostgreSQL (and any

@@ -34,6 +34,9 @@ class Probe:
     command: str
     expect: str  # "open", "closed", or for proxy checks the HTTP status class "2" or "4"
     kind: str = "tcp"
+    # catalog's listener: what puts the program behind the port in place,
+    # when NullBill does not; nothing answering is then DEGRADED, not FAIL.
+    listener: str = ""
 
 
 def _tcp(ip: str, port: int) -> str:
@@ -121,7 +124,10 @@ def _port_probes(plan: dict, model: dict, flows: list, zone: str, rep: str) -> l
         allowed = any(rep in f.sources and f.dest == dest and f.proto == proto and f.port == port for f in flows)
         label = "the PVE host" if dest == HOST else dest
         verb = "reaches" if allowed else "is refused"
-        out.append(Probe(f"{rep} ({zone}) {verb} {label} tcp/{port}", vmid, _tcp(ip, port), "open" if allowed else "closed"))
+        listener = model["services"].get(dest, {}).get("listener", "") if allowed else ""
+        out.append(
+            Probe(f"{rep} ({zone}) {verb} {label} tcp/{port}", vmid, _tcp(ip, port), "open" if allowed else "closed", listener=listener)
+        )
     return out
 
 
@@ -142,6 +148,8 @@ def _judge(probe: Probe, rc: int, out: str, err: str) -> Result:
         if state == "open":
             return Result("PASS", probe.name)
         why = "nothing listening; the firewall let it through" if state == "refused" else "timed out"
+        if probe.listener:
+            return Result("DEGRADED", probe.name, f"nothing answers ({why}): {probe.listener}")
         return Result("FAIL", probe.name, why)
     if state == "timeout":
         return Result("PASS", probe.name)
