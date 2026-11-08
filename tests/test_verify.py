@@ -1,8 +1,10 @@
 import errno
+import re
 import shlex
 import socket
 import subprocess
 import threading
+import time
 
 import pytest
 from conftest import backup_host, fixture_config
@@ -10,7 +12,7 @@ from conftest import backup_host, fixture_config
 from nullbill import verify
 from nullbill.model import build_model
 from nullbill.plan import build_plan
-from nullbill.verify import _connect_via, _lan, _tcp, probes, run_verify, tcp_connect
+from nullbill.verify import _connect_via, _lan, _tcp, batch, probes, run_verify, tcp_connect, unbatch
 
 PUBLIC = "192.0.2.80"  # RFC 5737 stand-in for the resolved public name
 
@@ -41,7 +43,27 @@ def firewall(plan, model, leak: bool = False):
             return 0, answers[command], ""
         return backup(target, command)
 
-    return run
+    return per_probe(run)
+
+
+def per_probe(run):
+    """A runner that takes each container's batch of probes apart and asks
+    run for each probe on its own, as `pct exec VMID -- bash -c COMMAND`."""
+
+    def batched(target, command):
+        argv = shlex.split(command)
+        if argv[:2] != ["pct", "exec"] or verify.BATCH_MARK not in argv[-1]:
+            return run(target, command)
+        lines = [re.fullmatch(r"\( (.*) \) >\S+ 2>&1 &", line) for line in argv[-1].splitlines()]
+        out = ""
+        for i, cmd in enumerate(m.group(1) for m in lines if m):
+            rc, part, err = run(target, f"pct exec {argv[2]} -- bash -c {shlex.quote(cmd)}")
+            if rc != 0:
+                return rc, "", err
+            out += f"{verify.BATCH_MARK}{i}\n{part}"
+        return 0, out, ""
+
+    return batched
 
 
 def statuses(results):
@@ -164,6 +186,31 @@ def test_probe_commands_work_in_bash():
     assert _run_locally(_tcp("127.0.0.1", port)).strip() == "rc=1"  # closed port: refused
 
 
+def test_a_batch_runs_its_commands_side_by_side_and_keeps_each_output(tmp_path, monkeypatch):
+    commands = ["sleep 1; echo rc=0", "echo one; echo two", "true", "sleep 1; echo rc=124"]
+    script = batch(commands).replace("/run/", f"{tmp_path}/")
+    started = time.monotonic()
+    out = _run_locally(script)
+    assert time.monotonic() - started < 1.9  # the two sleeps overlap
+    assert unbatch(out, len(commands)) == ["rc=0\n", "one\ntwo\n", "", "rc=124\n"]
+    assert not list(tmp_path.iterdir())  # it cleans up after itself
+
+
+def test_each_container_gets_its_probes_in_one_call(facts):
+    plan, model = setup(facts)
+    run = firewall(plan, model)
+    calls = []
+
+    def counting(target, command):
+        calls.append(command)
+        return run(target, command)
+
+    run_verify(plan, model, "root@pve.internal", counting, lambda h, p: "timeout", lambda n: PUBLIC)
+    planned = probes(plan, model, PUBLIC)[0]
+    batches = [c for c in calls if verify.BATCH_MARK in c]
+    assert len(batches) == len({p.vmid for p in planned}) < len(planned)
+
+
 def test_host_only_port_is_refused_from_mgmt_guests(facts):
     plan, model = setup(facts)
     names = [p.name for p in probes(plan, model, PUBLIC)[0]]
@@ -202,7 +249,7 @@ def test_a_service_nullbill_does_not_serve_yet_is_degraded_when_nothing_answers(
         rc, out, err = run(target, command)
         return (rc, "rc=124\n", err) if command in silent else (rc, out, err)
 
-    by = statuses(run_verify(plan, model, "root@pve.internal", nothing_listens, lambda h, p: "timeout", lambda n: PUBLIC))
+    by = statuses(run_verify(plan, model, "root@pve.internal", per_probe(nothing_listens), lambda h, p: "timeout", lambda n: PUBLIC))
     degraded = [r for r in by["DEGRADED"] if " windows-dev " in r.name]
     assert degraded and all("Remote Desktop" in r.detail for r in degraded)
     # Services NullBill installs still fail when nothing answers.

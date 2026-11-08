@@ -92,6 +92,9 @@ class FakeReach:
         # by machine ("host", a VMID, or a VM's address) and playbook. Kept
         # out of self.calls, which then reads as the work itself.
         self.marks = {}
+        # Guests tls-cert.yml gave a certificate, by VMID, and those whose ran out since.
+        self.certs = set()
+        self.expired = set()
 
     def mark(self, machine, command):
         """apply's reads and writes of the marks on one machine."""
@@ -106,6 +109,9 @@ class FakeReach:
         return 0, ""
 
     def host(self, command, stdin=None, timeout=900):
+        if command.startswith("pct exec ") and "openssl x509 -checkend 3600" in command:
+            vmid = int(command.split()[2])
+            return 0, "valid\n" if vmid in self.certs - self.expired else "", ""
         if applied.DIR in command:
             if command.startswith("pct exec "):
                 vmid, inner = command.split()[2], shlex.split(command)[6]
@@ -451,6 +457,9 @@ class FakeReach:
         self.calls.append(("playbook", playbook, hosts, variables))
         if playbook == self.fail_playbook:
             return 2
+        if playbook == "tls-cert.yml":
+            self.certs |= {h["proxmox_vmid"] for h in hosts.values()}
+            self.expired -= {h["proxmox_vmid"] for h in hosts.values()}
         if playbook == "vpn.yml" and variables["vpn_auth_key"].startswith("tskey-auth-"):
             self.tailnet = "Running"
         return 0
@@ -615,13 +624,20 @@ def test_a_full_run_or_one_after_failed_checks_runs_everything_and_failure_leave
     assert "postgres.yml" not in c.reach.marks[vmid]
 
 
-def test_certificates_are_seen_to_every_run(ctx):
+def test_a_certificate_that_ran_out_gets_a_token_and_its_role_whatever_the_inputs(ctx):
     c = ctx("small")
     apply.stage_ca(c)
     c.reach.calls.clear()
     apply.stage_ca(c)
-    assert ran(c, "step-ca.yml") == []
-    assert ran(c, "tls-cert.yml") == [["forgejo", "monitoring", "postgres", "runner-dispatcher"]]
+    assert ran(c, "step-ca.yml") == ran(c, "tls-cert.yml") == []
+    assert not [call for call in c.reach.calls if call[0] == "host" and " token " in call[1]]
+
+    # The server was off for a day: postgres's ran out.
+    c.reach.expired = {c.bare["guests"]["postgres"]["vmid"]}
+    c.reach.calls.clear()
+    apply.stage_ca(c)
+    ((_, _, hosts, _),) = [call for call in c.reach.calls if call[:2] == ("playbook", "tls-cert.yml")]
+    assert list(hosts) == ["postgres"] and hosts["postgres"]["tls_cert_token"] == "token-for-postgres.nullbill.internal"
 
 
 def test_a_playbook_depends_on_its_roles_and_the_connection_plugin_not_their_checks():
@@ -1453,12 +1469,12 @@ def test_a_full_apply_runs_every_stage_against_the_stand_ins(ctx, monkeypatch, t
         assert playbook in ran, playbook
     assert ran.index("forgejo.yml") < ran.index("runner-dispatcher.yml") and ran.index("postgres.yml") < ran.index("forgejo.yml")
     assert c.log[-1] == "PASS     everything"
-    # Again: nothing is baked or made twice, and with nothing changed only
-    # the certificates are seen to.
+    # Again: nothing is baked or made twice, and with nothing changed no
+    # playbook runs.
     secrets = dict(c.secrets.data)
     c.reach.calls.clear()
     run_apply(c)
-    assert [call[1] for call in c.reach.calls if call[0] == "playbook"] == ["tls-cert.yml"]
+    assert [call[1] for call in c.reach.calls if call[0] == "playbook"] == []
     assert c.secrets.data == secrets
 
 

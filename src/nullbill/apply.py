@@ -161,18 +161,25 @@ def run_playbooks(
     variables: dict,
     facts: dict[str | None, str] | None = None,
     always: bool = False,
+    force: set[str | None] | None = None,
+    fresh: dict[str | None, dict] | None = None,
 ) -> None:
     """One playbook run on several machines at once, each with its own
     host vars on top of its connection. A machine where the playbook's last
-    good run had the same inputs is left out."""
+    good run had the same inputs is left out, unless it is in force.
+    fresh: host vars made anew for each run (a one-time token), passed on
+    but not part of the inputs."""
     hosts = {name or "pve": connection(ctx, name) | extra for name, extra in targets.items()}
     names = {name or "pve": name for name in targets}
     full = always or ctx.full or (ctx.home / FULL_NEXT).exists()
     key = ctx.secrets.ensure("applied_key", lambda: secrets.token_hex(32))
     digests = {h: applied.digest(key, playbook, hosts[h], variables, (facts or {}).get(names[h], "")) for h in hosts}
+    for name, extra in (fresh or {}).items():
+        hosts[name or "pve"] |= extra
     # A pool's golden image is baked from a fresh VM each time, then sealed.
     marked = {h for h in hosts if names[h] is None or ctx.bare["guests"][names[h]]["kind"] != "vm-pool"}
-    same = set() if full else {h for h in sorted(marked) if applied_mark(ctx, names[h], playbook) == digests[h]}
+    forced = {name or "pve" for name in force or ()}
+    same = set() if full else {h for h in sorted(marked - forced) if applied_mark(ctx, names[h], playbook) == digests[h]}
     for h in sorted(same):
         ctx.say(f"{stage}: {playbook} on {names[h] or 'PVE host'} is unchanged since its last run")
     run = {h: v for h, v in hosts.items() if h not in same}
@@ -1084,19 +1091,24 @@ def stage_ca(ctx: Context) -> None:
     run_playbook(ctx, "ca", "step-ca.yml", "step-ca", {"step_ca_domain": domain})
     root = ca_root(ctx, "ca")
     targets: dict[str | None, dict] = {
-        name: {
-            "tls_cert_name": f"{name}.{domain}",
-            "tls_cert_token": ca_token(ctx, "ca", name),
-            "tls_cert_group": group,
-            "tls_cert_reload": reload,
-        }
+        name: {"tls_cert_name": f"{name}.{domain}", "tls_cert_group": group, "tls_cert_reload": reload}
         for name, (group, reload) in TLS.items()
         if name in ctx.bare["guests"]
     }
-    # Every run, all at once: a certificate that ran out while the server
-    # was off (they last 24 h) is replaced from its token.
+    # A guest without a certificate good for another hour (they last 24 h,
+    # so one runs out while the server is off) gets a one-time token for a
+    # new one, and the role runs there whatever its inputs; all at once.
+    lapsed = {name for name in targets if not cert_valid(ctx, name)}
+    tokens: dict[str | None, dict] = {name: {"tls_cert_token": ca_token(ctx, "ca", name)} for name in sorted(lapsed)}
     variables = {"tls_cert_ca_url": f"https://step-ca.{domain}", "tls_cert_ca_root": root}
-    run_playbooks(ctx, "ca", "tls-cert.yml", targets, variables, always=True)
+    run_playbooks(ctx, "ca", "tls-cert.yml", targets, variables, force=lapsed, fresh=tokens)
+
+
+def cert_valid(ctx: Context, name: str) -> bool:
+    """Whether name's tls_cert certificate is good for another hour, as the role asks."""
+    path = shlex.quote(f"/etc/nullbill/tls/{name}.{ctx.bare['domain']}.crt")
+    rc, out = _on_machine(ctx, name, f"openssl x509 -checkend 3600 -noout -in {path} >/dev/null 2>&1 && echo valid || true")
+    return rc == 0 and out.strip() == "valid"
 
 
 def planned(ctx: Context, name: str) -> bool:

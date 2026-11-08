@@ -53,9 +53,11 @@ stage is idempotent, so re-running apply resumes.
   and leaves that machine out when it is the same. The mark goes before a
   run starts, so a run that stops part way is run whole next time, and a
   guest OpenTofu makes afresh has none.
-- What depends on more than its inputs runs anyway: `tls-cert.yml` every
-  time (certificates last 24 h), the runner dispatcher after a bake (the
-  bake stopped it), the golden images (baked from a fresh VM). The NVIDIA
+- What depends on more than its inputs runs anyway: `tls-cert.yml` with a
+  fresh one-time token on a guest whose certificate is not good for another
+  hour (they last 24 h; the token is not part of the inputs), the runner
+  dispatcher after a bake (the bake stopped it), the golden images (baked
+  from a fresh VM). The NVIDIA
   host role's inputs include the running kernel and the loaded module.
 - `apply --full` runs everything, and so does the run after one whose
   checks failed (`$NULLBILL_HOME/apply-full-next`), in case a guest

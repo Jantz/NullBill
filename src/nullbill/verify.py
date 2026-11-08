@@ -23,10 +23,13 @@ from nullbill.render import strip_notes
 from nullbill.results import Result
 
 TIMEOUT_S = 3
-# Probes run this many at a time, each its own ssh to the host: one at a
-# time took 13 minutes for some 300. sshd starts dropping new connections
+# A container's probes run side by side in one `pct exec` (batch), and this
+# many containers at a time, each its own ssh to the host. One probe per
+# ssh, six at a time, took 3 min for some 300 on the owner's server, most
+# of it drops waiting out TIMEOUT_S. sshd starts dropping new connections
 # past MaxStartups' 10 unauthenticated ones, so stay well below.
 PARALLEL = 6
+BATCH_MARK = "--- nb-probe "
 Connect = Callable[[str, int], str]  # -> "open", "refused" or "timeout"
 Resolve = Callable[[str], str]
 
@@ -135,6 +138,28 @@ def _port_probes(plan: dict, model: dict, flows: list, zone: str, rep: str) -> l
             Probe(f"{rep} ({zone}) {verb} {label} tcp/{port}", vmid, _tcp(ip, port), "open" if allowed else "closed", listener=listener)
         )
     return out
+
+
+def batch(commands: list[str]) -> str:
+    """One bash script that runs every command at once, each in its own
+    subshell, then prints each one's output after a BATCH_MARK line."""
+    d = "/run/nb-probes.$$"
+    lines = [f"mkdir -m 0700 {d} || exit 1"]
+    lines += [f"( {c} ) >{d}/{i} 2>&1 &" for i, c in enumerate(commands)]
+    lines += ["wait", f"for i in $(seq 0 {len(commands) - 1}); do echo '{BATCH_MARK}'$i; cat {d}/$i; done", f"rm -rf {d}"]
+    return "\n".join(lines)
+
+
+def unbatch(out: str, count: int) -> list[str]:
+    """Each command's output from a batch's, "" for one that printed none."""
+    parts = [""] * count
+    current = None
+    for line in out.splitlines(keepends=True):
+        if line.startswith(BATCH_MARK) and line[len(BATCH_MARK) :].strip().isdigit():
+            current = int(line[len(BATCH_MARK) :])
+        elif current is not None and current < count:
+            parts[current] += line
+    return parts
 
 
 def _judge(probe: Probe, rc: int, out: str, err: str) -> Result:
@@ -263,13 +288,22 @@ def run_verify(
     else:
         add(Result("PASS", "pve-firewall is running"))
 
-    def attempt(probe: Probe) -> Result:
-        command = f"pct exec {probe.vmid} -- bash -c {shlex.quote(probe.command)}"
-        return _judge(probe, *run(target, command))
+    # In the plan's order, each probe from its container's batch.
+    by_vmid: dict[int, list[Probe]] = {}
+    for probe in planned:
+        by_vmid.setdefault(probe.vmid, []).append(probe)
+
+    def attempt(vmid: int) -> list[Result]:
+        group = by_vmid[vmid]
+        rc, out, err = run(target, f"pct exec {vmid} -- bash -c {shlex.quote(batch([p.command for p in group]))}")
+        return [_judge(p, rc, part, err) for p, part in zip(group, unbatch(out, len(group)), strict=True)]
 
     with ThreadPoolExecutor(PARALLEL) as pool:
-        for result in pool.map(attempt, planned):
-            add(result)
+        done = {vmid: pool.submit(attempt, vmid) for vmid in by_vmid}
+        told = dict.fromkeys(by_vmid, 0)
+        for probe in planned:
+            add(done[probe.vmid].result()[told[probe.vmid]])
+            told[probe.vmid] += 1
     add(*skipped)
     if lan_state == lan.OPEN:
         add(Result("DEGRADED", "LAN is refused the PVE host", "open until you close it over Tailscale (docs/runbooks/vpn.md)"))
