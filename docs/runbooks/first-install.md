@@ -397,9 +397,9 @@ Tailscale.
 
 ## 14. Use it
 
-[everyday-use.md](everyday-use.md) lists what runs, its address over
-Tailscale, how to sign in to Grafana, Forgejo, the workspace and the coding
-agent the first time, and what you manage where.
+The page's **Services** card lists what runs, opens each service and shows
+the passwords setup made for it. [everyday-use.md](everyday-use.md) says
+the same away from the page, and what you manage where.
 
 ## If a stage fails
 
@@ -423,9 +423,7 @@ certificates.
 - Local AI models and Windows CI runners: NullBill makes their guests but
   does not set up the GPU driver, the model server or the runners yet. Installing Windows in the desktop VM is done by
   hand ([windows-desktop.md](windows-desktop.md)).
-- The page does not show Forgejo's and Grafana's admin passwords yet; read
-  them in the Proxmox Shell ([everyday-use.md](everyday-use.md#passwords)).
-  Your devices do not resolve the services' names
+- Your devices do not resolve the services' names
   (`forgejo.nullbill.internal`) over Tailscale yet, and the certificate
   authority is not limited to those names, so your devices should not
   trust it; open the services by address and accept the warning.

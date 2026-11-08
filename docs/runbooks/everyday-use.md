@@ -1,11 +1,15 @@
 # Use and manage the server
 
-What runs after setup, where each part answers from a device on your
-tailnet, and how you sign in to it the first time. Addresses and guest
-numbers below are for the default `network.base` (10.42.0.0/16) and
-`vmid_base` (2000); the page's step 4, **The full plan**, lists the real
-ones under `guests` (`ip`, `vmid`). A guest's address is
-`10.42.<zone index>.<service id>`; its number is `2000 + <service id>`.
+The page's **Services** card, under **Server status**, lists each service
+the plan runs with its address, an **Open** button, the user to sign in as,
+**Show password** where setup made the password, and whether its guest
+answers monitoring. This guide is the same list for reading away from the
+page.
+
+Addresses and guest numbers below are for the default `network.base`
+(10.42.0.0/16) and `vmid_base` (2000); the page's step 4, **The full
+plan**, lists the real ones under `guests` (`ip`, `vmid`). A guest's address
+is `10.42.<zone index>.<service id>`; its number is `2000 + <service id>`.
 
 ## Where things are
 
@@ -13,9 +17,9 @@ ones under `guests` (`ip`, `vmid`). A guest's address is
 |---|---|---|
 | NullBill page | `https://10.42.1.2:8443` | your page password (step 1) |
 | Proxmox web UI | `https://10.42.1.254:8006` | `root`, realm Linux PAM, the password from the Proxmox installer |
-| Grafana (metrics, logs) | `http://10.42.1.14:3000` | `admin`, see [Passwords](#passwords) |
-| Forgejo (Git, CI) | `https://10.42.2.17`, Git over SSH on `10.42.2.17` port 22 | `nullbill-admin`, see [Passwords](#passwords); Forgejo asks for a new one |
-| Kept disk share | `\\10.42.1.23\<share>` | `nbshare`, **Show the password** on the page's step 3 |
+| Grafana (metrics, logs) | `http://10.42.1.14:3000` | `admin`, **Show password** on the page |
+| Forgejo (Git, CI) | `https://10.42.2.17`, Git over SSH on `10.42.2.17` port 22 | `nullbill-admin`, **Show password** on the page; Forgejo asks for a new one |
+| Kept disk share | `\\10.42.1.23\<share>` | `nbshare`, **Show password** on the page |
 | Workspace | SSH to `10.42.3.19` | see [Workspace](#workspace) |
 | Coding agent | inside the operator guest (2016) | see [Coding agent](#coding-agent) |
 | Windows desktop | Remote Desktop to `10.42.5.22` | the account you make when installing ([windows-desktop.md](windows-desktop.md)) |
@@ -38,13 +42,15 @@ Names under `nullbill.internal` do not resolve on your devices yet. Forgejo
 shows `forgejo.nullbill.internal` in its clone and mail links; on a laptop,
 add the line `10.42.2.17 forgejo.nullbill.internal` to the hosts file
 (`/etc/hosts`, or `C:\Windows\System32\drivers\etc\hosts` edited as
-administrator) so those links work.
+administrator) so those links work. Put it below
+`# TailscaleHostsSectionEnd` if the file has that section: Tailscale
+rewrites everything between its start and end lines.
 
 ## Passwords
 
-Setup makes Grafana's and Forgejo's admin passwords and keeps a copy in its
-encrypted secrets; the page does not show them yet. Read them on the
-server: in the Proxmox web UI select the node, open **Shell** and run
+Setup makes Grafana's, Forgejo's and the share's passwords and keeps them
+in its encrypted secrets; **Show password** on the Services card shows each.
+Without the page, read the first two in the Proxmox Shell:
 
 ```sh
 pct exec 2014 -- cat /etc/grafana/admin-password    # Grafana, user admin
@@ -52,8 +58,8 @@ pct exec 2017 -- cat /etc/forgejo/admin-password    # Forgejo, user nullbill-adm
 ```
 
 Keep them in your password manager. Forgejo makes you change its password
-at the first sign-in; the file keeps the first one, which then no longer
-works.
+at the first sign-in; the page and the file keep the first one, which then
+no longer works.
 
 ## Every day
 

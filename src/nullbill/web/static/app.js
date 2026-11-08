@@ -476,9 +476,78 @@ function renderReady(states) {
   $("ready-list").replaceChildren(...items);
 }
 
+// Services: what the owner opens, with how to sign in. Whether each one
+// answers comes from monitoring, through refreshStatus.
+let lastStatus = null;
+
+function revealButton(name) {
+  const button = make("button", {type: "button", className: "secondary", textContent: "Show password"});
+  const feedback = make("p", {className: "feedback"});
+  feedback.setAttribute("role", "status");
+  feedback.setAttribute("aria-live", "polite");
+  const secret = make("code", {className: "secret"});
+  button.addEventListener("click", () => press(button, feedback, "Fetching…", async () => {
+    secret.textContent = (await api("/api/password-reveal", {name})).password;
+    return "";
+  }));
+  return [make("div", {className: "actions"}, button, feedback), secret];
+}
+
+function renderServices(st) {
+  const services = st.services || {items: []};
+  show("services", Boolean(st.last_jobs.apply) && services.items.length > 0);
+  $("service-list").replaceChildren(...services.items.map((s) => {
+    const signIn = s.user ? make("p", {}, "Sign in as ", make("code", {textContent: s.user})) : null;
+    const open = s.url ? make("a", {className: "button", href: s.url, target: "_blank", rel: "noopener noreferrer", textContent: "Open"}) : null;
+    const item = make("li", {className: "service"},
+      make("div", {className: "service-head"},
+        make("span", {className: "dot idle", ariaHidden: "true"}),
+        make("h3", {textContent: s.title}),
+        make("span", {className: "service-state"}),
+        open),
+      make("p", {textContent: s.what}),
+      s.url ? make("p", {}, make("code", {textContent: s.url})) : null,
+      ...(s.addresses || []).map((a) => make("p", {}, make("code", {textContent: a}))),
+      signIn,
+      ...(s.password ? revealButton(s.password) : []),
+      s.password_note ? make("p", {className: "hint", textContent: s.password_note}) : null,
+      s.how ? make("p", {className: "hint", textContent: s.how}) : null);
+    item.dataset.watch = s.watch || "";
+    return item;
+  }));
+  $("services-background").textContent = services.background.length
+    ? `Also running, with nothing to open: ${services.background.join(", ")}.`
+    : "";
+  paintServices();
+}
+
+function paintServices() {
+  for (const node of document.querySelectorAll("#service-list .service")) {
+    const watch = node.dataset.watch;
+    const dot = node.querySelector(".dot");
+    const label = node.querySelector(".service-state");
+    const ok = lastStatus && lastStatus.monitoring === "ok";
+    if (!watch || !ok) {
+      dot.className = "dot idle";
+      label.textContent = "";
+    } else if (lastStatus.answering.includes(watch)) {
+      dot.className = "dot good";
+      label.textContent = "running";
+    } else if (lastStatus.down.includes(watch)) {
+      dot.className = "dot bad";
+      label.textContent = "not answering";
+    } else {
+      dot.className = "dot idle";
+      label.textContent = "";
+    }
+  }
+}
+
 // Status, from monitoring.
 async function refreshStatus() {
   const s = await api("/api/status");
+  lastStatus = s;
+  paintServices();
   const alerts = $("status-alerts");
   const facts = $("status-facts");
   const dot = $("status-dot");
@@ -532,6 +601,7 @@ async function refresh() {
   if (!choicesDirty() || disksChanged) renderChoices(st);
   renderHardware(st.hardware);
   renderFiles(st.files);
+  renderServices(st);
   renderPlan(st.plan);
   renderAlerts(st.alerts);
   renderAgent(st.agent_credential);
@@ -924,7 +994,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }, field);
   });
   $("files-reveal").addEventListener("click", () => press($("files-reveal"), "files-result", "Fetching…", async () => {
-    $("files-password").textContent = (await api("/api/files-password", {})).password;
+    $("files-password").textContent = (await api("/api/password-reveal", {name: "files"})).password;
     return "";
   }));
 

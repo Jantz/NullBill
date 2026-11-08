@@ -363,6 +363,7 @@ def test_status_reads_prometheus_on_the_monitoring_guest(site):
         ],
         "targets": 2,
         "down": ["forgejo:9100"],
+        "answering": ["pbs:9100"],
         "security_waiting": [],
         "reboot_waiting": ["pve:9100"],
     }
@@ -374,6 +375,38 @@ def test_status_reads_prometheus_on_the_monitoring_guest(site):
     app.fetch = unreachable
     assert client.call("/api/status")[1] == {"monitoring": "unreachable", "error": "no route to host"}
     assert Client(client.port, app.home / "web" / "cert.pem").call("/api/status")[0] == 401
+
+
+def test_services_list_what_the_plan_runs_and_reveal_only_their_passwords(site):
+    app, client = site
+    sign_in(app, client)
+    assert client.call("/api/state")[1]["services"] == {"items": [], "background": []}
+    golden = Path(__file__).parent / "golden" / "small.plan.yaml"
+    (app.home / "plan.yaml").write_text(golden.read_text())
+    services = client.call("/api/state")[1]["services"]
+    items = {s["name"]: s for s in services["items"]}
+    assert list(items) == ["proxmox", "grafana", "forgejo", "workspace", "operator", "linux-runner"]
+    assert items["proxmox"]["url"] == "https://10.42.1.254:8006" and items["proxmox"]["watch"] == "pve"
+    assert items["grafana"]["url"] == "http://10.42.1.14:3000"
+    assert (items["grafana"]["user"], items["grafana"]["password"]) == ("admin", "grafana")
+    assert (items["forgejo"]["url"], items["forgejo"]["user"]) == ("https://10.42.2.17/", "nullbill-admin")
+    assert items["workspace"]["addresses"] == ["ssh root@10.42.3.19"] and "pct enter 2019" in items["workspace"]["how"]
+    assert "pct enter 2016" in items["operator"]["how"]
+    background = ["router", "internet proxy", "certificate authority", "PostgreSQL", "CI dispatcher", "Tailscale entry", "backup server"]
+    assert services["background"] == background
+    legacy_plan = yaml.safe_load((golden.parent / "large-legacy.plan.yaml").read_text())
+    (app.home / "plan.yaml").write_text(yaml.safe_dump(legacy_plan))
+    files = next(s for s in client.call("/api/state")[1]["services"]["items"] if s["name"] == "files")
+    assert files["addresses"] == ["\\\\10.42.1.23\\data"] and files["password"] == "files"
+    secrets = app.codec(app.home).data
+    secrets |= {"grafana_admin_password": "grafana-pw", "forgejo_admin_password": "forgejo-pw", "page_password": "never"}
+    assert client.call("/api/password-reveal", {"name": "grafana"}) == (200, {"password": "grafana-pw"})
+    assert client.call("/api/password-reveal", {"name": "forgejo"}) == (200, {"password": "forgejo-pw"})
+    for name in ("page_password", "grafana_admin_password", "tailscale_client_secret", ""):
+        status, data = client.call("/api/password-reveal", {"name": name})
+        assert status == 400 and "no password" in data["error"]
+    anonymous = Client(client.port, app.home / "web" / "cert.pem")
+    assert anonymous.call("/api/password-reveal", {"name": "grafana"})[0] == 401
 
 
 def test_closing_the_lan_needs_the_page_over_tailscale_and_then_shuts_the_lan_out(site, monkeypatch):
@@ -580,9 +613,10 @@ def test_keeping_a_disk_plans_the_share_and_shows_where_it_is(site):
     state = client.call("/api/state")[1]
     assert {d["id"]: d["choice"] for d in state["disks"]}[OLD] == "keep"
     assert state["files"] == {"ip": "10.42.1.23", "shares": ["data"], "user": "nbshare", "password_set": False}
-    assert client.call("/api/files-password", {}) == (400, {"error": "run setup first; it makes the password"})
+    files = {"name": "files"}
+    assert client.call("/api/password-reveal", files) == (400, {"error": "run setup first; it makes the password"})
     app.codec(app.home).data["files_share_password"] = "a-long-share-password"
-    assert client.call("/api/files-password", {}) == (200, {"password": "a-long-share-password"})
+    assert client.call("/api/password-reveal", files) == (200, {"password": "a-long-share-password"})
     # Read-write, then back; keys the page does not show stay.
     client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "keep", "rw": True}}})
     assert pins(app) == {OLD: {"use": "legacy", "mode": "rw"}}

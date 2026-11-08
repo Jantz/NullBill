@@ -42,6 +42,7 @@ from nullbill.plan import guest_storage
 from nullbill.secretfile import Codec, Secrets, Sops
 from nullbill.tailnet import render_tailnet
 from nullbill.web import progress
+from nullbill.web.services import PASSWORDS, services, shares
 
 SESSION_S = 12 * 3600
 MIN_PASSWORD = 12
@@ -275,6 +276,7 @@ class App:
                 "alerts": sorted(alerts, key=lambda a: (a["severity"] != "page", a["name"])),
                 "targets": len(up),
                 "down": sorted(r["metric"].get("instance", "?") for r in up if r["value"][1] == "0"),
+                "answering": sorted(r["metric"].get("instance", "?") for r in up if r["value"][1] == "1"),
                 "security_waiting": instances('sum by (instance) (apt_upgrades_pending{origin=~".*-security.*"}) > 0'),
                 "reboot_waiting": instances("node_reboot_required == 1"),
             }
@@ -509,12 +511,17 @@ class App:
         ip = (plan.get("guests") or {}).get("files", {}).get("ip")
         if not ip:
             return None
-        shares = [m["share"] for m in legacy.shares(plan)] + [c["name"] for c in legacy.copies(plan)]
         has_password = bool(Secrets(self.codec(self.home)).data.get("files_share_password"))
-        return {"ip": ip, "shares": shares, "user": legacy.SHARE_USER, "password_set": has_password}
+        return {"ip": ip, "shares": shares(plan), "user": legacy.SHARE_USER, "password_set": has_password}
 
-    def files_password(self) -> str:
-        value = Secrets(self.codec(self.home)).data.get("files_share_password")
+    def services(self) -> dict:
+        path = self.home / "plan.yaml"
+        return services((yaml.safe_load(path.read_text()) or {}) if path.exists() else {})
+
+    def password(self, name: str) -> str:
+        if name not in PASSWORDS:
+            raise NullBillError(f"the page shows no password for {name!r}")
+        value = Secrets(self.codec(self.home)).data.get(PASSWORDS[name])
         if not value:
             raise NullBillError("run setup first; it makes the password")
         return value
@@ -814,6 +821,7 @@ class App:
             "disks": self.disks(),
             "gpus": self.gpus(),
             "files": self.files(),
+            "services": self.services(),
             "workloads": WORKLOADS,
             "plan": self.plan(),
             "alerts": self.alerts() if has_password else None,
@@ -980,8 +988,8 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 if self.path == "/api/vpn":
                     app.save_tailscale_key(body)
                     return self.json(200, {"ok": True, "tailscale_key": app.tailscale_key()})
-                if self.path == "/api/files-password":
-                    return self.json(200, {"password": app.files_password()})
+                if self.path == "/api/password-reveal":
+                    return self.json(200, {"password": app.password(str(body.get("name", "")))})
                 if self.path == "/api/alerts/test":
                     return self.json(200, {"ok": True, "sent": app.test_alerts()})
                 if self.path == "/api/jobs":

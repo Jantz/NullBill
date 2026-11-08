@@ -393,3 +393,12 @@ table.guests { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
 .disk-confirm input { border-color: var(--error); }
 #files-shares { padding-left: 18px; overflow-wrap: anywhere; }
 #files-password { display: block; margin-top: 8px; }
+
+.services { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 10px; }
+.service { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.service-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.service-head h3 { margin: 0; flex: 1; }
+.service-state { font-size: 0.85rem; color: var(--muted); }
+.service p { margin: 6px 0 0; }
+.service .actions { margin-top: 8px; }
+.service .secret { display: block; margin-top: 6px; }
