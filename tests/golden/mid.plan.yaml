@@ -316,6 +316,7 @@ flows:
   - service:monitoring -> inference tcp/9100
   - zone:build -> model-gateway tcp/4000
   - role:owner -> model-gateway tcp/4000
+  - service:monitoring -> model-gateway tcp/4000
   - service:monitoring -> model-gateway tcp/9100
   - role:owner -> windows-dev tcp/3389
   - role:owner -> the PVE host tcp/8006

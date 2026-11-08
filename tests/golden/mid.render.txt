@@ -190,6 +190,7 @@ OUT ACCEPT -dest +nb-svc-runner-dispatcher -p tcp -dport 8443 # to runner-dispat
 OUT ACCEPT -dest +nb-svc-runner-dispatcher -p tcp -dport 9100 # to runner-dispatcher
 OUT ACCEPT -dest +nb-svc-workspace -p tcp -dport 9100 # to workspace
 OUT ACCEPT -dest +nb-svc-inference -p tcp -dport 9100 # to inference
+OUT ACCEPT -dest +nb-svc-model-gateway -p tcp -dport 4000 # to model-gateway
 OUT ACCEPT -dest +nb-svc-model-gateway -p tcp -dport 9100 # to model-gateway
 OUT ACCEPT -dest 10.42.1.254 -p tcp -dport 9100 # to the PVE host
 ===== firewall/2015.fw
@@ -344,6 +345,7 @@ policy_out: DROP
 [RULES]
 IN ACCEPT -source +nb-zone-build -p tcp -dport 4000 # zone:build
 IN ACCEPT -source +nb-svc-vpn -p tcp -dport 4000 # role:owner
+IN ACCEPT -source +nb-svc-monitoring -p tcp -dport 4000 # service:monitoring
 IN ACCEPT -source +nb-svc-monitoring -p tcp -dport 9100 # service:monitoring
 OUT ACCEPT -dest +nb-svc-router -p udp -dport 53 # to router
 OUT ACCEPT -dest +nb-svc-router -p tcp -dport 53 # to router
@@ -751,6 +753,7 @@ table inet nullbill {
         ip saddr { 10.42.1.14 } ip daddr { 10.42.4.20 } tcp dport 9100 accept # service:monitoring to inference
         ip saddr { 10.42.3.0/24 } ip daddr { 10.42.4.21 } tcp dport 4000 accept # zone:build to model-gateway
         ip saddr { 10.42.6.11 } ip daddr { 10.42.4.21 } tcp dport 4000 accept # role:owner to model-gateway
+        ip saddr { 10.42.1.14 } ip daddr { 10.42.4.21 } tcp dport 4000 accept # service:monitoring to model-gateway
         ip saddr { 10.42.1.14 } ip daddr { 10.42.4.21 } tcp dport 9100 accept # service:monitoring to model-gateway
         ip saddr { 10.42.6.11 } ip daddr { 10.42.5.22 } tcp dport 3389 accept # role:owner to windows-dev
         ip saddr { 10.42.6.11 } ip daddr { 10.42.1.254 } tcp dport 8006 accept # role:owner to the PVE host

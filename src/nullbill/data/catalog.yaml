@@ -277,7 +277,7 @@ services:
     description: LiteLLM, one OpenAI-compatible API in front of the local model.
     floor: {cores: 1, memory_mib: 512, disk_gib: 4}
     ports:
-      - {port: 4000, proto: tcp, from: ["zone:build", "role:owner"]}
+      - {port: 4000, proto: tcp, from: ["zone:build", "role:owner", "service:monitoring"]}
   windows-runner:
     id: 31
     kind: vm-pool

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from conftest import fixture_config
 
-from nullbill import applied, apply, backups, ci, hostroot, lan, llm
+from nullbill import applied, apply, backups, ci, flows, hostroot, lan, llm
 from nullbill.apply import ApplyError, Context, connection, run_apply
 from nullbill.artifacts import render_all
 from nullbill.errors import NullBillError
@@ -716,6 +716,16 @@ def test_monitoring_stage_watches_every_guest_and_alerts_the_owner(ctx):
     assert variables["monitoring_https_proxy"] == "http://10.42.2.10:3128"
     assert variables["monitoring_shipper_ca"] == (c.home / "shipper-ca" / "ca.crt").read_text()
     assert c.secrets.data["grafana_admin_password"] == "password-of-2014"
+
+
+@pytest.mark.parametrize("cls", ["small", "mid", "large"])
+def test_monitoring_may_reach_every_tls_target_it_probes(ctx, cls):
+    # A probe the firewall drops reads as a failed TLS handshake.
+    c = ctx(cls)
+    allowed = {(f.dest, f.port) for f in flows.resolve_flows(c.bare, c.model) if "monitoring" in f.sources and f.proto == "tcp"}
+    for target in apply.tls_targets(c):
+        host, port = target.rsplit(":", 1)
+        assert (host.split(".")[0], int(port)) in allowed, target
 
 
 def test_monitoring_stage_runs_without_a_topic_and_says_so(ctx):
