@@ -1,3 +1,24 @@
+# The driver is built on the server and so signed by no key the firmware
+# trusts: with Secure Boot on, the kernel refuses to load it. Stop before
+# changing anything. The EFI variable is 4 attribute bytes and the value;
+# without it the machine booted without UEFI or Secure Boot.
+- name: Secure Boot state
+  ansible.builtin.shell: |
+    set -o pipefail
+    f=/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c
+    if [ -r "$f" ]; then od -An -tu1 -j4 -N1 "$f" | tr -d ' '; else echo 0; fi
+  args:
+    executable: /bin/bash
+  register: nvidia_host_secure_boot
+  changed_when: false
+
+- name: Secure Boot is off
+  ansible.builtin.assert:
+    that: nvidia_host_secure_boot.stdout == "0"
+    fail_msg: >-
+      Secure Boot is on, so the server would refuse the NVIDIA driver it builds. Turn Secure Boot
+      off in the BIOS, start the server again and run setup again (docs/runbooks/local-models.md).
+
 - name: Running kernel
   ansible.builtin.command: uname -r
   register: nvidia_host_kernel
