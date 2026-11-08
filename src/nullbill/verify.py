@@ -11,6 +11,7 @@ import shlex
 import socket
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from nullbill import agent, backups, ci, forge, lan, legacy
@@ -21,6 +22,10 @@ from nullbill.render import strip_notes
 from nullbill.results import Result
 
 TIMEOUT_S = 3
+# Probes run this many at a time, each its own ssh to the host: one at a
+# time took 13 minutes for some 300. sshd starts dropping new connections
+# past MaxStartups' 10 unauthenticated ones, so stay well below.
+PARALLEL = 6
 Connect = Callable[[str, int], str]  # -> "open", "refused" or "timeout"
 Resolve = Callable[[str], str]
 
@@ -200,27 +205,37 @@ def run_verify(
     now: backups.Clock = time.time,
     lan_state: str = lan.CLOSED,
     lan_host: str | None = None,
+    say: Callable[[Result], None] | None = None,
 ) -> list[Result]:
+    """Every check's result, in a fixed order; `say` hears each one as soon as
+    it and those before it are in, so a long run shows its progress."""
     results: list[Result] = []
+
+    def add(*found: Result) -> None:
+        for result in found:
+            results.append(result)
+            if say:
+                say(result)
+
     bare = strip_notes(plan)
     if bare["backups"]["status"] == "DEGRADED":
-        results.append(Result("DEGRADED", "backups", "no separate disk for PBS"))
+        add(Result("DEGRADED", "backups", "no separate disk for PBS"))
     elif bare["backups"]["status"] == "disabled":
-        results.append(Result("DEGRADED", "backups", "switched off; nothing is backed up"))
+        add(Result("DEGRADED", "backups", "switched off; nothing is backed up"))
     if target is None:
         planned, skipped = probes(plan, model, "unresolved")
         reason = "no target.ssh in config.yaml"
-        return (
-            results
-            + skipped
-            + [Result("SKIP", p.name, reason) for p in planned]
-            + [Result("SKIP", f"LAN is refused the PVE host tcp/{port}", reason) for port in HOST_PORTS]
-            + backups.skipped(plan, reason)
-            + agent.skipped(plan, reason)
-            + forge.skipped(plan, reason)
-            + ci.skipped(plan, reason)
-            + legacy.skipped(plan, reason)
+        add(
+            *skipped,
+            *[Result("SKIP", p.name, reason) for p in planned],
+            *[Result("SKIP", f"LAN is refused the PVE host tcp/{port}", reason) for port in HOST_PORTS],
+            *backups.skipped(plan, reason),
+            *agent.skipped(plan, reason),
+            *forge.skipped(plan, reason),
+            *ci.skipped(plan, reason),
+            *legacy.skipped(plan, reason),
         )
+        return results
     name = model["verify"]["public_name"]
     try:
         public_ip = resolve(name)
@@ -229,20 +244,25 @@ def run_verify(
     planned, skipped = probes(plan, model, public_ip)
     rc, out, err = run(target, "pve-firewall status")
     if rc != 0 or "running" not in out:
-        results.append(Result("FAIL", "pve-firewall is running", (out or err).strip()[:120]))
+        add(Result("FAIL", "pve-firewall is running", (out or err).strip()[:120]))
     else:
-        results.append(Result("PASS", "pve-firewall is running"))
-    for probe in planned:
+        add(Result("PASS", "pve-firewall is running"))
+
+    def attempt(probe: Probe) -> Result:
         command = f"pct exec {probe.vmid} -- bash -c {shlex.quote(probe.command)}"
-        results.append(_judge(probe, *run(target, command)))
-    results += skipped
+        return _judge(probe, *run(target, command))
+
+    with ThreadPoolExecutor(PARALLEL) as pool:
+        for result in pool.map(attempt, planned):
+            add(result)
+    add(*skipped)
     if lan_state == lan.OPEN:
-        results.append(Result("DEGRADED", "LAN is refused the PVE host", "open until you close it over Tailscale (docs/runbooks/vpn.md)"))
+        add(Result("DEGRADED", "LAN is refused the PVE host", "open until you close it over Tailscale (docs/runbooks/vpn.md)"))
     else:
-        results += _lan(lan_host or target.rpartition("@")[2], connect)
-    results += backups.check(plan, target, run, now)
-    results += agent.check(plan, target, run)
-    results += forge.check(plan, target, run)
-    results += ci.check(plan, target, run)
-    results += legacy.check(plan, target, run)
+        add(*_lan(lan_host or target.rpartition("@")[2], connect))
+    add(*backups.check(plan, target, run, now))
+    add(*agent.check(plan, target, run))
+    add(*forge.check(plan, target, run))
+    add(*ci.check(plan, target, run))
+    add(*legacy.check(plan, target, run))
     return results

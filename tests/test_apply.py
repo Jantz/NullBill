@@ -1023,7 +1023,7 @@ def test_verify_reports_an_open_lan_as_degraded_not_failed(ctx, monkeypatch):
     monkeypatch.setattr(apply, "run_verify", lambda *a, **kw: seen.update(kw) or [Result("PASS", "x")])
     c = ctx()
     apply.stage_verify(c)
-    assert seen == {"lan_state": "open", "lan_host": "pve.internal"}
+    assert seen.pop("say") and seen == {"lan_state": "open", "lan_host": "pve.internal"}
 
 
 def test_a_failed_playbook_stops_apply_before_later_stages(ctx):
@@ -1035,7 +1035,13 @@ def test_a_failed_playbook_stops_apply_before_later_stages(ctx):
 
 
 def test_verify_stage_fails_on_any_fail(ctx, monkeypatch):
-    monkeypatch.setattr(apply, "run_verify", lambda *a, **kw: [Result("PASS", "a"), Result("FAIL", "b", "closed")])
+    def run_verify(*a, say, **kw):
+        found = [Result("PASS", "a"), Result("FAIL", "b", "closed")]
+        for result in found:
+            say(result)
+        return found
+
+    monkeypatch.setattr(apply, "run_verify", run_verify)
     c = ctx()
     with pytest.raises(ApplyError, match="apply stopped at verify: 1 checks failed"):
         run_apply(c, only="verify")
@@ -1173,8 +1179,13 @@ def test_tofu_finds_the_windows_iso_the_owner_uploaded(ctx, monkeypatch):
     assert ("host", apply.ISO_LIST) not in s.reach.calls
 
 
+def passing_verify(*_args, say, **_kw) -> list[Result]:
+    say(Result("PASS", "everything"))
+    return [Result("PASS", "everything")]
+
+
 def test_a_full_apply_runs_every_stage_against_the_stand_ins(ctx, monkeypatch, tailnet):
-    monkeypatch.setattr(apply, "run_verify", lambda *a, **kw: [Result("PASS", "everything")])
+    monkeypatch.setattr(apply, "run_verify", passing_verify)
     c = with_client(ctx("small"))
     c.secrets.set("ntfy_topic", "nullbill-topic")
     c.secrets.set("claude_oauth_token", "sk-ant-oat01-token")
@@ -1393,7 +1404,7 @@ def test_the_pbs_disk_is_never_one_apply_kept(ctx, monkeypatch, tmp_path):
 
 def test_a_full_apply_with_a_kept_disk(ctx, monkeypatch, tailnet):
     monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
-    monkeypatch.setattr(apply, "run_verify", lambda *a, **kw: [Result("PASS", "everything")])
+    monkeypatch.setattr(apply, "run_verify", passing_verify)
     c = with_client(ctx("large", config=legacy_config()))
     c.secrets.set("ntfy_topic", "nullbill-topic")
     (c.home / "web").mkdir()

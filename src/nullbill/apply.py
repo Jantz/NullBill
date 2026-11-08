@@ -1519,9 +1519,9 @@ def stage_vpn(ctx: Context) -> None:
 
 def stage_verify(ctx: Context) -> None:
     lan_host = ctx.lan_host or split_target(ctx.target)[1]
-    results = run_verify(ctx.plan, ctx.model, ctx.target, ctx.run, lan_state=lan.state(ctx.home), lan_host=lan_host)
-    for result in results:
-        ctx.say(result.line())
+    results = run_verify(
+        ctx.plan, ctx.model, ctx.target, ctx.run, lan_state=lan.state(ctx.home), lan_host=lan_host, say=lambda r: ctx.say(r.line())
+    )
     failed = [r for r in results if r.status == "FAIL"]
     if failed:
         raise ApplyError("verify", f"{len(failed)} checks failed")

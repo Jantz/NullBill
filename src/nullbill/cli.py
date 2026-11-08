@@ -122,9 +122,9 @@ def cmd_verify(_args: argparse.Namespace) -> int:
     plan = build_plan(model, json.loads(facts_bytes))
     target = reach_target(home, configured, plan) if configured else None
     lan_host = split_target(configured)[1] if configured else None
-    results = run_verify(plan, model, target, ssh_run, lan_state=lan.state(home), lan_host=lan_host)
-    for result in results:
-        print(result.line())
+    results = run_verify(
+        plan, model, target, ssh_run, lan_state=lan.state(home), lan_host=lan_host, say=lambda r: print(r.line(), flush=True)
+    )
     counts = {s: sum(r.status == s for r in results) for s in ("PASS", "FAIL", "SKIP", "DEGRADED")}
     print(", ".join(f"{n} {s}" for s, n in counts.items()))
     return 1 if counts["FAIL"] else 0

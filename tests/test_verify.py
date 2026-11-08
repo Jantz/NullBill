@@ -7,6 +7,7 @@ import threading
 import pytest
 from conftest import backup_host, fixture_config
 
+from nullbill import verify
 from nullbill.model import build_model
 from nullbill.plan import build_plan
 from nullbill.verify import _connect_via, _lan, _tcp, probes, run_verify, tcp_connect
@@ -208,3 +209,27 @@ def test_a_service_nullbill_does_not_serve_yet_is_degraded_when_nothing_answers(
     # A service NullBill installs still fails when nothing answers.
     assert any(" forgejo " in r.name for r in by["FAIL"])
     assert not any(" model-gateway " in r.name for r in by["FAIL"])
+
+
+def test_results_are_told_in_order_as_they_come_with_probes_run_side_by_side(facts):
+    plan, model = setup(facts)
+    run = firewall(plan, model)
+    running, most = [0], [0]
+    lock = threading.Lock()
+
+    def slow(target, command):
+        with lock:
+            running[0] += 1
+            most[0] = max(most[0], running[0])
+        try:
+            if command.startswith("pct exec"):
+                threading.Event().wait(0.01)
+            return run(target, command)
+        finally:
+            with lock:
+                running[0] -= 1
+
+    told = []
+    results = run_verify(plan, model, "root@pve.internal", slow, lambda h, p: "timeout", lambda n: PUBLIC, say=told.append)
+    assert told == results
+    assert 1 < most[0] <= verify.PARALLEL
