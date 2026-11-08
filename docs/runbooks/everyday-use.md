@@ -80,6 +80,15 @@ no longer works.
   (`{job="commands"}` for every agent command, `{job="auth"}` for SSH
   sign-ins).
 
+## Turn it off and on
+
+In the Proxmox web UI select the node and press **Shutdown** or
+**Reboot** at the top right (or `poweroff` / `reboot` in its Shell). A short
+press of the case's power button also shuts it down cleanly. Proxmox stops
+the guests first; at the next start it starts NullBill's guests again in
+order, and certificates that expired while it was off are replaced by
+**Run setup**. Pull the plug only when it no longer answers.
+
 ## Forgejo
 
 Sign in as `nullbill-admin`, set its new password, then make your own
@@ -89,6 +98,12 @@ public key to it (**Settings, SSH / GPG keys**). Clone and push over SSH:
 line above. Git over HTTPS from a laptop fails on the certificate. With
 Linux CI on, [ci-runners.md](ci-runners.md) says how a repository runs
 jobs.
+
+To bring a project you already have: make an empty repository in Forgejo
+(**+**, **New repository**, no README), then in your local clone
+`git remote add nullbill git@forgejo.nullbill.internal:<user>/<repo>.git`
+and `git push nullbill --all`. Forgejo has no way out to GitHub, so
+**New migration** from GitHub does not work.
 
 ## Workspace
 
