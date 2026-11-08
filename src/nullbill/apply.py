@@ -5,8 +5,10 @@ Each stage is idempotent, so running apply again resumes. Everything that
 leaves the controller goes through a Reach; the checks pass a stand-in.
 
 Ansible reaches the host over SSH as target.ssh, containers through the
-host with `pct exec` (community.proxmox's proxmox_pct_remote connection),
-and VMs over SSH as `nullbill` with the host as jump host.
+host with `pct exec` (community.proxmox's proxmox_pct_remote connection,
+pipelined: ansible/connection_plugins/nb_pct.py), and VMs over SSH as
+`nullbill` with the host as jump host. A playbook whose inputs are the same
+as at its last good run on a machine is not run there again (applied.py).
 """
 
 import base64
@@ -26,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from nullbill import backups, ci, hostroot, lan, legacy, llm, media
+from nullbill import applied, backups, ci, hostroot, lan, legacy, llm, media
 from nullbill.artifacts import write_build
 from nullbill.errors import NullBillError
 from nullbill.flows import mac
@@ -41,7 +43,8 @@ from nullbill.tailscale import Tailnet, TailscaleError
 from nullbill.verify import run_verify
 
 ANSIBLE = REPO_ROOT / "ansible"
-PCT_CONNECTION = "community.proxmox.proxmox_pct_remote"
+# community.proxmox's proxmox_pct_remote with pipelining (ansible/connection_plugins).
+PCT_CONNECTION = "nb_pct"
 PVE_FIREWALL = "/etc/pve/firewall"
 # The node's host firewall; PVE reads /etc/pve/nodes/<node>/host.fw, which
 # /etc/pve/local points to on every node.
@@ -87,6 +90,7 @@ class Context:
     media_stopped: bool = False  # likewise the Jellyfin guest
     legacy_mounted: bool = False  # a kept disk was mounted in this run
     kept_before: set[str] | None = None  # disks disks.json protects, as this run found it
+    full: bool = False  # run every playbook, even where its inputs are unchanged (applied.py)
 
     @property
     def bare(self) -> dict:
@@ -139,12 +143,85 @@ def _download_proxy(ctx: Context, name: str) -> dict:
     return {"downloads_proxy": proxy} if proxy else {}
 
 
-def run_playbook(ctx: Context, stage: str, playbook: str, name: str | None, variables: dict | None = None) -> None:
-    label = name or "PVE host"
+def run_playbook(
+    ctx: Context, stage: str, playbook: str, name: str | None, variables: dict | None = None, facts: str = "", always: bool = False
+) -> None:
+    """playbook on the host (name None) or a guest, unless it ran there
+    before with the same inputs (applied.py). facts: what the run also
+    depends on that is read from the machine. always: run it regardless,
+    for a playbook whose work depends on time, as a certificate's does."""
+    run_playbooks(ctx, stage, playbook, {name: {}}, variables or {}, facts={name: facts}, always=always)
+
+
+def run_playbooks(
+    ctx: Context,
+    stage: str,
+    playbook: str,
+    targets: dict[str | None, dict],
+    variables: dict,
+    facts: dict[str | None, str] | None = None,
+    always: bool = False,
+) -> None:
+    """One playbook run on several machines at once, each with its own
+    host vars on top of its connection. A machine where the playbook's last
+    good run had the same inputs is left out."""
+    hosts = {name or "pve": connection(ctx, name) | extra for name, extra in targets.items()}
+    names = {name or "pve": name for name in targets}
+    full = always or ctx.full or (ctx.home / FULL_NEXT).exists()
+    key = ctx.secrets.ensure("applied_key", lambda: secrets.token_hex(32))
+    digests = {h: applied.digest(key, playbook, hosts[h], variables, (facts or {}).get(names[h], "")) for h in hosts}
+    # A pool's golden image is baked from a fresh VM each time, then sealed.
+    marked = {h for h in hosts if names[h] is None or ctx.bare["guests"][names[h]]["kind"] != "vm-pool"}
+    same = set() if full else {h for h in sorted(marked) if applied_mark(ctx, names[h], playbook) == digests[h]}
+    for h in sorted(same):
+        ctx.say(f"{stage}: {playbook} on {names[h] or 'PVE host'} is unchanged since its last run")
+    run = {h: v for h, v in hosts.items() if h not in same}
+    if not run:
+        return
+    label = ", ".join(names[h] or "PVE host" for h in run)
+    for h in sorted(run.keys() & marked):
+        # Gone while it runs: one that stops part way runs whole next time.
+        set_mark(ctx, names[h], playbook, None)
     ctx.say(f"{stage}: {playbook} on {label}")
-    rc = ctx.reach.playbook(playbook, {name or "pve": connection(ctx, name)}, variables or {})
+    rc = ctx.reach.playbook(playbook, run, variables)
     if rc != 0:
         raise ApplyError(stage, f"{playbook} failed on {label} (exit {rc})")
+    for h in sorted(run.keys() & marked):
+        set_mark(ctx, names[h], playbook, digests[h])
+
+
+# Left by a run whose checks failed: the next runs every playbook in full,
+# in case something on a guest changed under unchanged inputs.
+FULL_NEXT = "apply-full-next"
+
+
+def _on_machine(ctx: Context, name: str | None, command: str) -> tuple[int, str]:
+    """A root shell command on the host, a container or a VM. The exit
+    status is returned, not raised: a guest that does not answer yet just
+    has no marks, and its playbook runs and reports."""
+    if name is None:
+        rc, out, _ = ctx.reach.host(command)
+        return rc, out
+    guest = ctx.bare["guests"][name]
+    if guest["kind"] == "lxc":
+        rc, out, _ = ctx.reach.host(shlex.join(["pct", "exec", str(guest["vmid"]), "--", "sh", "-c", command]))
+        return rc, out
+    conn = connection(ctx, name)
+    argv = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", *shlex.split(conn["ansible_ssh_common_args"])]
+    argv += [f"nullbill@{conn['ansible_host']}", shlex.join(["sudo", "sh", "-c", command])]
+    return ctx.reach.local(argv, ctx.home, {}, capture=True)
+
+
+def applied_mark(ctx: Context, name: str | None, playbook: str) -> str:
+    """The digest of playbook's last good run on a machine, or ""."""
+    rc, out = _on_machine(ctx, name, f"cat {shlex.quote(f'{applied.DIR}/{Path(playbook).name}')} 2>/dev/null || true")
+    return out.strip() if rc == 0 else ""
+
+
+def set_mark(ctx: Context, name: str | None, playbook: str, digest: str | None) -> None:
+    """Leave digest for playbook on a machine, or take it away (None)."""
+    path = shlex.quote(f"{applied.DIR}/{Path(playbook).name}")
+    _on_machine(ctx, name, f"rm -f {path}" if digest is None else f"mkdir -p -m 0700 {applied.DIR} && echo {digest} > {path}")
 
 
 def host_files(ctx: Context, stage: str, directory: str, files: dict[str, str]) -> None:
@@ -941,7 +1018,7 @@ def stage_proxy(ctx: Context) -> None:
     run_playbook(ctx, "proxy", "egress-proxy.yml", PROXY, {"egress_proxy_files": files})
 
 
-def update_guests(ctx: Context) -> dict[str, dict]:
+def update_guests(ctx: Context) -> dict[str | None, dict]:
     """Each Linux guest that lives on, with its proxy and reboot settings."""
     owner_reboots = set(ctx.bare["updates"]["owner_reboots"])
     proxy = f"http://{ctx.bare['guests'][PROXY]['ip']}:{proxy_port(ctx.model)}"
@@ -952,7 +1029,7 @@ def update_guests(ctx: Context) -> dict[str, dict]:
         # The router has its own uplink; other guests in a proxied zone
         # reach the mirrors through the proxy only.
         proxied = name != "router" and ctx.bare["zones"][guest["zone"]]["egress"] == "proxy"
-        guests[name] = connection(ctx, name) | {
+        guests[name] = {
             "updates_apt_proxy": proxy if proxied else "",
             "updates_auto_reboot": name not in owner_reboots,
             "updates_reboot_time": ctx.bare["updates"]["reboot_at"],
@@ -962,11 +1039,7 @@ def update_guests(ctx: Context) -> dict[str, dict]:
 
 
 def stage_updates(ctx: Context) -> None:
-    guests = update_guests(ctx)
-    ctx.say(f"updates: updates.yml on {len(guests)} guests")
-    rc = ctx.reach.playbook("updates.yml", guests, {})
-    if rc != 0:
-        raise ApplyError("updates", f"updates.yml failed (exit {rc}); its log names the guest")
+    run_playbooks(ctx, "updates", "updates.yml", update_guests(ctx), {})
 
 
 def guest_out(ctx: Context, stage: str, name: str, argv: list[str], stdin: str | None = None) -> str:
@@ -1010,18 +1083,20 @@ def stage_ca(ctx: Context) -> None:
     domain = ctx.bare["domain"]
     run_playbook(ctx, "ca", "step-ca.yml", "step-ca", {"step_ca_domain": domain})
     root = ca_root(ctx, "ca")
-    for name, (group, reload) in TLS.items():
-        if name not in ctx.bare["guests"]:
-            continue
-        variables = {
+    targets: dict[str | None, dict] = {
+        name: {
             "tls_cert_name": f"{name}.{domain}",
-            "tls_cert_ca_url": f"https://step-ca.{domain}",
-            "tls_cert_ca_root": root,
             "tls_cert_token": ca_token(ctx, "ca", name),
             "tls_cert_group": group,
             "tls_cert_reload": reload,
         }
-        run_playbook(ctx, "ca", "tls-cert.yml", name, variables)
+        for name, (group, reload) in TLS.items()
+        if name in ctx.bare["guests"]
+    }
+    # Every run, all at once: a certificate that ran out while the server
+    # was off (they last 24 h) is replaced from its token.
+    variables = {"tls_cert_ca_url": f"https://step-ca.{domain}", "tls_cert_ca_root": root}
+    run_playbooks(ctx, "ca", "tls-cert.yml", targets, variables, always=True)
 
 
 def planned(ctx: Context, name: str) -> bool:
@@ -1208,7 +1283,9 @@ def stage_inference(ctx: Context) -> None:
         # change along with it.
         host_out(ctx, "inference", f"pct shutdown {vmid} --timeout 120 --forceStop 1")
         ctx.say(f"inference: stopped the inference container to replace NVIDIA's driver {loaded} with {version}")
-    run_playbook(ctx, "inference", "nvidia-host.yml", None)
+    # The module is built for the running kernel and must be the one loaded.
+    kernel = host_out(ctx, "inference", "uname -r").strip()
+    run_playbook(ctx, "inference", "nvidia-host.yml", None, facts=f"{kernel} {loaded}")
     give_gpu(ctx, vmid, section["gpus"])
     if "status: running" not in host_out(ctx, "inference", f"pct status {vmid}"):
         host_out(ctx, "inference", f"pct start {vmid}")
@@ -1416,17 +1493,17 @@ def retire(ctx: Context, name: str, guest: dict) -> None:
 BAKING_DIR = "/root/nullbill"
 
 
-def bake(ctx: Context, name: str, guest: dict) -> None:
+def bake(ctx: Context, name: str, guest: dict) -> bool:
     """Boot the pool's template VM, make it a one-job runner, seal it and
     convert it to a template. A template is kept until it is
-    ci.REBAKE_AFTER_S old, then replaced and baked again."""
+    ci.REBAKE_AFTER_S old, then replaced and baked again. True if it baked."""
     vmid = guest["template_vmid"]
     if "template: 1" in host_out(ctx, "ci", f"qm config {vmid}"):
         recorded = host_out(ctx, "ci", f"cat {ci.TEXTFILE_DIR}/{ci.baked_file(name)} 2>/dev/null || true")
         baked = ci.baked_time(recorded)
         if baked is not None and time.time() - baked < ci.REBAKE_AFTER_S:
             ctx.say(f"ci: {name}'s golden image is baked")
-            return
+            return False
         ctx.say(f"ci: {name}'s golden image is over {ci.REBAKE_AFTER_S // 86400} days old; baking it again")
         retire(ctx, name, guest)
     # A bake that stopped partway may have sealed the VM (no SSH host keys)
@@ -1457,6 +1534,7 @@ def bake(ctx: Context, name: str, guest: dict) -> None:
     host_files(ctx, "ci", ci.TEXTFILE_DIR, {ci.baked_file(name): ci.baked_metric(name, time.time())})
     host_out(ctx, "ci", f"rm -f {marker}")
     ctx.say(f"ci: {name}'s golden image is a template")
+    return True
 
 
 def forgejo_token(ctx: Context) -> str:
@@ -1502,9 +1580,9 @@ def stage_ci(ctx: Context) -> None:
     """Each Linux pool's golden image, then the dispatcher that clones it per job."""
     if not planned(ctx, "runner-dispatcher") or not linux_pools(ctx):
         return
-    for name, guest in linux_pools(ctx).items():
-        bake(ctx, name, guest)
-    run_playbook(ctx, "ci", "runner-dispatcher.yml", "runner-dispatcher", dispatcher_vars(ctx))
+    baked = [bake(ctx, name, guest) for name, guest in linux_pools(ctx).items()]
+    # Making way for a new image stopped the dispatcher; its run starts it again.
+    run_playbook(ctx, "ci", "runner-dispatcher.yml", "runner-dispatcher", dispatcher_vars(ctx), always=any(baked))
 
 
 def proxy_url(ctx: Context, name: str) -> str:
@@ -1821,8 +1899,12 @@ def stage_verify(ctx: Context) -> None:
         ctx.plan, ctx.model, ctx.target, ctx.run, lan_state=lan.state(ctx.home), lan_host=lan_host, say=lambda r: ctx.say(r.line())
     )
     failed = [r for r in results if r.status == "FAIL"]
+    flag = ctx.home / FULL_NEXT
     if failed:
+        flag.touch()
+        ctx.say("verify: the next setup runs every step in full, not only what changed")
         raise ApplyError("verify", f"{len(failed)} checks failed")
+    flag.unlink(missing_ok=True)
 
 
 Stage = tuple[str, Callable[[Context], None]]
@@ -1911,6 +1993,10 @@ class SshReach:
                 # error with a growing pause (1, 3, 7, 15, then 30 s), so
                 # 12 retries wait about four minutes for sshd and cloud-init.
                 "ANSIBLE_SSH_RETRIES": str(SSH_RETRIES),
+                # One exec per module instead of four, to containers and VMs.
+                "ANSIBLE_PIPELINING": "true",
+                "ANSIBLE_CONNECTION_PLUGINS": str(ANSIBLE / "connection_plugins"),
+                "ANSIBLE_PARAMIKO_PTY": "false",
             }
             argv = ["ansible-playbook", "-i", str(inventory), "-e", f"@{values}", str(ANSIBLE / playbook)]
             try:

@@ -35,11 +35,31 @@ stage is idempotent, so re-running apply resumes.
   2.1.0, checked against its SHA-256 by `tools/install-apply-deps`, with
   paramiko). This works
   before guest networking or the VPN exists, and for containers without
-  sshd.
+  sshd. `ansible/connection_plugins/nb_pct.py` is that plugin with
+  pipelining turned on: each module goes to the container on the stdin of
+  one `pct exec`, where the plugin alone takes four (temporary directory,
+  copy, chmod, run). VMs are pipelined too. The apply check counts 7
+  `pct exec` calls for one `copy` task, against 11 without.
 - VMs (router, PBS, the golden images) are reached over SSH as `nullbill`
   with the owner's key, jumping through the host (`ProxyJump`), which sits
   on the mgmt bridge. Each VM's host key is pinned on first sight in
   `$NULLBILL_HOME/known_hosts`, kept apart from the owner's own.
+
+**Reruns.**
+- After a playbook succeeds on a machine, apply leaves an HMAC of its
+  inputs there (`/var/lib/nullbill/applied/<playbook>`): the playbook,
+  every role it reaches (not their `tests/`), the connection plugin, and
+  the variables (`src/nullbill/applied.py`). The next run reads it first
+  and leaves that machine out when it is the same. The mark goes before a
+  run starts, so a run that stops part way is run whole next time, and a
+  guest OpenTofu makes afresh has none.
+- What depends on more than its inputs runs anyway: `tls-cert.yml` every
+  time (certificates last 24 h), the runner dispatcher after a bake (the
+  bake stopped it), the golden images (baked from a fresh VM). The NVIDIA
+  host role's inputs include the running kernel and the loaded module.
+- `apply --full` runs everything, and so does the run after one whose
+  checks failed (`$NULLBILL_HOME/apply-full-next`), in case a guest
+  changed under unchanged inputs.
 
 **Secrets.**
 - `$NULLBILL_HOME/secrets.sops.yaml` is encrypted with sops, using an age

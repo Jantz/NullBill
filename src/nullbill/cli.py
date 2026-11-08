@@ -94,6 +94,7 @@ def cmd_apply(args: argparse.Namespace) -> int:
         files,
         close_lan=args.close_lan,
         open_lan=args.open_lan,
+        full=args.full,
         lan_host=split_target(configured)[1],
         run=ssh_run,
     )
@@ -153,6 +154,7 @@ def main(argv: list[str] | None = None) -> int:
     apply = sub.add_parser("apply", help=f"bring the host to the plan, stage by stage: {stages}")
     apply.add_argument("--dry-run", action="store_true", help="render into $NULLBILL_HOME/build, change nothing")
     apply.add_argument("--stage", choices=[name for name, _ in STAGES], help="run only this stage")
+    apply.add_argument("--full", action="store_true", help="run every playbook, also where nothing it depends on changed")
     apply.add_argument(
         "--close-lan", action="store_true", help="close the LAN to 8006 and 22; reopens by itself unless confirmed over Tailscale"
     )

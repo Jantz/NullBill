@@ -78,7 +78,9 @@ def check_host(ctx: apply.Context) -> None:
         fail("the baseline made sshd key-only")
     ok("host stage: baseline over SSH, firewall files in /etc/pve/firewall and host.fw in /etc/pve/local")
     ctx.log.clear()
+    ctx.full = True  # the playbooks too, not only the files
     apply.stage_host(ctx)
+    ctx.full = False
     if [line for line in ctx.log if "wrote" in line]:
         fail("a second host stage rewrites nothing")
     ok("a second host stage rewrites nothing")
@@ -86,13 +88,33 @@ def check_host(ctx: apply.Context) -> None:
 
 def check_guests(ctx: apply.Context) -> None:
     apply.run_playbook(ctx, "check", REACH, "forgejo")
-    if on(TARGET, "cat /tmp/reached-forgejo") != "forgejo\n" or "exec 2017" not in on(TARGET, "cat /var/log/fake-pct.log"):
+    execs = on(TARGET, "cat /var/log/fake-pct.log").splitlines()
+    if on(TARGET, "cat /tmp/reached-forgejo") != "forgejo\n" or "exec 2017" not in execs:
         fail("a container is reached with pct exec on its VMID")
     ok("container reached through the host with pct exec 2017")
+    # The marker's copy runs stat and copy, each on the stdin of one exec,
+    # and puts the content with one more: three, where unpipelined it took ten.
+    # Less apply's own three: reading the mark, taking it away, leaving the new one.
+    copy = len(execs) - 3
+    if copy > 7:
+        fail(f"a container's modules are pipelined: {copy} pct execs for one copy")
+    ok(f"a container's modules are pipelined: {copy} pct execs for one copy, against 11 without")
+    ctx.log.clear()
+    apply.run_playbook(ctx, "check", REACH, "forgejo")
+    if ctx.log != [f"check: {REACH} on forgejo is unchanged since its last run"]:
+        fail(f"a playbook run again with the same inputs is left out: {ctx.log}")
+    ok("a playbook run again with the same inputs is left out, by the digest the container keeps")
     apply.run_playbook(ctx, "check", REACH, "pbs")
     if on("nullbill@10.42.1.15", "sudo stat -c %U:%a /tmp/reached-pbs") != "root:600\n":
         fail("a VM is reached through the host as jump host, as root")
     ok("VM reached as nullbill through the host, with sudo")
+    if len(on("nullbill@10.42.1.15", "sudo cat /var/lib/nullbill/applied/reach.yml").strip()) != 64:
+        fail("a VM keeps the digest of a playbook's good run")
+    ctx.log.clear()
+    apply.run_playbook(ctx, "check", REACH, "pbs")
+    if ctx.log != [f"check: {REACH} on pbs is unchanged since its last run"]:
+        fail(f"a VM's playbook run again with the same inputs is left out: {ctx.log}")
+    ok("a VM keeps the digest of its good run, and the same run again is left out")
     try:
         apply.run_playbook(ctx, "check", "/opt/nullbill/tools/apply-check/missing.yml", "pbs")
     except NullBillError as exc:

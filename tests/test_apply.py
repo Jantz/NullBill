@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from conftest import fixture_config
 
-from nullbill import apply, backups, ci, hostroot, lan, llm
+from nullbill import applied, apply, backups, ci, hostroot, lan, llm
 from nullbill.apply import ApplyError, Context, connection, run_apply
 from nullbill.artifacts import render_all
 from nullbill.errors import NullBillError
@@ -88,9 +88,32 @@ class FakeReach:
         self.media_ct = {"exists": False, "status": "running", "mps": {}, "devs": {}, "restarts": 0}
         self.render_nodes = {"0000:00:02.0": "/dev/dri/renderD128"}
         self.jellyfin = []
+        # Each machine's digests of its playbooks' last good runs (applied.py),
+        # by machine ("host", a VMID, or a VM's address) and playbook. Kept
+        # out of self.calls, which then reads as the work itself.
+        self.marks = {}
+
+    def mark(self, machine, command):
+        """apply's reads and writes of the marks on one machine."""
+        marks = self.marks.setdefault(machine, {})
+        if command.startswith("cat "):
+            return 0, marks.get(command.split()[1].rsplit("/", 1)[1], "") + "\n"
+        if command.startswith("rm -f "):
+            marks.pop(command.split()[2].rsplit("/", 1)[1], None)
+            return 0, ""
+        _, digest, _, path = command.split(" && ")[1].split()
+        marks[path.rsplit("/", 1)[1]] = digest
+        return 0, ""
 
     def host(self, command, stdin=None, timeout=900):
+        if applied.DIR in command:
+            if command.startswith("pct exec "):
+                vmid, inner = command.split()[2], shlex.split(command)[6]
+                return (*self.mark(int(vmid), inner), "")
+            return (*self.mark("host", command), "")
         self.calls.append(("host", command))
+        if command == "uname -r":
+            return 0, "6.12.40-1-pve\n", ""
         if command == apply.CLUSTER_VMS:
             return 0, json.dumps(self.vms), ""
         if command.startswith("qm stop ") and "qm destroy " in command:
@@ -384,6 +407,8 @@ class FakeReach:
         return 127, "", f"fake guest {vmid}: unexpected {argv}"
 
     def local(self, argv, cwd, env, capture=False):
+        if argv[0] == "ssh" and applied.DIR in argv[-1]:
+            return self.mark(argv[-2].split("@")[1], shlex.split(argv[-1])[3])
         self.calls.append(("local", argv, cwd))
         self.envs.append(env)
         if argv[0] == "openssl":
@@ -463,7 +488,7 @@ def test_containers_are_reached_through_the_host_and_vms_by_jump(ctx):
     host = {"ansible_host": "pve.internal", "ansible_user": "root", "ansible_python_interpreter": "/usr/bin/python3"}
     assert connection(c, None) == host
     forgejo = connection(c, "forgejo")
-    assert forgejo["ansible_connection"] == "community.proxmox.proxmox_pct_remote"
+    assert forgejo["ansible_connection"] == "nb_pct"
     assert (forgejo["ansible_host"], forgejo["proxmox_vmid"]) == ("pve.internal", 2017)
     pbs = connection(c, "pbs")
     assert (pbs["ansible_host"], pbs["ansible_user"], pbs["ansible_become"]) == ("10.42.1.15", "nullbill", True)
@@ -533,7 +558,80 @@ def test_updates_stage_sets_up_every_linux_guest_once(ctx):
     assert hosts["router"]["updates_apt_proxy"] == ""  # its own uplink
     assert hosts["forgejo"]["updates_auto_reboot"] and hosts["forgejo"]["updates_reboot_time"] == "04:30"
     assert not hosts["workspace"]["updates_auto_reboot"]  # agents' long jobs
-    assert hosts["forgejo"]["ansible_connection"] == "community.proxmox.proxmox_pct_remote"
+    assert hosts["forgejo"]["ansible_connection"] == "nb_pct"
+
+
+def ran(c, playbook):
+    """The machines each run of playbook went to, in order."""
+    return [sorted(call[2]) for call in c.reach.calls if call[:2] == ("playbook", playbook)]
+
+
+def test_a_rerun_leaves_out_each_machine_whose_inputs_are_unchanged(ctx):
+    c = ctx("large")
+    apply.stage_updates(c)
+    everyone = ran(c, "updates.yml")[0]
+    assert len(everyone) > 5
+    # Each machine holds a digest of its run, which names no secret.
+    marks = c.reach.marks
+    assert len({m["updates.yml"] for m in marks.values() if "updates.yml" in m}) == len(everyone)
+
+    c.reach.calls.clear()
+    apply.stage_updates(c)
+    assert ran(c, "updates.yml") == []
+    assert "updates: updates.yml on forgejo is unchanged since its last run" in c.log
+
+    # A guest OpenTofu made afresh has no marks, and one whose settings
+    # change runs again; the others stay left out.
+    del marks[c.bare["guests"]["forgejo"]["vmid"]]
+    c.plan["updates"]["owner_reboots"] = [*c.bare["updates"]["owner_reboots"], "postgres"]
+    c.reach.calls.clear()
+    apply.stage_updates(c)
+    assert ran(c, "updates.yml") == [["forgejo", "postgres"]]
+
+
+def test_a_full_run_or_one_after_failed_checks_runs_everything_and_failure_leaves_no_mark(ctx):
+    c = ctx("small")
+    apply.stage_postgres(c)
+    c.reach.calls.clear()
+    apply.stage_postgres(c)
+    assert ran(c, "postgres.yml") == []
+
+    c.full = True
+    apply.stage_postgres(c)
+    assert ran(c, "postgres.yml") == [["postgres"]]
+
+    c.full = False
+    c.reach.calls.clear()
+    (c.home / apply.FULL_NEXT).touch()
+    apply.stage_postgres(c)
+    assert ran(c, "postgres.yml") == [["postgres"]]
+    (c.home / apply.FULL_NEXT).unlink()
+
+    # A run that fails takes the old mark with it, so the next one runs whole.
+    vmid = c.bare["guests"]["postgres"]["vmid"]
+    c.reach.fail_playbook = "postgres.yml"
+    with pytest.raises(ApplyError):
+        apply.run_playbook(c, "postgres", "postgres.yml", "postgres", playbook_vars(c, "postgres.yml") | {"changed": 1})
+    assert "postgres.yml" not in c.reach.marks[vmid]
+
+
+def test_certificates_are_seen_to_every_run(ctx):
+    c = ctx("small")
+    apply.stage_ca(c)
+    c.reach.calls.clear()
+    apply.stage_ca(c)
+    assert ran(c, "step-ca.yml") == []
+    assert ran(c, "tls-cert.yml") == [["forgejo", "monitoring", "postgres", "runner-dispatcher"]]
+
+
+def test_a_playbook_depends_on_its_roles_and_the_connection_plugin_not_their_checks():
+    names = {str(p.relative_to(applied.ANSIBLE)) for p in applied.sources("tls-cert.yml")}
+    assert {"tls-cert.yml", "roles/tls_cert/tasks/main.yml", "roles/step_ca/tasks/repo.yml"} <= names
+    assert "roles/downloads/tasks/fetch.yml" in names  # a dependency of step_ca's
+    assert "connection_plugins/nb_pct.py" in names
+    assert not [n for n in names if n.startswith(("roles/postgres/", "roles/forgejo/")) or "/tests/" in n]
+    assert applied.digest("k", "tls-cert.yml", {}, {"a": 1}) != applied.digest("k", "tls-cert.yml", {}, {"a": 2})
+    assert applied.digest("k", "tls-cert.yml", {}, {}) != applied.digest("other", "tls-cert.yml", {}, {})
 
 
 def test_host_stage_switches_the_on_site_screen_off_by_default(ctx):
@@ -558,8 +656,11 @@ def test_ca_stage_issues_each_tls_service_a_certificate_from_a_one_time_token(ct
     apply.stage_ca(c)
     playbooks = [call[1:] for call in c.reach.calls if call[0] == "playbook"]
     assert playbooks[0] == ("step-ca.yml", {"step-ca": connection(c, "step-ca")}, {"step_ca_domain": "nullbill.internal"})
-    certs = {next(iter(hosts)): v for name, hosts, v in playbooks[1:] if name == "tls-cert.yml"}
-    assert set(certs) == {"postgres", "monitoring", "forgejo", "runner-dispatcher"}
+    # One run for all of them, each guest's own values as host vars.
+    ((_, hosts, shared),) = [p for p in playbooks[1:] if p[0] == "tls-cert.yml"]
+    assert set(hosts) == {"postgres", "monitoring", "forgejo", "runner-dispatcher"}
+    certs = {name: {k: v for k, v in hostvars.items() if k.startswith("tls_")} | shared for name, hostvars in hosts.items()}
+    assert hosts["postgres"]["ansible_connection"] == "nb_pct"
     assert certs["postgres"] == {
         "tls_cert_name": "postgres.nullbill.internal",
         "tls_cert_ca_url": "https://step-ca.nullbill.internal",
@@ -708,10 +809,12 @@ def test_ci_stage_bakes_each_golden_image_once_then_runs_the_dispatcher(ctx):
     metric = f"{ci.TEXTFILE_DIR}/{ci.baked_file('linux-runner')}"
     assert time.time() - ci.baked_time(c.reach.files[metric]) < 60
 
-    # Again: the template is kept and so is the Forgejo token.
+    # Again: the template is kept and so is the Forgejo token, and the
+    # dispatcher, with nothing new, is left alone.
     c.reach.calls.clear()
     apply.stage_ci(c)
-    assert [call[1] for call in c.reach.calls if call[0] == "playbook"] == ["runner-dispatcher.yml"]
+    assert [call[1] for call in c.reach.calls if call[0] == "playbook"] == []
+    assert "ci: runner-dispatcher.yml on runner-dispatcher is unchanged since its last run" in c.log
     assert c.secrets.data["forgejo_dispatcher_token"] == token
     assert "ci: linux-runner's golden image is baked" in c.log
     assert not c.reach.dispatcher_stopped
@@ -1171,8 +1274,8 @@ def test_verify_stage_fails_on_any_fail(ctx, monkeypatch):
     c = ctx()
     with pytest.raises(ApplyError, match="apply stopped at verify: 1 checks failed"):
         run_apply(c, only="verify")
-    assert c.log == ["PASS     a", "FAIL     b: closed"]
-    assert c.reach.calls == []
+    assert c.log == ["PASS     a", "FAIL     b: closed", "verify: the next setup runs every step in full, not only what changed"]
+    assert c.reach.calls == [] and (c.home / apply.FULL_NEXT).exists()
 
 
 def test_only_runs_one_stage(ctx):
@@ -1340,11 +1443,12 @@ def test_a_full_apply_runs_every_stage_against_the_stand_ins(ctx, monkeypatch, t
         assert playbook in ran, playbook
     assert ran.index("forgejo.yml") < ran.index("runner-dispatcher.yml") and ran.index("postgres.yml") < ran.index("forgejo.yml")
     assert c.log[-1] == "PASS     everything"
-    # Again: nothing is baked or made twice.
+    # Again: nothing is baked or made twice, and with nothing changed only
+    # the certificates are seen to.
     secrets = dict(c.secrets.data)
     c.reach.calls.clear()
     run_apply(c)
-    assert "ci-runner.yml" not in [call[1] for call in c.reach.calls if call[0] == "playbook"]
+    assert [call[1] for call in c.reach.calls if call[0] == "playbook"] == ["tls-cert.yml"]
     assert c.secrets.data == secrets
 
 
