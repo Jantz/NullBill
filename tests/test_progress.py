@@ -135,3 +135,8 @@ def test_advice_by_cause_then_by_stage():
     assert advice("something new", "tofu").startswith("Proxmox refused a change")
     assert advice("something new").startswith("Run setup again")
     assert sentence("wait until the running job finishes") == "Wait until the running job finishes."
+
+
+def test_a_proxy_refusal_says_the_site_is_not_allowed():
+    text = "Request failed: <urlopen error Tunnel connection failed: 403 Forbidden>"
+    assert advice(text, "ca").startswith("NullBill's internet proxy refused a site")

@@ -105,6 +105,11 @@ ADVICE = [
         r"Windows ISO",
         "Upload the Windows 11 ISO in Proxmox (local storage, ISO Images, keep Win in its name), or untick Windows in step 3.",
     ),
+    (
+        r"Tunnel connection failed: 403|403 Forbidden.*proxy|proxy.*403 Forbidden",
+        "NullBill's internet proxy refused a site this guest needs: the site is not on its allowed list. "
+        "Update NullBill and run setup again; if it stops here again, copy the details and report them.",
+    ),
     (r"No space left on device", "A disk is full. Free space on it, or choose fewer workloads in step 3, then run setup again."),
     (
         r"Could not resolve|Temporary failure (in name resolution|resolving)|Network is unreachable|timed out|Connection timed out|"
