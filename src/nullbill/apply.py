@@ -114,7 +114,7 @@ def connection(ctx: Context, name: str | None) -> dict:
             "ansible_user": user,
             "proxmox_vmid": guest["vmid"],
             "ansible_python_interpreter": "/usr/bin/python3",
-        }
+        } | _download_proxy(ctx, name)
     # A pool is reached at its golden image's reserved lease while apply bakes it.
     address = guest["ips"][guest["zone"]] if "ips" in guest else guest.get("ip") or guest["template_ip"]
     # VM host keys are new on first boot; pin each on first sight in a file
@@ -126,7 +126,16 @@ def connection(ctx: Context, name: str | None) -> dict:
         "ansible_become": True,
         "ansible_ssh_common_args": f"-o ProxyJump={ctx.target} -o UserKnownHostsFile={known} -o StrictHostKeyChecking=accept-new",
         "ansible_python_interpreter": "/usr/bin/python3",
-    }
+    } | _download_proxy(ctx, name)
+
+
+def _download_proxy(ctx: Context, name: str) -> dict:
+    """downloads_proxy for a guest in a proxied zone: its pinned downloads
+    (the downloads role's fetch) go through egress-proxy, which resolves the
+    names; such a guest cannot resolve outside names itself. A role that
+    passes its own downloads_proxy still wins."""
+    proxy = proxy_url(ctx, name)
+    return {"downloads_proxy": proxy} if proxy else {}
 
 
 def run_playbook(ctx: Context, stage: str, playbook: str, name: str | None, variables: dict | None = None) -> None:
@@ -1257,8 +1266,9 @@ def stage_ci(ctx: Context) -> None:
 
 
 def proxy_url(ctx: Context, name: str) -> str:
-    """The egress proxy for a guest in a proxied zone, or "" where egress is direct."""
-    if ctx.bare["zones"][ctx.bare["guests"][name]["zone"]]["egress"] != "proxy":
+    """The egress proxy for a guest in a proxied zone, or "" where egress is
+    direct. The router, which is the zones' way out, has its own uplink."""
+    if name == "router" or ctx.bare["zones"][ctx.bare["guests"][name]["zone"]]["egress"] != "proxy":
         return ""
     return f"http://{ctx.bare['guests'][PROXY]['ip']}:{proxy_port(ctx.model)}"
 

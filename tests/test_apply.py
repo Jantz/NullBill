@@ -1548,3 +1548,16 @@ def test_discarding_a_kept_disk_copies_nothing_and_wipes_it(ctx, facts, monkeypa
     apply.stage_tofu(c)
     assert c.reach.copy_runs == [] and c.reach.backup_disk == [OLD, "1"] and c.reach.legacy == {}
     assert "files" not in c.bare["guests"]
+
+
+def test_guests_in_proxied_zones_fetch_pinned_downloads_through_the_proxy(ctx):
+    # A proxied zone resolves no outside names; get_url must go through Squid.
+    c = ctx("mid")
+    proxy = "http://10.42.2.10:3128"
+    for name in ("step-ca", "monitoring", "operator", "pbs", "workspace"):
+        assert connection(c, name)["downloads_proxy"] == proxy, name
+    for name in ("router", "forgejo", "postgres", "vpn"):
+        assert "downloads_proxy" not in connection(c, name), name
+    apply.stage_ca(c)
+    (hosts,) = [call[2] for call in c.reach.calls if call[0] == "playbook" and call[1] == "step-ca.yml"]
+    assert hosts["step-ca"]["downloads_proxy"] == proxy
