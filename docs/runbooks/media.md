@@ -9,29 +9,31 @@ read-only to Jellyfin. Why it is built this way:
 | What | Where |
 |---|---|
 | Jellyfin | `http://10.42.7.24:8096` (guest 2024), from your devices on the tailnet |
-| Sign-in | user `nullbill-admin`, password from **Show password** on the Services card |
+| Sign-in | user `nullbill-admin`, password from **Show password** on the page's **Services** page |
 | Your kept disks, inside Jellyfin | `/media/<name>`, one folder per kept disk |
 
 ## 1. Turn it on
 
-**You need:** the setup page, and a disk with your media kept in step 3
-([legacy-disk.md](legacy-disk.md)). Without one Jellyfin has nothing to
-play.
+**You need:** the setup page, and a disk with your media kept under
+**What to run** on its **Setup** page ([legacy-disk.md](legacy-disk.md)).
+Without one Jellyfin has nothing to play.
 
-1. Step 3: tick **Media server (Jellyfin)**, press **Save and plan**, and
-   check that step 4 shows no problems. The plan's `media` section says
+1. On the **Setup** page, in **What to run**, tick **Media server
+   (Jellyfin)**, press **Save and plan**, and check that the **Plan** card
+   shows no problems. The plan's `media` section says
    whether Jellyfin transcodes on the processor's graphics or on the
    processor itself.
-2. Step 8: press **Run setup**. The stage **Set up Jellyfin** installs it,
-   finishes its first-run setup and makes its admin.
+2. Press **Run setup** at the top of the page. The stage **Set up
+   Jellyfin** installs it, finishes its first-run setup and makes its
+   admin.
 3. **Run checks** shows Jellyfin's checks: it answers with its setup done,
    shows nothing without sign-in, reads each kept disk and cannot write to
    it, and, with the processor's graphics, transcodes with Quick Sync.
 
 To transcode on the processor's graphics, they must be on: on the
 i9-9900K, the BIOS setting that keeps integrated graphics on beside a
-graphics card (often **IGPU Multi-Monitor**). Probe again in step 2 after
-changing it. A 9900KF has none.
+graphics card (often **IGPU Multi-Monitor**). Press **Read the hardware**
+on the **Setup** page again after changing it. A 9900KF has none.
 
 ## 2. Add your libraries
 
@@ -60,8 +62,8 @@ TVs without Tailscale on your home network cannot reach it yet.
 ## If setup stops at Set up Jellyfin
 
 - "no render node for the integrated graphics": the processor's graphics
-  are switched off now. Probe again in step 2 and run setup again; Jellyfin
-  then transcodes on the processor.
+  are switched off now. Press **Read the hardware** on the **Setup** page
+  again and run setup again; Jellyfin then transcodes on the processor.
 - "Jellyfin refuses nullbill-admin": you changed the admin password in
   Jellyfin, and setup needs it to make its key again. In Proxmox, select
   the node, open **Shell** and run `pct enter 2024`, then put the new

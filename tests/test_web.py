@@ -3,6 +3,7 @@
 import http.client
 import http.server
 import json
+import os
 import ssl
 import stat
 import sys
@@ -221,6 +222,22 @@ def test_jobs_report_failure_and_offsets(site):
     assert client.call("/api/state")[1]["last_jobs"]["apply"]["state"] == "failed"
     later = client.call(f"/api/jobs/{job['id']}?offset={done['offset']}")[1]
     assert later["text"] == ""
+
+
+def test_choices_saved_after_the_last_good_setup_run_are_waiting(site):
+    app, client = site
+    sign_in(app, client)
+    choices = {"workloads": ["agents"], "owner_login": "owner-a@example.internal"}
+    client.call("/api/choices", choices)
+    assert client.call("/api/state")[1]["config_changed"] is False  # nothing ran yet
+    job = client.call("/api/jobs", {"action": "apply"})[1]
+    assert wait(client, job["id"])["state"] == "done"
+    config = app.home / "config.yaml"
+    started = app.jobs[job["id"]].started
+    os.utime(config, (started - 60, started - 60))
+    assert client.call("/api/state")[1]["config_changed"] is False
+    os.utime(config, (started + 60, started + 60))
+    assert client.call("/api/state")[1]["config_changed"] is True
 
 
 def test_one_job_at_a_time(site, tmp_path):

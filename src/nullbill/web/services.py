@@ -91,6 +91,10 @@ def _entries(plan: dict, guests: dict) -> list[dict]:
                 "addresses": [f"\\\\{ip('files')}\\{share}" for share in shares(plan)],
                 "user": "nbshare",
                 "password": "files",
+                "how": (
+                    "Windows: paste the address into File Explorer's address bar. macOS: in Finder, Go, Connect to Server, "
+                    f"as smb://{ip('files')}/<share>. Linux: your file manager's Other Locations, the same way."
+                ),
                 "watch": "files",
             }
         )
@@ -109,7 +113,7 @@ def _entries(plan: dict, guests: dict) -> list[dict]:
                     f"In Jellyfin open Dashboard, Libraries, Add, and pick a folder under {folders}. "
                     "The disks stay read-only; Jellyfin keeps its own data."
                     if library
-                    else "Keep a disk with your media in step 3 and run setup again; Jellyfin then shows it under /media."
+                    else "Keep a disk with your media under Setup, What to run, and run setup again; Jellyfin then shows it under /media."
                 ),
                 "watch": media.JELLYFIN,
             }
@@ -133,7 +137,7 @@ def _entries(plan: dict, guests: dict) -> list[dict]:
             {
                 "name": "operator",
                 "title": "Coding agent",
-                "what": "The agent CLI, signed in with the credential from step 6.",
+                "what": "The agent CLI, signed in with the credential saved under Agents.",
                 "how": f"{shell} pct enter {vmid('operator')}, then su - agent, tmux new -s agent and claude.",
                 "watch": "operator",
             }

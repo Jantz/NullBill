@@ -33,18 +33,20 @@ If the old PC no longer starts, keep the disk read-only.
 ## Steps
 
 1. Put the disk in the server and start it. Proxmox leaves it alone.
-2. On the page, **Look at the hardware** again. Step 3 lists the disk under
-   **Other disks** with its partitions, labels, sizes and health.
+2. On the page's **Setup** page, press **Read the hardware** again. The
+   **What to run** card lists the disk under **Other disks** with its
+   partitions, labels, sizes and health.
 3. Choose **Keep its files and share them to me**. Tick **Let me change
    files on it** only if you need to, and only for an NTFS disk Windows shut
-   down fully. Press **Save and plan** and check the plan: the disk shows as
-   `use: legacy` with each partition it keeps, and a `files` guest appears.
+   down fully. Press **Save and plan** and check the **Plan** card: the disk
+   shows as `use: legacy` with each partition it keeps, and a `files` guest
+   appears.
 4. **Run setup**. The tofu stage mounts the disk under `/mnt/nb-legacy` on
    Proxmox, read-only unless you chose otherwise, and the files stage shares
    it.
-5. Under **Your kept disks**, the page shows each share's address and the
-   user `nbshare`. Press **Show the password** and keep it in your password
-   manager.
+5. On the page's **Services** page, the **Kept disk files** card shows
+   each share's address and the user `nbshare`. Press **Show password** (or
+   **Copy**) and keep it in your password manager.
 
 ## Open the files
 
@@ -84,9 +86,10 @@ unmounted; its files are not touched. Then you can take it out.
 
 ## Reuse it for backups or as storage
 
-To erase a kept disk, step 3 offers two choices for it, and for each,
-whether the disk then holds the nightly backups or becomes extra storage in
-Proxmox (an LVM-thin storage called `nb-data`, for volumes you put there).
+To erase a kept disk, **What to run** on the **Setup** page offers two
+choices for it, and for each, whether the disk then holds the nightly
+backups or becomes extra storage in Proxmox (an LVM-thin storage called
+`nb-data`, for volumes you put there).
 Both ask you to type the end of its name.
 
 - **Copy its files onto the server, check the copy, then erase the disk.**

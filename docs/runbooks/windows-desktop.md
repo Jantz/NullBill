@@ -7,7 +7,8 @@ Tailscale. NullBill makes the VM and its firewall; you install Windows in
 it yourself, once.
 
 On a 16 GiB server it fits next to the AI agents, without Linux CI runners
-and without backups (step 4 of the setup page says so if it does not).
+and without backups (the **Plan** card on the setup page's **Setup** page
+says so if it does not).
 
 What NullBill does not do for it yet: Windows Update is not set up through
 NullBill's proxy, and the VM is not backed up unless backups are on.
@@ -30,10 +31,11 @@ Proxmox web UI.
 
 **You need:** the ISO uploaded, the setup page.
 
-1. Step 3: tick **A Windows desktop VM**, untick what does not fit (Linux
-   CI runners, Nightly backups on 16 GiB), press **Save and plan**, and
-   check step 4 shows no errors.
-2. Step 8: press **Run setup**. The tofu stage prints
+1. On the **Setup** page, in **What to run**, tick **A Windows desktop
+   VM**, untick what does not fit (Linux CI runners, Nightly backups on
+   16 GiB), press **Save and plan**, and check the **Plan** card shows no
+   errors.
+2. Press **Run setup** at the top of the page. The tofu stage prints
    `tofu: Windows guests install from local:iso/...` and makes the VM.
 
 ## 3. Install Windows

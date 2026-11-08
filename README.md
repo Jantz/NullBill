@@ -89,11 +89,14 @@ setup page and remote access.
 2. Open the address. Your browser warns about the certificate; check that
    the fingerprint matches, then continue. Enter the code and choose a
    password.
-3. Follow the page from top to bottom: look at the hardware, choose what to
-   run, check the plan, set up alerts, paste the agent's key and, to reach
-   the server from anywhere, a Tailscale auth key ([docs/runbooks/vpn.md](docs/runbooks/vpn.md)).
-4. Press **Run setup** and watch the log. The first run downloads images
-   and packages and takes a while.
+3. On the page's **Setup** page, read the hardware, choose what to run and
+   check the plan. Then set up alerts on the **Alerts** page, paste the
+   agent's key on the **Agents** page and, to reach the server from
+   anywhere, a Tailscale auth key on the **Remote access** page
+   ([docs/runbooks/vpn.md](docs/runbooks/vpn.md)).
+4. Press **Run setup** at the top of the page and follow it on the
+   **Activity** page. The first run downloads images and packages and
+   takes a while.
 
 [docs/runbooks/first-install.md](docs/runbooks/first-install.md) has the
 same steps in more detail, and what to do when a step fails. Every step is

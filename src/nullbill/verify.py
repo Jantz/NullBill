@@ -229,7 +229,7 @@ def _agent_root(target: str, run: Runner) -> Result:
     if rc != 0:
         return Result("FAIL", name, f"cannot read {hostroot.KEYS}: {(err or out).strip()[:120]}")
     if hostroot.granted(out):
-        return Result("DEGRADED", name, "it has: the owner's switch on the page (step 7) is on")
+        return Result("DEGRADED", name, "it has: the switch Agent has root on Proxmox on the page's Agents page is on")
     return Result("PASS", name)
 
 

@@ -68,16 +68,16 @@ STOPPED = re.compile(r"apply stopped at ([a-z-]+): (.*)$", re.S)
 ADVICE = [
     (
         r"planned guests need \d+ MiB at their floors|guests need more memory",
-        "Your choices need more memory than this server has. In step 3, untick a workload "
-        "(or the on-site screen) and press Save and plan until step 4 shows no problems.",
+        "Your choices need more memory than this server has. Under Setup, What to run, untick a workload "
+        "(or the on-site screen) and press Save and plan until Plan shows no problems.",
     ),
     (
         r"storage \S+ has \d+ GiB free|guests need \d+ GiB",
-        "Your choices need more disk space than Proxmox's storage has free. In step 3, untick a workload "
-        "and press Save and plan, or free space in Proxmox and probe again in step 2.",
+        "Your choices need more disk space than Proxmox's storage has free. Under Setup, What to run, untick a workload "
+        "and press Save and plan, or free space in Proxmox and read the hardware again.",
     ),
-    (r"could not read VRAM", "In step 3, give the graphics card's memory in GB, as on its box, then press Save and plan."),
-    (r"no host-shared GPU budgets VRAM", "Untick Local AI models in step 3, then press Save and plan."),
+    (r"could not read VRAM", "Under Setup, What to run, give the graphics card's memory in GB, as on its box, then press Save and plan."),
+    (r"no host-shared GPU budgets VRAM", "Untick Local AI models under Setup, What to run, then press Save and plan."),
     (
         r"nouveau driver holds the graphics card",
         "Restart the server once (in Proxmox: the node, then Reboot), then press Run setup again. "
@@ -95,7 +95,7 @@ ADVICE = [
     ),
     (
         r"no render node for the integrated graphics",
-        "Jellyfin was to use the processor's graphics, but the server shows none now. Probe the server again in step 2 "
+        "Jellyfin was to use the processor's graphics, but the server shows none now. Read the hardware again under Setup "
         "and run setup again; Jellyfin then transcodes on the processor itself.",
     ),
     (
@@ -105,19 +105,20 @@ ADVICE = [
     ),
     (
         r"signatures.*wipe|has signatures",
-        "A disk holds data. In step 3, choose what to do with it, and type the end of its name to erase it.",
+        "A disk holds data. Under Setup, What to run, choose what to do with it, and type the end of its name to erase it.",
     ),
-    (r"target\.ssh is required|config\.yaml.*(missing|not found)|No such file.*config\.yaml", "Save your choices in step 3 first."),
-    (r"facts\.json|no probe|probe the server", "Press Probe the server in step 2 first."),
+    (r"target\.ssh is required|config\.yaml.*(missing|not found)|No such file.*config\.yaml", "Save your choices under Setup first."),
+    (r"facts\.json|no probe|probe the server", "Press Read the hardware under Setup first."),
     (r"another job is still running", "Wait until the running job finishes; its progress shows on this page."),
     (
         r"OAuth client lacks a scope",
         "In the Tailscale admin console, give the OAuth client the Policy file (write) and Devices (read) scopes, "
-        "or make a new one, and save it again in step 7.",
+        "or make a new one, and save it again under Remote access.",
     ),
     (
         r"Tailscale.*\b(401|403)\b|invalid_client|unauthorized",
-        "Tailscale did not accept the OAuth client. Check the client ID and secret, save them again in step 7, then run setup again.",
+        "Tailscale did not accept the OAuth client. Check the client ID and secret, save them again under Remote access, "
+        "then run setup again.",
     ),
     (
         r"Tailscale refused the policy",
@@ -127,19 +128,19 @@ ADVICE = [
     (r"free plan allows", "Remove tagged devices you no longer use in the Tailscale admin console, then run setup again."),
     (
         r"Tailscale did not log in|auth key",
-        "In Tailscale, generate a new one-time auth key tagged tag:nb-vpn, paste it in step 7, and run setup again.",
+        "In Tailscale, generate a new one-time auth key tagged tag:nb-vpn, paste it under Remote access, and run setup again.",
     ),
     (r"Tailscale's API did not answer", "The server could not reach Tailscale. Check its internet connection and run setup again."),
     (
         r"Windows ISO",
-        "Upload the Windows 11 ISO in Proxmox (local storage, ISO Images, keep Win in its name), or untick Windows in step 3.",
+        "Upload the Windows 11 ISO in Proxmox (local storage, ISO Images, keep Win in its name), or untick Windows under Setup.",
     ),
     (
         r"Tunnel connection failed: 403|403 Forbidden.*proxy|proxy.*403 Forbidden",
         "NullBill's internet proxy refused a site this guest needs: the site is not on its allowed list. "
         "Update NullBill and run setup again; if it stops here again, copy the details and report them.",
     ),
-    (r"No space left on device", "A disk is full. Free space on it, or choose fewer workloads in step 3, then run setup again."),
+    (r"No space left on device", "A disk is full. Free space on it, or choose fewer workloads under Setup, then run setup again."),
     (
         r"Could not resolve|Temporary failure (in name resolution|resolving)|Network is unreachable|timed out|Connection timed out|"
         r"Failed to download|Failed to fetch|status code (429|5\d\d)|HTTP Error (429|5\d\d)",
@@ -160,7 +161,7 @@ ADVICE = [
     (r"checks failed", "Look at the failing checks below. Fix what they name, then run the checks again."),
 ]
 STAGE_ADVICE = {
-    PREPARE: "Fix what the message names in steps 2 to 4, then run setup again.",
+    PREPARE: "Fix what the message names under Setup, then run setup again.",
     "tofu": "Proxmox refused a change. The message above names it. Fix it and run setup again; finished parts are kept.",
     "verify": "Setup itself finished. Look at the failing checks below, fix what they name, and run the checks again.",
 }

@@ -19,9 +19,9 @@ Overview:
 6. Install Proxmox VE 9
 7. Sign in to Proxmox once
 8. Install NullBill
-9. The setup page, steps 1 to 8: first setup run
+9. The setup page: first setup run
 10. Join Tailscale and open the page from anywhere
-11. Close the home network (setup page step 9)
+11. Close Proxmox to the home network
 12. Protect what only you can protect: Proxmox second factor, backup key
 13. Open your kept disk's files
 
@@ -33,12 +33,13 @@ You can do this part days ahead, away from the server.
 
 1. **ntfy**: install the free ntfy app on your phone (App Store or Google
    Play). No account. You subscribe to your topic in part 9.
-2. **Tailscale account** (needed in part 9, step 3, even if you set up
-   Tailscale later): sign up at <https://login.tailscale.com/start> with
-   Google, Microsoft, GitHub, Apple or another sign-in it offers. The free
-   Personal plan is enough. Open <https://console.tailscale.com/admin/users>
-   and note your login exactly as it is shown there; for a GitHub sign-in it
-   looks like `name@github`. The setup page asks for it.
+2. **Tailscale account** (needed in part 9 for the **What to run** card,
+   even if you set up Tailscale later): sign up at
+   <https://login.tailscale.com/start> with Google, Microsoft, GitHub,
+   Apple or another sign-in it offers. The free Personal plan is enough.
+   Open <https://console.tailscale.com/admin/users> and note your login
+   exactly as it is shown there; for a GitHub sign-in it looks like
+   `name@github`. The setup page asks for it.
 3. **Coding agent credential** (only if you want the AI agents): either an
    Anthropic API key (`sk-ant-api...`) from <https://console.anthropic.com/>,
    or a subscription token: on a computer where you use Claude Code with a
@@ -237,24 +238,30 @@ must hand out addresses by DHCP: the NullBill container takes one.
    (`https://<address>:8443`), its certificate's SHA-256 fingerprint and a
    setup code. Keep that Shell open, or copy all three.
 
-## 9. The setup page, steps 1 to 8: first setup run
+## 9. The setup page: first setup run
 
-The numbers below are the page's own step numbers.
+The page has a sidebar with its pages, such as **Overview**, **Setup**,
+**Services**, **Alerts**, **Agents**, **Remote access** and **Activity**.
+**Run setup**, **Run checks** and **Update NullBill** sit at the top of
+every page.
 
 **You need:** the address, fingerprint and setup code from part 8, your
 Tailscale login from part 1, and a new password of at least 12 characters
-for the page. For steps 5 to 7: your phone with ntfy, the Healthchecks.io
-URL and the agent credential if you made them.
+for the page. For the **Alerts**, **Agents** and **Remote access** pages:
+your phone with ntfy, the Healthchecks.io URL and the agent credential if
+you made them.
 
 1. Open the page's address. Before you accept the certificate warning, open
    the certificate's details from the warning (or the address bar) and check
    that its SHA-256 fingerprint equals the one the Shell printed. If it
    differs, stop.
 2. **Sign in** with the setup code.
-3. **1. Choose a password**: at least 12 characters, kept in your password
-   manager. From now on you sign in with it.
-4. **2. Look at the hardware**: press **Probe the server**. It only reads.
-5. **3. Choose what to run**:
+3. **Choose a password**: the page asks for one at this first sign-in. Use
+   at least 12 characters and keep it in your password manager. From now
+   on you sign in with it.
+4. **Setup** page, **Hardware** card: press **Read the hardware**. It only
+   reads.
+5. **Setup** page, **What to run** card:
    - Any of **AI agents**, **Linux CI runners**, **Local AI models on the
      GPU** and **A Windows desktop VM**: on 16 GB they fit together, with
      one CI runner at a time. Containers count at half their memory limit
@@ -274,33 +281,36 @@ URL and the agent credential if you made them.
      fully (part 2), and only if you need to.
    - **Your Tailscale login**: exactly as noted in part 1.
    - Press **Save and plan**.
-6. **4. Check the plan**: a green box says the plan fits and how the memory
-   is shared out; a red box lists what does not fit and what to change.
-   Change your choices in step 3 and save again until it is green. Open
-   **The full plan** and check: the system disk shows as `use: system`, a
-   backup disk as `use: pbs`, a kept disk as `use: legacy` with each
-   partition it keeps.
-7. **5. Get alerts on your phone**: in the ntfy app, add a subscription to
-   the topic the page shows (server `ntfy.sh`, no account). Keep the topic
-   to yourself: anyone who knows it can read your alerts. Paste the
-   Healthchecks.io ping URL if you made one, press **Save**, then **Send a
-   test alert** and check that your phone shows it.
-8. **6. Sign in the coding agent** (only with AI agents): paste the API key
-   or subscription token and press **Save**. A subscription token lasts a
-   year; make a new one and paste it here before then.
-9. **7. Reach it from anywhere**, first half: in the Tailscale admin console
-   (<https://console.tailscale.com/admin>), signed in with the login from
-   part 1, open **Settings, Trust credentials** and add an **OAuth client**
-   with the scope **Policy file** set to write; the console adds the device
-   scopes it needs. Copy the client ID and the secret (`tskey-client-...`;
-   Tailscale shows the secret once). Paste both under **OAuth client ID**
-   and **OAuth client secret** and press **Save**. You can skip Tailscale
-   for now: the vpn stage then waits and everything else still runs, but
-   the page stays reachable only from home.
-10. **8. Build it**: press **Run setup**. The page lists every stage, ticks
-    each one off as it finishes and shows what the running one does now;
-    **Full log** has every line. The first run downloads images and packages
-    and takes a while; creating the guests, building the CI images and the
+6. **Setup** page, **Plan** card: a green box says the plan fits and how
+   the memory is shared out; a red box lists what does not fit and what to
+   change. Change your choices in **What to run** and save again until it
+   is green. Open **The full plan** and check: the system disk shows as
+   `use: system`, a backup disk as `use: pbs`, a kept disk as
+   `use: legacy` with each partition it keeps.
+7. **Alerts** page: in the ntfy app, add a subscription to the topic the
+   page shows (server `ntfy.sh`, no account). Keep the topic to yourself:
+   anyone who knows it can read your alerts. Paste the Healthchecks.io ping
+   URL if you made one, press **Save URL**, then **Send a test alert** and
+   check that your phone shows it.
+8. **Agents** page, **Coding agent sign-in** card (only with AI agents):
+   paste the API key or subscription token and press **Save credential**. A
+   subscription token lasts a year; make a new one and paste it here before
+   then.
+9. **Remote access** page, **Tailscale** card, first half: in the
+   Tailscale admin console (<https://console.tailscale.com/admin>), signed
+   in with the login from part 1, open **Settings, Trust credentials** and
+   add an **OAuth client** with the scope **Policy file** set to write; the
+   console adds the device scopes it needs. Copy the client ID and the
+   secret (`tskey-client-...`; Tailscale shows the secret once). Paste
+   both under **Client ID** and **Client secret** and press
+   **Save client**. You can skip Tailscale for now: the vpn stage then waits and
+   everything else still runs, but the page stays reachable only from
+   home.
+10. Press **Run setup** at the top of the page. The bar at the top shows
+    its progress; the **Activity** page lists every stage, ticks each one
+    off as it finishes and shows what the running one does now, and **Full
+    log** has every line. The first run downloads images and packages and
+    takes a while; creating the guests, building the CI images and the
     first backup are the longest. Without an auth key yet, the vpn stage
     reports `vpn: waiting for a Tailscale auth key`. That is expected.
 
@@ -334,9 +344,9 @@ console, and the Tailscale app on the phone or laptop you will use.
    **Pre-approved** and **Tags** and pick `tag:nb-vpn`, then press
    **Generate key**. Copy it; Tailscale shows it once and it expires within
    90 days.
-2. On the setup page, step 7, paste it under **Tailscale auth key** and
-   press **Save**.
-3. Step 8: press **Run setup** again. This run is shorter. The vpn stage
+2. On the setup page's **Remote access** page, **Tailscale** card, paste
+   it under **Auth key** and press **Save auth key**.
+3. Press **Run setup** again. This run is shorter. The vpn stage
    logs in once, forgets the key and prints the page's address on the
    tailnet. Note that address: once the home network is closed, it is the
    way in.
@@ -346,16 +356,17 @@ console, and the Tailscale app on the phone or laptop you will use.
 5. With Tailscale on, open the address the vpn stage printed. Sign in with
    your page password.
 
-## 11. Close the home network (setup page step 9)
+## 11. Close Proxmox to the home network
 
 Until now Proxmox's web UI and SSH answer anyone on your home network. This
 closes them, so only Tailscale gets in.
 
 **You need:** the page open over Tailscale (part 10, step 5), and the
-host's `mgmt` address: in step 4's **Plan**, under `zones`, `mgmt`,
-`host_ip` (normally `10.42.1.254`).
+host's `mgmt` address: in **The full plan** in the **Setup** page's
+**Plan** card, under `zones`, `mgmt`, `host_ip` (normally `10.42.1.254`).
 
-1. On the page opened over Tailscale, press **Close the home network**.
+1. On the page opened over Tailscale, open the **Remote access** page and,
+   in its **Home network** card, press **Close to the home network**.
 2. Within 15 minutes, open `https://<mgmt address>:8006` over Tailscale and
    check that Proxmox answers.
 3. Back on the page opened over Tailscale, press **Keep it closed**. The
@@ -366,8 +377,8 @@ If you do not press it in time, the server opens the home network again by
 itself after 15 minutes, or when it restarts first, so a mistake cannot
 lock you out. Until it is closed, **Run checks** reports the open home
 network as DEGRADED. Once closed, the page answers only over Tailscale and
-on the on-site screen; **Open it again** gives the home network its access
-back. [vpn.md](vpn.md) says what to do if Tailscale is down.
+on the on-site screen; **Reopen to the home network** gives the home
+network its access back. [vpn.md](vpn.md) says what to do if Tailscale is down.
 
 ## 12. Protect what only you can protect
 
@@ -387,9 +398,9 @@ an authenticator app on your phone (any TOTP app).
 **You need:** a kept disk chosen in part 9, setup run, and a device on
 Tailscale.
 
-1. On the setup page, step 3, **Your kept disks** shows each share's address
-   and the user `nbshare`. Press **Show the password** and keep it in your
-   password manager.
+1. On the setup page's **Services** page, the **Kept disk files** card
+   shows each share's address and the user `nbshare`. Press **Show
+   password** (or **Copy**) and keep it in your password manager.
 2. Open the share: on Windows, type `\\<address>\<name>` in File Explorer's
    address bar; on macOS, Finder, **Go**, **Connect to Server**,
    `smb://<address>/<name>`. [legacy-disk.md](legacy-disk.md) lists the
@@ -397,7 +408,7 @@ Tailscale.
 
 ## 14. Use it
 
-The page's **Services** card lists what runs, opens each service and shows
+The page's **Services** page lists what runs, opens each service and shows
 the passwords setup made for it. [everyday-use.md](everyday-use.md) says
 the same away from the page, and what you manage where.
 

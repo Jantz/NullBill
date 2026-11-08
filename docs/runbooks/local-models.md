@@ -9,8 +9,8 @@ with one key. Why it is built this way: [ADR 0008](../adr/0008-local-models.md).
 |---|---|
 | Model gateway (LiteLLM) | `https://model-gateway.nullbill.internal:4000/v1` (guest 2021, `10.42.4.21`) |
 | Model server (llama.cpp) | guest 2020, `10.42.4.20` port 8080, reached only by the gateway |
-| Model | the page's step 3, **Your local AI model**; for a 12 GB card, `qwen3.5-9b` |
-| Key | the page's step 3, **Show the key** |
+| Model | the page's **Services** page, **Local AI model** card; for a 12 GB card, `qwen3.5-9b` |
+| Key | the same card, **Show key** (or **Copy**) |
 
 ## 1. Turn it on
 
@@ -18,13 +18,14 @@ with one key. Why it is built this way: [ADR 0008](../adr/0008-local-models.md).
 
 1. In the BIOS, turn **Secure Boot** off if it is on. The card's driver is
    built on the server, and Secure Boot refuses a driver it did not sign.
-2. Step 3: tick **Local AI models on the GPU**, give the card's memory in
-   GB if it asks (12 for an RTX 4070), press **Save and plan**, and check
-   that step 4 shows no problems.
-3. Step 8: press **Run setup**. The stage **Set up the local AI model and
-   its gateway** takes a while the first time: it installs the card's
-   driver on Proxmox, builds llama.cpp (about 15 minutes) and downloads the
-   model (about 5 GB).
+2. On the **Setup** page, in **What to run**, tick **Local AI models on
+   the GPU**, give the card's memory in GB if it asks (12 for an RTX 4070),
+   press **Save and plan**, and check that the **Plan** card shows no
+   problems.
+3. Press **Run setup** at the top of the page. The stage **Set up the
+   local AI model and its gateway** takes a while the first time: it
+   installs the card's driver on Proxmox, builds llama.cpp (about 15
+   minutes) and downloads the model (about 5 GB).
 4. If setup stops and says the old nouveau driver holds the card: in the
    Proxmox web UI select the node, press **Reboot**, wait until the page
    answers again, and press **Run setup** again. This happens once.
@@ -35,7 +36,7 @@ answers through the gateway, and a wrong key is refused.
 
 ## 2. Use it
 
-**You need:** the key from the page.
+**You need:** the key from the page's **Services** page.
 
 From the workspace (your coding agents), it works as it is:
 

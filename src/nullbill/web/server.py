@@ -521,7 +521,7 @@ class App:
         known = {d["id"]: d for d in self.disks()}
         for disk_id, want in chosen.items():
             if disk_id not in known:
-                raise NullBillError(f"{disk_id}: no such disk in the last probe; probe the server again")
+                raise NullBillError(f"{disk_id}: no such disk in the last probe; read the hardware again under Setup")
             choice, rw = str(want.get("choice", "alone")), bool(want.get("rw"))
             use_for = str(want.get("for", "backups"))
             if use_for not in DISK_USES:
@@ -668,7 +668,7 @@ class App:
             text = plan_text(model, facts.read_bytes())
         except NullBillError as exc:
             # One line of advice per cause, in the order the problems are listed.
-            other = "Change your choices in step 3 so this no longer applies, and press Save and plan."
+            other = "Change your choices under Setup, What to run, so this no longer applies, and press Save and plan."
             advice = list(dict.fromkeys(progress.advice(m, default=other) for m in exc.messages))
             return {"text": None, "errors": exc.messages, "advice": advice, "summary": None, "tailnet_policy": None}
         _write_private(self.home / "plan.yaml", text)
@@ -781,7 +781,7 @@ class App:
             raise NullBillError("send enabled: true or false")
         key, operator, target = hostroot.public_key(self.home), self.guest_ip("operator"), self.host_target()
         if enabled and not (key and operator and target):
-            raise NullBillError("the agent's key comes from the operator: choose Agents in step 3 and run setup first")
+            raise NullBillError("the agent's key comes from the operator: choose AI agents under Setup, What to run, and run setup first")
         rc, _, err = self.host_run(target, hostroot.command(hostroot.line(key, operator) if enabled else None)) if target else (0, "", "")
         if rc != 0 and enabled:
             raise NullBillError(f"could not give the agent's key root on the host: {err.strip()[:200] or f'exit {rc}'}")
@@ -924,6 +924,13 @@ class App:
             out[job.action] = {"id": job.id, "state": job.state(), "started": job.started}
         return out
 
+    def config_changed(self) -> bool:
+        """The choices were saved after the start of the last setup run that
+        finished, so the server does not follow them yet."""
+        config = self.home / "config.yaml"
+        good = [j.started for j in self.jobs.values() if j.action == "apply" and j.state() == "done"]
+        return bool(good) and config.exists() and config.stat().st_mtime > max(good)
+
     def hardware(self) -> dict | None:
         """The last probe, in a line or two."""
         facts = self.facts()
@@ -951,6 +958,7 @@ class App:
             "probed": (self.home / "probe" / "latest" / "facts.json").is_file(),
             "hardware": self.hardware(),
             "last_jobs": self.last_jobs(),
+            "config_changed": self.config_changed(),
             "remote_agents_ready": self.guest_ip("nullbill") is not None and self.guest_ip("vpn") is not None,
             "choices": self.choices(),
             "disks": self.disks(),
@@ -1091,7 +1099,8 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 if not agent:
                     return
                 if not app.may(agent, match[1]):
-                    return self.json(403, {"error": "the owner has not let the agent run setup and updates (page, step 7)"})
+                    refused = "the owner has not let the agent run setup and updates (Agents page, Agent has root on Proxmox)"
+                    return self.json(403, {"error": refused})
                 stage = body.get("stage") if match[1] == "apply" else None
                 if stage is not None and stage not in APPLY_STAGES:
                     return self.json(400, {"error": f"no stage {stage!r}; stages: {', '.join(APPLY_STAGES)}"})

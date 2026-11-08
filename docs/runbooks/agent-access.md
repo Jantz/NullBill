@@ -35,9 +35,10 @@ References: <https://pve.proxmox.com/pve-docs/chapter-pveum.html>,
 
 ## Let it manage the server
 
-On the page under step 6, **Let the agent manage the server**, press
-**Turn on**. You chose this over the confined default
-(docs/adr/0003-agent-access.md); it lasts until you press **Turn off**.
+On the page's **Agents** page, in the **Let the agent manage the server**
+card, turn on the switch **Agent has root on Proxmox**. You chose this over
+the confined default (docs/adr/0003-agent-access.md); it lasts until you
+turn the switch off.
 While it is on, the agent also:
 
 - has root on Proxmox: `ssh pve '<command>'`, one command per session,
@@ -49,18 +50,19 @@ While it is on, the agent also:
   page like your own, and your ntfy topic gets a message when it starts
   and when it ends;
 - proposes fixes to NullBill as pull requests, if you saved a GitHub token
-  in the same step (fine-grained, NullBill's repository only, Contents and
-  Pull requests read and write). Its commits use your GitHub noreply
-  address. It never pushes to main; you merge.
+  in the **Fixes as pull requests** card on the same page (fine-grained,
+  NullBill's repository only, Contents and Pull requests read and write).
+  Its commits use your GitHub noreply address. It never pushes to main;
+  you merge.
 
 Its rules tell it to ask you before anything that deletes data or cannot
 be undone, and before a host reboot. That is the model's cooperation, not a
 control: with root it could do anything. verify shows
 `the agent has no root on the PVE host` as DEGRADED while this is on.
 
-**Turn off** takes its key off Proxmox at once. If the page cannot reach
-Proxmox then, it says so; stop the operator container (below) to cut the
-agent off anyway.
+Turning the switch off takes its key off Proxmox at once. If the page
+cannot reach Proxmox then, it says so; stop the operator container (below)
+to cut the agent off anyway.
 
 A typical session: `claude`, then ask it to check the server and fix what
 it finds, or to update everything: it runs `nb-page upgrade`, then
@@ -77,10 +79,11 @@ same API as `nb-page` and nothing more: start `nullbill verify` and read
 verify's output. It cannot start setup, read other jobs or use the page as
 you.
 
-1. On the page under step 7, name it under **Agents on other computers**
-   and press **Make a token**. The page shows `NB_PAGE_URL`, `NB_PAGE_SPKI`
-   and `NB_PAGE_TOKEN` once; give them to the agent (its environment, or a
-   file only it reads). The page keeps the token's SHA-256 only.
+1. On the page's **Agents** page, name it in the **Agents on other
+   computers** card and press **Make a token**. The page shows
+   `NB_PAGE_URL`, `NB_PAGE_SPKI` and `NB_PAGE_TOKEN` once; give them to
+   the agent (its environment, or a file only it reads). The page keeps
+   the token's SHA-256 only.
 2. The computer needs to be on your tailnet. Signed in as you, it already
    reaches the page. A computer that is not yours joins with an auth key
    tagged `tag:nb-agent` (Settings, Keys; Pre-approved, not Reusable). The
