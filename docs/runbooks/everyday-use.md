@@ -102,8 +102,10 @@ jobs.
 To bring a project you already have: make an empty repository in Forgejo
 (**+**, **New repository**, no README), then in your local clone
 `git remote add nullbill git@forgejo.nullbill.internal:<user>/<repo>.git`
-and `git push nullbill --all`. Forgejo has no way out to GitHub, so
-**New migration** from GitHub does not work.
+and `git push nullbill --all`. Or let Forgejo fetch it: **+**, **New
+migration**, **GitHub**, the repository's URL and, for a private one, a
+GitHub token that may read it; tick **This repository will be a mirror** to
+keep it following GitHub.
 
 ## Workspace
 
