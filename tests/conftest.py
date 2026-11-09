@@ -6,6 +6,7 @@ import pytest
 from fixturedata import CLASSES, FIXTURES, fixture_config, write_raw  # noqa: F401
 
 from nullbill.probe import parse
+from nullbill.tailscale import MissingScope, TailscaleError
 
 
 @pytest.fixture
@@ -157,3 +158,57 @@ def agent_api(
         raise KeyError(command)
 
     return run
+
+
+class FakeTailnet:
+    """Tailscale's API: one policy, its ETag, the devices on the tailnet."""
+
+    def __init__(self, client_id="", client_secret=""):
+        self.credential = (client_id, client_secret)
+        self.live = {"acls": [{"action": "accept", "src": ["*"], "dst": ["*:*"]}]}
+        self.etag = "e0"
+        self.devices_list = [{"id": "1", "tags": []}]
+        self.refuse = None  # a validate error message
+        self.mangle = False  # store something other than what was pushed
+        self.pushes = []
+        self.dns = {"example.com": ["192.0.2.53"]}  # split DNS someone else set
+        self.dns_scope = True
+        self.dns_sets = []
+        self.users_list = []
+        self.users_scope = True
+        self.deleted = []
+
+    def devices(self):
+        return self.devices_list
+
+    def policy(self):
+        return json.loads(json.dumps(self.live)), self.etag
+
+    def validate(self, policy):
+        if self.refuse:
+            raise TailscaleError(f"Tailscale refused the policy: {self.refuse}")
+
+    def set_policy(self, policy, etag):
+        assert etag == self.etag
+        self.pushes.append(policy)
+        self.live = dict(policy, extra=True) if self.mangle else policy
+        self.etag = f"e{len(self.pushes)}"
+
+    def split_dns(self):
+        if not self.dns_scope:
+            raise MissingScope("reading the tailnet's split DNS: the OAuth client lacks a scope (...); give it dns")
+        return dict(self.dns)
+
+    def set_split_dns(self, domain, nameservers):
+        self.dns_sets.append((domain, nameservers))
+        self.dns[domain] = nameservers
+
+    def users(self):
+        if not self.users_scope:
+            raise MissingScope("listing the tailnet's users: the OAuth client lacks a scope (...); give it users")
+        return list(self.users_list)
+
+    def delete_user(self, user_id):
+        self.users()
+        self.deleted.append(user_id)
+        self.users_list = [u for u in self.users_list if u["id"] != user_id]

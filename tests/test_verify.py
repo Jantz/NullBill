@@ -300,3 +300,37 @@ def test_jellyfin_is_checked_inside_its_guest(facts):
         assert name in names
     skipped = run_verify(plan, model, None, firewall(plan, model))
     assert "jellyfin answers with its first-run setup done" in [r.name for r in statuses(skipped)["SKIP"]]
+
+
+def test_the_policy_in_tailscale_is_compared_with_the_plans(facts):
+    import json
+
+    from conftest import FakeTailnet
+
+    from nullbill.errors import NullBillError
+    from nullbill.tailnet import render_tailnet
+
+    plan, model = setup(facts, "large")
+    api = FakeTailnet()
+
+    def policy(tailnet):
+        return [(r.status, r.detail) for r in run_verify(plan, model, None, None, tailnet=tailnet) if r.name == verify.POLICY]
+
+    # Whatever someone left in Tailscale's admin console is not the plan's.
+    assert policy(lambda: api) == [
+        ("FAIL", "the policy in Tailscale is not the plan's; run setup, or press Send to Tailscale under Access, People")
+    ]
+    api.live = json.loads(render_tailnet(plan, model)["policy.json"])
+    assert policy(lambda: api) == [("PASS", "")]
+    # One port more for one person is a different policy.
+    api.live["grants"][-1]["ip"].append("tcp:1")
+    assert policy(lambda: api)[0][0] == "FAIL"
+    # Nothing to ask with, or no answer: unknown, never a pass.
+    assert policy(lambda: None) == [("SKIP", "no Tailscale OAuth client saved; paste one on the page's Access page")]
+
+    def down():
+        raise NullBillError("Tailscale did not answer")
+
+    assert policy(down) == [("SKIP", "Tailscale did not answer")]
+    # verify without the page's secrets does not ask at all.
+    assert not [r for r in run_verify(plan, model, None, None) if r.name == verify.POLICY]

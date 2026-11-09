@@ -3,3 +3,4 @@ intent:
 people:
   owner-a: {role: owner, login: owner-a@example.internal}
   dev-b: {role: default, login: dev-b@example.internal}
+  friend-c: {role: friend, login: friend-c@example.internal, services: [forgejo, model-gateway]}

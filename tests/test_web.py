@@ -1266,3 +1266,179 @@ def test_connections_stay_open_and_close_without_a_reset(site):
     length = int(re.search(rb"Content-Length: (\d+)", head)[1])
     assert len(body) == length
     tls.close()
+
+
+# People besides the owner (Access, People).
+
+FRIEND = {"name": "alex", "login": "alex@example.internal", "services": ["forgejo"]}
+
+
+def with_tailscale(app, client):
+    """Signed in, planned and built, with a stand-in for Tailscale's API."""
+    from conftest import FakeTailnet
+
+    sign_in(app, client)
+    probed(app)
+    assert client.call("/api/choices", {**OWNER, "workloads": ["agents", "linux-ci", "media"]})[0] == 200
+    api = FakeTailnet()
+    app.tailnet_client = lambda _id, _secret: api
+    secret = "tskey-client-kExampleCNTRL-" + "f" * 30
+    assert client.call("/api/tailscale-client", {"client_id": "kExampleCNTRL", "secret": secret})[0] == 200
+    return api
+
+
+def built(app, client):
+    job = client.call("/api/jobs", {"action": "apply"})[1]
+    assert wait(client, job["id"])["state"] == "done"
+
+
+def people_of(app):
+    return yaml.safe_load((app.home / "config.yaml").read_text())["people"]
+
+
+def test_a_person_added_before_the_first_setup_run_waits_for_it(site):
+    app, client = site
+    assert client.call("/api/people")[0] == 401 and client.call("/api/people", FRIEND)[0] == 401
+    api = with_tailscale(app, client)
+    view = client.call("/api/people")[1]
+    assert [p["name"] for p in view["people"]] == ["owner"] and view["limit"] == {"used": 1, "max": 6}
+    assert view["tailscale"] == {"waits": "People you add now get their access with the first setup run.", "in_place": None, "error": None}
+    assert {"forgejo", "model-gateway"} <= {s["name"] for s in view["shareable"]}
+    status, saved = client.call("/api/people", FRIEND)
+    assert status == 200 and saved["added"] and saved["message"] == "alex added. It takes effect with the next setup run."
+    assert api.pushes == []
+    assert people_of(app)["alex"] == {"role": "friend", "login": "alex@example.internal", "services": ["forgejo"]}
+    alex = saved["people"][1]
+    assert alex["services"] == ["forgejo"] and alex["devices"] is None
+    assert "sign in as alex@example.internal" in alex["instructions"] and "https://10.42.2.17/" in alex["instructions"]
+    # The root to send along exists once setup's ca stage made it.
+    assert alex["root"] is False and "nullbill-root.crt" not in alex["instructions"]
+    browserca.root(app.home, "nullbill.internal", "10.42.0.0/16")
+    alex = client.call("/api/people")[1]["people"][1]
+    assert alex["root"] is True and "nullbill-root.crt" in alex["instructions"]
+
+
+def test_a_person_added_after_setup_is_in_force_at_once(site):
+    app, client = site
+    api = with_tailscale(app, client)
+    built(app, client)
+    config = app.home / "config.yaml"
+    started = max(job.started for job in app.jobs.values())
+    os.utime(config, (started - 60, started - 60))
+    status, saved = client.call("/api/people", FRIEND)
+    assert status == 200 and saved["message"] == "alex added. In force now."
+    assert saved["tailscale"] == {"waits": None, "in_place": True, "error": None}
+    # Tailscale has it, so it is no choice that waits for a setup run.
+    assert client.call("/api/state")[1]["config_changed"] is False
+    (policy,) = api.pushes
+    grant = next(g for g in policy["grants"] if g["src"] == ["alex@example.internal"])
+    assert sorted(grant["ip"]) == ["tcp:22", "tcp:443"]
+    assert any(t["src"] == "alex@example.internal" and t["deny"] for t in policy["tests"])
+    # Their devices show as soon as they join; a login nobody added is named.
+    api.devices_list += [
+        {
+            "user": "Alex@example.internal",
+            "hostname": "alex-phone",
+            "os": "iOS",
+            "connectedToControl": True,
+            "lastSeen": "2026-11-09T10:00:00Z",
+        },
+        {"user": "who@example.internal", "hostname": "laptop", "os": "linux", "lastSeen": "2026-11-08T10:00:00Z"},
+    ]
+    view = client.call("/api/people?fresh=1")[1]
+    assert view["people"][1]["devices"] == [{"name": "alex-phone", "os": "iOS", "seen": 1794218400.0, "connected": True}]
+    assert view["strangers"] == ["who@example.internal"]
+    # More services, same person: one more push, nothing else.
+    status, saved = client.call("/api/people", {**FRIEND, "services": ["jellyfin", "forgejo"]})
+    assert status == 200 and saved["added"] is False and saved["message"] == "alex saved. In force now."
+    assert people_of(app)["alex"]["services"] == ["forgejo", "jellyfin"] and len(api.pushes) == 2
+    grants = [[g["ip"] for g in push["grants"] if g["src"] == ["alex@example.internal"]] for push in api.pushes]
+    assert grants == [[["tcp:443", "tcp:22"]], [["tcp:443", "tcp:22"], ["tcp:8096"]]]
+
+
+def test_what_tailscale_refuses_is_not_saved(site):
+    app, client = site
+    api = with_tailscale(app, client)
+    built(app, client)
+    api.refuse = "test(s) failed"
+    status, answer = client.call("/api/people", FRIEND)
+    assert status == 400 and answer["error"].startswith("Tailscale did not take it, so nothing changed: ")
+    assert list(people_of(app)) == ["owner"] and api.pushes == []
+    api.refuse = None
+    for bad, why in (
+        ({**FRIEND, "name": "Al ex"}, "lowercase letters"),
+        ({**FRIEND, "login": "alex"}, "email address"),
+        ({**FRIEND, "login": "OWNER-A@example.internal"}, "is the login of you already"),
+        ({**FRIEND, "services": ["monitoring"]}, "monitoring cannot be given to a person"),
+        ({**FRIEND, "name": "owner"}, "owner is you"),
+    ):
+        status, answer = client.call("/api/people", bad)
+        assert status == 400 and why in answer["error"], bad
+    assert list(people_of(app)) == ["owner"] and api.pushes == []
+    # The free plan's six people, the owner among them.
+    for n in range(5):
+        assert client.call("/api/people", {"name": f"friend-{n}", "login": f"f{n}@example.internal"})[0] == 200
+    status, answer = client.call("/api/people", FRIEND)
+    assert status == 400 and "6" in answer["error"] and "alex" not in people_of(app)
+    assert client.call("/api/people")[1]["limit"] == {"used": 6, "max": 6}
+
+
+def test_a_removed_person_loses_access_and_their_tailscale_account(site):
+    app, client = site
+    api = with_tailscale(app, client)
+    built(app, client)
+    assert client.call("/api/people", FRIEND)[0] == 200
+    api.users_list = [
+        {"id": "u1", "loginName": "owner-a@example.internal", "role": "owner"},
+        {"id": "u2", "loginName": "alex@example.internal", "role": "member"},
+    ]
+    assert client.call("/api/people/remove", {"name": "owner"})[0] == 400
+    assert client.call("/api/people/remove", {"name": "nobody"})[0] == 400
+    status, gone = client.call("/api/people/remove", {"name": "alex"})
+    assert status == 200 and [p["name"] for p in gone["people"]] == ["owner"]
+    assert gone["message"] == "alex can open nothing any more. Their account and devices are off your Tailscale network."
+    assert api.deleted == ["u2"] and "alex@example.internal" not in json.dumps(api.pushes[-1])
+    # Never joined: nothing to delete. No Users scope: the owner is told where to do it.
+    assert client.call("/api/people", FRIEND)[0] == 200
+    assert "They had not joined" in client.call("/api/people/remove", {"name": "alex"})[1]["message"]
+    assert client.call("/api/people", FRIEND)[0] == 200
+    api.users_scope = False
+    message = client.call("/api/people/remove", {"name": "alex"})[1]["message"]
+    assert "Remove alex@example.internal on Tailscale's Users page too" in message and "Users, write" in message
+    assert list(people_of(app)) == ["owner"] and api.deleted == ["u2"]
+
+
+def test_a_policy_changed_in_tailscale_is_seen_and_put_back(site):
+    app, client = site
+    api = with_tailscale(app, client)
+    assert client.call("/api/people/sync", {})[0] == 400  # the first setup run does it
+    built(app, client)
+    assert client.call("/api/people?fresh=1")[1]["tailscale"]["in_place"] is False
+    status, answer = client.call("/api/people/sync", {})
+    assert status == 200 and answer["message"] == "Tailscale has the policy again." and answer["tailscale"]["in_place"] is True
+    assert len(api.pushes) == 1
+    api.live = {"acls": []}
+    assert client.call("/api/people")[1]["tailscale"]["in_place"] is True  # asked at most twice a minute
+    assert client.call("/api/people?fresh=1")[1]["tailscale"]["in_place"] is False
+    # Tailscale out of reach: the page says so and still lists the people.
+    api.devices = lambda: (_ for _ in ()).throw(web.TailscaleError("Tailscale did not answer"))
+    view = client.call("/api/people?fresh=1")[1]
+    assert view["tailscale"]["error"] == "Tailscale did not answer" and view["people"][0]["devices"] is None
+
+
+def test_people_and_jobs_wait_for_each_other(site, tmp_path):
+    app, client = site
+    with_tailscale(app, client)
+    app.people_busy = True
+    status, answer = client.call("/api/jobs", {"action": "apply"})
+    assert status == 400 and "Access, People" in answer["error"]
+    assert client.call("/api/people", FRIEND)[0] == 400
+    app.people_busy = False
+    release = tmp_path / "release"
+    app.command = [sys.executable, "-c", f"import os,time\nwhile not os.path.exists({str(release)!r}): time.sleep(0.02)"]
+    job = client.call("/api/jobs", {"action": "apply"})[1]
+    status, answer = client.call("/api/people", FRIEND)
+    assert status == 400 and answer["error"] == "wait until the running job finishes"
+    release.write_text("")
+    wait(client, job["id"])
+    assert client.call("/api/people", FRIEND)[0] == 200

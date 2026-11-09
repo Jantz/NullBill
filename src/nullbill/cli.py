@@ -5,7 +5,7 @@ import hashlib
 import json
 import sys
 
-from nullbill import browserca, lan
+from nullbill import browserca, lan, tailscale
 from nullbill.apply import STAGES, Context, SshReach, confirm_lan, run_apply, split_target
 from nullbill.artifacts import render_all, write_build
 from nullbill.errors import NullBillError
@@ -133,6 +133,7 @@ def cmd_verify(_args: argparse.Namespace) -> int:
         lan_host=lan_host,
         say=lambda r: print(r.line(), flush=True),
         browser_root=home / browserca.DIR / "ca.crt",
+        tailnet=lambda: tailscale.from_secrets(Secrets(Sops(home)).data),
     )
     counts = {s: sum(r.status == s for r in results) for s in ("PASS", "FAIL", "SKIP", "DEGRADED")}
     print(", ".join(f"{n} {s}" for s, n in counts.items()))

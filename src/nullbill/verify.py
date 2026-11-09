@@ -6,8 +6,14 @@ same way as the catalog's. They run over SSH as `pct exec` in one container
 per zone; backups.py adds backup age and a restore test, llm.py the local
 model through the model gateway, media.py Jellyfin. A check that cannot run reports SKIP,
 never PASS.
+
+People are not probed from inside: every person arrives as the vpn guest.
+What holds each of them to their own services is the tailnet policy, so
+verify reads the policy in force from Tailscale and compares it with the
+plan's, whose tests Tailscale ran when it took it.
 """
 
+import json
 import shlex
 import socket
 import time
@@ -22,6 +28,8 @@ from nullbill.flows import HOST, HOST_PORTS, resolve_flows
 from nullbill.probe import Runner
 from nullbill.render import strip_notes
 from nullbill.results import Result
+from nullbill.tailnet import render_tailnet
+from nullbill.tailscale import Tailnet
 
 TIMEOUT_S = 3
 # A container's probes run side by side in one `pct exec` (batch), and this
@@ -234,6 +242,26 @@ def _agent_root(target: str, run: Runner) -> Result:
     return Result("PASS", name)
 
 
+POLICY = "Tailscale holds each person to the services picked for them"
+
+
+def _policy(plan: dict, model: dict, tailnet: Callable[[], Tailnet | None]) -> list[Result]:
+    """The tailnet's policy in force is the plan's: the grants per person,
+    and the tests Tailscale runs on every change to it."""
+    if "vpn" not in strip_notes(plan)["guests"]:
+        return []
+    try:
+        api = tailnet()
+        if api is None:
+            return [Result("SKIP", POLICY, "no Tailscale OAuth client saved; paste one on the page's Access page")]
+        live, _ = api.policy()
+    except NullBillError as exc:
+        return [Result("SKIP", POLICY, "; ".join(exc.messages)[:200])]
+    if live == json.loads(render_tailnet(plan, model)["policy.json"]):
+        return [Result("PASS", POLICY)]
+    return [Result("FAIL", POLICY, "the policy in Tailscale is not the plan's; run setup, or press Send to Tailscale under Access, People")]
+
+
 def run_verify(
     plan: dict,
     model: dict,
@@ -246,6 +274,7 @@ def run_verify(
     lan_host: str | None = None,
     say: Callable[[Result], None] | None = None,
     browser_root: Path | None = None,
+    tailnet: Callable[[], Tailnet | None] | None = None,
 ) -> list[Result]:
     """Every check's result, in a fixed order; `say` hears each one as soon as
     it and those before it are in, so a long run shows its progress."""
@@ -278,6 +307,7 @@ def run_verify(
             *media.skipped(plan, reason),
             *names.skipped(plan, reason),
             *(browserca.skipped(plan, reason) if browser_root is not None else []),
+            *(_policy(plan, model, tailnet) if tailnet is not None else []),
         )
         return results
     name = model["verify"]["public_name"]
@@ -325,4 +355,6 @@ def run_verify(
     add(*names.check(plan, target, run))
     if browser_root is not None:
         add(*browserca.check(plan, browser_root, target, run, lan_closed=lan_state == lan.CLOSED))
+    if tailnet is not None:
+        add(*_policy(plan, model, tailnet))
     return results

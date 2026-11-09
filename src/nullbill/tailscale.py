@@ -1,12 +1,20 @@
-"""The Tailscale API calls apply makes: push the rendered policy, read it
-back, count tagged devices, send the plan's domain to the router (split DNS).
+"""The Tailscale API calls apply and the page make: push the rendered policy,
+read it back, count tagged devices, send the plan's domain to the router
+(split DNS), list devices and, for a person the owner removes, delete their
+user.
 
 The owner makes an OAuth client in Tailscale's admin console with the
 policy_file scope (and the device scopes the console adds to it) and the dns
-scope, and pastes its ID and secret on the page. OAuth clients do not expire; each run trades
-them for an access token that lasts an hour
-(https://tailscale.com/kb/1215/oauth-clients). `-` names the client's own
-tailnet (https://tailscale.com/kb/1101/api).
+scope, and pastes its ID and secret on the page. With the users scope too,
+removing a person on the page also removes their user from the tailnet.
+OAuth clients do not expire; each run trades them for an access token that
+lasts an hour (https://tailscale.com/kb/1215/oauth-clients). `-` names the
+client's own tailnet (https://tailscale.com/kb/1101/api).
+
+An OAuth client cannot invite a user: Tailscale's API takes invites from a
+person's own key only ("Only permitted for user-owned keys",
+https://tailscale.com/api#tag/userinvites). The owner sends the invite from
+the admin console; the page says where.
 """
 
 import json
@@ -103,6 +111,45 @@ class Tailnet:
     def devices(self) -> list[dict]:
         status, _, data = self._authed("GET", "tailnet/-/devices")
         return json.loads(self._ok("listing the tailnet's devices", status, data)).get("devices", [])
+
+    def users(self) -> list[dict]:
+        status, _, data = self._authed("GET", "tailnet/-/users")
+        return json.loads(self._ok("listing the tailnet's users", status, data, "users")).get("users", [])
+
+    def delete_user(self, user_id: str) -> None:
+        """Remove a user and their devices from the tailnet; their seat is free again."""
+        status, _, data = self._authed("POST", f"users/{urllib.parse.quote(user_id, safe='')}/delete")
+        self._ok("removing the user from the tailnet", status, data, "users")
+
+
+TAILSCALE_CLIENT = ("tailscale_client_id", "tailscale_client_secret")
+
+
+def from_secrets(data: dict, make: type[Tailnet] = Tailnet) -> Tailnet | None:
+    """The owner's Tailscale OAuth client, or None until one is pasted."""
+    client_id, secret = (data.get(name, "") for name in TAILSCALE_CLIENT)
+    return make(client_id, secret) if client_id and secret else None
+
+
+def sync_policy(api: Tailnet, want: dict, tag: str, limit: int) -> tuple[bool, int]:
+    """Make the tailnet's policy `want`, or raise TailscaleError and leave
+    it as it was. Tailscale runs the policy's tests before it takes it; the
+    policy read back must equal `want`. Returns whether it changed, and the
+    tagged devices counted with the one that carries `tag`."""
+    tagged = [d for d in api.devices() if d.get("tags")]
+    # The vpn guest counts once it has joined; until then it is about to.
+    count = len(tagged) + (0 if any(tag in d["tags"] for d in tagged) else 1)
+    if count > limit:
+        raise TailscaleError(f"the tailnet would have {count} tagged devices with the vpn guest; Tailscale's free plan allows {limit}")
+    live, etag = api.policy()
+    if live == want:
+        return False, count
+    api.validate(want)
+    api.set_policy(want, etag)
+    back, _ = api.policy()
+    if back != want:
+        raise TailscaleError("the tailnet policy read back differs from the rendered one; check the admin console's Access controls")
+    return True, count
 
 
 def _header(headers: dict, name: str) -> str:

@@ -481,6 +481,25 @@ main { grid-area: main; container: main / inline-size; overflow-y: auto; padding
 .secret-box { border: 1px solid var(--warn-line); background: var(--warn-bg); border-radius: var(--radius); }
 .secret-box-head { display: flex; align-items: center; gap: 8px; justify-content: space-between; padding: 6px 6px 6px 12px; font-size: 12px; }
 .secret-box pre { padding: 10px 12px; border-top: 1px solid var(--warn-line); }
+.secret-box.plain { border-color: var(--line); background: var(--bg-sub); }
+.secret-box.plain pre { border-top-color: var(--line); white-space: pre-wrap; overflow-wrap: anywhere; }
+.secret-box-head .feedback { margin-right: auto; order: -1; }
+.secret-box-head > span { order: -2; }
+/* A form or a set of steps that opens above the table it belongs to. */
+.panel { display: grid; gap: 14px; padding: 16px 18px; margin-bottom: 16px; border: 1px solid var(--line-strong); border-radius: var(--radius-lg); }
+.panel h2 { font-size: 14px; line-height: 20px; }
+.panel .group { margin: 0; }
+.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.hint { color: var(--text-3); font-size: 12px; }
+.group > .hint { display: block; margin-top: 8px; }
+.person-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; max-width: 720px; align-items: start; }
+input:not([type=checkbox]):not([type=radio])[readonly] { background: var(--bg-sub); color: var(--text-2); }
+.people-table td { height: auto; padding: 9px 12px; vertical-align: top; }
+.people-table .devices .status { display: flex; }
+.people-table td.actions { vertical-align: middle; }
+.people-table .login { white-space: nowrap; }
+.people-table th:nth-child(2) { min-width: 240px; }
+#sec-people .note .btn { margin-left: auto; flex: none; }
 .disclosure { margin-top: 20px; }
 .disclosure > summary { cursor: pointer; color: var(--text-2); font-size: 13px; font-weight: 500; width: fit-content; }
 .disclosure > summary:hover { color: var(--text); }
@@ -869,6 +888,19 @@ dialog::backdrop { background: var(--scrim); }
   h1 { font-size: 20px; line-height: 28px; }
   .page-head { margin-bottom: 16px; }
   .setting { grid-template-columns: minmax(0, 1fr); padding: 16px; }
+  .person-fields { grid-template-columns: minmax(0, 1fr); }
+  #access-tabs { gap: 16px; }
+  /* A person per block: four columns do not fit a phone. */
+  .people-table, .people-table tbody { display: block; }
+  .people-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .people-table tr { display: grid; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  .people-table tr:last-child { border-bottom: 0; }
+  .people-table td, .people-table td.actions { display: block; width: auto; padding: 0; border: 0; text-align: left; }
+  .people-table td[data-label]::before { content: attr(data-label); display: block; color: var(--text-3); font-size: 12px; }
+  .people-table td.actions:empty { display: none; }
+  .people-table .login { white-space: normal; overflow-wrap: anywhere; }
+  .people-table td.actions .btn:first-child { margin-left: -10px; }
+  .panel { padding: 14px; }
   .props > div { grid-template-columns: 110px minmax(0, 1fr); }
   .job-cols { grid-template-columns: minmax(0, 1fr); }
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }

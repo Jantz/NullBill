@@ -37,15 +37,17 @@ from pathlib import Path
 
 import yaml
 
-from nullbill import browserca, hostroot, lan, legacy, llm, names, owner
+from nullbill import browserca, hostroot, lan, legacy, llm, names, owner, people, tailscale
 from nullbill.apply import DISKS_FILE, GUESTS, NTFY, REMOVALS, SPKI, STAGES
 from nullbill.cli import plan_text, reach_target
 from nullbill.errors import NullBillError
 from nullbill.model import build_model
-from nullbill.plan import guest_storage, planned_services
+from nullbill.plan import build_plan, guest_storage, planned_services
 from nullbill.probe import ssh_run
+from nullbill.render import strip_notes
 from nullbill.secretfile import Codec, Secrets, Sops
-from nullbill.tailnet import render_tailnet
+from nullbill.tailnet import TAG, render_tailnet
+from nullbill.tailscale import MissingScope, Tailnet, TailscaleError
 from nullbill.web import chat, progress, workloads
 from nullbill.web.services import PASSWORDS, services, shares
 
@@ -128,6 +130,9 @@ AGENT_HOME = Path("/var/lib/nullbill-agent")
 TOOLS_SOCKET = Path("/run/nullbill-agent/tools.sock")
 REPO = Path(__file__).resolve().parents[3]
 WATCH_S = 5
+# What Tailscale said about the tailnet's devices and policy is shown for
+# this long before the People tab asks again.
+TAILNET_CACHE_S = 30
 SECURITY_HEADERS = {
     "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'",
     "X-Content-Type-Options": "nosniff",
@@ -272,6 +277,10 @@ class App:
     github: Callable[[str, str], dict] = github_json
     # The page reaches the host over SSH for the agent's switch.
     host_run: Callable[[str, str], tuple[int, str, str]] = ssh_run
+    # Tailscale's API with the owner's OAuth client, for the People tab.
+    tailnet_client: Callable[[str, str], Tailnet] = Tailnet
+    tailnet_seen: tuple[float, dict] | None = None
+    people_busy: bool = False
     agent_command: list[str] = field(default_factory=lambda: list(AGENT_COMMAND))
     agent_user: str | None = AGENT_USER
     agent_home: Path = AGENT_HOME
@@ -922,6 +931,162 @@ class App:
         policy = render_tailnet(loaded, model)["policy.json"]
         return {"text": text, "errors": [], "advice": [], "summary": plan_summary(loaded), "tailnet_policy": policy}
 
+    # People besides the owner (nullbill/people.py): who they are and which
+    # services each may open. A change goes to Tailscale first, whose own
+    # tests of the policy must pass, and is saved only then.
+    def tailnet(self) -> Tailnet | None:
+        return tailscale.from_secrets(Secrets(self.codec(self.home)).data, self.tailnet_client)
+
+    def planned(self, config: dict) -> tuple[dict, dict | None, list[str]]:
+        """A config's model and plan, or no plan and why: nothing probed yet
+        (no reasons), or the plan's problems."""
+        model = build_model(config)
+        facts = self.home / "probe" / "latest" / "facts.json"
+        if not facts.is_file():
+            return model, None, []
+        try:
+            return model, build_plan(model, json.loads(facts.read_bytes())), []
+        except NullBillError as exc:
+            return model, None, exc.messages
+
+    def tailnet_wait(self, plan: dict | None, problems: list[str]) -> str | None:
+        """Why a change to people cannot go to Tailscale now, or None when
+        it can. Until then setup's tailnet stage is what brings it there."""
+        if problems:
+            return "The plan has problems, so what you save here waits. Settle them under Setup, Plan, then run setup."
+        if plan is None or "vpn" not in strip_notes(plan)["guests"]:
+            return "Nothing is planned yet. People you add now get their access with the first setup run."
+        if not self.tailscale_client():
+            return "No Tailscale OAuth client is saved, so what you save here waits. Paste one on the Tailscale tab, then run setup."
+        if not self.built():
+            return "People you add now get their access with the first setup run."
+        return None
+
+    def tailnet_now(self, fresh: bool) -> dict:
+        """Each login's devices on the tailnet and the policy in force, or
+        why Tailscale did not say."""
+        seen = self.tailnet_seen
+        if not fresh and seen and time.time() - seen[0] < TAILNET_CACHE_S:
+            return seen[1]
+        api = self.tailnet()
+        try:
+            found = {"devices": people.devices(api.devices()), "policy": api.policy()[0]}
+        except TailscaleError as exc:
+            found = {"error": "; ".join(exc.messages)}
+        self.tailnet_seen = (time.time(), found)
+        return found
+
+    def people_view(self, fresh: bool = False) -> dict:
+        config = self.config() or {}
+        model, plan, problems = self.planned(config)
+        wait = self.tailnet_wait(plan, problems)
+        now = {} if wait else self.tailnet_now(fresh)
+        on_tailnet = now.get("devices")
+        rows = people.rows(model, plan, on_tailnet)
+        by_name = names.active(self.home)
+        root = (self.home / browserca.DIR / "ca.crt").is_file()
+        for row in rows:
+            if not row["owner"]:
+                row["instructions"] = people.instructions(model, plan, row["name"], by_name, root)
+                # The owner sends the root along (Access, Trust this server, has the file).
+                row["root"] = root and people.wants_root(model, plan, row["name"])
+        in_place = None
+        if "policy" in now:
+            in_place = now["policy"] == json.loads(render_tailnet(plan, model)["policy.json"])
+        return {
+            "people": rows,
+            "shareable": people.shareable(model, plan),
+            "limit": {"used": len(model["people"]), "max": model["tailnet"]["free_limits"]["users"]},
+            "tailscale": {"waits": wait, "in_place": in_place, "error": now.get("error")},
+            "strangers": people.strangers(model, on_tailnet) if on_tailnet is not None else [],
+            "users_page": people.USERS_PAGE,
+        }
+
+    def change_people(self, change: Callable[[dict, dict], dict]) -> bool:
+        """Save what `change(config, model)` returns, which differs from the
+        config in `people` only. True when Tailscale has it already; False
+        when the next setup run brings it there."""
+        with self.lock:
+            if self.people_busy or any(job.state() == "running" for job in self.jobs.values()):
+                raise NullBillError("wait until the running job finishes")
+            self.people_busy = True
+        try:
+            path = self.home / "config.yaml"
+            config = self.config()
+            if config is None:
+                raise NullBillError("save your choices under Setup, What to run, first; that names you as the owner")
+            _, _, before = self.planned(config)
+            candidate = change(config, build_model(config))
+            model, plan, problems = self.planned(candidate)
+            new = [m for m in problems if m not in before]
+            if new:
+                raise NullBillError(*new)
+            ready = self.tailnet_wait(plan, problems) is None
+            if ready:
+                want = json.loads(render_tailnet(plan, model)["policy.json"])
+                try:
+                    tailscale.sync_policy(self.tailnet(), want, TAG, model["tailnet"]["free_limits"]["tagged_devices"])
+                except TailscaleError as exc:
+                    raise NullBillError(f"Tailscale did not take it, so nothing changed: {'; '.join(exc.messages)}") from exc
+            saved = path.stat()
+            _write_private(path, yaml.safe_dump(candidate, sort_keys=False))
+            if ready:
+                # In force already: not a choice that waits for a setup run
+                # (config_changed).
+                os.utime(path, ns=(saved.st_atime_ns, saved.st_mtime_ns))
+            self.tailnet_seen = None
+            return ready
+        finally:
+            self.people_busy = False
+
+    def save_person(self, body: dict) -> dict:
+        name = str(body.get("name", "")).strip().lower()
+        picked = body.get("services") or []
+        if not isinstance(picked, list):
+            raise NullBillError("services is a list of names")
+        services = [str(s) for s in picked]
+        new = name not in ((self.config() or {}).get("people") or {})
+        live = self.change_people(lambda config, model: people.save(config, model, name, str(body.get("login", "")), services))
+        given = ", ".join(services) or "nothing"
+        print(f"nullbill-web: person {name} {'added' if new else 'changed'}: {given}", file=sys.stderr, flush=True)
+        what = "In force now." if live else "It takes effect with the next setup run."
+        return {"ok": True, "message": f"{name} {'added' if new else 'saved'}. {what}", "added": new, **self.people_view(fresh=True)}
+
+    def remove_person(self, body: dict) -> dict:
+        name = str(body.get("name", ""))
+        login = (((self.config() or {}).get("people") or {}).get(name) or {}).get("login", "")
+        live = self.change_people(lambda config, _model: people.remove(config, name))
+        print(f"nullbill-web: person {name} removed", file=sys.stderr, flush=True)
+        gone = "can open nothing any more" if live else "is removed here; the next setup run takes their access away"
+        return {"ok": True, "message": f"{name} {gone}. {self.forget_user(login)}", **self.people_view(fresh=True)}
+
+    def forget_user(self, login: str) -> str:
+        """Take a removed person's user off the tailnet, so their devices
+        leave and their place is free; or say what is left for the owner."""
+        by_hand = f"Remove {login} on Tailscale's Users page too: their account counts toward your people until then"
+        api = self.tailnet()
+        if api is None:
+            return f"{by_hand}."
+        try:
+            user = people.find_user(api.users(), login)
+            if user is None:
+                return "They had not joined; if an invitation is still open, delete it on Tailscale's Users page."
+            api.delete_user(str(user["id"]))
+        except MissingScope:
+            return f"{by_hand} (an OAuth client with Users, write, lets this page do it)."
+        except TailscaleError as exc:
+            return f"{by_hand} ({'; '.join(exc.messages)})."
+        print(f"nullbill-web: tailnet user of a removed person deleted ({user['id']})", file=sys.stderr, flush=True)
+        return "Their account and devices are off your Tailscale network."
+
+    def sync_people(self) -> dict:
+        """Put the plan's policy in place again: after someone changed it in
+        Tailscale's admin console, or a change was saved while Tailscale
+        could not be reached."""
+        if not self.change_people(lambda config, _model: config):
+            raise NullBillError("Tailscale gets the policy from the next setup run")
+        return {"ok": True, "message": "Tailscale has the policy again.", **self.people_view(fresh=True)}
+
     # The LAN. Its addresses come from the plan, so nothing is known before one.
     def network(self) -> tuple[str | None, str | None]:
         """(the NullBill network, the vpn guest's address)."""
@@ -1088,6 +1253,8 @@ class App:
         with self.lock:
             if any(j.state() == "running" for j in self.jobs.values()):
                 raise NullBillError("another job is still running")
+            if self.people_busy:
+                raise NullBillError("a change under Access, People is on its way to Tailscale; try again in a moment")
             jobs = self.home / "jobs"
             jobs.mkdir(mode=0o700, exist_ok=True)
             # To the millisecond: the weekly job and a press can share a second.
@@ -1442,6 +1609,11 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 return self.json(401, {"error": "sign in first"})
             if path == "/api/status":
                 return self.json(200, app.status())
+            if path == "/api/people":
+                try:
+                    return self.json(200, app.people_view(fresh="fresh=1" in query.split("&")))
+                except NullBillError as exc:
+                    return self.json(400, {"error": "; ".join(exc.messages)})
             if path == "/api/chat":
                 return self.json(200, app.chat.view(offset(query, "after")))
             if path == "/api/agent-log":
@@ -1577,6 +1749,12 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 if self.path == "/api/remote-agents/revoke":
                     app.revoke_remote_agent(body)
                     return self.json(200, {"ok": True, "remote_agents": sorted(app.remote_agents())})
+                if self.path == "/api/people":
+                    return self.json(200, app.save_person(body))
+                if self.path == "/api/people/remove":
+                    return self.json(200, app.remove_person(body))
+                if self.path == "/api/people/sync":
+                    return self.json(200, app.sync_people())
                 if self.path == "/api/tailscale-client":
                     app.save_tailscale_client(body)
                     return self.json(200, {"ok": True, "tailscale_client": app.tailscale_client()})

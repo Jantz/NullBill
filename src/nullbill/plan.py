@@ -9,6 +9,7 @@ from typing import Any
 
 from nullbill import backups, ci, legacy, media
 from nullbill.errors import NullBillError
+from nullbill.flows import SHARED
 from nullbill.proxy import allows
 from nullbill.render import Note, strip_notes
 from nullbill.tailnet import check_tailnet
@@ -71,7 +72,7 @@ def _check_refs(model: dict, errors: _Errors) -> None:
 
     def check(ref: str, where: str) -> None:
         kind, _, name = ref.partition(":")
-        if kind == "host":
+        if kind in ("host", SHARED):
             return
         if name != "*" and name not in kinds[kind]:
             errors.append(f"{where}: {ref} does not exist")
@@ -93,6 +94,8 @@ def _check_refs(model: dict, errors: _Errors) -> None:
         for ref in role["reach"]:
             if ref == "host":
                 errors.append(f"roles.{name}.reach: host is only a flow source; the owner role reaches the host through the VPN")
+            if ref == SHARED:
+                errors.append(f"roles.{name}.reach: shared is only a flow source; give a person services under people instead")
             check(ref, f"roles.{name}.reach")
     for name, person in model["people"].items():
         if person["role"] not in model["roles"]:
@@ -634,7 +637,9 @@ def build_plan(model: dict, facts: dict) -> dict:
         **_copies(facts),
         "backups": _backups(planned, pbs),
         "flows": Note(_flows(model, planned, set(zones)), "Allowed flows; everything else is denied."),
-        "people": {name: p["role"] for name, p in model["people"].items()},
+        "people": {
+            name: {"role": p["role"], "services": p["services"]} if p.get("services") else p["role"] for name, p in model["people"].items()
+        },
         "updates": _updates(model, guests),
     }
     plan["tailnet"] = check_tailnet(plan, model, errors)

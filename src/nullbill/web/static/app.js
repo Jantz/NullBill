@@ -10,7 +10,7 @@ const VIEWS = ["overview", "services", "activity", "alerts", "setup", "access", 
 const ALIASES = {home: "overview", agents: "agent", "": ""};
 const STEPS = ["hardware", "choices", "plan", "build"];
 const AGENT_TABS = ["chat", "settings", "log"];
-const ACCESS_TABS = ["tailscale", "lan", "trust", "ssh"];
+const ACCESS_TABS = ["tailscale", "people", "lan", "trust", "ssh"];
 const PLATFORMS = ["android", "windows", "apple"];
 // Runs that open their page when they start; the others show in the top
 // bar while the owner stays where they pressed.
@@ -488,6 +488,9 @@ function showAccessTab(tab) {
   const chosen = ACCESS_TABS.includes(tab) ? tab : fallback;
   selectTab("access-tabs", chosen);
   for (const t of ACCESS_TABS) show(`sec-${t}`, t === chosen);
+  // Five tabs are wider than a small phone: the chosen one scrolls into sight.
+  if (phone.matches) $(`tab-${chosen}`).scrollIntoView({block: "nearest", inline: "nearest"});
+  if (chosen === "people") loadPeople(false).catch((error) => say("people-result", "error", error.message));
 }
 
 function showPlatform(name) {
@@ -1139,6 +1142,232 @@ const LAN = {
   closed: ["good", "Closed", "Proxmox answers only over Tailscale."],
 };
 
+// People (Access, People): who else reaches the server and what each may
+// open. Asked when the tab opens; a change answers with the new list.
+let peopleView = null;
+let personEdited = null;   // the name in the form, "" for a new person, null while it is closed
+let personInvited = null;  // whose invitation steps show
+
+function peopleShown() { return currentView === "access" && !$("sec-people").hidden; }
+
+async function loadPeople(fresh) {
+  peopleView = await api(`/api/people${fresh ? "?fresh=1" : ""}`);
+  renderPeople();
+}
+
+function shareTitle(name) {
+  const found = peopleView.shareable.find((s) => s.name === name);
+  return found ? found.title : name;
+}
+
+function deviceLines(row) {
+  if (row.devices === null) return [make("span", {className: "muted", textContent: "Not known yet"})];
+  if (!row.devices.length) return [row.owner ? status("", "No device") : status("warn", "Not joined yet")];
+  const lines = row.devices.slice(0, 3).map((d) => status(d.connected ? "good" : "", d.name || d.os || "Device",
+    d.connected ? "connected" : d.seen ? `seen ${ago(d.seen)}` : ""));
+  if (row.devices.length > 3) lines.push(make("span", {className: "sub", textContent: `and ${row.devices.length - 3} more`}));
+  return lines;
+}
+
+function mayOpen(row) {
+  if (row.owner) return [make("span", {textContent: "Everything"})];
+  const planned = new Map(peopleView.shareable.map((s) => [s.name, s.planned]));
+  const names = [...row.by_role.filter((n) => !row.services.includes(n)), ...row.services];
+  if (!names.length) return [make("span", {className: "muted", textContent: "Nothing yet"})];
+  const waiting = row.services.filter((n) => planned.get(n) === false);
+  return [make("span", {textContent: names.map(shareTitle).join(", ")}),
+    waiting.length ? make("span", {className: "sub", textContent: `${andList(waiting.map(shareTitle))} ${waiting.length > 1 ? "are" : "is"} not set up on the server yet`}) : null];
+}
+
+// On a phone a row stands alone, so each cell says what it is.
+function labelled(cell, label) { cell.dataset.label = label; return cell; }
+
+function renderPeople() {
+  const view = peopleView;
+  if (!view) return;
+  const ts = view.tailscale;
+  const others = view.people.length - 1;
+  $("people-state").replaceChildren(
+    ts.waits ? status("", "Waits for setup")
+      : ts.error ? status("warn", "Tailscale did not answer")
+        : ts.in_place === false ? status("bad", "Changed in Tailscale")
+          : status("good", "In force", others ? `${others} ${others > 1 ? "people" : "person"} besides you` : "only you"));
+  show("people-waits", Boolean(ts.waits));
+  $("people-waits").querySelector("span").textContent = ts.waits || "";
+  show("people-drift", !ts.waits && ts.in_place === false);
+  show("people-error", Boolean(ts.error));
+  $("people-error").querySelector("span").textContent = ts.error ? `${sentence(ts.error)} Who is listed here still holds; their devices show again once Tailscale answers.` : "";
+  $("people-count").textContent = `${view.limit.used} of ${view.limit.max} people on Tailscale's free plan, you included`;
+  const full = view.limit.used >= view.limit.max;
+  $("person-add").setAttribute("aria-disabled", full ? "true" : "false");
+  $("person-add").dataset.why = full ? `Tailscale's free plan holds ${view.limit.max} people, you included. Remove someone first.` : "";
+
+  $("people-strangers").replaceChildren(...view.strangers.map((login) => {
+    const add = make("button", {type: "button", className: "btn small", textContent: "Add them"});
+    add.addEventListener("click", () => openPerson("", login));
+    return make("div", {className: "note warn"}, icon("alert"),
+      make("span", {}, make("b", {textContent: login}), " is on your Tailscale network and not listed here, so they can open nothing. Add them, or remove them on ",
+        make("a", {href: view.users_page, target: "_blank", rel: "noopener noreferrer", textContent: "Tailscale's Users page"}), "."), add);
+  }));
+
+  $("people-rows").replaceChildren(...view.people.map((row) => {
+    const actions = make("td", {className: "actions"});
+    if (!row.owner) {
+      const invite = make("button", {type: "button", className: "btn small ghost", textContent: "Invite"});
+      invite.setAttribute("aria-label", `How ${row.name} joins`);
+      invite.addEventListener("click", () => showInvite(row.name, true));
+      const edit = make("button", {type: "button", className: "btn small ghost", textContent: "Edit"});
+      edit.setAttribute("aria-label", `Edit ${row.name}`);
+      edit.addEventListener("click", () => openPerson(row.name));
+      const remove = make("button", {type: "button", className: "btn small ghost", textContent: "Remove"});
+      remove.setAttribute("aria-label", `Remove ${row.name}`);
+      remove.addEventListener("click", () => removePerson(row, remove));
+      actions.append(invite, edit, remove);
+    }
+    const tr = make("tr", {},
+      make("td", {}, make("span", {className: "name", textContent: row.name}), row.owner ? make("span", {className: "meta", textContent: " you"}) : null,
+        make("span", {className: "sub login", textContent: row.login})),
+      labelled(make("td", {}, ...mayOpen(row)), "May open"),
+      labelled(make("td", {className: "devices"}, ...deviceLines(row)), "Devices"),
+      actions);
+    if (row.name === personEdited || row.name === personInvited) tr.className = "current";
+    return tr;
+  }));
+  if (personInvited) showInvite(personInvited, false);
+}
+
+function openPerson(name, login) {
+  const add = $("person-add");
+  if (!name && add.getAttribute("aria-disabled") === "true") { say("people-result", "info", add.dataset.why); return; }
+  const row = name ? peopleView.people.find((p) => p.name === name) : null;
+  personEdited = row ? row.name : "";
+  personInvited = null;
+  show("person-invite", false);
+  say("people-result", "", "");
+  say("person-result", "", "");
+  $("person-form-title").textContent = row ? `What ${row.name} may open` : "Add a person";
+  $("person-save").textContent = row ? "Save" : "Add";
+  const nameField = $("person-name");
+  nameField.value = row ? row.name : (login || "").split("@")[0].toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^[^a-z]+|-+$/g, "").slice(0, 31);
+  nameField.readOnly = Boolean(row);
+  $("person-name-hint").textContent = row ? "Stays as it is. For another name, remove them and add them again." : "For you only. Lowercase letters, digits and dashes.";
+  $("person-login").value = row ? row.login : login || "";
+  for (const field of [nameField, $("person-login")]) field.removeAttribute("aria-invalid");
+  $("person-services").replaceChildren(...peopleView.shareable.map((s) => {
+    const byRole = Boolean(row && row.by_role.includes(s.name));
+    const box = make("input", {type: "checkbox", value: s.name, checked: byRole || Boolean(row && row.services.includes(s.name)), disabled: byRole});
+    return make("label", {className: "option"}, box, make("span", {className: "option-text"},
+      make("span", {className: "option-title", textContent: s.title}),
+      s.what ? make("span", {className: "option-desc", textContent: s.what}) : null,
+      byRole ? make("span", {className: "option-desc", textContent: "Their role gives them this."}) : null,
+      !s.planned && !byRole ? make("span", {className: "option-why", textContent: "Not set up on the server yet. It opens for them once you turn it on under Setup, What to run."}) : null));
+  }));
+  if (!peopleView.shareable.length) {
+    $("person-services").replaceChildren(make("p", {className: "empty-line", textContent: "Nothing that can be given to a person is turned on under Setup, What to run."}));
+  }
+  show("person-form", true);
+  renderPeople();
+  (row || nameField.value ? $("person-login") : nameField).focus();
+  $("person-form").scrollIntoView({block: "nearest"});
+}
+
+function closePerson() {
+  personEdited = null;
+  show("person-form", false);
+  renderPeople();
+}
+
+function savePerson(button) {
+  const name = $("person-name").value.trim().toLowerCase();
+  const fields = {name: $("person-name"), login: $("person-login")};
+  for (const field of Object.values(fields)) field.removeAttribute("aria-invalid");
+  const live = !peopleView.tailscale.waits;
+  press(button, "person-result", live ? "Sending to Tailscale, which tests it first…" : "Saving…", async () => {
+    let out;
+    try {
+      out = await api("/api/people", {
+        name, login: fields.login.value.trim(),
+        services: [...$("person-services").querySelectorAll("input:checked:not(:disabled)")].map((box) => box.value),
+      });
+    } catch (error) {
+      const field = /^Name the person|is you/.test(error.message) ? fields.name : /login/i.test(error.message) ? fields.login : null;
+      if (field && error.status === 400) { field.setAttribute("aria-invalid", "true"); field.focus(); }
+      else setTimeout(() => $("person-result").scrollIntoView({block: "nearest"}), 0);
+      throw error;
+    }
+    peopleView = out;
+    personEdited = null;
+    show("person-form", false);
+    say("people-result", "ok", out.message);
+    announce(out.message);
+    renderPeople();
+    if (out.added) showInvite(name, true);
+    else $("person-add").focus();
+    return "";
+  });
+}
+
+function showInvite(name, focus) {
+  const row = peopleView.people.find((p) => p.name === name && !p.owner);
+  personInvited = row ? name : null;
+  show("person-invite", Boolean(row));
+  if (!row) return;
+  if (focus) { personEdited = null; show("person-form", false); }
+  $("person-invite-title").textContent = `How ${name} joins`;
+  $("person-invite-login").textContent = row.login;
+  $("person-invite-link").href = peopleView.users_page;
+  $("person-invite-text").textContent = row.instructions;
+  show("person-invite-root", Boolean(row.root));
+  if (focus) {
+    say("person-invite-result", "", "");
+    renderPeople();
+    $("person-invite").focus();
+    $("person-invite").scrollIntoView({block: "nearest"});
+  }
+}
+
+async function removePerson(row, button) {
+  const sure = await confirmDialog({
+    title: `Remove ${row.name}?`,
+    text: `From the moment you confirm, ${row.login} opens nothing on your server. This page then takes their account and devices off your Tailscale network too, or says what is left for you to do there.`,
+    yes: "Remove",
+  });
+  if (!sure) { button.focus(); return; }
+  press(button, "people-result", `Removing ${row.name}…`, async () => {
+    const out = await api("/api/people/remove", {name: row.name});
+    peopleView = out;
+    if (personEdited === row.name) { personEdited = null; show("person-form", false); }
+    if (personInvited === row.name) { personInvited = null; show("person-invite", false); }
+    renderPeople();
+    $("person-add").focus();
+    announce(out.message);
+    return out.message;
+  });
+}
+
+function wirePeople() {
+  $("person-add").addEventListener("click", () => openPerson(""));
+  $("person-cancel").addEventListener("click", () => { closePerson(); $("person-add").focus(); });
+  $("person-form").addEventListener("submit", (event) => { event.preventDefault(); savePerson(submitter(event)); });
+  $("person-invite-close").addEventListener("click", () => { personInvited = null; show("person-invite", false); renderPeople(); $("person-add").focus(); });
+  $("person-invite-copy").addEventListener("click", () => press($("person-invite-copy"), "person-invite-result", "Copying…", async () => {
+    try { await copyText($("person-invite-text").textContent); } catch {
+      selectAll($("person-invite-text"));
+      throw new ApiError("Copying is blocked here. The steps are selected: copy them with Ctrl+C or your phone's Copy.", 400);
+    }
+    return "Copied.";
+  }));
+  $("people-sync").addEventListener("click", () => press($("people-sync"), "people-result", "Sending the policy to Tailscale…", async () => {
+    peopleView = await api("/api/people/sync", {});
+    renderPeople();
+    return peopleView.message;
+  }));
+  $("people-refresh").addEventListener("click", () => press($("people-refresh"), "people-result", "Asking Tailscale…", async () => {
+    await loadPeople(true);
+    return "";
+  }));
+}
+
 function renderLan(lan) {
   const [kind, word, text] = LAN[lan.state];
   const extra = lan.state === "closing" && !lan.via_vpn ? " This page is not open over Tailscale right now." : "";
@@ -1727,6 +1956,7 @@ async function refresh() {
   renderAgentGithub(st.agent_github);
   renderRemoteAgents(st.remote_agents, st.remote_agents_ready);
   renderLan(st.lan);
+  if (peopleShown() && !$("confirm").open) loadPeople(false).catch(() => {});
   renderTrust(st.trust);
   onChoicesChanged();
   paintChatShell();
@@ -2684,6 +2914,7 @@ function commands() {
     {label: "What the agent did", kind: "Agent", icon: "activity", run: () => go("agent/log")},
     {label: "Setup guide", kind: "Help", icon: "check", run: openGuide},
     {label: "Tailscale", kind: "Access", icon: "access", run: () => go("access/tailscale")},
+    {label: "People and what each may open", kind: "Access", icon: "access", run: () => go("access/people")},
     {label: "Home network", kind: "Access", icon: "lock", run: () => go("access/lan")},
     {label: "Trust this server, install the app", kind: "Access", icon: "download", run: () => go("access/trust")},
     {label: "Theme: match the system", kind: "Look", icon: "moon", run: () => setTheme("system")},
@@ -3030,6 +3261,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   wireTabs("agent-tabs", (tab) => go(`agent/${tab}`));
   wireTabs("access-tabs", (tab) => go(`access/${tab}`));
+  wirePeople();
   wireTabs("platform-tabs", showPlatform);
   showPlatform(guessPlatform());
   $("trust-download").addEventListener("click", () => store.set("nb-trusted", "1"));

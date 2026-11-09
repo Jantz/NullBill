@@ -81,6 +81,12 @@ roles:
   default:
     description: Git/CI and the credential-free workspace only.
     reach: ["service:forgejo", "service:workspace"]
+  # The role the page gives a person the owner adds (Access, People). It
+  # reaches nothing by itself: each person gets the services ticked for
+  # them (people.<name>.services), on the ports that list `shared`.
+  friend:
+    description: Nothing but the services the owner picks for that person.
+    reach: []
 
 # agent_managed: in the PVE pool the agent may power-manage and snapshot,
 # and open to SSH from the operator with a short-lived certificate. Guests
@@ -88,6 +94,10 @@ roles:
 # id: unique per service; sets the VMID and the host part of the address.
 # workload: core services are always planned. Others are planned only when
 # intent.workloads lists their workload.
+# ports.from: who may open the port. A role is everyone who holds it;
+# `shared` is each person the owner gave this service to (Access, People on
+# the page). Only a port that lists `shared` can be given to anyone, and
+# none in mgmt can, so an admin port stays the owner's by leaving it out.
 services:
   router:
     id: 1
@@ -185,10 +195,16 @@ services:
     zone: services
     workload: core
     floor: {cores: 1, memory_mib: 1024, disk_gib: 32}
+    # No sign-up: a person given Forgejo still needs a user the owner makes.
+    share:
+      title: Forgejo
+      what: Git repositories and CI
+      open: "https://{host}/"
+      note: I make your account and send you its sign-in. Git over SSH is git@{host}.
     ports:
       # monitoring: blackbox watches the certificate renew.
-      - {port: 443, proto: tcp, from: ["role:owner", "role:default", "zone:build", "zone:windows", "service:runner-dispatcher", "service:monitoring"]}
-      - {port: 22, proto: tcp, from: ["role:owner", "role:default"]}
+      - {port: 443, proto: tcp, from: ["role:owner", "role:default", "shared", "zone:build", "zone:windows", "service:runner-dispatcher", "service:monitoring"]}
+      - {port: 22, proto: tcp, from: ["role:owner", "role:default", "shared"]}
   runner-dispatcher:
     id: 18
     kind: lxc
@@ -232,8 +248,13 @@ services:
       - .archive.org
     # Transcoding takes the cores; the library's index and artwork the disk.
     floor: {cores: 2, memory_mib: 2048, disk_gib: 16}
+    share:
+      title: Jellyfin
+      what: Films, series and music
+      open: "http://{host}:8096/"
+      note: I make your account and send you its sign-in. Jellyfin's apps for phones and TVs take the same address.
     ports:
-      - {port: 8096, proto: tcp, from: ["role:owner"]}
+      - {port: 8096, proto: tcp, from: ["role:owner", "shared"]}
   linux-runner:
     id: 30
     kind: vm-pool
@@ -287,8 +308,15 @@ services:
     # and the hourly apt jobs a 512 MiB container sat full and stopped
     # answering.
     floor: {cores: 1, memory_mib: 1024, disk_gib: 4}
+    # By address: that is where the gateway shows the certificate devices
+    # trust (browserca.py).
+    share:
+      title: Local AI model
+      what: An OpenAI-compatible API in front of the model on the graphics card
+      open: "https://{ip}:4000/v1"
+      note: It asks for an API key, which I send you. Ask for the model as local.
     ports:
-      - {port: 4000, proto: tcp, from: ["zone:build", "role:owner", "service:monitoring"]}
+      - {port: 4000, proto: tcp, from: ["zone:build", "role:owner", "shared", "service:monitoring"]}
   windows-runner:
     id: 31
     kind: vm-pool
@@ -441,5 +469,6 @@ tailnet:
   free_limits: {users: 6, groups: 3, tagged_devices: 50}
 
 # People are listed in config.yaml with their Tailscale login; the catalog
-# ships none.
+# ships none. The page's Access, People tab adds and removes everyone but
+# the owner (people.py).
 people: {}

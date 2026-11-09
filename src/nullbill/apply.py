@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from nullbill import applied, backups, browserca, ci, hostroot, lan, legacy, llm, media, names, owner
+from nullbill import applied, backups, browserca, ci, hostroot, lan, legacy, llm, media, names, owner, tailscale
 from nullbill.artifacts import write_build
 from nullbill.errors import NullBillError
 from nullbill.flows import mac
@@ -2131,13 +2131,9 @@ def stage_backups(ctx: Context) -> None:
     ctx.say(f"backups: nightly at {backups.SCHEDULE} to {backups.STORAGE}, encrypted on the host")
 
 
-TAILSCALE_CLIENT = ("tailscale_client_id", "tailscale_client_secret")
-
-
 def tailnet_api(ctx: Context) -> Tailnet | None:
     """The owner's Tailscale OAuth client, or None until one is pasted."""
-    client_id, secret = (ctx.secrets.data.get(name, "") for name in TAILSCALE_CLIENT)
-    return Tailnet(client_id, secret) if client_id and secret else None
+    return tailscale.from_secrets(ctx.secrets.data, Tailnet)
 
 
 def push_policy(ctx: Context, stage: str) -> bool:
@@ -2150,26 +2146,13 @@ def push_policy(ctx: Context, stage: str) -> bool:
     want = json.loads(ctx.files["tailnet/policy.json"])
     limit = ctx.model["tailnet"]["free_limits"]["tagged_devices"]
     try:
-        devices = api.devices()
-        tagged = [d for d in devices if d.get("tags")]
-        # The vpn guest counts once it has joined; until then it is about to.
-        count = len(tagged) + (0 if any(TAG in d["tags"] for d in tagged) else 1)
-        if count > limit:
-            raise ApplyError(
-                stage, f"the tailnet would have {count} tagged devices with the vpn guest; Tailscale's free plan allows {limit}"
-            )
-        live, etag = api.policy()
-        if live == want:
-            ctx.say(f"{stage}: the tailnet policy is in place ({count} of {limit} tagged devices)")
-            return True
-        api.validate(want)
-        api.set_policy(want, etag)
-        back, _ = api.policy()
+        changed, count = tailscale.sync_policy(api, want, TAG, limit)
     except TailscaleError as error:
         raise ApplyError(stage, str(error)) from error
-    if back != want:
-        raise ApplyError(stage, "the tailnet policy read back differs from the rendered one; check the admin console's Access controls")
-    ctx.say(f"{stage}: pushed the tailnet policy; Tailscale ran its tests ({count} of {limit} tagged devices)")
+    if changed:
+        ctx.say(f"{stage}: pushed the tailnet policy; Tailscale ran its tests ({count} of {limit} tagged devices)")
+    else:
+        ctx.say(f"{stage}: the tailnet policy is in place ({count} of {limit} tagged devices)")
     return True
 
 
@@ -2255,6 +2238,7 @@ def stage_verify(ctx: Context) -> None:
         lan_host=lan_host,
         say=lambda r: ctx.say(r.line()),
         browser_root=ctx.home / browserca.DIR / "ca.crt",
+        tailnet=lambda: tailnet_api(ctx),
     )
     failed = [r for r in results if r.status == "FAIL"]
     flag = ctx.home / FULL_NEXT

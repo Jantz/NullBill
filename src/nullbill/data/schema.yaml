@@ -17,9 +17,10 @@ $defs:
 
   ref:
     # zone:<name>, service:<name>, role:<name>; zone:* means every zone;
-    # host is the PVE host itself.
+    # host is the PVE host itself. shared: the people whose own `services`
+    # list names the service this port belongs to (docs/adr/0011-people.md).
     type: string
-    pattern: "^(zone:(\\*|[a-z][a-z0-9-]*)|service:[a-z][a-z0-9-]*|role:[a-z][a-z0-9-]*|host)$"
+    pattern: "^(zone:(\\*|[a-z][a-z0-9-]*)|service:[a-z][a-z0-9-]*|role:[a-z][a-z0-9-]*|host|shared)$"
 
   size:
     type: object
@@ -69,6 +70,9 @@ $defs:
         type: array
         maxItems: 20
         items: {type: string, pattern: "^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\\.com|sk-ecdsa-sha2-nistp256@openssh\\.com) [A-Za-z0-9+/]{40,}={0,3}( [^\\r\\n]{0,200})?$"}
+      # Services this person may open besides what their role reaches: the
+      # ports of each that list `shared` in `from`, and nothing else.
+      services: {type: array, uniqueItems: true, items: {$ref: "#/$defs/name"}}
 
   service:
     type: object
@@ -98,6 +102,18 @@ $defs:
       # who does, or why nothing does yet. verify reports a flow to such a
       # port that finds nothing listening as DEGRADED with this text.
       listener: {type: string, minLength: 1}
+      # How a service with `shared` ports reads to the owner who gives it to
+      # a person and to that person (people.py). In `open`, {host} becomes
+      # the service's name, or its address while names are off, and {ip}
+      # always its address. Without `open`, each shared port is listed.
+      share:
+        type: object
+        additionalProperties: false
+        properties:
+          title: {type: string, minLength: 1, maxLength: 40}
+          what: {type: string, minLength: 1, maxLength: 120}
+          open: {type: string, minLength: 1, maxLength: 120}
+          note: {type: string, minLength: 1, maxLength: 200}
       floor: {$ref: "#/$defs/size"}
       grow: {type: integer, minimum: 1}
       # vm-pool: the labels a CI job names in runs-on to land on this pool.

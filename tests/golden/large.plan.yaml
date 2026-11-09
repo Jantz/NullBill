@@ -311,12 +311,14 @@ flows:
   - service:monitoring -> operator tcp/9100
   - role:owner -> forgejo tcp/443
   - role:default -> forgejo tcp/443
+  - shared -> forgejo tcp/443
   - zone:build -> forgejo tcp/443
   - zone:windows -> forgejo tcp/443
   - service:runner-dispatcher -> forgejo tcp/443
   - service:monitoring -> forgejo tcp/443
   - role:owner -> forgejo tcp/22
   - role:default -> forgejo tcp/22
+  - shared -> forgejo tcp/22
   - service:monitoring -> forgejo tcp/9100
   - zone:build -> runner-dispatcher tcp/8443
   - service:monitoring -> runner-dispatcher tcp/8443
@@ -332,6 +334,7 @@ flows:
   - service:monitoring -> inference tcp/9100
   - zone:build -> model-gateway tcp/4000
   - role:owner -> model-gateway tcp/4000
+  - shared -> model-gateway tcp/4000
   - service:monitoring -> model-gateway tcp/4000
   - service:monitoring -> model-gateway tcp/9100
   - role:owner -> windows-dev tcp/3389
@@ -346,6 +349,11 @@ flows:
 people:
   owner-a: owner
   dev-b: default
+  friend-c:
+    role: friend
+    services:
+      - forgejo
+      - model-gateway
 updates:
   # Debian security updates install by themselves on the host and every Linux guest.
   security: nightly
@@ -360,9 +368,9 @@ updates:
   not_managed:
     - windows-runner
     - windows-dev
-# Tailscale Personal: free for personal, non-commercial use. One group per role; the vpn guest is the tagged device.
+# Tailscale Personal: free for personal, non-commercial use. One group per role that reaches something; the vpn guest is the tagged device.
 tailnet:
-  users: 2 of 6
+  users: 3 of 6
   groups: 2 of 3
   tagged_devices: 1 of 50
 owner_supplies:

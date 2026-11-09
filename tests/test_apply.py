@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 import pytest
-from conftest import fixture_config
+from conftest import FakeTailnet, fixture_config
 
 from nullbill import applied, apply, backups, browserca, ci, flows, hostroot, lan, llm, names, owner
 from nullbill.apply import ApplyError, Context, connection, run_apply
@@ -1293,47 +1293,6 @@ def test_backups_stage_does_nothing_without_a_backup_disk(ctx):
     assert c.reach.calls == []
 
 
-class FakeTailnet:
-    """Tailscale's API: one policy, its ETag, the devices on the tailnet."""
-
-    def __init__(self, client_id="", client_secret=""):
-        self.credential = (client_id, client_secret)
-        self.live = {"acls": [{"action": "accept", "src": ["*"], "dst": ["*:*"]}]}
-        self.etag = "e0"
-        self.devices_list = [{"id": "1", "tags": []}]
-        self.refuse = None  # a validate error message
-        self.mangle = False  # store something other than what was pushed
-        self.pushes = []
-        self.dns = {"example.com": ["192.0.2.53"]}  # split DNS someone else set
-        self.dns_scope = True
-        self.dns_sets = []
-
-    def devices(self):
-        return self.devices_list
-
-    def policy(self):
-        return json.loads(json.dumps(self.live)), self.etag
-
-    def validate(self, policy):
-        if self.refuse:
-            raise apply.TailscaleError(f"Tailscale refused the policy: {self.refuse}")
-
-    def set_policy(self, policy, etag):
-        assert etag == self.etag
-        self.pushes.append(policy)
-        self.live = dict(policy, extra=True) if self.mangle else policy
-        self.etag = f"e{len(self.pushes)}"
-
-    def split_dns(self):
-        if not self.dns_scope:
-            raise apply.MissingScope("reading the tailnet's split DNS: the OAuth client lacks a scope (...); give it dns")
-        return dict(self.dns)
-
-    def set_split_dns(self, domain, nameservers):
-        self.dns_sets.append((domain, nameservers))
-        self.dns[domain] = nameservers
-
-
 @pytest.fixture
 def tailnet(monkeypatch):
     fake = FakeTailnet()
@@ -1457,14 +1416,20 @@ def test_vpn_stage_waits_for_the_policy_then_a_key_then_logs_in_once_and_forgets
     assert c.log[-2].startswith("vpn: on the tailnet")
 
 
-def test_vpn_routes_cover_only_zones_a_role_reaches(ctx):
+def test_vpn_routes_cover_only_zones_people_reach(ctx):
     c = ctx("small")
     c.model["roles"]["owner"]["reach"] = ["service:forgejo"]
     c.model["host"]["ports"] = []
     for name, svc in c.model["services"].items():
         for port in svc.get("ports", []):
-            port["from"] = [r for r in port["from"] if not r.startswith("role:") or (r == "role:owner" and name == "forgejo")]
-    assert routes(c.plan, c.model) == [c.bare["zones"][c.bare["guests"]["forgejo"]["zone"]]["subnet"], "10.42.6.1/32"]
+            port["from"] = [r for r in port["from"] if not flows.from_people(r) or (r == "role:owner" and name == "forgejo")]
+    forgejo = c.bare["zones"][c.bare["guests"]["forgejo"]["zone"]]["subnet"]
+    assert routes(c.plan, c.model) == [forgejo, "10.42.6.1/32"]
+    # A port that can be given to a person has its zone advertised whoever
+    # holds it, so giving it to someone changes the policy and no route.
+    jellyfin = c.model["services"]["jellyfin"]
+    jellyfin["ports"][0]["from"].append("shared")
+    assert routes(c.plan, c.model) == [forgejo, c.bare["zones"][jellyfin["zone"]]["subnet"], "10.42.6.1/32"]
 
 
 def test_host_stage_rewrites_only_what_changed(ctx):
@@ -1550,6 +1515,8 @@ def test_verify_reports_an_open_lan_as_degraded_not_failed(ctx, monkeypatch):
     c = ctx()
     apply.stage_verify(c)
     assert seen.pop("say") and seen.pop("browser_root") == c.home / "browser-ca" / "ca.crt"
+    # The policy check asks Tailscale with the owner's client, once there is one.
+    assert seen.pop("tailnet")() is None
     assert seen == {"lan_state": "open", "lan_host": "pve.internal"}
 
 

@@ -16,6 +16,10 @@ HOST_SET = "nb-host"
 # a device on the home network then talks to it directly instead of through
 # Tailscale's relays (DERP), which are slow for video.
 TAILSCALE_PORT = 41641
+# In a port's `from`: the people whose own `services` list names the port's
+# service. Like a role, they arrive through the vpn guest, so the firewall
+# opens the port to it and the tailnet policy decides who gets through.
+SHARED = "shared"
 
 
 @dataclass(frozen=True)
@@ -28,6 +32,11 @@ class Flow:
     dest_cidrs: tuple[str, ...]
     proto: str
     port: int
+
+
+def from_people(ref: str) -> bool:
+    """Whether a `from` entry names people, a role or `shared`, not guests."""
+    return ref == SHARED or ref.startswith("role:")
 
 
 def svc_set(name: str) -> str:
@@ -53,7 +62,7 @@ def _resolve(ref: str, plan: dict, base: str) -> tuple[str, tuple[str, ...], tup
             return None
         members = tuple(g for g, v in guests.items() if v["zone"] == name)
         return f"nb-zone-{name}", (plan["zones"][name]["subnet"],), members
-    if kind == "role":
+    if from_people(ref):
         # People arrive through the VPN subnet router, which masquerades them;
         # per-person limits live in the tailnet policy.
         name = "vpn"
