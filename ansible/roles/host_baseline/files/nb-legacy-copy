@@ -157,11 +157,13 @@ format_at() {
 transfer() {
   total=$(findmnt -bno USED --mountpoint "$1" | head -1)
   echo "nb-legacy-copy: copying $1 ($((${total:-0} / 1048576)) MiB) to $volume" >&2
-  # A line a minute while it copies: hours, for a full disk.
+  # A line a minute while it copies: hours, for a full disk. Its stdout is
+  # stderr too: the caller reads stdout through $(...), which would otherwise
+  # wait for the ticker's last sleep to end after it is killed.
   (while sleep 60; do
     done_bytes=$(findmnt -bno USED --mountpoint "$2" | head -1)
-    echo "nb-legacy-copy: $((${done_bytes:-0} / 1048576)) MiB copied" >&2
-  done) &
+    echo "nb-legacy-copy: $((${done_bytes:-0} / 1048576)) MiB copied"
+  done) >&2 &
   ticker=$!
   rc=0
   # Sparse files stay sparse (-S), so they need no more room than on the disk.
