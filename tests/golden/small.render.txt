@@ -25,7 +25,7 @@ acl from_operator src 10.42.1.16/32
 acl allowed_operator dstdomain -n api.anthropic.com
 http_access allow from_operator allowed_operator
 acl from_jellyfin src 10.42.7.24/32
-acl allowed_jellyfin dstdomain -n repo.jellyfin.org api.themoviedb.org image.tmdb.org musicbrainz.org coverartarchive.org .archive.org
+acl allowed_jellyfin dstdomain -n repo.jellyfin.org .mirror.jellyfin.org api.themoviedb.org image.tmdb.org musicbrainz.org coverartarchive.org .archive.org
 http_access allow from_jellyfin allowed_jellyfin
 http_access deny all
 

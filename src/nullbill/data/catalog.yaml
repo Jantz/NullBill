@@ -219,8 +219,12 @@ services:
     description: Jellyfin, which plays the files on the disks kept from a previous OS (read-only) to the owner's devices. Not agent-managed.
     # Jellyfin's apt repository and plugin catalogue, and where it looks up
     # titles, posters and album details (docs/adr/0009-media-server.md).
+    # repo.jellyfin.org answers each package with a redirect to one of its
+    # mirrors (nyc1.mirror.jellyfin.org and the like); without them apt
+    # retries the refused mirrors for half an hour.
     proxy_allow:
       - repo.jellyfin.org
+      - .mirror.jellyfin.org
       - api.themoviedb.org
       - image.tmdb.org
       - musicbrainz.org
