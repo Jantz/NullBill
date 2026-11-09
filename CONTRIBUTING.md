@@ -17,6 +17,7 @@ python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements-dev.txt -e .
 tools/install-hooks   # secret and deny-list checks on commit and push
 tools/check           # everything CI runs; the container checks need docker
+tools/check static    # lint, tests and gitleaks only; or name container checks: host roles ...
 ```
 
 The pre-push hook needs `NULLBILL_HOME` set to a directory outside the

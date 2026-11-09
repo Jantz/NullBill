@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# For a push to main in CI: succeed when a pull request run of check.yml
+# already passed the job named $1 on this exact commit with nothing left out
+# by CI-Skip. main moves only by fast-forward, so that run checked the same
+# tree. Needs gh with GH_TOKEN (actions: read), GITHUB_REPOSITORY, GITHUB_SHA.
+set -euo pipefail
+export JOB=$1
+runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/check.yml/runs?head_sha=$GITHUB_SHA&event=pull_request&per_page=100" \
+  --jq '.workflow_runs[].id')
+for run in $runs; do
+  # filter=all: any attempt that passed counts.
+  passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/jobs?filter=all&per_page=100" --jq '
+    [.jobs[]
+     | select(.name == env.JOB and .conclusion == "success")
+     | select(any(.steps[]; .name == "Run the checks" and .conclusion == "success"))
+     | select(all(.steps[]; .name != "Note checks CI-Skip left out" or .conclusion == "skipped"))]
+    | length')
+  if ((passed > 0)); then
+    echo "passed in pull request run $run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$run"
+    exit 0
+  fi
+done
+exit 1

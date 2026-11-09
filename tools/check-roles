@@ -1,25 +1,50 @@
 #!/usr/bin/env bash
 # Run each guest role's container check (ansible/roles/*/tests/check.sh) in
 # a fresh container of the Debian release its guest runs: Debian 13 for the
-# roles in trixie_roles, Debian 12 for the rest. Needs docker and network access.
+# roles in trixie_roles, Debian 12 for the rest. Arguments name the roles to
+# check; none checks them all. Needs docker and network access.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
+
+roles=("$@")
+if ((${#roles[@]} == 0)); then
+  for check in ansible/roles/*/tests/check.sh; do
+    roles+=("$(basename "$(dirname "$(dirname "$check")")")")
+  done
+fi
+for role in "${roles[@]}"; do
+  [[ -f ansible/roles/$role/tests/check.sh ]] || {
+    echo "check-roles: $role has no tests/check.sh" >&2
+    exit 2
+  }
+done
+# PBS 4 needs Debian 13 (catalog.yaml's debian-13-cloud).
+trixie_roles=" pbs "
 
 ctx=$(mktemp -d)
 trap 'rm -rf "$ctx"' EXIT
 cp tools/role-check/Dockerfile tools/role-check/role-check.sh "$ctx/"
 cat "${EXTRA_CA_FILE:-/dev/null}" > "$ctx/extra-ca.crt"
-docker build -q -t nullbill-role-check "$ctx" >/dev/null
-docker build -q -t nullbill-role-check:trixie \
-  --build-arg BASE=debian:13-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 "$ctx" >/dev/null
-# PBS 4 needs Debian 13 (catalog.yaml's debian-13-cloud).
-trixie_roles=" pbs "
+# Build only the images these roles run on.
+for role in "${roles[@]}"; do
+  if [[ $trixie_roles == *" $role "* ]]; then
+    trixie=1
+  else
+    bookworm=1
+  fi
+done
+if [[ -n ${bookworm:-} ]]; then
+  docker build -q -t nullbill-role-check "$ctx" >/dev/null
+fi
+if [[ -n ${trixie:-} ]]; then
+  docker build -q -t nullbill-role-check:trixie \
+    --build-arg BASE=debian:13-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 "$ctx" >/dev/null
+fi
 # PBS refuses to run unless /run/proxmox-backup is a tmpfs. Its certificate
 # takes the host's FQDN as CN, limited to 64 bytes, so give the container a
 # short name and drop the runner's DNS search domain.
 # nft -c needs CAP_NET_ADMIN, in the container's own network namespace.
-for check in ansible/roles/*/tests/check.sh; do
-  role=$(basename "$(dirname "$(dirname "$check")")")
+for role in "${roles[@]}"; do
   image=nullbill-role-check
   [[ $trixie_roles == *" $role "* ]] && image+=:trixie
   echo "$role ($image):"

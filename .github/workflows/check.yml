@@ -7,26 +7,79 @@ on:
 
 permissions:
   contents: read
+  # tools/ci-passed-on-pr reads this workflow's pull request runs.
+  actions: read
+
+# A newer push to a pull request replaces its running checks. An edit that
+# leaves the body (and so CI-Skip) alone runs nothing, so it gets a group of
+# its own and cancels no real run.
+concurrency:
+  group: check-${{ github.event.pull_request.number || github.sha }}${{ github.event.action == 'edited' && !github.event.changes.body && '-title' || '' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:
+    name: ${{ matrix.name }}
+    if: github.event.action != 'edited' || github.event.changes.body
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      # Parts of tools/check side by side. The roles are split so that each
+      # job takes about as long as inference, which builds llama.cpp; every
+      # role is in exactly one job (tests/test_ci_skip.py).
+      matrix:
+        include:
+          - name: lint, tests, gitleaks
+            parts: static
+          - name: apply, install
+            parts: apply install
+          - name: firewall, guests, tofu
+            parts: firewall guests tofu
+          - name: host
+            parts: host
+          - name: roles (inference)
+            parts: roles
+            roles: inference
+          - name: roles (monitoring, operator, model_gateway, downloads)
+            parts: roles
+            roles: monitoring operator model_gateway downloads
+          - name: roles (log_shipper, runner_dispatcher, pbs, forgejo, tls_cert)
+            parts: roles
+            roles: log_shipper runner_dispatcher pbs forgejo tls_cert
+          - name: roles (the rest)
+            parts: roles
+            roles: updates console postgres jellyfin vpn router files step_ca egress_proxy agent_ssh
+    env:
+      ROLES: ${{ matrix.roles }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+      # Pushes to main run every check, except a job that a pull request run
+      # already passed on this same commit with nothing left out.
+      - name: Look for a pull request run that passed this job
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB: ${{ matrix.name }}
+        run: |
+          if tools/ci-passed-on-pr "$JOB"; then
+            echo "PASSED_ON_PR=1" >> "$GITHUB_ENV"
+          fi
       - name: Install gitleaks 8.21.2
+        if: matrix.parts == 'static' && env.PASSED_ON_PR != '1'
         run: |
           curl -sSfLo /tmp/gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz
           echo "5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba  /tmp/gitleaks.tar.gz" | sha256sum -c -
           tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks
       - name: Install Python packages
+        if: env.PASSED_ON_PR != '1'
         run: |
           python3 -m venv /tmp/venv
           /tmp/venv/bin/pip install -r requirements-dev.txt -e .
           echo /tmp/venv/bin >> "$GITHUB_PATH"
       # A "CI-Skip:" line in the PR body leaves out container checks; see
-      # tools/check. Pushes to main always run everything.
+      # tools/check.
       - name: Read CI-Skip from the PR body
         if: github.event_name == 'pull_request'
         env:
@@ -34,4 +87,18 @@ jobs:
         run: |
           skip=$(printf '%s\n' "$PR_BODY" | tr -d '\r' | sed -nE 's/^[[:space:]]*ci-skip:[[:space:]]*//Ip' | head -n 1)
           echo "CI_SKIP=$skip" >> "$GITHUB_ENV"
-      - run: tools/check
+      - name: Run the checks
+        if: env.PASSED_ON_PR != '1'
+        shell: bash
+        env:
+          PARTS: ${{ matrix.parts }}
+        run: |
+          # shellcheck disable=SC2086 # part names, split on purpose
+          tools/check $PARTS | tee "$RUNNER_TEMP/check.log"
+          if grep -q '^SKIP: check-.* (CI_SKIP)$' "$RUNNER_TEMP/check.log"; then
+            echo "LEFT_OUT=1" >> "$GITHUB_ENV"
+          fi
+      # A job with this step run is checked again on main.
+      - name: Note checks CI-Skip left out
+        if: env.LEFT_OUT == '1'
+        run: echo "::notice::CI-Skip left out some of this job's checks; main runs them."

@@ -2,14 +2,26 @@
 # Every check CI runs, runnable locally. Needs gitleaks on PATH and the
 # packages in requirements-dev.txt.
 #
-# CI_SKIP names container checks to leave out, space or comma separated:
-# apply install firewall guests host roles tofu, or docker for all of them.
-# Lint, tests and gitleaks always run. CI sets it from a "CI-Skip:" line in
-# the pull request body.
+# Arguments name the parts to run: static (lint, tests, gitleaks) and the
+# container checks apply install firewall guests host roles tofu. None runs
+# them all. CI runs them in parallel jobs; ROLES limits roles to those roles.
+#
+# CI_SKIP names container checks to leave out, space or comma separated,
+# or docker for all of them. static always runs when asked for. CI sets it
+# from a "CI-Skip:" line in the pull request body.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 docker_checks=(apply install firewall guests host roles tofu)
+parts=("$@")
+((${#parts[@]})) || parts=(static "${docker_checks[@]}")
+for part in "${parts[@]}"; do
+  if [[ $part != static && " ${docker_checks[*]} " != *" $part "* ]]; then
+    echo "tools/check: unknown part '$part'; known: static ${docker_checks[*]}" >&2
+    exit 2
+  fi
+done
+wanted() { [[ " ${parts[*]} " == *" $1 "* ]]; }
 requested="${CI_SKIP:-}"
 read -ra requested <<<"${requested//,/ }"
 skip=" "
@@ -24,18 +36,22 @@ for name in "${requested[@]}"; do
   fi
 done
 
-# Python scripts the roles install, which have no .py suffix.
-scripts=(ansible/roles/monitoring/files/nb-alert-relay ansible/roles/log_shipper/files/nb-log-shipper)
-ruff check . "${scripts[@]}"
-ruff format --check . "${scripts[@]}"
-shellcheck -x hooks/* install.sh tools/check-install tools/install-check/check.sh tools/install-check/fakes/* tools/check tools/check-apply tools/install-apply-deps tools/setup-controller tools/finish-upgrade tools/check-firewall tools/check-guests tools/check-host tools/check-roles tools/check-tofu tools/guest-check/check.sh tools/host-check/check.sh tools/host-check/legacy-disk.sh tools/tofu-check/check.sh tools/role-check/role-check.sh ansible/roles/*/tests/check.sh ansible/roles/updates/files/nb-update-metrics ansible/roles/host_baseline/files/nb-pve-api-cert ansible/roles/host_baseline/files/nb-backup-disk ansible/roles/host_baseline/files/nb-legacy-disk ansible/roles/host_baseline/files/nb-legacy-copy ansible/roles/host_baseline/files/nb-storage-disk ansible/roles/egress_proxy/files/nb-squid-check ansible/roles/agent_ssh/files/nb-agent-command tools/denylist-scan tools/install-hooks
-python3 -m pytest -q
-gitleaks dir --no-banner --redact -c .gitleaks.toml .
-gitleaks git --no-banner --redact -c .gitleaks.toml .
+if wanted static; then
+  # Python scripts the roles install, which have no .py suffix.
+  scripts=(ansible/roles/monitoring/files/nb-alert-relay ansible/roles/log_shipper/files/nb-log-shipper)
+  ruff check . "${scripts[@]}"
+  ruff format --check . "${scripts[@]}"
+  shellcheck -x hooks/* install.sh tools/check-install tools/install-check/check.sh tools/install-check/fakes/* tools/check tools/check-apply tools/install-apply-deps tools/setup-controller tools/finish-upgrade tools/check-firewall tools/check-guests tools/check-host tools/check-roles tools/check-tofu tools/guest-check/check.sh tools/host-check/check.sh tools/host-check/legacy-disk.sh tools/tofu-check/check.sh tools/role-check/role-check.sh ansible/roles/*/tests/check.sh ansible/roles/updates/files/nb-update-metrics ansible/roles/host_baseline/files/nb-pve-api-cert ansible/roles/host_baseline/files/nb-backup-disk ansible/roles/host_baseline/files/nb-legacy-disk ansible/roles/host_baseline/files/nb-legacy-copy ansible/roles/host_baseline/files/nb-storage-disk ansible/roles/egress_proxy/files/nb-squid-check ansible/roles/agent_ssh/files/nb-agent-command tools/denylist-scan tools/install-hooks tools/ci-passed-on-pr
+  python3 -m pytest -q
+  gitleaks dir --no-banner --redact -c .gitleaks.toml .
+  gitleaks git --no-banner --redact -c .gitleaks.toml .
+fi
 
 run=()
 for name in "${docker_checks[@]}"; do
-  if [[ $skip == *" $name "* ]]; then
+  if ! wanted "$name"; then
+    continue
+  elif [[ $skip == *" $name "* ]]; then
     echo "SKIP: check-$name (CI_SKIP)"
   else
     run+=("$name")
@@ -45,7 +61,12 @@ if ((${#run[@]} == 0)); then
   :
 elif docker info >/dev/null 2>&1; then
   for name in "${run[@]}"; do
-    "tools/check-$name"
+    if [[ $name == roles ]]; then
+      # shellcheck disable=SC2086 # role names, split on purpose
+      tools/check-roles ${ROLES:-}
+    else
+      "tools/check-$name"
+    fi
   done
 else
   echo "SKIP: ${run[*]/#/check-} need docker"
