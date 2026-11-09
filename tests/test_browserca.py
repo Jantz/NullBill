@@ -78,6 +78,7 @@ def test_a_browser_that_trusts_the_root_accepts_the_server_by_address(tmp_path, 
     root = ca(tmp_path, network="127.0.0.0/8")
     _, crt, key = issue(tmp_path, root, "page", browserca.sans(["nullbill.nullbill.internal"], [address]))
     server = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server.minimum_version = ssl.TLSVersion.TLSv1_2
     server.load_cert_chain(crt, key)
     listener = socket.create_server(("127.0.0.1", 0))
     port = listener.getsockname()[1]
@@ -91,6 +92,7 @@ def test_a_browser_that_trusts_the_root_accepts_the_server_by_address(tmp_path, 
 
     threading.Thread(target=serve, daemon=True).start()
     client = ssl.create_default_context(cafile=str(root))
+    client.minimum_version = ssl.TLSVersion.TLSv1_2
     with socket.create_connection(("127.0.0.1", port)) as raw:
         if trusted:
             client.wrap_socket(raw, server_hostname="127.0.0.1").close()
