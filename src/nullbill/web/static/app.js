@@ -1,10 +1,10 @@
 "use strict";
 
-// NullBill's page. Pages in a rail (a tab bar on a phone), the latest run in
-// the bar at the top, and the agent docked beside every page (its own tab on
-// a phone). Every control answers beside itself: busy while the server
-// works, then done or the reason it was refused. The agent proposes; the
-// page decides by the owner's access mode and runs what is approved.
+// NullBill's page. A sidebar of pages (a tab bar on a phone), the run in
+// progress in the top bar, and the agent in a panel beside every page (its
+// own tab on a phone). Every control answers beside itself: busy while the
+// server works, then done or the reason it was refused. The agent proposes;
+// the page decides by the owner's access mode and runs what is approved.
 
 const LABELS = {
   "agents": ["AI agents", "The operator and a workspace container for coding agents."],
@@ -15,28 +15,35 @@ const LABELS = {
   "windows-dev": ["Windows desktop VM", "Upload the Windows 11 ISO in Proxmox first; you install Windows in it."],
 };
 
-const VIEWS = ["home", "agent", "services", "setup", "access", "alerts", "activity"];
-const ALIASES = {overview: "home", agents: "agent", "": ""};
-const STEPS = ["agent", "hardware", "choices", "plan", "build"];
+const VIEWS = ["overview", "services", "activity", "alerts", "setup", "access", "agent"];
+const ALIASES = {home: "overview", agents: "agent", "": ""};
+const STEPS = ["hardware", "choices", "plan", "build"];
 const AGENT_TABS = ["chat", "settings", "log"];
 const ACCESS_TABS = ["tailscale", "lan", "trust"];
-// Runs that open Activity when they start; the others show in the bar at
-// the top while the owner stays where they pressed.
-const OPENS_ACTIVITY = new Set(["apply", "verify", "upgrade", "remove-guests"]);
+const PLATFORMS = ["android", "windows", "apple"];
+// Runs that open their page when they start; the others show in the top
+// bar while the owner stays where they pressed.
+const OPENS_RUN = new Set(["apply", "verify", "upgrade", "remove-guests"]);
+const SETUP_RUNS = new Set(["apply", "remove-guests", "rebake-ci"]);
 const SERVICE_ICONS = {
   proxmox: "proxmox", grafana: "chart", forgejo: "git", files: "folder", jellyfin: "film",
   workspace: "terminal", operator: "bot", "windows-dev": "window", "linux-runner": "cog", "model-gateway": "chip",
 };
 const JOB_NAMES = {
-  probe: "Reading the hardware", apply: "Setup", verify: "Checks", upgrade: "Update of NullBill",
+  probe: "Hardware read", apply: "Setup", verify: "Checks", upgrade: "NullBill update",
   "close-lan": "Closing the home network", "keep-lan-closed": "Keeping the home network closed",
-  "open-lan": "Reopening the home network", "rebake-ci": "Rebuild of the CI images", "remove-guests": "Setup",
+  "open-lan": "Reopening the home network", "rebake-ci": "CI image rebuild", "remove-guests": "Setup with deletions",
 };
 const STARTING = {
   probe: "Reading…", apply: "Starting setup…", verify: "Starting the checks…", upgrade: "Starting the update…",
   "close-lan": "Closing…", "keep-lan-closed": "Keeping it closed…", "open-lan": "Opening…", "remove-guests": "Starting setup…",
 };
 const MODE_NAMES = {manual: "Manual", auto: "Auto", yolo: "YOLO"};
+const MODE_DESC = {
+  manual: "Asks before every change.",
+  auto: "Changes go ahead; deleting, rebooting and scripts wait.",
+  yolo: "Nothing waits. Everything is logged.",
+};
 // Past this much quiet the page calls a run stuck and points at Stop.
 const STUCK_S = 30 * 60;
 
@@ -59,6 +66,11 @@ function icon(name, cls) {
   svg.append(use);
   return svg;
 }
+// A status: a dot and a word, never the colour alone.
+function status(kind, text, sub) {
+  return make("span", {className: `status ${kind || "muted"}`}, make("span", {className: `dot ${kind || ""}`, ariaHidden: "true"}),
+    make("span", {className: "text", textContent: text}), sub ? make("span", {className: "meta", textContent: sub}) : null);
+}
 
 // Per-browser conveniences only; the page works without them.
 const store = {
@@ -72,10 +84,11 @@ let statusTimer = null;
 let lastStatus = null;     // the last /api/status
 let job = null;            // the followed run: {id, view, node, offset, timer, watched, feedback}
 let currentView = null;
+let currentSub = "";
 let currentStep = null;
 let agentTab = null;
-let accessTab = null;
 let installPrompt = null;  // the browser's install offer, once it makes one
+const expanded = new Set(); // services whose details are open
 
 // Words.
 function sentence(text) {
@@ -136,9 +149,9 @@ async function api(path, body) {
   return data;
 }
 
+// Said only when it is lost: a connected page needs no word for it.
 function connection(ok) {
-  $("conn").classList.toggle("lost", !ok);
-  $("conn-text").textContent = ok ? "Connected" : "Not connected";
+  show("conn", !ok);
 }
 
 function toast(text) {
@@ -186,17 +199,15 @@ async function press(button, feedback, busyText, work, field) {
 }
 
 function show(id, visible) { const node = typeof id === "string" ? $(id) : id; if (node) node.hidden = !visible; }
-function setBadge(id, text, kind) {
-  const node = typeof id === "string" ? $(id) : id;
+function setCount(node, text, kind, label) {
+  if (!node) return;
+  node.hidden = !text;
   node.textContent = text || "";
-  node.className = `badge ${kind || ""}`.trim();
+  node.className = `count ${kind || ""}`.trim();
+  if (label) node.setAttribute("aria-label", label); else node.removeAttribute("aria-label");
 }
-function setNav(view, text, kind) {
-  const badge = document.querySelector(`#nav a[data-view="${view}"] .nav-badge`);
-  if (!badge) return;
-  badge.hidden = !text;
-  badge.textContent = text || "";
-  badge.className = `nav-badge ${kind || ""}`.trim();
+function setNav(view, text, kind, label) {
+  setCount(document.querySelector(`#sidebar a[data-view="${view}"] .count`), text, kind, label);
 }
 
 // A small, safe Markdown: paragraphs, lists, code, bold and links. Built
@@ -297,44 +308,88 @@ function confirmDialog({title, text, yes, word, danger = true}) {
   });
 }
 
+// Menus: a list under the button that opened it, arrow keys inside, Escape
+// or a click elsewhere closes it and focus goes back to the button.
+const menu = {button: null};
+function openMenu(button, items, align) {
+  const box = $("menu");
+  if (menu.button === button && !box.hidden) { closeMenu(true); return; }
+  closeMenu(false);
+  box.replaceChildren();
+  for (const item of items) {
+    if (item.sep) { box.append(make("div", {className: "menu-sep", role: "separator"})); continue; }
+    if (item.heading) { box.append(make("div", {className: "menu-label", textContent: item.heading})); continue; }
+    const radio = "checked" in item;
+    const node = make("button", {type: "button", tabIndex: -1},
+      radio ? make("span", {className: "check"}, item.checked ? icon("check") : null) : item.icon ? icon(item.icon) : null,
+      make("span", {}, make("span", {textContent: item.label}), item.desc ? make("span", {className: "menu-desc", textContent: item.desc}) : null));
+    node.setAttribute("role", radio ? "menuitemradio" : "menuitem");
+    if (radio) node.setAttribute("aria-checked", item.checked ? "true" : "false");
+    node.addEventListener("click", () => { closeMenu(true); item.run(); });
+    box.append(node);
+  }
+  box.setAttribute("aria-label", button.getAttribute("aria-label") || button.textContent.trim() || button.title);
+  box.hidden = false;
+  menu.button = button;
+  button.setAttribute("aria-expanded", "true");
+  const r = button.getBoundingClientRect();
+  const w = box.offsetWidth;
+  const left = align === "left" ? r.left : r.right - w;
+  box.style.left = `${Math.max(8, Math.min(left, innerWidth - w - 8))}px`;
+  const below = r.bottom + 4;
+  box.style.top = below + box.offsetHeight > innerHeight - 8 ? `${Math.max(8, r.top - box.offsetHeight - 4)}px` : `${below}px`;
+  const first = box.querySelector('[aria-checked="true"]') || box.querySelector("[role^=menuitem]");
+  if (first) first.focus();
+}
+function closeMenu(focusBack) {
+  const box = $("menu");
+  if (box.hidden) return;
+  box.hidden = true;
+  if (menu.button) {
+    menu.button.setAttribute("aria-expanded", "false");
+    if (focusBack) menu.button.focus();
+  }
+  menu.button = null;
+}
+
 // Pages.
-function built() { return Boolean(state && state.last_jobs.apply && state.last_jobs.apply.state === "done"); }
-function defaultView() { return built() ? "home" : "setup"; }
+function built() { return Boolean(state && state.built); }
+function defaultView() { return "overview"; }
 
 function stepDone(step) {
   if (!state) return false;
-  if (step === "agent") return Boolean(state.chat && state.chat.signed_in);
   if (step === "hardware") return state.probed;
   if (step === "choices") return Boolean(state.choices.owner_login) && !choicesDirty();
   if (step === "plan") return Boolean(state.plan.text) && !state.plan.errors.length;
   return built() && !state.config_changed;
 }
-function defaultStep() {
-  const skipAgent = store.get("nb-skip-agent") === "1";
-  return STEPS.find((s) => !stepDone(s) && !(s === "agent" && skipAgent)) || "build";
-}
+function defaultStep() { return STEPS.find((s) => !stepDone(s)) || "build"; }
 
 function parseHash() {
-  const [raw, sub] = location.hash.slice(1).split("/");
+  const [raw, ...rest] = location.hash.slice(1).split("/");
+  const sub = rest.join("/");
   const name = raw in ALIASES ? ALIASES[raw] : raw;
-  if (raw && !VIEWS.includes(name) && currentView) return [currentView, "", false];
-  return [VIEWS.includes(name) ? name : defaultView(), sub || "", raw === "agents"];
+  if (raw && !VIEWS.includes(name) && currentView) return [currentView, currentSub];
+  // The agent's sign-in was once a setup step.
+  if (name === "setup" && sub === "agent") return ["agent", "settings"];
+  return [VIEWS.includes(name) ? name : defaultView(), raw === "agents" ? "settings" : sub || ""];
 }
 
 function route(focus) {
   if (!state) return;
-  const [view, sub, legacyAgents] = parseHash();
+  const [view, sub] = parseHash();
+  closeMenu(false);
   for (const v of VIEWS) $(`view-${v}`).hidden = v !== view;
-  for (const link of document.querySelectorAll("#nav a, .tabbar a, #more a")) {
+  for (const link of document.querySelectorAll("#sidebar .nav a, .tabbar a, #more a")) {
     if (link.dataset.view === view || link.getAttribute("href") === `#${view}`) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   }
-  const inMore = ["access", "alerts", "activity"].includes(view);
+  const inMore = ["setup", "access", "alerts"].includes(view);
   $("tab-more").classList.toggle("current", inMore);
-  if (inMore) $("tab-more").setAttribute("aria-current", "page"); else $("tab-more").removeAttribute("aria-current");
-  const changed = currentView !== view;
+  const changed = currentView !== view || currentSub !== sub;
   currentView = view;
-  document.title = `${$(`view-${view}`).dataset.title} · NullBill`;
+  currentSub = sub;
+  let title = $(`view-${view}`).dataset.title;
   let heading = $(`h-${view}`);
   if (view === "setup") {
     const step = STEPS.includes(sub) ? sub : defaultStep();
@@ -342,19 +397,31 @@ function route(focus) {
     showStep(step);
     if (stepChanged || changed) heading = $(`h-step-${step}`);
   } else if (view === "agent") {
-    showAgentTab(legacyAgents ? "settings" : sub);
-    if (sub && AGENT_TABS.includes(sub) === false && $(`sec-${sub}`)) heading = $(`sec-${sub}`).querySelector("h2");
+    showAgentTab(sub);
   } else if (view === "access") {
     showAccessTab(sub);
+  } else if (view === "activity") {
+    const detail = Boolean(sub);
+    show("activity-list", !detail);
+    show("activity-detail", detail);
+    if (detail) {
+      openRun(sub);
+      heading = null;
+      title = "Run";
+    }
   }
   placeChat();
-  if (narrow.matches && !phone.matches && dockOpen() && !(view === "agent" && sub === "chat")) setDock(false);
+  placeJob();
+  setSide(false);
+  if (narrow.matches && !phone.matches && dockOpen() && changed) setDock(false);
   if (changed) $("main").scrollTo(0, 0);
+  document.title = `${title} · NullBill`;
   if (focus && heading) {
     heading.tabIndex = -1;
     heading.focus({preventScroll: true});
   }
   paintStates();
+  paintBanner();
 }
 
 function go(hash) {
@@ -404,17 +471,26 @@ function scrollChatToNews() {
 
 function showAccessTab(tab) {
   const fallback = state && state.lan.state === "closing" ? "lan" : "tailscale";
-  accessTab = ACCESS_TABS.includes(tab) ? tab : fallback;
-  selectTab("access-tabs", accessTab);
-  for (const t of ACCESS_TABS) show(`sec-${t}`, t === accessTab);
+  const chosen = ACCESS_TABS.includes(tab) ? tab : fallback;
+  selectTab("access-tabs", chosen);
+  for (const t of ACCESS_TABS) show(`sec-${t}`, t === chosen);
+}
+
+function showPlatform(name) {
+  selectTab("platform-tabs", name);
+  for (const p of PLATFORMS) show(`howto-${p}`, p === name);
+}
+function guessPlatform() {
+  const ua = navigator.userAgent;
+  return /Android/i.test(ua) ? "android" : /iPhone|iPad|Macintosh.*Mobile/i.test(ua) ? "apple" : /Windows/i.test(ua) ? "windows" : "android";
 }
 
 // Arrow keys move along a tab list, as in every other tab list.
-function wireTabs(listId, hashFor) {
+function wireTabs(listId, onPick) {
   const list = $(listId);
   list.addEventListener("click", (event) => {
     const button = event.target.closest("[role=tab]");
-    if (button) go(hashFor(button.dataset.tab));
+    if (button) onPick(button.dataset.tab);
   });
   list.addEventListener("keydown", (event) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
@@ -428,19 +504,33 @@ function wireTabs(listId, hashFor) {
   });
 }
 
-// The agent's place: docked on a wide screen, an overlay on a narrow one,
-// the Agent tab on a phone.
+// The sidebar slides in below laptop width.
+function setSide(open) {
+  if (!narrow.matches || phone.matches) open = false;
+  $("app").classList.toggle("side-open", open);
+  $("open-side").setAttribute("aria-expanded", open ? "true" : "false");
+  $("main").inert = open;
+  if (open) {
+    if (dockOpen()) setDock(false);
+    const current = $("sidebar").querySelector('[aria-current="page"]') || $("sidebar").querySelector("a");
+    current.focus();
+  }
+}
+function sideOpen() { return $("app").classList.contains("side-open"); }
+
+// The agent's place: a panel on a wide screen, over the page on a narrower
+// one, the Agent tab on a phone.
 function dockOpen() { return !$("app").classList.contains("dock-closed"); }
 function setDock(open, remember) {
-  if (state) requestAnimationFrame(() => paintBanner());
   $("app").classList.toggle("dock-closed", !open);
-  // On a tablet the dock covers the page: keep focus inside it.
+  // Over the page: keep focus inside the panel.
   const overlay = open && narrow.matches && !phone.matches;
-  for (const id of ["nav", "main", "banner"]) { const node = $(id); if (node) node.inert = overlay; }
-  $("toggle-dock").setAttribute("aria-expanded", open ? "true" : "false");
+  for (const id of ["sidebar", "main", "banner"]) { const node = $(id); if (node) node.inert = overlay; }
+  $("toggle-dock").setAttribute("aria-expanded", open && !phone.matches ? "true" : "false");
   if (remember && !narrow.matches) store.set("nb-dock", open ? null : "closed");
   if (open) markSeen();
   paintChatBadge();
+  if (state) requestAnimationFrame(() => paintBanner());
 }
 function placeChat() {
   const chatNode = $("chat");
@@ -481,18 +571,18 @@ function signedOut() {
 }
 
 // Setup: workloads, extras, graphics cards and disks.
-function tile(input, title, desc, why, cls) {
-  return make("label", {className: `tile ${cls || ""}`.trim()}, input, make("span", {className: "tile-box", ariaHidden: "true"}),
-    make("span", {className: "tile-text"},
-      make("span", {className: "tile-title", textContent: title}),
-      desc ? make("span", {className: "tile-desc", textContent: desc}) : null,
-      why ? make("span", {className: "tile-why", textContent: why}) : null));
+function option(input, title, desc, why, cls) {
+  return make("label", {className: `option ${cls || ""}`.trim()}, input,
+    make("span", {className: "option-text"},
+      make("span", {className: "option-title", textContent: title}),
+      desc ? make("span", {className: "option-desc", textContent: desc}) : null,
+      why ? make("span", {className: "option-why", textContent: why}) : null));
 }
 
 function renderWorkloads(st) {
   $("workload-tiles").replaceChildren(...st.workloads.map((name) => {
     const [title, help] = LABELS[name] || [name, ""];
-    return tile(make("input", {type: "checkbox", value: name, checked: st.choices.workloads.includes(name)}), title, help);
+    return option(make("input", {type: "checkbox", value: name, checked: st.choices.workloads.includes(name)}), title, help);
   }));
 }
 
@@ -524,11 +614,13 @@ function renderDisks(disks) {
     const box = make("fieldset", {className: "disk"});
     box.dataset.id = disk.id;
     const hours = disk.power_on_hours ? `, ${disk.power_on_hours} hours in use` : "";
-    const health = make("span", {className: `badge ${disk.health === "PASSED" ? "good" : disk.health === "FAILED" ? "bad" : ""}`, textContent: `Health ${disk.health}`});
-    box.append(make("legend", {}, make("span", {className: "disk-id", textContent: disk.id}),
-      make("span", {className: "muted", textContent: `${disk.size_gib} GiB ${disk.rotational ? "hard disk" : "SSD"}${hours}`}), health));
+    const healthKind = disk.health === "PASSED" ? "good" : disk.health === "FAILED" ? "bad" : "";
+    box.append(make("legend", {}, make("div", {className: "disk-head"},
+      make("span", {className: "disk-id", textContent: disk.id}),
+      make("span", {className: "meta", textContent: `${disk.size_gib} GiB ${disk.rotational ? "hard disk" : "SSD"}${hours}`}),
+      make("span", {className: "push"}, status(healthKind, `Health ${disk.health}`)))));
     if (disk.health === "FAILED") {
-      box.append(make("div", {className: "callout danger compact"}, icon("alert"), make("span", {textContent: "This disk reports that it is failing. Copy what you need off it soon."})));
+      box.append(make("div", {className: "problem"}, make("p", {textContent: "This disk reports that it is failing. Copy what you need off it soon."})));
     }
     const parts = make("ul", {className: "disk-parts"});
     for (const p of disk.partitions) {
@@ -538,33 +630,34 @@ function renderDisks(disks) {
     if (!disk.partitions.length) parts.append(li("No partitions."));
     box.append(parts);
     const keepable = disk.partitions.some((p) => p.keepable);
-    const choices = make("div", {className: "tile-list"});
+    const choices = make("div", {className: "options"});
     for (const value of Object.keys(CHOICES)) {
       if (value === "copy" && !disk.kept && disk.choice !== "copy") continue;
       const [text, desc, why] = diskChoice(disk, value, keepable);
       const input = make("input", {type: "radio", name: `disk-${disk.id}`, value, checked: disk.choice === value, disabled: Boolean(why)});
       input.dataset.role = "choice";
-      choices.append(tile(input, text, desc, why, ["erase", "copy"].includes(value) ? "danger-tile" : ""));
+      choices.append(option(input, text, desc, why, ["erase", "copy"].includes(value) ? "danger-option" : ""));
     }
     box.append(choices);
     const rwInput = make("input", {type: "checkbox", checked: disk.rw});
-    const rw = make("div", {className: "disk-sub disk-rw"},
-      tile(rwInput, "Let me change files on it (NTFS only)", "Shut Windows down fully on that disk first, with shutdown /s /t 0, or it stays read-only."));
-    const uses = make("div", {className: "disk-sub disk-for"}, make("span", {className: "field-label", textContent: "Then use it"}));
+    const rw = make("div", {className: "disk-sub disk-rw"}, make("div", {className: "options"},
+      option(rwInput, "Let me change files on it (NTFS only)", "Shut Windows down fully on that disk first, with shutdown /s /t 0, or it stays read-only.")));
+    const uses = make("div", {className: "options"});
     for (const [value, text, desc] of [["backups", "For the nightly backups", ""],
       ["storage", "As extra storage in Proxmox", "A copy made first moves onto it, checked again."]]) {
-      uses.append(tile(make("input", {type: "radio", name: `disk-for-${disk.id}`, value, checked: disk.for === value}), text, desc));
+      uses.append(option(make("input", {type: "radio", name: `disk-for-${disk.id}`, value, checked: disk.for === value}), text, desc));
     }
-    const confirm = make("label", {className: "field disk-confirm"},
-      make("span", {className: "field-label", textContent: `Type ${disk.confirm}, the end of its name, to erase everything on it`}),
-      make("input", {autocomplete: "off", spellcheck: false}));
-    box.append(rw, uses, confirm);
+    const usesBox = make("div", {className: "disk-sub disk-for"}, make("span", {className: "label", textContent: "Then use it"}), uses);
+    const confirm = make("div", {className: "disk-sub"}, make("label", {className: "field narrow disk-confirm"},
+      make("span", {className: "label", textContent: `Type ${disk.confirm}, the end of its name, to erase everything on it`}),
+      make("input", {autocomplete: "off", spellcheck: false})));
+    box.append(rw, usesBox, confirm);
     const sync = () => {
       const chosen = box.querySelector("input[data-role=choice]:checked");
       rw.hidden = !chosen || chosen.value !== "keep";
       const erasing = Boolean(chosen) && ["erase", "copy"].includes(chosen.value);
       const usedFor = uses.querySelector("input:checked").value;
-      uses.hidden = !erasing;
+      usesBox.hidden = !erasing;
       confirm.hidden = !erasing || (disk.choice === chosen.value && disk.for === usedFor);
     };
     box.addEventListener("change", sync);
@@ -582,7 +675,7 @@ function renderGpus(gpus) {
     const input = make("input", {type: "number", min: "1", max: "256", step: "1", inputMode: "numeric",
       value: gpu.vram_mib ? Math.round(gpu.vram_mib / 1024) : ""});
     input.dataset.pci = gpu.pci;
-    list.append(make("label", {className: "field narrow-field"}, make("span", {className: "field-label", textContent: `Memory of the ${gpu.name}, in GB`}), input));
+    list.append(make("label", {className: "field narrow"}, make("span", {className: "label", textContent: `Memory of the ${gpu.name}, in GB`}), input));
   }
 }
 
@@ -630,26 +723,27 @@ function renderChoices(st) {
 
 function onChoicesChanged() {
   const dirty = choicesDirty();
-  if (dirty) say("choices-result", "info", "Not saved yet.");
-  else if ($("choices-result").classList.contains("info")) say("choices-result", "", "");
+  if (!dirty && $("choices-result").classList.contains("info")) say("choices-result", "", "");
+  $("savebar").classList.toggle("dirty", dirty);
+  $("savebar-text").textContent = dirty ? "Unsaved changes" : "Saving makes a new plan. Nothing on the server changes until you run setup.";
+  show("choices-discard", dirty);
   $("plan-stale").hidden = !dirty || !state || !(state.plan.text || state.plan.errors.length);
   paintStates();
 }
-
-const SPEC = (iconName, label, value) => make("li", {}, icon(iconName), make("span", {}, make("small", {textContent: label}), value));
 
 function renderHardware(hw) {
   const list = $("hardware");
   list.hidden = !hw;
   $("probe-button").querySelector("span").textContent = hw ? "Read it again" : "Read the hardware";
-  $("probe-button").className = `btn ${hw ? "secondary" : "primary"}`;
+  $("probe-button").className = `btn ${hw ? "" : "primary"}`;
   if (!hw) return;
   const items = [];
-  if (hw.cpu || hw.threads) items.push(SPEC("chip", "Processor", `${hw.cpu || "CPU"}, ${hw.threads} threads`));
-  if (hw.memory_mib) items.push(SPEC("memory", "Memory", gib(hw.memory_mib)));
-  items.push(SPEC("gpu", "Graphics", hw.gpus.length ? hw.gpus.join(", ") : "No separate card"));
-  items.push(SPEC("disk", "Disks", `${hw.disks} disk${hw.disks === 1 ? "" : "s"}`));
-  if (hw.pve_version) items.push(SPEC("proxmox", "Proxmox VE", hw.pve_version));
+  const prop = (label, value) => items.push(make("div", {}, make("dt", {textContent: label}), make("dd", {textContent: value})));
+  if (hw.cpu || hw.threads) prop("Processor", `${hw.cpu || "CPU"}, ${hw.threads} threads`);
+  if (hw.memory_mib) prop("Memory", gib(hw.memory_mib));
+  prop("Graphics", hw.gpus.length ? hw.gpus.join(", ") : "No separate card");
+  prop("Disks", `${hw.disks} disk${hw.disks === 1 ? "" : "s"}`);
+  if (hw.pve_version) prop("Proxmox VE", hw.pve_version);
   list.replaceChildren(...items);
 }
 
@@ -675,7 +769,7 @@ function renderPlan(plan) {
           : "")
       : `${guests.length} guests.`;
     const bar = $("memory");
-    bar.parentElement.hidden = !m.host_mib;
+    $("memory-block").hidden = !m.host_mib;
     if (m.host_mib) {
       $("memory-total").textContent = `${gib(m.host_mib)} in all`;
       for (const [cls, v] of [["m-reserve", m.reserve_mib], ["m-guests", m.guests_mib], ["m-free", m.unallocated_mib]]) {
@@ -687,11 +781,11 @@ function renderPlan(plan) {
         make("li", {className: "k-free", textContent: `Free ${gib(m.unallocated_mib)}`}));
     }
     $("plan-guests").replaceChildren(...guests.map((g) => make("tr", {},
-      make("td", {textContent: g.name}),
+      make("td", {className: "name", textContent: g.name}),
       make("td", {textContent: (KINDS[g.kind] || g.kind) + (g.count ? ` of ${g.count}` : "")}),
-      make("td", {textContent: g.zone || ""}),
-      make("td", {className: "num-col", textContent: g.cores ?? ""}),
-      make("td", {className: "num-col", textContent: g.memory_mib ? gib(g.memory_mib) + (g.count ? " each" : "") : ""}))));
+      make("td", {className: "hide-phone muted", textContent: g.zone || ""}),
+      make("td", {className: "num", textContent: g.cores ?? ""}),
+      make("td", {className: "num", textContent: g.memory_mib ? gib(g.memory_mib) + (g.count ? " each" : "") : ""}))));
   }
   $("tailnet-policy").textContent = plan.tailnet_policy || "";
   show("tailnet-details", Boolean(plan.tailnet_policy));
@@ -702,35 +796,48 @@ function renderAlerts(alerts) {
   $("healthchecks-url").value = alerts ? alerts.healthchecks_url : "";
 }
 
+// What is firing, from monitoring.
+function renderFiring() {
+  const s = lastStatus;
+  const ok = s && s.monitoring === "ok";
+  const alerts = ok ? s.alerts : [];
+  show("firing-table", alerts.length > 0);
+  show("firing-empty", alerts.length === 0);
+  $("firing-empty").textContent = !s ? "Asking monitoring…"
+    : s.monitoring === "not planned" ? "Monitoring is not in your plan, so nothing can fire."
+    : !ok ? (built() ? "Monitoring does not answer. If setup is running or just finished, wait a minute." : "Alerts show here once setup has built monitoring.")
+    : "Nothing is firing.";
+  $("firing-meta").textContent = ok ? `${s.targets} systems watched` : "";
+  $("firing-rows").replaceChildren(...alerts.map((a) => make("tr", {},
+    make("td", {}, status(a.severity === "page" ? "bad" : "warn", a.severity === "page" ? "Page" : "Ticket")),
+    make("td", {className: "name", textContent: a.name}),
+    make("td", {className: "hide-phone", textContent: a.summary || ""}))));
+}
+
 // The agent's settings.
 function renderAgentSignin(st) {
   const kind = st.agent_credential;
   $("agent-label").textContent = kind ? "Replace it with a new API key or subscription token" : "API key or subscription token";
-  setBadge("signin-state", ...(kind ? [`${kind === "API key" ? "API key" : "Subscription"}`, "good"] : ["Not signed in", "warn"]));
-  setBadge("step-agent-state", ...(kind ? ["Done", "good"] : ["First", "agent"]));
-  show("setup-agent-form", !kind);
-  show("step-agent-done", Boolean(kind));
+  $("signin-state").replaceChildren(kind ? status("good", `Signed in with ${kind === "API key" ? "an API key" : "a subscription token"}`) : status("warn", "Not signed in"));
 }
 
 function renderMode(settings) {
-  for (const button of document.querySelectorAll("#modes .mode")) button.setAttribute("aria-pressed", button.dataset.mode === settings.mode ? "true" : "false");
+  for (const button of document.querySelectorAll("#modes .choice")) button.setAttribute("aria-pressed", button.dataset.mode === settings.mode ? "true" : "false");
   $("auto-fix").checked = settings.auto_fix;
-  setBadge("mode-state", MODE_NAMES[settings.mode], settings.mode === "yolo" ? "warn" : "agent");
   const pill = $("chat-mode");
-  pill.textContent = MODE_NAMES[settings.mode];
+  pill.firstChild.textContent = MODE_NAMES[settings.mode];
   pill.dataset.mode = settings.mode;
-  pill.title = `Access mode: ${MODE_NAMES[settings.mode]}. Change it under Agent, Settings.`;
-  pill.setAttribute("aria-label", `Access mode: ${MODE_NAMES[settings.mode]}, change`);
-  setBadge("home-mode", MODE_NAMES[settings.mode], settings.mode === "yolo" ? "warn" : "agent");
+  pill.title = `Access mode: ${MODE_NAMES[settings.mode]}. ${MODE_DESC[settings.mode]}`;
+  pill.setAttribute("aria-label", `Access mode: ${MODE_NAMES[settings.mode]}. Change`);
 }
 
 function renderAgentPowers(on) {
   $("agent-powers").setAttribute("aria-checked", on ? "true" : "false");
-  setBadge("powers-state", ...(on ? ["Root on", "bad"] : ["Off", ""]));
+  $("powers-state").replaceChildren(on ? status("bad", "On: the operator agent has root on Proxmox") : status("", "Off"));
 }
 
 function renderAgentGithub(login) {
-  setBadge("github-state", ...(login ? [login, "good"] : ["Optional", ""]));
+  $("github-state").replaceChildren(login ? status("good", `Saved, as ${login} on GitHub`) : status("", "Not set"));
   show("agent-github-remove", Boolean(login));
 }
 
@@ -745,7 +852,7 @@ function renderRemoteAgents(names, ready) {
     if (have.has(name)) continue;
     const result = make("p", {className: "feedback"});
     result.setAttribute("role", "status");
-    const revoke = make("button", {type: "button", className: "btn ghost small", textContent: "Revoke"});
+    const revoke = make("button", {type: "button", className: "btn small ghost", textContent: "Revoke"});
     revoke.setAttribute("aria-label", `Revoke ${name}`);
     revoke.addEventListener("click", () => press(revoke, result, `Revoking ${name}…`, async () => {
       const left = (await api("/api/remote-agents/revoke", {name})).remote_agents;
@@ -760,36 +867,42 @@ function renderRemoteAgents(names, ready) {
   }
 }
 
+let logEntries = [];
 async function loadAgentLog() {
   try {
-    const {entries} = await api("/api/agent-log");
-    const WORD = {run: "Ran", refused: "Blocked", approve: "You approved", decline: "You declined", "ask-owner": "Asked you", ask: "Asked you"};
-    const rows = entries.slice().reverse().map((e) => make("tr", {},
-      make("td", {textContent: clock(e.t)}),
-      make("td", {}, make("span", {textContent: `${WORD[e.action] || e.action}: `}),
-        e.command ? make("code", {textContent: `${e.where && e.where !== "host" ? `${e.where}: ` : ""}${e.command}`}) : make("span", {textContent: e.what || e.question || e.kind || ""})),
-      make("td", {textContent: e.by === "owner" ? "You" : "Agent"}),
-      make("td", {}, e.tier ? make("span", {className: `badge ${{read: "", change: "agent", risky: "warn", blocked: "bad"}[e.tier] || ""}`, textContent: e.tier}) : null)));
-    $("log-rows").replaceChildren(...(rows.length ? rows : [make("tr", {}, make("td", {colSpan: 4, className: "muted", textContent: "Nothing yet. Each action the agent takes shows here before it runs."}))]));
+    logEntries = (await api("/api/agent-log")).entries.slice().reverse();
+    paintAgentLog();
   } catch (error) {
-    $("log-rows").replaceChildren(make("tr", {}, make("td", {colSpan: 4, textContent: error.message})));
+    $("log-rows").replaceChildren(make("tr", {}, make("td", {colSpan: 5, textContent: error.message})));
   }
+}
+function paintAgentLog() {
+  const WORD = {run: "Ran", refused: "Blocked", approve: "Approved", decline: "Declined", "ask-owner": "Asked you", ask: "Asked you", notes: "Notes"};
+  const q = $("log-filter").value.trim().toLowerCase();
+  const what = (e) => `${e.where && e.where !== "host" ? `${e.where}: ` : ""}${e.command || e.what || e.question || e.kind || ""}`;
+  const rows = logEntries.filter((e) => !q || `${WORD[e.action] || e.action} ${what(e)} ${e.tier || ""}`.toLowerCase().includes(q)).map((e) => make("tr", {},
+    make("td", {className: "muted", textContent: clock(e.t)}),
+    make("td", {textContent: WORD[e.action] || e.action}),
+    make("td", {}, e.command ? make("code", {textContent: what(e)}) : make("span", {textContent: what(e)})),
+    make("td", {className: "hide-phone", textContent: e.by === "owner" ? "You" : "Agent"}),
+    make("td", {className: "hide-phone"}, e.tier ? make("span", {className: `tier ${e.tier}`, textContent: e.tier}) : null)));
+  const empty = q ? "Nothing matches the filter." : "Nothing yet. Each action the agent takes shows here before it runs.";
+  $("log-rows").replaceChildren(...(rows.length ? rows : [make("tr", {}, make("td", {colSpan: 5, className: "muted", textContent: empty}))]));
 }
 
 // Access.
 const LAN = {
-  open: ["Open", "", "Proxmox answers on your home network."],
-  closing: ["Confirm", "warn", "Closing: press Keep it closed on this page opened over Tailscale, or it opens again by itself."],
-  closed: ["Closed", "good", "Closed: Proxmox answers only over Tailscale."],
+  open: ["warn", "Open", "Proxmox's web UI and SSH answer on your home network."],
+  closing: ["warn", "Closing", "Press Keep it closed on this page opened over Tailscale, or it opens again by itself."],
+  closed: ["good", "Closed", "Proxmox answers only over Tailscale."],
 };
 
 function renderLan(lan) {
-  const [badge, kind, text] = LAN[lan.state];
+  const [kind, word, text] = LAN[lan.state];
   const extra = lan.state === "closing" && !lan.via_vpn ? " This page is not open over Tailscale right now." : "";
-  $("lan-status").replaceChildren(icon(lan.state === "open" ? "unlock" : "lock"), make("span", {textContent: text + extra}));
-  $("lan-status").className = `callout compact ${kind === "good" ? "success" : kind === "warn" ? "warn" : ""}`;
+  $("lan-state").replaceChildren(status(kind, word));
+  $("lan-status").textContent = text + extra;
   $("lan-minutes").textContent = lan.minutes;
-  setBadge("lan-state", badge, kind);
   show("lan-close", lan.state === "open");
   show("lan-keep", lan.state === "closing");
   show("lan-open", lan.state !== "open");
@@ -798,39 +911,42 @@ function renderLan(lan) {
 function renderTrust(trust) {
   const ready = Boolean(trust && trust.ready);
   show("trust-download", ready);
-  show("trust-wait", !ready);
-  $("trust-fingerprint").textContent = ready && trust.fingerprint ? `SHA-256 fingerprint: ${trust.fingerprint}` : "";
-  setBadge("trust-state", ...(ready ? ["Ready", "good"] : ["After setup", ""]));
+  show("trust-wait", false);
+  show("trust-props", ready && Boolean(trust.fingerprint));
+  $("trust-fingerprint").textContent = ready && trust.fingerprint ? trust.fingerprint : "";
+  $("trust-state").replaceChildren(ready ? status("good", "Ready to install") : status("", "Made by the first setup run"));
 }
 
-// The checklist on Home: what is needed, then what is recommended.
+// The setup guide: what is needed, then what is recommended. It sits on
+// Overview until the first setup run finishes, then behind the top bar's
+// ring until everything is done.
 function runningAction() { return job && job.view && job.view.state === "running" ? job.view.action : null; }
 
-function checklist(st) {
+function guideItems(st) {
   const apply = st.last_jobs.apply;
   const running = runningAction();
   const hw = st.hardware;
   const signed = st.chat && st.chat.signed_in;
   const items = [
-    ["setup/agent", "Sign in your agent", signed ? ["done", "It helps from here on."] : ["todo", "It reads the hardware and fixes what breaks."]],
+    ["agent/settings", "Sign in the agent", signed ? ["done", "It helps from here on."] : ["todo", "It reads the hardware for you and fixes what breaks."]],
     ["setup/hardware", "Read the hardware",
       running === "probe" ? ["running", "Reading…"]
-        : st.probed ? ["done", hw ? `${hw.cpu || "CPU"}${hw.memory_mib ? `, ${gib(hw.memory_mib)}` : ""}` : "Done"] : ["todo", "CPU, memory, disks and graphics."]],
+        : st.probed ? ["done", hw ? `${hw.cpu || "CPU"}${hw.memory_mib ? `, ${gib(hw.memory_mib)}` : ""}` : "Done."] : ["todo", "Processor, memory, disks and graphics. Changes nothing."]],
     ["setup/choices", "Choose what to run",
-      choicesDirty() ? ["attention", "Changed but not saved."] : st.choices.owner_login ? ["done", "Saved."] : ["todo", "Workloads, disks, your Tailscale login."]],
+      choicesDirty() ? ["attention", "Changed but not saved."] : st.choices.owner_login ? ["done", "Saved."] : ["todo", "Workloads, disks and your Tailscale login."]],
     ["setup/plan", "Check that it fits",
       st.plan.errors.length ? ["attention", "The plan does not fit yet."] : st.plan.text ? ["done", "The plan fits."] : ["todo", "Once the choices are saved."]],
   ];
   const removals = st.removals || [];
   if (removals.length) items.push(["setup/build", "Keep or delete guests", ["attention", `Setup stopped before deleting ${andList(removals)}.`]]);
   items.push(["setup/build", "Run setup",
-    ["apply", "rebake-ci", "remove-guests"].includes(running) ? ["running", "Running now."]
-      : !apply ? ["todo", "Builds everything in the plan."]
-      : apply.state === "done" ? (st.config_changed ? ["attention", "Choices changed since; run it again."] : ["done", `Finished ${ago(apply.started)}.`])
+    SETUP_RUNS.has(running) ? ["running", "Running now."]
+      : !apply ? ["todo", "Builds everything in the plan, in about 20 minutes."]
+      : built() && apply.state === "done" ? (st.config_changed ? ["attention", "Choices changed since; run it again."] : ["done", `Finished ${ago(apply.started)}.`])
       : apply.state === "running" ? ["running", "Running now."] : ["attention", "Stopped. Activity says why."]]);
   const needed = items.length;
-  items.push(["alerts", "Alerts on your phone",
-    st.alerts && st.alerts.healthchecks_url ? ["done", "ntfy and Healthchecks.io set."] : ["todo", "Subscribe to your ntfy topic."]]);
+  items.push(["alerts", "Get alerts on your phone",
+    st.alerts && st.alerts.healthchecks_url ? ["done", "ntfy and Healthchecks.io are set."] : ["todo", "Subscribe to your ntfy topic."]]);
   const joined = st.lan.via_vpn || st.lan.state === "closed";
   items.push(["access/tailscale", "Reach it over Tailscale",
     joined ? ["done", "This page answers over Tailscale."]
@@ -839,59 +955,90 @@ function checklist(st) {
   items.push(["access/lan", "Close Proxmox to the home network",
     st.lan.state === "closed" ? ["done", "Only over Tailscale."]
       : st.lan.state === "closing" ? ["attention", `Confirm within ${st.lan.minutes} minutes.`] : ["todo", "After Tailscale works."]]);
-  items.push(["access/trust", "Trust it, install the app",
-    st.trust && st.trust.ready ? ["todo", "Install the root certificate."] : ["todo", "After setup makes the certificate."]]);
-  return items.map(([href, title, [kind, sub]], i) => ({href, title, kind, sub, recommended: i >= needed}));
+  items.push(["access/trust", "Trust this server on your devices",
+    store.get("nb-trusted") === "1" ? ["done", "Root certificate installed."]
+      : st.trust && st.trust.ready ? ["todo", "Install the root certificate."] : ["todo", "After setup makes the certificate."]]);
+  return items.map(([href, title, [kind, sub]], i) => ({href, title, kind, sub, later: i >= needed}));
 }
 
-function renderChecklist(items) {
+function guideList(items) {
   const current = items.find((i) => i.kind !== "done");
-  $("checklist").replaceChildren(...items.map((item) => make("li", {className: `${item.kind}${item === current ? " current" : ""}`},
-    make("a", {href: `#${item.href}`},
-      make("span", {className: "check-mark", ariaHidden: "true"}, item.kind === "done" ? icon("check") : item.kind === "attention" ? icon("alert") : null),
-      make("span", {className: "check-title", textContent: item.title}),
-      make("span", {className: "sr-only", textContent: `: ${{done: "done", attention: "needs you", running: "running", todo: "to do"}[item.kind]}. `}),
-      make("span", {className: "check-sub", textContent: item.sub}),
-      make("span", {className: "check-tag"}, item.recommended && item.kind !== "done" ? make("span", {className: "badge", textContent: "Later"}) : null)))));
-  const done = items.filter((i) => i.kind === "done").length;
-  $("progress-meter").style.width = `${Math.round((100 * done) / items.length)}%`;
-  setBadge("progress-count", `${done} of ${items.length}`, done === items.length ? "good" : "");
+  return items.map((item, i) => {
+    const mark = make("span", {className: "step-mark", ariaHidden: "true"},
+      item.kind === "done" ? icon("check") : item.kind === "attention" ? "!" : item.kind === "running" ? "" : String(i + 1));
+    const word = {done: "done", attention: "needs you", running: "running", todo: "to do"}[item.kind];
+    const go = item === current ? make("span", {className: "go"}, item.kind === "attention" ? "Fix" : "Start", icon("chevron-right"))
+      : item.later && item.kind !== "done" ? make("span", {className: "later", textContent: "Recommended"}) : null;
+    return make("li", {className: `${item.kind}${item === current ? " current" : ""}`},
+      make("a", {href: `#${item.href}`}, mark,
+        make("span", {className: "step-text"}, make("span", {className: "step-title", textContent: item.title}),
+          make("span", {className: "sr-only", textContent: `, ${word}. `}),
+          make("span", {className: "step-sub", textContent: item.sub})),
+        go));
+  });
 }
 
-// Each badge, the nav, the checklist and the banner, from state and the run.
+function renderGuide(items) {
+  const done = items.filter((i) => i.kind === "done").length;
+  const text = `${done} of ${items.length} done`;
+  const inline = !built();
+  show("guide-inline", inline);
+  if (inline) {
+    $("guide-list").replaceChildren(...guideList(items));
+    $("guide-progress").textContent = text;
+    show("guide-agent", Boolean(state.chat && state.chat.signed_in));
+  }
+  const left = items.length - done;
+  const ring = $("guide-btn");
+  ring.hidden = left === 0 || (inline && currentView === "overview");
+  ring.querySelector(".ring-fill").style.strokeDashoffset = `${50.27 * (1 - done / items.length)}`;
+  ring.title = `Setup guide: ${text}`;
+  $("guide-count").textContent = `, ${text}`;
+  if ($("guide").open) {
+    $("guide-pop-list").replaceChildren(...guideList(items));
+    $("guide-pop-progress").textContent = text;
+  }
+}
+
+// Each count, the guide, the overview and the banner, from state and the run.
 function paintStates() {
   if (!state) return;
   const st = state;
   const running = runningAction();
-  const items = checklist(st);
-  renderChecklist(items);
+  const items = guideItems(st);
+  renderGuide(items);
   for (const a of document.querySelectorAll("#stepper a")) {
     const s = a.dataset.step;
-    a.classList.toggle("done", stepDone(s));
+    const attention = (s === "plan" && st.plan.errors.length > 0) || (s === "choices" && choicesDirty()) || (s === "build" && ((st.removals || []).length > 0 || Boolean(st.config_changed)));
+    a.classList.toggle("done", stepDone(s) && !attention);
+    a.classList.toggle("attention", attention);
     let note = a.querySelector(".step-state");
     if (!note) { note = make("span", {className: "sr-only step-state"}); a.append(note); }
-    a.classList.toggle("attention", (s === "plan" && st.plan.errors.length > 0) || (s === "choices" && choicesDirty()) || (s === "build" && (st.removals || []).length > 0));
-    note.textContent = a.classList.contains("attention") ? ", needs you" : a.classList.contains("done") ? ", done" : "";
+    note.textContent = attention ? ", needs you" : stepDone(s) ? ", done" : "";
   }
-  setBadge("hardware-state", ...(running === "probe" ? ["Reading", "run"] : st.probed ? ["Done", "good"] : ["To do", ""]));
-  setBadge("choices-state", ...(choicesDirty() ? ["Not saved", "warn"] : st.choices.owner_login ? ["Saved", "good"] : ["To do", ""]));
-  setBadge("plan-state", ...(st.plan.errors.length ? ["Does not fit", "bad"] : st.plan.text ? ["Fits", "good"] : ["Waiting", ""]));
-  const setupLeft = STEPS.slice(1, 4).filter((s) => !stepDone(s)).length;
-  setNav("setup", setupLeft ? `${setupLeft}` : "", "warn");
-  setNav("access", st.lan.state === "closing" ? "!" : "", "warn");
-  setNav("activity", running ? "•" : st.last_jobs.apply && st.last_jobs.apply.state === "failed" ? "!" : "", running ? "run" : "bad");
-  const alerts = lastStatus && lastStatus.monitoring === "ok" ? lastStatus.alerts.length : 0;
-  setNav("home", alerts ? String(alerts) : "", "bad");
-  setBadge("hc-state", ...(st.alerts && st.alerts.healthchecks_url ? ["Set", "good"] : ["Optional", ""]));
+  $("hardware-state").replaceChildren(running === "probe" ? status("run", "Reading") : st.probed ? status("good", "Read") : status("", "Not read yet"));
+  $("choices-state").replaceChildren(choicesDirty() ? status("warn", "Not saved") : st.choices.owner_login ? status("good", "Saved") : status("", "Not saved yet"));
+  $("plan-state").replaceChildren(st.plan.errors.length ? status("bad", "Does not fit") : st.plan.text ? status("good", "Fits") : status("", "No plan yet"));
+  const setupLeft = STEPS.slice(0, 3).filter((s) => !stepDone(s)).length;
+  setNav("setup", setupLeft ? `${setupLeft}` : "", "", setupLeft ? `${setupLeft} steps left` : "");
+  setNav("access", st.lan.state === "closing" ? "!" : "", "warn", "needs you");
+  const failed = !running && st.last_jobs.apply && st.last_jobs.apply.state === "failed";
+  setNav("activity", running ? "1" : failed ? "!" : "", running ? "run" : "bad", running ? "a run is going" : failed ? "the last setup run stopped" : "");
+  const firing = lastStatus && lastStatus.monitoring === "ok" ? lastStatus.alerts.length : 0;
+  setNav("alerts", firing ? String(firing) : "", "bad", firing ? `${firing} firing` : "");
   const ts = items.find((i) => i.href === "access/tailscale");
-  setBadge("tailscale-state", ...(ts.kind === "done" ? ["Connected", "good"] : st.tailscale_key ? ["Run setup", "warn"] : st.tailscale_client ? ["Client saved", ""] : ["Optional", ""]));
+  $("tailscale-state").replaceChildren(ts.kind === "done" ? status("good", "Connected") : st.tailscale_key ? status("warn", "Auth key saved: run setup")
+    : st.tailscale_client ? status("", "Client saved; add an auth key") : status("", "Not set up"));
   $("ts-dot-client").classList.toggle("done", st.tailscale_client);
   $("ts-dot-key").classList.toggle("done", ts.kind === "done");
   show("tailscale-client-saved", st.tailscale_client);
   show("vpn-saved", st.tailscale_key);
   show("pending-dot", Boolean(st.config_changed || st.tailscale_key));
+  $("run-setup").title = st.config_changed ? "Run setup: your saved choices are not built yet" : st.tailscale_key ? "Run setup: an auth key waits" : "Run setup";
   renderReady();
-  paintHero();
+  renderOverview(items);
+  renderRuns();
+  renderFiring();
   paintBanner();
   paintChips();
 }
@@ -906,9 +1053,9 @@ function renderReady() {
   if (state.plan.errors.length) ok(false, "The plan does not fit yet.", "#setup/plan");
   else if (state.plan.text) ok(true, "The plan fits.");
   else ok(false, "Save your choices to make a plan.", "#setup/choices");
-  if (!(state.chat && state.chat.signed_in)) ok(false, "No agent yet: setup runs, but nobody looks into a failure for you.", "#setup/agent");
+  if (!(state.chat && state.chat.signed_in)) ok(false, "No agent yet: setup runs, but nobody looks into a failure for you.", "#agent/settings");
   if (!state.tailscale_client) ok(false, "No Tailscale client: setup runs, but the server stays off Tailscale.", "#access/tailscale");
-  if (state.config_changed) ok(false, "Choices changed since the last setup run; run it so the server follows.");
+  if (state.config_changed) ok(false, "Your choices changed since the last setup run; run it so the server follows.");
   $("ready-list").replaceChildren(...items);
   const removals = state.removals || [];
   show("removals", removals.length > 0);
@@ -916,107 +1063,115 @@ function renderReady() {
   $("removals-disks").textContent = removals.length > 1 ? "their disks" : "its disk";
 }
 
-// Home: health from monitoring once built, setup progress before.
-function stat(label, value, sub, dot, href) {
-  const body = [make("span", {className: "overline", textContent: label}),
-    make("span", {className: "stat-value"}, dot ? make("span", {className: `dot ${dot}`, ariaHidden: "true"}) : null, value),
-    sub ? make("span", {className: "stat-sub", textContent: sub}) : null];
-  return make("li", {className: "stat"}, ...(href ? [make("a", {href, className: "stat-link"}, ...body)] : body));
-}
-
-// Each state of the hero has one main thing to do.
-function heroActions() {
+// Overview: what needs the owner, health, services and recent runs.
+function attentionItems() {
   const out = [];
   const signed = Boolean(state.chat && state.chat.signed_in);
-  const running = runningAction();
-  const failed = job && job.view && job.view.state === "failed" && job.view.action === "apply";
-  const button = (label, kind, run, href) => {
-    const node = href ? make("a", {className: `btn ${kind}`, href, textContent: label}) : make("button", {type: "button", className: `btn ${kind}`, textContent: label});
-    if (run) node.addEventListener("click", run);
-    return node;
+  const add = (kind, title, sub, actions) => out.push({kind, title, sub, actions});
+  const link = (text, href) => make("a", {className: "btn small", href, textContent: text});
+  const ask = (text, prompt) => {
+    const b = make("button", {type: "button", className: "btn small", textContent: text});
+    b.addEventListener("click", () => askAgent(prompt));
+    return b;
   };
-  if (running) out.push(button("Follow the run", "secondary", null, "#activity"));
-  else if (failed && signed) out.push(button("Ask the agent to fix it", "primary", () => askAgent(`The setup run ${job.view.id} stopped. Find out why and propose the fix.`)), button("Open the run", "ghost", null, "#activity"));
-  else if (failed) out.push(button("Open the run", "primary", null, "#activity"), button("Sign in the agent", "ghost", null, "#setup/agent"));
-  else if (!built() && !signed) out.push(button("Sign in the agent", "primary", null, "#setup/agent"), button(`Go to ${defaultStep() === "agent" ? "hardware" : defaultStep()}`, "ghost", null, `#setup/${defaultStep() === "agent" ? "hardware" : defaultStep()}`));
-  else if (!built()) out.push(button("Let the agent set it up", "primary", () => askAgent("Set this server up with me: read the hardware, suggest what it should run in a few lines, make the plan fit, then start setup. Ask me where the choice is mine, and fix what breaks.")), button("Continue setup", "ghost", null, `#setup/${defaultStep()}`));
-  else if (lastStatus && (lastStatus.alerts.length || lastStatus.down.length) && signed) out.push(button("Ask the agent what is wrong", "primary", () => askAgent("Look at the firing alerts and the systems that do not answer, find the cause and propose the fix.")));
+  const pending = chat.pending.length;
+  if (pending) {
+    const card = latestRequest();
+    const b = make("button", {type: "button", className: "btn small primary", textContent: "Review"});
+    b.addEventListener("click", () => showRequest());
+    add("warn", pending > 1 ? `The agent waits for your OK on ${pending} requests` : "The agent waits for your OK",
+      card ? card.querySelector(".card-title").textContent : "", [b]);
+  }
+  const apply = state.last_jobs.apply;
+  if (apply && apply.state === "failed" && !runningAction()) {
+    const view = job && job.id === apply.id ? job.view : null;
+    const e = view && view.progress.error;
+    add("bad", e && e.stage_text ? `Setup stopped at "${e.stage_text}"` : "The last setup run stopped", e ? e.message : "",
+      [link("Open the run", `#activity/${apply.id}`), signed ? ask("Ask the agent", `The setup run ${apply.id} stopped. Find out why and propose the fix.`) : null].filter(Boolean));
+  }
+  if ((state.removals || []).length) add("bad", `Setup stopped before deleting ${andList(state.removals)}`, "Keep them or confirm the deletion.", [link("Decide", "#setup/build")]);
+  const s = lastStatus;
+  if (s && s.monitoring === "ok") {
+    for (const a of s.alerts) add(a.severity === "page" ? "bad" : "warn", a.summary || a.name, a.name, [link("Alerts", "#alerts")]);
+    if (s.down.length) add("bad", `${s.down.length} system${s.down.length > 1 ? "s do" : " does"} not answer`, s.down.join(", "),
+      signed ? [ask("Ask the agent", "Look at the systems that do not answer, find the cause and propose the fix.")] : []);
+    if (s.reboot_waiting.length) add("warn", "A restart would finish installed updates", s.reboot_waiting.join(", "), []);
+  } else if (s && built() && s.monitoring !== "not planned" && !SETUP_RUNS.has(runningAction())) {
+    add("warn", "Monitoring does not answer", "If setup just finished, wait a minute.", signed ? [ask("Ask the agent", "Monitoring does not answer. Find out why.")] : []);
+  }
+  if (built() && state.config_changed && !SETUP_RUNS.has(runningAction())) {
+    const b = make("button", {type: "button", className: "btn small", textContent: "Run setup"});
+    const fb = make("p", {className: "feedback"});
+    b.addEventListener("click", () => startJob("apply", b, fb));
+    add("warn", "Your saved choices are not built yet", "Run setup so the server follows them.", [fb, b]);
+  }
+  if (state.agent_powers) add("warn", "The operator agent has root on Proxmox", "The checks warn while this is on.", [link("Agent settings", "#agent/settings")]);
   return out;
 }
 
-function paintHero() {
+function renderOverview(items) {
+  const st = state;
+  const hw = st.hardware;
+  const install = st.install || {};
+  $("host-line").textContent = [install.node, install.host].filter(Boolean).join(" · ");
+  $("overview-sub").textContent = hw ? [`${hw.cpu || "CPU"}, ${hw.threads} threads`, hw.memory_mib ? gib(hw.memory_mib) : "", hw.pve_version ? `Proxmox VE ${hw.pve_version}` : ""].filter(Boolean).join(" · ")
+    : install.host ? `Proxmox at ${install.host}. Read the hardware to begin.` : "";
+  // Needs attention.
+  const att = attentionItems();
+  show("attention", att.length > 0);
+  $("attention-list").replaceChildren(...att.map((a) => make("li", {},
+    make("span", {className: `dot ${a.kind}`, ariaHidden: "true"}),
+    make("span", {className: "row-text"}, make("span", {className: "row-title", textContent: a.title}),
+      make("span", {className: "sr-only", textContent: a.kind === "bad" ? " (problem)" : " (warning)"}),
+      a.sub ? make("span", {className: "row-sub", textContent: ` ${a.sub}`}) : null),
+    make("span", {className: "row"}, ...a.actions))));
+  // Health, once something is built.
   const s = lastStatus;
-  $("hero-actions").replaceChildren(...heroActions());
-  const failedRun = job && job.view && job.view.state === "failed" && job.view.action === "apply" && !built();
-  const setIcon = (kind, name) => { $("hero-icon").dataset.state = kind; $("hero-icon").replaceChildren(icon(name)); };
-  const alerts = $("hero-alerts");
-  alerts.replaceChildren();
-  const running = runningAction();
-  if (!built()) {
-    const left = STEPS.filter((x) => !stepDone(x)).length;
-    $("hero-over").textContent = "Setup";
-    const stage = failedRun && job.view.progress && job.view.progress.error ? job.view.progress.error.stage_text || job.view.progress.error.stage : "";
-    $("hero-title").textContent = running ? `${JOB_NAMES[running] || "A run"} is running` : failedRun ? "Setup stopped" : left ? `${left} step${left > 1 ? "s" : ""} to a running server` : "Ready to build";
-    const next = defaultStep();
-    $("hero-sub").textContent = running ? "The bar at the top follows it." : failedRun ? [stage, (job.view.progress && job.view.progress.error && job.view.progress.error.message) || ""].filter(Boolean).join(": ") : {
-      agent: "Start by signing in your agent: it guides you and fixes what breaks.",
-      hardware: "Next: read the hardware. It changes nothing.",
-      choices: "Next: choose what the server runs.",
-      plan: "Next: make the plan fit this machine.",
-      build: "Press Run setup. The first run takes a while.",
-    }[next];
-    setIcon(running ? "run" : failedRun ? "bad" : "idle", running ? "activity" : failedRun ? "alert" : "setup");
-  } else if (!s) {
-    $("hero-over").textContent = "Server";
-    $("hero-title").textContent = "Checking…";
-    $("hero-sub").textContent = "";
-    setIcon("idle", "circle");
-  } else if (s.monitoring === "not planned") {
-    $("hero-over").textContent = "Server";
-    $("hero-title").textContent = "Built";
-    $("hero-sub").textContent = "Health shows here with monitoring, which your choices leave out.";
-    setIcon("good", "check");
-  } else if (s.monitoring !== "ok") {
-    $("hero-over").textContent = "Server";
-    $("hero-title").textContent = "Monitoring does not answer";
-    $("hero-sub").textContent = "If setup is running or just finished, wait a minute. Or ask the agent.";
-    setIcon("warn", "alert");
-  } else {
-    const n = s.alerts.length;
-    $("hero-over").textContent = "Server";
-    if (n) {
-      $("hero-title").textContent = `${n} alert${n > 1 ? "s" : ""} firing`;
-      setIcon(s.alerts.some((a) => a.severity === "page") ? "bad" : "warn", "alert");
-    } else if (s.down.length) {
-      $("hero-title").textContent = `${s.down.length} system${s.down.length > 1 ? "s" : ""} not answering`;
-      setIcon("warn", "alert");
+  show("health", built());
+  if (built()) {
+    const stats = [];
+    const cell = (label, value, kind, sub, href) => {
+      const inner = make("span", {className: "status-val"}, kind !== null ? make("span", {className: `dot ${kind}`, ariaHidden: "true"}) : null, value);
+      stats.push(make("div", {}, make("dt", {textContent: label}),
+        make("dd", {}, href ? make("a", {href}, inner) : inner), sub ? make("dd", {className: "sub", textContent: sub, title: sub}) : null));
+    };
+    if (s && s.monitoring === "ok") {
+      cell("Systems", `${s.targets - s.down.length} of ${s.targets} answer`, s.down.length ? "bad" : "good", s.down.length ? `Down: ${s.down.join(", ")}` : "");
+      cell("Alerts", s.alerts.length ? `${s.alerts.length} firing` : "None firing", s.alerts.length ? (s.alerts.some((a) => a.severity === "page") ? "bad" : "warn") : "good", "", "#alerts");
+      cell("Security updates", s.security_waiting.length ? `${s.security_waiting.length} waiting` : "Up to date", s.security_waiting.length ? "warn" : "good",
+        s.security_waiting.length ? s.security_waiting.join(", ") : "Installed nightly");
     } else {
-      $("hero-title").textContent = "All clear";
-      setIcon("good", "check");
+      cell("Monitoring", !s ? "Asking…" : s.monitoring === "not planned" ? "Not planned" : "Not answering", !s ? "" : s.monitoring === "not planned" ? "" : "warn", "");
     }
-    $("hero-sub").textContent = n || s.down.length ? "Your phone gets these as alerts too." : "Every system answers and no alert is firing.";
-    alerts.replaceChildren(...s.alerts.slice(0, 4).map((a) => make("li", {className: a.severity === "page" ? "page" : ""}, icon("alert"), make("span", {textContent: a.summary || a.name}))));
+    const lan = st.lan.state;
+    cell("Home network", lan === "closed" ? "Closed" : lan === "closing" ? "Closing" : "Open", lan === "closed" ? "good" : "warn",
+      lan === "closed" ? "Proxmox only over Tailscale" : "Proxmox answers on your LAN", "#access/lan");
+    const verify = st.last_jobs.verify;
+    cell("Checks", !verify ? "Not run" : verify.state === "done" ? "Passed" : verify.state === "running" ? "Running" : "Failed",
+      !verify ? "" : verify.state === "done" ? "good" : verify.state === "running" ? "run" : "bad", verify ? ago(verify.started) : "", verify ? `#activity/${verify.id}` : null);
+    $("stats").replaceChildren(...stats);
+    $("health-meta").textContent = s && s.monitoring === "ok" ? "From Prometheus, every 30 s" : "";
   }
-  const stats = [];
-  if (s && s.monitoring === "ok") {
-    stats.push(stat("Answering", `${s.targets - s.down.length} of ${s.targets}`, s.down.length ? `Down: ${s.down.join(", ")}` : "All systems", s.down.length ? "bad" : "good"));
-    stats.push(stat("Security updates", s.security_waiting.length ? `${s.security_waiting.length} waiting` : "Up to date",
-      s.security_waiting.length ? s.security_waiting.join(", ") : "Installed nightly", s.security_waiting.length ? "warn" : "good"));
-    if (s.reboot_waiting.length) stats.push(stat("Reboot needed", `${s.reboot_waiting.length}`, s.reboot_waiting.join(", "), "warn"));
-  }
-  const apply = state.last_jobs.apply;
-  stats.push(stat("Last setup", !apply ? "Not run" : apply.state === "done" ? "Finished" : apply.state === "running" ? "Running" : "Stopped",
-    apply ? ago(apply.started) : "", !apply ? "" : apply.state === "done" ? "good" : apply.state === "running" ? "" : "bad", "#activity"));
-  const lan = state.lan.state;
-  stats.push(stat("Home network", lan === "closed" ? "Closed" : lan === "closing" ? "Closing" : "Open",
-    lan === "closed" ? "Proxmox only over Tailscale" : "Proxmox answers on your LAN", lan === "closed" ? "good" : "warn", "#access/lan"));
-  if (state.agent_powers) stats.push(stat("Operator agent", "Root on", "Proxmox", "bad", "#agent/settings"));
-  $("stats").replaceChildren(...stats);
+  // Services and recent runs.
+  const services = (st.services && st.services.items) || [];
+  show("ov-services", services.length > 0 && built());
+  $("ov-services-rows").replaceChildren(...services.slice(0, 6).map((sv) => {
+    const [kind, word] = serviceState(sv.watch);
+    const address = sv.url || (sv.addresses || [])[0] || "";
+    return make("tr", {},
+      make("td", {className: "name"}, make("a", {href: "#services", textContent: sv.title})),
+      make("td", {}, status(kind, word)),
+      make("td", {className: "hide-phone mono", textContent: address.replace(/^[A-Z][^:]{0,40}: /, "")}),
+      make("td", {className: "actions"}, openLink(sv)));
+  }));
+  const runs = st.runs || [];
+  show("ov-runs", runs.length > 0);
+  $("ov-runs-rows").replaceChildren(...runs.slice(0, 5).map(runRow));
 }
 
-// One line across the top for what needs the owner now.
+// One line across the top for what cannot wait.
 function paintBanner() {
-  const pending = chat.pending.length;
+  if (!state) return;
   let text = "";
   let href = "";
   let label = "Open";
@@ -1024,22 +1179,16 @@ function paintBanner() {
     text = state.lan.via_vpn ? `Press Keep it closed within ${state.lan.minutes} minutes, or the home network opens again by itself.`
       : `Open this page over Tailscale and press Keep it closed within ${state.lan.minutes} minutes.`;
     href = "#access/lan";
-  } else if (pending && !chatVisible()) {
-    text = pending > 1 ? `The agent waits for your OK on ${pending} requests.` : "The agent waits for your OK.";
+  } else if (chat.pending.length && !chatVisible() && currentView !== "overview") {
+    text = chat.pending.length > 1 ? `The agent waits for your OK on ${chat.pending.length} requests.` : "The agent waits for your OK.";
     href = "#agent/chat";
-    label = "Show";
-  } else if ((state.removals || []).length) {
-    text = `Setup stopped before deleting ${andList(state.removals)}.`;
-    href = "#setup/build";
+    label = "Review";
   }
   show("banner", Boolean(text));
   $("banner-text").textContent = text;
-  $("banner-link").href = href || "#home";
+  $("banner-link").href = href || "#overview";
   $("banner-link").textContent = label;
   $("banner-link").dataset.request = href === "#agent/chat" ? "1" : "";
-  // Asking from Home only when the agent is signed in and not already beside it.
-  const signed = Boolean(state.chat && state.chat.signed_in);
-  show("home-ask-panel", signed && (phone.matches || !dockOpen()));
 }
 
 // Services.
@@ -1135,87 +1284,105 @@ function copyButton(label, get, feedback) {
   return button;
 }
 
-function kvRow(label, value, ...buttons) {
-  return make("div", {className: "kv-row"}, make("dt", {textContent: label}), make("dd", {}, value, ...buttons));
-}
-
 function serviceState(watch) {
   const ok = lastStatus && lastStatus.monitoring === "ok";
-  if (!watch || !ok) return ["", ""];
+  if (!built()) return ["", "Not built yet"];
+  if (!watch) return ["", "No status"];
+  if (!ok) return ["", lastStatus ? "No status" : "Asking…"];
   if (lastStatus.answering.includes(watch)) return ["good", "Running"];
   if (lastStatus.down.includes(watch)) return ["bad", "Not answering"];
-  return ["", ""];
+  return ["", "No status"];
+}
+
+function openLink(s) {
+  if (!s.url || !built()) return null;
+  return make("a", {className: "btn small", href: s.url, target: "_blank", rel: "noopener noreferrer"},
+    "Open", make("span", {className: "sr-only", textContent: ` ${s.title} in a new tab`}), icon("external"));
+}
+
+function serviceDetail(s, feedback) {
+  const rows = [];
+  const kv = (label, value, ...buttons) => rows.push(make("dt", {textContent: label}), make("dd", {}, value, ...buttons));
+  if (s.url) kv("Address", make("code", {textContent: s.url}), copyButton(`Copy ${s.title} address`, () => s.url, feedback));
+  for (const a of s.addresses || []) {
+    const m = /^([A-Z][^:]{0,40}): (.+)$/.exec(a);
+    const [label, value] = m ? [m[1], m[2]] : ["Address", a];
+    kv(label, make("code", {textContent: value}), copyButton(`Copy ${s.title}: ${label.toLowerCase()}`, () => value, feedback));
+  }
+  if (s.user) kv("User", make("code", {textContent: s.user}), copyButton(`Copy ${s.title} user`, () => s.user, feedback));
+  if (s.password) {
+    const word = s.password === "model-gateway" ? "key" : "password";
+    const value = make("code", {className: "masked", textContent: "••••••••••"});
+    value.id = `secret-${s.name}`;
+    const reveal = make("button", {type: "button", className: "icon-btn", title: `Show ${word}`, ariaLabel: `Show ${s.title} ${word}`}, icon("eye"));
+    reveal.setAttribute("aria-pressed", "false");
+    reveal.setAttribute("aria-controls", value.id);
+    reveal.addEventListener("click", () => press(reveal, feedback, "Fetching…", async () => {
+      const shown = reveal.getAttribute("aria-pressed") === "true";
+      value.textContent = shown ? "••••••••••" : await secret(s.password);
+      value.className = shown ? "masked" : "";
+      reveal.setAttribute("aria-pressed", shown ? "false" : "true");
+      reveal.replaceChildren(icon(shown ? "eye" : "eye-off"));
+      reveal.title = shown ? `Show ${word}` : `Hide ${word}`;
+      announce(shown ? "Hidden." : "Shown.");
+      return "";
+    }));
+    kv(word === "key" ? "API key" : "Password", value, reveal, copyButton(`Copy ${s.title} ${word}`, () => secret(s.password), feedback));
+  }
+  return [
+    s.what ? make("p", {className: "svc-note", textContent: s.what, style: "margin-top:0;margin-bottom:10px"}) : null,
+    rows.length ? make("dl", {className: "kv"}, ...rows) : null,
+    s.password_note ? make("p", {className: "svc-note", textContent: s.password_note}) : null,
+    s.how ? make("p", {className: "svc-note", textContent: s.how}) : null,
+    feedback,
+  ];
 }
 
 function renderServices(st) {
   const services = st.services || {items: [], background: []};
-  show("services-empty", services.items.length === 0);
-  show("services-unbuilt", services.items.length > 0 && !built());
-  $("service-list").replaceChildren(...services.items.map((s) => {
+  const items = services.items;
+  show("services-empty", items.length === 0);
+  show("services-table", items.length > 0);
+  show("services-unbuilt", items.length > 0 && !built());
+  const rows = [];
+  for (const s of items) {
+    const detailId = `svc-detail-${s.name}`;
+    const open = expanded.has(s.name);
+    const toggle = make("button", {type: "button", className: "icon-btn expand", title: "Details"}, icon("chevron-right"),
+      make("span", {className: "sr-only", textContent: `${s.title} details`}));
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    toggle.setAttribute("aria-controls", detailId);
+    const first = s.url || (s.addresses || [])[0] || "";
+    const row = make("tr", {className: "link-row"},
+      make("td", {}, make("div", {className: "svc"}, toggle, make("span", {className: "svc-icon", ariaHidden: "true"}, icon(SERVICE_ICONS[s.name] || "services")),
+        make("span", {className: "svc-text"}, make("span", {className: "name", textContent: s.title}), make("span", {className: "sub hide-phone", textContent: s.what, title: s.what})))),
+      make("td", {className: "state-cell"}),
+      make("td", {className: "hide-phone mono", textContent: first.replace(/^[A-Z][^:]{0,40}: /, "")}),
+      make("td", {className: "hide-narrow mono nowrap", textContent: (s.user || "").split(",")[0]}),
+      make("td", {className: "actions"}, openLink(s)));
+    row.dataset.watch = s.watch || "";
     const feedback = make("p", {className: "feedback"});
     feedback.setAttribute("role", "status");
-    const rows = [];
-    if (s.url) rows.push(kvRow("Address", make("code", {textContent: s.url}), copyButton(`Copy ${s.title} address`, () => s.url, feedback)));
-    for (const a of s.addresses || []) {
-      const m = /^([A-Z][^:]{0,40}): (.+)$/.exec(a);
-      const [label, value] = m ? [m[1], m[2]] : ["Address", a];
-      rows.push(kvRow(label, make("code", {textContent: value}), copyButton(`Copy ${s.title}: ${label.toLowerCase()}`, () => value, feedback)));
-    }
-    if (s.user) rows.push(kvRow("User", make("code", {textContent: s.user}), copyButton(`Copy ${s.title} user`, () => s.user, feedback)));
-    if (s.password) {
-      const word = s.password === "model-gateway" ? "key" : "password";
-      const value = make("code", {className: "masked", textContent: "••••••••••"});
-      value.id = `secret-${s.name}`;
-      const reveal = make("button", {type: "button", className: "icon-btn", title: `Show ${word}`, ariaLabel: `Show ${s.title} ${word}`}, icon("eye"));
-      reveal.setAttribute("aria-pressed", "false");
-      reveal.setAttribute("aria-controls", value.id);
-      reveal.addEventListener("click", () => press(reveal, feedback, "Fetching…", async () => {
-        const shown = reveal.getAttribute("aria-pressed") === "true";
-        value.textContent = shown ? "••••••••••" : await secret(s.password);
-        value.className = shown ? "masked" : "";
-        reveal.setAttribute("aria-pressed", shown ? "false" : "true");
-        reveal.replaceChildren(icon(shown ? "eye" : "eye-off"));
-        reveal.title = shown ? `Show ${word}` : `Hide ${word}`;
-        announce(shown ? "Hidden." : "Shown.");
-        return "";
-      }));
-      rows.push(kvRow(word === "key" ? "API key" : "Password", value, reveal, copyButton(`Copy ${s.title} ${word}`, () => secret(s.password), feedback)));
-    }
-    const open = s.url ? make("a", {className: "btn primary small", href: s.url, target: "_blank", rel: "noopener noreferrer"}, "Open", make("span", {className: "sr-only", textContent: ` ${s.title}`}), icon("external")) : null;
-    const item = make("li", {className: "service"},
-      make("div", {className: "service-head"},
-        make("span", {className: "service-icon", ariaHidden: "true"}, icon(SERVICE_ICONS[s.name] || "services")),
-        make("div", {className: "service-title"},
-          make("h2", {textContent: s.title}),
-          make("span", {className: "service-state"}, make("span", {className: "dot", ariaHidden: "true"}), make("span", {className: "state-text"}))),
-        open),
-      make("p", {className: "service-what", textContent: s.what}),
-      rows.length ? make("dl", {className: "kv"}, ...rows) : null,
-      s.password_note ? make("p", {className: "service-note", textContent: s.password_note}) : null,
-      s.how ? make("p", {className: "service-note", textContent: s.how}) : null,
-      feedback);
-    item.dataset.watch = s.watch || "";
-    return item;
-  }));
+    const detail = make("tr", {className: "detail", id: detailId, hidden: !open}, make("td", {colSpan: 5}, ...serviceDetail(s, feedback)));
+    const flip = () => {
+      const on = toggle.getAttribute("aria-expanded") !== "true";
+      toggle.setAttribute("aria-expanded", on ? "true" : "false");
+      detail.hidden = !on;
+      if (on) expanded.add(s.name); else expanded.delete(s.name);
+    };
+    toggle.addEventListener("click", (event) => { event.stopPropagation(); flip(); });
+    row.addEventListener("click", (event) => { if (!event.target.closest("a, button")) flip(); });
+    rows.push(row, detail);
+  }
+  $("service-rows").replaceChildren(...rows);
   $("services-background").textContent = services.background.length ? `Also running, with nothing to open: ${services.background.join(", ")}.` : "";
-  show("glance-empty", services.items.length === 0);
-  $("glance").replaceChildren(...services.items.map((s) => {
-    const item = make("li", {},
-      make("span", {className: "dot", ariaHidden: "true"}),
-      make("span", {className: "glance-name"}, make("b", {textContent: s.title}), make("span", {className: "glance-state state-text"})),
-      s.url ? make("a", {className: "btn ghost small", href: s.url, target: "_blank", rel: "noopener noreferrer"}, "Open", make("span", {className: "sr-only", textContent: ` ${s.title}`}), icon("external")) : null);
-    item.dataset.watch = s.watch || "";
-    return item;
-  }));
   paintServices();
 }
 
 function paintServices() {
-  for (const node of document.querySelectorAll("#service-list .service, #glance li")) {
-    const watch = node.dataset.watch;
-    const [dot, label] = serviceState(watch);
-    node.querySelector(".dot").className = `dot ${dot}`;
-    node.querySelector(".state-text").textContent = label || (built() ? (watch ? "No status yet" : "") : "Not built yet");
+  for (const row of document.querySelectorAll("#service-rows tr.link-row")) {
+    const [kind, word] = serviceState(row.dataset.watch);
+    row.querySelector(".state-cell").replaceChildren(status(kind, word));
   }
 }
 
@@ -1246,6 +1413,7 @@ async function refresh() {
   const first = !state;
   const disksChanged = !state || JSON.stringify(state.disks.map((d) => d.id)) !== JSON.stringify(st.disks.map((d) => d.id));
   const choicesChanged = !state || JSON.stringify(state.choices) !== JSON.stringify(st.choices);
+  const wasBuilt = built();
   state = st;
   show("gate", false);
   show("app", true);
@@ -1253,6 +1421,7 @@ async function refresh() {
   if (!choicesDirty() || disksChanged || (choicesChanged && !choicesDirty())) renderChoices(st);
   renderHardware(st.hardware);
   renderServices(st);
+  if (wasBuilt !== built()) renderServices(st);
   renderPlan(st.plan);
   renderAlerts(st.alerts);
   renderAgentSignin(st);
@@ -1262,7 +1431,6 @@ async function refresh() {
   renderRemoteAgents(st.remote_agents, st.remote_agents_ready);
   renderLan(st.lan);
   renderTrust(st.trust);
-  renderHistory(st.last_jobs);
   onChoicesChanged();
   paintChatShell();
   if (first) {
@@ -1272,9 +1440,9 @@ async function refresh() {
     statusTimer = setInterval(() => refreshStatus().catch(() => {}), 30000);
     startChat();
   }
-  if (st.job && (!job || job.id !== st.job.id)) follow(st.job, st.job.state === "running");
+  // Follow the latest run unless the owner opened another one.
+  if (st.job && (!job || (job.id !== st.job.id && !(currentView === "activity" && currentSub === job.id)))) follow(st.job, st.job.state === "running");
   if (!st.job) paintPill(null);
-  show("job-none", !st.job);
   gateJobButtons();
 }
 
@@ -1290,31 +1458,68 @@ function stopFollowing() { if (job) clearTimeout(job.timer); }
 
 function gateJobButtons() {
   const running = Boolean(runningAction());
-  for (const button of document.querySelectorAll("button[data-action], .job-retry, #agent-powers")) {
+  for (const button of document.querySelectorAll("button[data-action], .job-retry, .job-again, #agent-powers, #run-menu")) {
     if (button.classList.contains("busy")) continue;
     button.setAttribute("aria-disabled", running ? "true" : "false");
-    button.dataset.why = running ? "Wait until the running job finishes; the bar at the top shows it." : "";
+    button.dataset.why = running ? "Wait until the running job finishes; the top bar follows it." : "";
   }
 }
 
-function renderHistory(lastJobs) {
-  const entries = Object.entries(lastJobs).sort((a, b) => b[1].started - a[1].started);
-  show("history-card", entries.length > 0);
-  $("history").replaceChildren(...entries.map(([action, j]) => {
-    const kind = j.state === "done" ? ["Finished", "good"] : j.state === "running" ? ["Running", "run"] : ["Stopped", "bad"];
-    const button = make("button", {type: "button", className: "btn ghost small", textContent: "Show"});
-    button.setAttribute("aria-label", `Show ${JOB_NAMES[action] || action}`);
-    button.addEventListener("click", async () => {
-      try {
-        const view = await api(`/api/jobs/${j.id}`);
-        follow(view, view.state === "running");
-        job.node.querySelector(".job-title").focus();
-      } catch (error) { toast(error.message); }
-    });
-    return make("li", {}, make("span", {className: "item-name", textContent: JOB_NAMES[action] || action}),
-      make("span", {className: "muted small", textContent: clock(j.started)}),
-      make("span", {className: `badge ${kind[1]}`, textContent: kind[0]}), button);
-  }));
+// A run as the tables show it, live for the followed one.
+function runView(r) {
+  if (job && job.id === r.id && job.view) {
+    const v = job.view;
+    const steps = (v.progress && v.progress.steps) || [];
+    const done = steps.filter((s) => s.status === "done").length;
+    return {...r, state: v.state, seconds: v.seconds, stage: v.state === "running" && steps.length ? `Stage ${Math.min(steps.length, done + 1)} of ${steps.length}` : ""};
+  }
+  return r;
+}
+function runRow(raw) {
+  const r = runView(raw);
+  const result = r.state === "running" ? status("run", r.stage || "Running") : r.state === "done" ? status("good", "Finished") : status("bad", "Stopped");
+  const row = make("tr", {className: `link-row${job && job.id === r.id && currentSub === r.id ? " current" : ""}`},
+    make("td", {className: "name"}, make("a", {href: `#activity/${r.id}`, textContent: JOB_NAMES[r.action] || r.action})),
+    make("td", {}, result),
+    make("td", {className: "muted"}, make("span", {textContent: clock(r.started), title: ago(r.started)})),
+    make("td", {className: "num muted hide-phone", textContent: r.state === "running" ? duration(r.seconds) : duration(r.seconds)}),
+    make("td", {className: "muted hide-phone", textContent: r.by === "agent" ? "Agent" : r.by === "owner" ? "You" : r.by}));
+  row.addEventListener("click", (event) => { if (!event.target.closest("a, button")) go(`activity/${r.id}`); });
+  return row;
+}
+function renderRuns() {
+  const runs = state.runs || [];
+  show("runs-empty", runs.length === 0);
+  show("runs-table", runs.length > 0);
+  $("runs-rows").replaceChildren(...runs.map(runRow));
+}
+
+// The run page: the one the address names.
+async function openRun(id) {
+  $("crumb-run").textContent = job && job.id === id ? JOB_NAMES[job.view.action] || job.view.progress.title : "Run";
+  if (job && job.id === id) return;
+  try {
+    const view = await api(`/api/jobs/${id}`);
+    follow(view, view.state === "running");
+  } catch (error) {
+    $("job-slot").replaceChildren(make("div", {className: "empty"}, make("h2", {textContent: "This run is not kept any more"}),
+      make("p", {textContent: error.message}), make("a", {className: "btn", href: "#activity", textContent: "All activity"})));
+  }
+}
+
+// The followed run's card goes where the owner looks at it: its own page,
+// or under Build while a setup run goes.
+function placeJob() {
+  if (!job) return;
+  const onRun = currentView === "activity" && currentSub === job.id;
+  const onBuild = currentView === "setup" && currentStep === "build" && SETUP_RUNS.has(job.view.action);
+  const target = onRun ? $("job-slot") : onBuild ? $("build-job") : null;
+  if (target && job.node.parentElement !== target) {
+    for (const slot of [$("job-slot"), $("build-job")]) if (slot !== target && slot.contains(job.node)) slot.replaceChildren();
+    target.replaceChildren(job.node);
+  }
+  if (onRun) $("crumb-run").textContent = JOB_NAMES[job.view.action] || job.view.progress.title;
+  show("build-start", !(onBuild && job.view.state === "running"));
 }
 
 function follow(first, watched, feedback) {
@@ -1323,12 +1528,11 @@ function follow(first, watched, feedback) {
   const node = $("job-template").content.firstElementChild.cloneNode(true);
   // A clone keeps no listeners, so the copy buttons go on here.
   for (const pre of node.querySelectorAll(".job-log pre, .job-detail-text")) outputBox(pre);
-  $("job-slot").replaceChildren(node);
-  show("job-none", false);
   job = {id: first.id, view: first, node, offset: 0, timer: null, watched, misses: 0, feedback, stage: null};
   const again = ["verify", "upgrade"].includes(first.action) ? first.action : "apply";
-  const retry = node.querySelector(".job-retry");
-  retry.addEventListener("click", () => startJob(again, retry, node.querySelector(".job-copy-result")));
+  for (const button of node.querySelectorAll(".job-retry, .job-again")) {
+    button.addEventListener("click", () => startJob(again, button, node.querySelector(button.classList.contains("job-again") ? ".job-stop-result" : ".job-copy-result")));
+  }
   node.querySelector(".job-copy").addEventListener("click", () => copyDetails(node));
   node.querySelector(".job-agent").addEventListener("click", () => {
     const view = job.view;
@@ -1347,6 +1551,8 @@ function follow(first, watched, feedback) {
       return "Stopped. What to do next shows here in a moment.";
     });
   });
+  placeJob();
+  drawJob(job, first);
   tick(job);
 }
 
@@ -1360,7 +1566,7 @@ async function tick(current) {
     // The page's server restarts during an update; keep trying.
     current.misses += 1;
     current.node.querySelector(".job-now").textContent = `Lost contact with the server; trying again… (${error.message})`;
-    $("jobpill-sub").textContent = "Lost contact; trying again…";
+    $("run-sub").textContent = "Lost contact; trying again…";
     current.timer = setTimeout(() => tick(current), Math.min(10000, 1000 * current.misses));
     return;
   }
@@ -1371,6 +1577,7 @@ async function tick(current) {
   drawJob(current, view);
   gateJobButtons();
   paintStates();
+  placeJob();
   if (view.state === "running") {
     current.timer = setTimeout(() => tick(current), 1000);
   } else if (current.watched) {
@@ -1382,17 +1589,18 @@ async function tick(current) {
       say(current.feedback, view.state === "done" ? "ok" : "error", view.state === "done" ? "Finished." : "Stopped. Activity says why.");
     }
     refresh().catch((error) => toast(error.message));
-    if (view.state === "failed" && currentView === "activity") current.node.querySelector(".job-error-title").focus();
+    if (view.state === "failed" && current.node.isConnected) current.node.querySelector(".job-error-title").focus();
   }
 }
 
 function paintPill(view) {
-  const pill = $("jobpill");
-  const fill = pill.querySelector(".fill");
+  const pill = $("run");
+  const fill = $("run-fill");
   if (!view) {
     pill.dataset.state = "idle";
-    $("jobpill-title").textContent = "Nothing has run yet";
-    $("jobpill-sub").textContent = "";
+    $("run-title").textContent = "No runs yet";
+    $("run-sub").textContent = "";
+    pill.href = "#activity";
     fill.style.width = "0";
     return;
   }
@@ -1401,18 +1609,20 @@ function paintPill(view) {
   const done = steps.filter((s) => s.status === "done").length;
   const now = steps.find((s) => s.status === "running" || s.status === "failed");
   pill.dataset.state = view.state;
+  pill.href = `#activity/${view.id}`;
   const name = JOB_NAMES[view.action] || p.title;
   if (view.state === "running") {
-    $("jobpill-title").textContent = `${name}${steps.length ? ` · ${Math.min(steps.length, done + 1)}/${steps.length}` : ""}`;
-    $("jobpill-sub").textContent = [now ? now.text : "", duration(view.seconds)].filter(Boolean).join(" · ");
-    fill.style.width = steps.length ? `${Math.round((100 * done) / steps.length)}%` : "30%";
+    $("run-title").textContent = `${name}${steps.length ? ` ${Math.min(steps.length, done + 1)}/${steps.length}` : ""}`;
+    $("run-sub").textContent = [now ? now.text : "Starting", duration(view.seconds)].filter(Boolean).join(" · ");
+    fill.style.width = steps.length ? `${Math.max(2, Math.round((100 * done) / steps.length))}%` : "30%";
   } else if (view.state === "done") {
-    $("jobpill-title").textContent = `${name} finished`;
-    $("jobpill-sub").textContent = `${ago(view.started + view.seconds)} · ${duration(view.seconds)}`;
-    fill.style.width = "100%";
+    $("run-title").textContent = `${name} finished`;
+    $("run-sub").textContent = `${ago(view.started + view.seconds)}, took ${duration(view.seconds)}`;
+    fill.style.width = "0";
   } else {
-    $("jobpill-title").textContent = `${name} stopped`;
-    $("jobpill-sub").textContent = p.error && p.error.stage_text ? `at ${p.error.stage_text}` : ago(view.started + view.seconds);
+    $("run-title").textContent = `${name} stopped`;
+    $("run-sub").textContent = p.error && p.error.stage_text ? `at ${p.error.stage_text}` : ago(view.started + view.seconds);
+    fill.style.width = "0";
   }
 }
 
@@ -1420,22 +1630,20 @@ function drawJob(current, view) {
   const node = current.node;
   const p = view.progress;
   node.dataset.state = view.state;
-  node.querySelector(".job-icon").replaceChildren(...{done: [icon("check")], failed: [icon("x")]}[view.state] || []);
   paintPill(view);
   node.querySelector(".job-title").textContent = p.title;
-  const badge = node.querySelector(".job-badge");
-  const [btext, bkind] = {running: ["Running", "run"], done: ["Finished", "good"], failed: ["Stopped", "bad"]}[view.state];
-  badge.textContent = btext;
-  badge.className = `badge job-badge ${bkind}`;
   const steps = p.steps || [];
   const done = steps.filter((s) => s.status === "done").length;
   const now = steps.find((s) => s.status === "running" || s.status === "failed");
-  const sub = [];
-  if (steps.length) sub.push(`Stage ${Math.min(steps.length, done + (now ? 1 : 0))} of ${steps.length}`);
-  if (view.state === "running") sub.push(`running for ${duration(view.seconds)}`);
-  else sub.push(`took ${duration(view.seconds)}`, `started ${clock(view.started)}`);
-  if (view.by === "agent") sub.push("started by the agent");
-  node.querySelector(".job-sub").textContent = sub.join(" · ");
+  const [kind, word] = {running: ["run", "Running"], done: ["good", "Finished"], failed: ["bad", "Stopped"]}[view.state];
+  node.querySelector(".job-state").replaceChildren(status(kind, word));
+  const meta = [];
+  if (steps.length) meta.push(`Stage ${Math.min(steps.length, done + (now ? 1 : 0))} of ${steps.length}`);
+  if (view.state === "running") meta.push(`running for ${duration(view.seconds)}`);
+  else meta.push(`took ${duration(view.seconds)}`);
+  meta.push(`started ${clock(view.started)}`);
+  if (view.by === "agent") meta.push("by the agent");
+  node.querySelector(".job-meta").textContent = meta.join(" · ");
   if (view.state === "running" && now && current.stage !== now.name) {
     if (current.stage !== null) announce(`Stage ${done + 1} of ${steps.length}: ${now.text}.`);
     current.stage = now.name;
@@ -1464,14 +1672,12 @@ function drawJob(current, view) {
   } else {
     nowLine.textContent = "";
   }
-  node.querySelector(".job-stopper").hidden = view.state !== "running";
-  const fold = node.querySelector(".job-stages");
-  fold.hidden = !steps.length;
-  if (view.state === "done" && !fold.dataset.folded) {
-    fold.open = false;
-    fold.dataset.folded = "1";
-  }
-  fold.querySelector("summary").textContent = view.state === "done" ? `All ${steps.length} stages` : "Stages";
+  node.querySelector(".job-stop").hidden = view.state !== "running";
+  const againButton = node.querySelector(".job-again");
+  const canAgain = view.state === "done" && ["apply", "verify", "rebake-ci", "upgrade", "remove-guests"].includes(view.action);
+  againButton.hidden = !canAgain;
+  againButton.textContent = view.action === "verify" ? "Run the checks again" : view.action === "upgrade" ? "Update again" : "Run setup again";
+  node.querySelector(".job-stages").hidden = !steps.length;
   const WORD = {done: "done", failed: "failed", running: "running", waiting: "waiting"};
   node.querySelector(".stages").replaceChildren(...steps.map((s) => make("li", {className: s.status},
     make("span", {className: "s-icon", ariaHidden: "true"}, s.status === "done" ? icon("check") : s.status === "failed" ? icon("x") : null),
@@ -1481,7 +1687,8 @@ function drawJob(current, view) {
   node.querySelector(".job-error").hidden = !failed;
   if (failed) {
     const e = p.error;
-    node.querySelector(".job-message").textContent = (e.stage_text ? `At "${e.stage_text}": ` : "") + e.message;
+    node.querySelector(".job-error-title").textContent = e.stage_text ? `Stopped at "${e.stage_text}"` : "What went wrong";
+    node.querySelector(".job-message").textContent = e.message;
     node.querySelector(".job-more").replaceChildren(...e.more.map((m) => li(m)));
     const detail = node.querySelector(".job-detail");
     const lines = [];
@@ -1508,20 +1715,20 @@ function drawJob(current, view) {
   next.replaceChildren();
   if (view.state === "done") {
     const text = {
-      probe: ["The hardware is read", "Choose what to run next."],
-      apply: ["Setup finished", "Everything in the plan is in place. The checks ran at the end; their results are below."],
-      verify: ["The checks finished", "No check failed."],
-      upgrade: ["NullBill is updated", "Run setup now, so the server follows the new version."],
-      "close-lan": ["The home network is closing", "Open this page over Tailscale and press Keep it closed under Access."],
-      "keep-lan-closed": ["The home network stays closed", "Proxmox now answers only over Tailscale."],
-      "open-lan": ["The home network is open again", "Proxmox answers on your home network."],
-      "rebake-ci": ["The CI images are rebuilt", ""],
-      "remove-guests": ["Setup finished", "The guests you chose to delete are gone; everything else in the plan is in place."],
-    }[view.action] || ["Finished", ""];
+      probe: ["The hardware is read.", "Choose what to run next."],
+      apply: ["Setup finished.", "Everything in the plan is in place; the checks ran at the end."],
+      verify: ["The checks finished.", "No check failed."],
+      upgrade: ["NullBill is updated.", "Run setup now, so the server follows the new version."],
+      "close-lan": ["The home network is closing.", "Open this page over Tailscale and press Keep it closed under Access."],
+      "keep-lan-closed": ["The home network stays closed.", "Proxmox now answers only over Tailscale."],
+      "open-lan": ["The home network is open again.", "Proxmox answers on your home network."],
+      "rebake-ci": ["The CI images are rebuilt.", ""],
+      "remove-guests": ["Setup finished.", "The guests you chose to delete are gone; everything else in the plan is in place."],
+    }[view.action] || ["Finished.", ""];
     node.querySelector(".job-ok-title").textContent = text[0];
     node.querySelector(".job-ok-text").textContent = text[1];
-    if (view.action === "probe") next.append(make("a", {className: "btn secondary small", href: "#setup/choices", textContent: "Choose what to run"}));
-    if (view.action === "apply") next.append(make("a", {className: "btn secondary small", href: "#services", textContent: "Open your services"}));
+    if (view.action === "probe") next.append(make("a", {className: "btn small", href: "#setup/choices", textContent: "Choose what to run"}));
+    if (view.action === "apply") next.append(make("a", {className: "btn small", href: "#services", textContent: "Open your services"}));
     if (view.action === "upgrade") {
       const run = make("button", {type: "button", className: "btn primary small", textContent: "Run setup"});
       const result = make("p", {className: "feedback"});
@@ -1534,11 +1741,8 @@ function drawJob(current, view) {
   box.hidden = !v;
   if (v) {
     const c = v.counts;
-    box.querySelector(".counts").replaceChildren(
-      make("li", {className: "badge good", textContent: `${c.PASS} passed`}),
-      make("li", {className: `badge ${c.FAIL ? "bad" : ""}`, textContent: `${c.FAIL} failed`}),
-      make("li", {className: `badge ${c.DEGRADED ? "warn" : ""}`, textContent: `${c.DEGRADED} degraded`}),
-      make("li", {className: "badge", textContent: `${c.SKIP} skipped`}));
+    const part = (n, word) => [make("b", {textContent: String(n)}), ` ${word}`];
+    box.querySelector(".counts").replaceChildren(...part(c.PASS, "passed"), " · ", ...part(c.FAIL, "failed"), " · ", ...part(c.DEGRADED, "degraded"), " · ", ...part(c.SKIP, "skipped"));
     box.querySelector(".problems").replaceChildren(...v.problems.map((x) =>
       make("li", {className: x.status.toLowerCase()}, make("b", {textContent: x.status === "FAIL" ? "Failed: " : "Degraded: "}), x.text)));
   }
@@ -1581,8 +1785,10 @@ async function startJob(action, button, feedback) {
   await press(button, feedback, STARTING[action] || "Starting…", async () => {
     const view = await api("/api/jobs", {action});
     follow(view, true, feedback);
-    if (OPENS_ACTIVITY.has(action) && currentView !== "activity") go("activity");
-    return OPENS_ACTIVITY.has(action) ? "Started." : "Started. The bar at the top follows it.";
+    const onBuild = currentView === "setup" && currentStep === "build" && SETUP_RUNS.has(action);
+    if (OPENS_RUN.has(action) && !onBuild) go(`activity/${view.id}`);
+    else placeJob();
+    return OPENS_RUN.has(action) ? "Started." : "Started. The top bar follows it.";
   });
 }
 
@@ -1594,7 +1800,7 @@ function feedbackFor(button) {
 
 function submitter(event) { return event.submitter || event.target.querySelector("button[type=submit]"); }
 
-// The agent's sign-in, from any of its three forms.
+// The agent's sign-in, from either of its forms.
 function signInAgent(event, fieldId, resultId) {
   event.preventDefault();
   const field = $(fieldId);
@@ -1681,6 +1887,7 @@ function applyChat(view) {
     if (event.kind === "job" || (event.kind === "proposal_update" && ["done", "failed"].includes(event.state)) || (event.kind === "turn" && event.state === "end")) refreshNeeded = true;
   }
   const wasBusy = chat.busy;
+  const hadPending = chat.pending.length;
   chat.busy = view.busy;
   chat.queued = view.queued || 0;
   chat.pending = view.pending || [];
@@ -1703,7 +1910,8 @@ function applyChat(view) {
     if (last && last.kind !== "assistant") announce("The agent needs you.", true);
   }
   paintChatBadge();
-  if (state) paintBanner();
+  if (state && hadPending !== chat.pending.length) paintStates();
+  else if (state) paintBanner();
   if (refreshNeeded || (wasBusy && !view.busy)) refreshSoon();
 }
 
@@ -1712,19 +1920,18 @@ function markSeen() { chat.seen = chat.latest; paintChatBadge(); }
 function paintChatBadge() {
   const waiting = chat.pending.length + [...chat.asks].length;
   const unread = chat.latest > chat.seen && !chatVisible();
-  const text = waiting ? String(waiting) : unread ? "•" : "";
-  const badge = $("tab-agent-badge");
-  badge.hidden = !text;
-  badge.textContent = text;
-  badge.setAttribute("aria-label", waiting ? `${waiting} waiting for you` : unread ? "new message" : "");
+  const text = waiting ? String(waiting) : unread ? "1" : "";
+  const label = waiting ? `${waiting} waiting for you` : unread ? "new message" : "";
+  setCount($("tab-agent-badge"), text, waiting ? "warn" : "run", label);
+  setCount($("agent-count"), text, waiting ? "warn" : "run", label);
   if ("setAppBadge" in navigator) (waiting ? navigator.setAppBadge(waiting) : navigator.clearAppBadge()).catch(() => {});
-  setNav("agent", text, waiting ? "warn" : "agent");
+  setNav("agent", waiting ? String(waiting) : "", "warn", label);
 }
 
 function chatEmpty() {
-  return make("div", {className: "chat-empty"}, icon("agent", "big accent-2"),
-    make("b", {textContent: "Ask the agent anything about your server."}),
-    make("span", {textContent: "It reads logs and runs checks by itself. It asks you before it changes anything your access mode keeps for you."}));
+  return make("div", {className: "chat-empty"},
+    make("b", {textContent: "Ask about your server."}),
+    make("span", {textContent: "The agent reads logs and runs checks by itself. It asks before it changes anything your access mode keeps for you."}));
 }
 
 function paintChatShell() {
@@ -1734,6 +1941,7 @@ function paintChatShell() {
   show("chat-signin", !signed);
   show("chat-log", signed);
   $("composer").hidden = !signed;
+  show("chat-chips", signed);
   const log = $("chat-log");
   const empty = log.querySelector(".chat-empty");
   const hasMessages = [...log.children].some((n) => !n.classList.contains("chat-empty") && !n.classList.contains("typing"));
@@ -1742,8 +1950,8 @@ function paintChatShell() {
   $("chat").classList.toggle("working", chat.busy);
   $("chat-status").textContent = !signed ? "Not signed in"
     : c.installed === false ? "Not installed: press Update NullBill"
-    : chat.busy && chat.queued ? `Working… then ${chat.queued} more message${chat.queued === 1 ? "" : "s"}`
-    : chat.busy ? "Working…"
+    : chat.busy && chat.queued ? `Working, then ${chat.queued} more message${chat.queued === 1 ? "" : "s"}`
+    : chat.busy ? "Working"
     : chat.pending.length ? "Waiting for you"
     : "Ready";
   show("chat-stop", chat.busy);
@@ -1821,9 +2029,9 @@ function renderEvent(e) {
       break;
     case "ran":
       addToLog(make("div", {className: "ran"},
-        make("span", {className: `badge ${e.tier === "risky" ? "warn" : ""}`, textContent: `Ran (${MODE_NAMES[e.mode] || e.mode})`}),
-        make("span", {className: "ran-title", textContent: e.title}),
-        e.command ? make("code", {className: "cmd inline", textContent: e.command}) : null));
+        make("span", {className: `tier ${e.tier}`, textContent: `Ran in ${MODE_NAMES[e.mode] || e.mode}`}),
+        make("span", {textContent: e.title}),
+        e.command ? make("code", {textContent: e.command}) : null));
       break;
     case "tool": {
       const node = make("details", {className: "tool"},
@@ -1861,13 +2069,14 @@ function renderEvent(e) {
     }
     case "refused":
       addToLog(make("div", {className: "card refused"},
-        make("div", {className: "card-head"}, icon("shield"), make("b", {textContent: "Blocked by the page"})),
-        make("span", {textContent: e.title}),
-        e.command ? make("div", {className: "cmd", textContent: e.command}) : null,
-        make("span", {className: "why", textContent: `Refused in every mode: this ${e.why}.`})));
+        make("div", {className: "card-head"}, icon("shield"), make("b", {className: "card-title", textContent: "Blocked by the page"})),
+        make("div", {className: "card-body"},
+          make("span", {textContent: e.title}),
+          e.command ? make("div", {className: "cmd", textContent: e.command}) : null,
+          make("span", {className: "why", textContent: `Refused in every mode: this ${e.why}.`}))));
       break;
     case "job":
-      addToLog(make("div", {className: "msg system"}, `Started: ${e.title || JOB_NAMES[e.action] || e.action}. `, make("a", {href: "#activity", textContent: "Follow it"})));
+      addToLog(make("div", {className: "msg system"}, `Started: ${e.title || JOB_NAMES[e.action] || e.action}. `, make("a", {href: e.id ? `#activity/${e.id}` : "#activity", textContent: "Follow it"})));
       break;
     default:
       break;
@@ -1885,37 +2094,37 @@ function requestCard(e) {
   const titleId = `req-title-${++cardCount}`;
   card.setAttribute("role", "group");
   card.setAttribute("aria-labelledby", titleId);
-  const parts = [
-    make("div", {className: "card-head"}, icon(e.tier === "risky" ? "alert" : "shield"),
-      make("b", {id: titleId, className: "card-title", textContent: e.act === "command" && !e.lines ? `Run on ${where}${e.background ? " in the background" : ""}` : e.title}),
-      make("span", {className: `badge ${e.tier === "risky" ? "bad" : "warn"}`, textContent: TIER_TEXT[e.tier] || e.tier})),
-  ];
-  if (e.act === "command") parts.push(make("div", {className: "cmd", textContent: e.command}));
+  const body = make("div", {className: "card-body"});
+  card.append(make("div", {className: "card-head"}, icon(e.tier === "risky" ? "alert" : "shield"),
+    make("b", {id: titleId, className: "card-title", textContent: e.act === "command" && !e.lines ? `Run on ${where}${e.background ? " in the background" : ""}` : e.title}),
+    make("span", {className: `tier ${e.tier}`, textContent: TIER_TEXT[e.tier] || e.tier})), body);
+  if (e.act === "command") body.append(make("div", {className: "cmd", textContent: e.command}));
   if (e.act === "steps") {
-    parts.push(make("ol", {className: "steps-list"}, ...(e.steps || []).map((step) => make("li", {},
+    body.append(make("ol", {className: "steps-list"}, ...(e.steps || []).map((step) => make("li", {},
       make("span", {className: "step-where", textContent: step.where === "host" ? "Proxmox" : step.where}),
-      make("span", {className: `badge ${step.tier === "risky" ? "bad" : step.tier === "change" ? "warn" : ""}`, textContent: TIER_TEXT[step.tier] || step.tier}),
+      make("span", {className: `tier ${step.tier}`, textContent: TIER_TEXT[step.tier] || step.tier}),
       make("div", {className: "cmd", textContent: step.command})))));
   }
-  if (e.act === "write" && e.diff) parts.push(diffView(e.diff));
-  if (e.lines && e.lines.length) parts.push(make("ul", {className: "says"}, ...e.lines.map((l) => li(l))));
-  if (e.why) parts.push(make("p", {className: "says", textContent: e.why}));
-  parts.push(make("p", {className: "why", textContent: `Waits for you because this ${e.reason}.`}));
+  if (e.act === "write" && e.diff) body.append(diffView(e.diff));
+  if (e.lines && e.lines.length) body.append(make("ul", {className: "says"}, ...e.lines.map((l) => li(l))));
+  if (e.why) body.append(make("p", {className: "says", textContent: e.why}));
+  body.append(make("p", {className: "why", textContent: `Waits for you because this ${e.reason}.`}));
   const approve = make("button", {type: "button", className: `btn ${e.tier === "risky" ? "danger" : "primary"} small`, textContent: "Approve"});
   approve.setAttribute("aria-keyshortcuts", "Alt+Y");
-  const decline = make("button", {type: "button", className: "btn ghost small", textContent: "Decline"});
+  const decline = make("button", {type: "button", className: "btn small", textContent: "Decline"});
   decline.setAttribute("aria-keyshortcuts", "Alt+N");
-  const actions = make("div", {className: "row actions"});
+  decline.dataset.role = "decline";
+  approve.dataset.role = "approve";
+  const actions = make("div", {className: "actions"});
   let word = null;
   if (e.tier === "risky" && e.word) {
     word = make("input", {autocomplete: "off", spellcheck: false, placeholder: e.word, className: "word"});
     word.setAttribute("aria-label", `Type ${e.word} to approve`);
-    actions.append(make("label", {className: "field narrow-field"}, make("span", {className: "field-label", textContent: `Type ${e.word} to approve`}), word));
+    actions.append(make("label", {className: "field narrow"}, make("span", {className: "label", textContent: `Type ${e.word} to approve`}), word));
     word.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); approve.click(); } });
   }
   actions.append(approve, decline, result);
-  parts.push(actions);
-  card.append(...parts);
+  body.append(actions);
   const decide = (yes) => press(yes ? approve : decline, result, yes ? "Approving…" : "Declining…", async () => {
     await api("/api/chat/decide", {id: e.id, approve: yes, typed: word ? word.value : ""});
     announce(`${yes ? "Approved" : "Declined"}: ${e.title}`, true);
@@ -1932,8 +2141,8 @@ function requestCard(e) {
 }
 
 const SETTLED = {
-  running: ["Approved, running…", "run"], done: ["Done", "good"], failed: ["Failed", "bad"],
-  declined: ["Declined", ""], expired: ["Expired: not answered in 30 minutes", ""],
+  running: ["run", "Approved, running"], done: ["good", "Done"], failed: ["bad", "Failed"],
+  declined: ["", "Declined"], expired: ["", "Expired: not answered in 30 minutes"],
 };
 
 function settleRequest(card, stateName, output, full) {
@@ -1942,18 +2151,19 @@ function settleRequest(card, stateName, output, full) {
   card.classList.add("settled");
   const actions = card.querySelector(".actions");
   if (actions) actions.remove();
+  const body = card.querySelector(".card-body");
   let line = card.querySelector(".settled-line");
   if (!line) {
     line = make("p", {className: "settled-line"});
-    card.append(line);
+    body.append(line);
   }
-  const [text, kind] = SETTLED[stateName] || [stateName, ""];
-  line.replaceChildren(make("span", {className: `badge ${kind}`, textContent: text}));
+  const [kind, text] = SETTLED[stateName] || ["", stateName];
+  line.replaceChildren(status(kind, text));
   if (output) {
     for (const old of card.querySelectorAll(".result")) old.remove();
     const shown = shownOutput(output, full);
     for (const node of shown) node.classList.add("result");
-    card.append(...shown);
+    body.append(...shown);
   }
 }
 
@@ -1964,7 +2174,7 @@ function askCard(e) {
   result.setAttribute("role", "status");
   const input = make("input", {autocomplete: "off", placeholder: "Your answer"});
   input.setAttribute("aria-label", "Your answer");
-  const send = make("button", {type: "submit", className: "btn primary small icon-only", title: "Send answer"}, icon("send"), make("span", {className: "sr-only", textContent: "Send answer"}));
+  const send = make("button", {type: "submit", className: "icon-btn send", title: "Send answer"}, icon("send"), make("span", {className: "sr-only", textContent: "Send answer"}));
   const form = make("form", {className: "answer-form"}, input, send);
   const answer = (text) => press(send, result, "Sending…", async () => {
     if (!text.trim()) throw new ApiError("Write or pick an answer first.", 400);
@@ -1978,10 +2188,11 @@ function askCard(e) {
     chip.addEventListener("click", () => answer(o));
     return chip;
   }));
-  card.append(make("div", {className: "card-head"}, icon("agent", "accent-2"), make("b", {textContent: "The agent asks"})),
-    make("div", {className: "msg assistant"}, ...markdown(e.question)),
-    (e.options || []).length ? options : null,
-    make("div", {className: "answer-box"}, form, result));
+  card.append(make("div", {className: "card-head"}, icon("agent"), make("b", {className: "card-title", textContent: "The agent asks"})),
+    make("div", {className: "card-body"},
+      make("div", {className: "msg assistant"}, ...markdown(e.question)),
+      (e.options || []).length ? options : null,
+      make("div", {className: "answer-box"}, form, result)));
   chat.nodes.set(`ask-${e.id}`, card);
   chat.asks.add(e.id);
   return card;
@@ -1991,9 +2202,9 @@ function settleAsk(card, text) {
   card.classList.add("settled");
   const box = card.querySelector(".answer-box");
   if (box) box.remove();
-  const chips = card.querySelector(".chips");
+  const chips = card.querySelector(".card-body > .chips");
   if (chips) chips.remove();
-  card.append(make("p", {className: "says"}, make("b", {textContent: "You: "}), text));
+  card.querySelector(".card-body").append(make("p", {className: "says"}, make("b", {textContent: "You: "}), text));
 }
 
 async function sendChat(text, feedback) {
@@ -2042,17 +2253,15 @@ function suggestions() {
 
 function paintChips() {
   const items = suggestions();
+  const box = $("chat-chips");
   const key = JSON.stringify(items);
-  for (const id of ["home-chips", "chat-chips"]) {
-    const box = $(id);
-    if (box.dataset.key === key) continue;
-    box.dataset.key = key;
-    box.replaceChildren(...items.map(([label, text]) => {
-      const chip = make("button", {type: "button", className: "chip", textContent: label});
-      chip.addEventListener("click", () => askAgent(text));
-      return chip;
-    }));
-  }
+  if (box.dataset.key === key) return;
+  box.dataset.key = key;
+  box.replaceChildren(...items.map(([label, text]) => {
+    const chip = make("button", {type: "button", className: "chip", textContent: label});
+    chip.addEventListener("click", () => askAgent(text));
+    return chip;
+  }));
 }
 
 async function saveSettings(body) {
@@ -2064,30 +2273,106 @@ async function saveSettings(body) {
   return result;
 }
 
+// The access mode, from the agent page or the panel's menu. YOLO asks for
+// the word first.
+async function setMode(mode, feedback, focusAfter) {
+  if (mode === state.chat.mode) return;
+  if (mode === "yolo") {
+    const ok = await confirmDialog({title: "Let the agent act without asking?", text: "In YOLO it runs every command, script and setup run it decides on, without waiting for you, including reboots and deleting. What is always blocked stays blocked, and every action is logged.", yes: "Turn on YOLO", word: "yolo"});
+    if (!ok) { if (focusAfter) focusAfter.focus(); return; }
+  }
+  try {
+    say(feedback, "busy", "Saving…");
+    await saveSettings({mode});
+    say(feedback, "ok", `${MODE_NAMES[mode]}. The agent knows from its next step.`);
+    announce(`Access mode: ${MODE_NAMES[mode]}.`);
+  } catch (error) {
+    renderMode(state.chat);
+    say(feedback, "error", error.message);
+    toast(error.message);
+  }
+  if (focusAfter) focusAfter.focus();
+}
+
+// Menus.
+function runMenu() {
+  const button = $("run-menu");
+  if (button.getAttribute("aria-disabled") === "true") { say("actions-result", "info", button.dataset.why); return; }
+  const start = (action) => () => startJob(action, $("run-setup"), $("actions-result"));
+  openMenu(button, [
+    {label: "Run the checks", desc: "Every allowed and denied path, then a report.", icon: "checks", run: start("verify")},
+    {label: "Update NullBill", desc: "Fetches the newest version; the page restarts.", icon: "update", run: start("upgrade")},
+    {label: "Read the hardware", desc: "Changes nothing.", icon: "chip", run: start("probe")},
+  ]);
+}
+function themeName() { return document.documentElement.dataset.theme || "system"; }
+function accountMenu() {
+  const items = [
+    {heading: "Theme"},
+    ...[["system", "Match the system"], ["light", "Light"], ["dark", "Dark"]].map(([v, label]) => ({label, checked: themeName() === v, run: () => setTheme(v)})),
+    {sep: true},
+    {label: "Keyboard shortcuts", icon: "keyboard", run: () => $("keys").showModal()},
+  ];
+  if (installPrompt) items.push({label: "Install the app", icon: "download", run: install});
+  items.push({sep: true}, {label: "Sign out", icon: "logout", run: logout});
+  openMenu($("account"), items, "left");
+}
+function modeMenu() {
+  const button = $("chat-mode");
+  openMenu(button, [
+    ...Object.keys(MODE_NAMES).map((m) => ({label: MODE_NAMES[m], desc: MODE_DESC[m], checked: state.chat.mode === m, run: () => setMode(m, "composer-result", button)})),
+    {sep: true},
+    {label: "Agent settings", icon: "cog", run: () => go("agent/settings")},
+  ]);
+}
+function chatMenu() {
+  openMenu($("chat-more"), [
+    {label: "New conversation", icon: "plus", run: newConversation},
+    {label: "Copy the conversation", icon: "copy", run: () => copyConversation($("chat-more"))},
+    {sep: true},
+    {label: "What the agent did", icon: "activity", run: () => go("agent/log")},
+    {label: "Agent settings", icon: "cog", run: () => go("agent/settings")},
+  ]);
+}
+async function newConversation() {
+  if (chat.busy || chat.pending.length) {
+    const ok = await confirmDialog({title: "Start a new conversation?", text: "The agent stops what it is doing, and waiting requests expire.", yes: "Start over", danger: false});
+    if (!ok) return;
+  }
+  try {
+    await api("/api/chat/new", {});
+    pollChat();
+    $("composer-text").focus();
+  } catch (error) { say("composer-result", "error", error.message); }
+}
+
 // Command palette.
 function commands() {
   const out = [
-    ...VIEWS.map((v) => ({label: $(`view-${v}`).dataset.title, kind: "Page", icon: v === "home" ? "home" : v, run: () => go(v)})),
-    ...STEPS.map((s, i) => ({label: `Setup: ${i + 1}. ${$("stepper").querySelector(`[data-step="${s}"] .step-name`).textContent}`, kind: "Step", icon: "setup", run: () => go(`setup/${s}`)})),
-    {label: "Run setup", kind: "Run", icon: "play", run: () => startJob("apply", document.querySelector('.topbar [data-action="apply"]'), $("actions-result"))},
-    {label: "Run the checks", kind: "Run", icon: "checks", run: () => startJob("verify", document.querySelector('.topbar [data-action="verify"]'), $("actions-result"))},
-    {label: "Update NullBill", kind: "Run", icon: "update", run: () => startJob("upgrade", document.querySelector('.topbar [data-action="upgrade"]'), $("actions-result"))},
+    ...VIEWS.map((v) => ({label: $(`view-${v}`).dataset.title, kind: "Page", icon: {overview: "overview", agent: "agent", activity: "activity", alerts: "alerts", setup: "setup", access: "access", services: "services"}[v], run: () => go(v)})),
+    ...STEPS.map((s) => ({label: `Setup: ${$("stepper").querySelector(`[data-step="${s}"]`).textContent.replace(/, (done|needs you)$/, "")}`, kind: "Step", icon: "setup", run: () => go(`setup/${s}`)})),
+    {label: "Run setup", kind: "Run", icon: "play", run: () => startJob("apply", $("run-setup"), $("actions-result"))},
+    {label: "Run the checks", kind: "Run", icon: "checks", run: () => startJob("verify", $("run-setup"), $("actions-result"))},
+    {label: "Update NullBill", kind: "Run", icon: "update", run: () => startJob("upgrade", $("run-setup"), $("actions-result"))},
     {label: "Read the hardware", kind: "Run", icon: "chip", run: () => { go("setup/hardware"); $("probe-button").click(); }},
     {label: "Open the agent", kind: "Agent", icon: "agent", run: () => openAgent(true)},
-    {label: "New conversation with the agent", kind: "Agent", icon: "plus", run: () => $("chat-new").click()},
+    {label: "New conversation with the agent", kind: "Agent", icon: "plus", run: newConversation},
     {label: "Copy the conversation", kind: "Agent", icon: "copy", run: () => copyConversation()},
     {label: "Stop the agent", kind: "Agent", icon: "stop", run: () => api("/api/chat/stop", {}).then(pollChat).catch((e) => toast(e.message))},
     {label: "Access mode", kind: "Agent", icon: "shield", run: () => { go("agent/settings"); setTimeout(() => document.querySelector('#modes [aria-pressed="true"]').focus(), 30); }},
     {label: "What the agent did", kind: "Agent", icon: "activity", run: () => go("agent/log")},
+    {label: "Setup guide", kind: "Help", icon: "check", run: openGuide},
     {label: "Tailscale", kind: "Access", icon: "access", run: () => go("access/tailscale")},
     {label: "Home network", kind: "Access", icon: "lock", run: () => go("access/lan")},
     {label: "Trust this server, install the app", kind: "Access", icon: "download", run: () => go("access/trust")},
-    {label: "Light or dark", kind: "Look", icon: "moon", run: toggleTheme},
+    {label: "Theme: match the system", kind: "Look", icon: "moon", run: () => setTheme("system")},
+    {label: "Theme: light", kind: "Look", icon: "sun", run: () => setTheme("light")},
+    {label: "Theme: dark", kind: "Look", icon: "moon", run: () => setTheme("dark")},
     {label: "Keyboard shortcuts", kind: "Help", icon: "keyboard", run: () => $("keys").showModal()},
     {label: "Sign out", kind: "Account", icon: "logout", run: logout},
   ];
   for (const s of (state && state.services && state.services.items) || []) {
-    if (s.url) out.push({label: `Open ${s.title}`, kind: "Service", icon: SERVICE_ICONS[s.name] || "services", run: () => window.open(s.url, "_blank", "noopener")});
+    if (s.url && built()) out.push({label: `Open ${s.title}`, kind: "Service", icon: SERVICE_ICONS[s.name] || "services", run: () => window.open(s.url, "_blank", "noopener")});
   }
   return out;
 }
@@ -2128,6 +2413,7 @@ function paintPaletteSelection() {
 
 function openPalette() {
   if ($("palette").open || !state) return;
+  closeMenu(false);
   $("palette-q").value = "";
   palette.index = 0;
   paintPalette();
@@ -2141,29 +2427,30 @@ function runPalette(i) {
   if (c) c.run();
 }
 
-// Theme.
-const lightSystem = matchMedia("(prefers-color-scheme: light)");
-function effectiveTheme() {
-  return document.documentElement.dataset.theme || (lightSystem.matches ? "light" : "dark");
+function openGuide() {
+  if (!state) return;
+  $("guide").showModal();
+  renderGuide(guideItems(state));
+  const current = $("guide-pop-list").querySelector(".current a") || $("guide-pop-list").querySelector("a");
+  if (current) current.focus();
 }
-// theme: "light", "dark", or null to follow the system.
+
+// Theme: the system's, or the owner's light or dark.
+const lightSystem = matchMedia("(prefers-color-scheme: light)");
 function applyTheme(theme) {
-  if (theme) document.documentElement.dataset.theme = theme;
+  if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
   else delete document.documentElement.dataset.theme;
   const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
-  document.querySelector('meta[name="theme-color"]').content = bg || (effectiveTheme() === "light" ? "#f4f6f9" : "#07090d");
-  const button = $("theme");
-  if (button) {
-    button.setAttribute("aria-pressed", effectiveTheme() === "light" ? "true" : "false");
-    button.title = `Light theme: ${effectiveTheme() === "light" ? "on" : "off"}${theme ? "" : " (following the system)"}`;
-  }
+  document.querySelector('meta[name="theme-color"]').content = bg || "#ffffff";
+}
+function setTheme(theme) {
+  store.set("nb-theme", theme === "system" ? null : theme);
+  applyTheme(theme);
+  announce(`Theme: ${theme === "system" ? "matches the system" : theme}.`);
 }
 function toggleTheme() {
-  const next = effectiveTheme() === "light" ? "dark" : "light";
-  // Back to the system's choice when that is where the owner lands.
-  const follow = next === (lightSystem.matches ? "light" : "dark");
-  store.set("nb-theme", follow ? null : next);
-  applyTheme(follow ? null : next);
+  const dark = themeName() === "dark" || (themeName() === "system" && !lightSystem.matches);
+  setTheme(dark ? "light" : "dark");
 }
 
 async function logout() {
@@ -2182,7 +2469,6 @@ async function logout() {
 function paintInstall() {
   const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
   const can = Boolean(installPrompt) && !standalone;
-  show("install-app", can);
   show("install-app-2", can);
   const sheetButton = document.querySelector('#more [data-run="install"]');
   if (sheetButton) sheetButton.parentElement.hidden = !can;
@@ -2210,7 +2496,7 @@ function registerWorker() {
 
 // Keyboard.
 let gPending = 0;
-const G_KEYS = {h: "home", a: "agent", s: "services", u: "setup", x: "access", l: "alerts", y: "activity"};
+const G_KEYS = {o: "overview", h: "overview", s: "services", y: "activity", l: "alerts", u: "setup", x: "access", a: "agent"};
 
 function typing(target) {
   return target && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
@@ -2224,7 +2510,7 @@ function showRequest(card) {
   requestAnimationFrame(() => {
     card.scrollIntoView({block: "center"});
     const word = card.querySelector("input.word");
-    (word || card.querySelector(".actions .btn:not(.ghost)")).focus();
+    (word || card.querySelector('[data-role="approve"]')).focus();
     announce(`The agent asks: ${card.querySelector(".card-title").textContent}. Alt+Y approves, Alt+N declines.`, true);
   });
 }
@@ -2238,8 +2524,24 @@ function latestRequest() {
   return null;
 }
 
+function onMenuKey(event) {
+  const box = $("menu");
+  const items = [...box.querySelectorAll("[role^=menuitem]")];
+  const at = items.indexOf(document.activeElement);
+  if (event.key === "Escape") { event.preventDefault(); closeMenu(true); return true; }
+  if (event.key === "Tab") { closeMenu(false); return false; }
+  if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+    event.preventDefault();
+    const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (at + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+    items[next].focus();
+    return true;
+  }
+  return false;
+}
+
 function onKey(event) {
   if (!state || $("app").hidden) return;
+  if (!$("menu").hidden && onMenuKey(event)) return;
   const mod = event.ctrlKey || event.metaKey;
   if (mod && event.key.toLowerCase() === "k") { event.preventDefault(); openPalette(); return; }
   if (document.querySelector("dialog[open]")) return;
@@ -2259,10 +2561,11 @@ function onKey(event) {
       }
       const word = card.querySelector("input.word");
       if (k === "KeyY" && word && !word.value) { word.focus(); return; }
-      card.querySelector(k === "KeyY" ? ".actions .btn:not(.ghost)" : ".actions .btn.ghost").click();
+      card.querySelector(k === "KeyY" ? '[data-role="approve"]' : '[data-role="decline"]').click();
       return;
     }
   }
+  if (event.key === "Escape" && sideOpen()) { setSide(false); $("open-side").focus(); return; }
   if (event.key === "Escape" && narrow.matches && !phone.matches && dockOpen()) {
     setDock(false);
     $("toggle-dock").focus();
@@ -2286,13 +2589,14 @@ function onKey(event) {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-  const chosen = store.get("nb-theme");
-  applyTheme(chosen === "light" || chosen === "dark" ? chosen : null);
+  applyTheme(store.get("nb-theme"));
   lightSystem.addEventListener("change", () => { if (!document.documentElement.dataset.theme) applyTheme(null); });
   $("single-keys").checked = store.get("nb-single-keys") !== "off";
   $("single-keys").addEventListener("change", () => store.set("nb-single-keys", $("single-keys").checked ? null : "off"));
   document.querySelector(".skip").addEventListener("click", (event) => { event.preventDefault(); $("main").focus(); });
-  $("dock-scrim").addEventListener("click", () => { setDock(false); $("toggle-dock").focus(); });
+  $("side-scrim").addEventListener("click", () => {
+    if (sideOpen()) { setSide(false); $("open-side").focus(); } else { setDock(false); $("toggle-dock").focus(); }
+  });
   $("banner-link").addEventListener("click", (event) => {
     if (!event.currentTarget.dataset.request) return;
     event.preventDefault();
@@ -2305,9 +2609,14 @@ document.addEventListener("DOMContentLoaded", () => {
   for (const pre of document.querySelectorAll("#plan, #tailnet-policy")) outputBox(pre);
   window.addEventListener("hashchange", () => route(true));
   document.addEventListener("keydown", onKey);
+  document.addEventListener("pointerdown", (event) => {
+    if (!$("menu").hidden && !$("menu").contains(event.target) && !(menu.button && menu.button.contains(event.target))) closeMenu(false);
+  });
+  window.addEventListener("resize", () => closeMenu(false));
   for (const media of [phone, narrow]) {
     media.addEventListener("change", () => {
       setDock(!narrow.matches && store.get("nb-dock") !== "closed");
+      setSide(false);
       placeChat();
       if (state) route(false);
     });
@@ -2321,6 +2630,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const ask = event.target.closest("[data-ask]");
     if (ask) askAgent(ask.dataset.ask);
     const link = event.target.closest('a[href^="#"]');
+    if (link && $("guide").open && $("guide").contains(link)) $("guide").close();
     if (link && narrow.matches && !phone.matches && dockOpen() && !$("dock").contains(link)) setDock(false);
   });
 
@@ -2355,13 +2665,19 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // The shell.
-  $("toggle-dock").addEventListener("click", () => setDock(!dockOpen(), true));
+  $("toggle-dock").addEventListener("click", () => {
+    if (phone.matches) { openAgent(true); return; }
+    setDock(!dockOpen(), true);
+    if (dockOpen()) setTimeout(() => $("composer-text").focus(), 30);
+  });
   $("chat-close").addEventListener("click", () => { setDock(false, true); $("toggle-dock").focus(); });
+  $("open-side").addEventListener("click", () => setSide(!sideOpen()));
   $("open-palette").addEventListener("click", openPalette);
-  $("shortcuts").addEventListener("click", () => $("keys").showModal());
-  $("theme").addEventListener("click", toggleTheme);
-  $("logout").addEventListener("click", logout);
-  $("install-app").addEventListener("click", install);
+  $("account").addEventListener("click", accountMenu);
+  $("run-menu").addEventListener("click", runMenu);
+  $("guide-btn").addEventListener("click", openGuide);
+  $("chat-mode").addEventListener("click", modeMenu);
+  $("chat-more").addEventListener("click", chatMenu);
   $("install-app-2").addEventListener("click", install);
   $("tab-more").addEventListener("click", () => $("more").showModal());
   $("more").addEventListener("click", (event) => {
@@ -2370,14 +2686,19 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!target) return;
     $("more").close();
     const run = target.dataset.run;
-    if (run === "verify" || run === "upgrade") startJob(run, document.querySelector(`.topbar [data-action="${run}"]`), $("actions-result"));
+    if (run === "verify" || run === "upgrade") startJob(run, $("run-setup"), $("actions-result"));
     if (run === "install") install();
     if (run === "theme") toggleTheme();
     if (run === "logout") logout();
   });
-  wireTabs("agent-tabs", (tab) => `agent/${tab}`);
-  wireTabs("access-tabs", (tab) => `access/${tab}`);
-  $("step-agent").querySelector('a[href="#setup/hardware"]').addEventListener("click", () => store.set("nb-skip-agent", "1"));
+  for (const dialog of [$("guide"), $("palette")]) {
+    dialog.addEventListener("click", (event) => { if (event.target === dialog) dialog.close(); });
+  }
+  wireTabs("agent-tabs", (tab) => go(`agent/${tab}`));
+  wireTabs("access-tabs", (tab) => go(`access/${tab}`));
+  wireTabs("platform-tabs", showPlatform);
+  showPlatform(guessPlatform());
+  $("trust-download").addEventListener("click", () => store.set("nb-trusted", "1"));
 
   // Palette.
   $("palette-q").addEventListener("input", () => { palette.index = 0; paintPalette(); });
@@ -2393,14 +2714,10 @@ document.addEventListener("DOMContentLoaded", () => {
       runPalette(palette.index);
     }
   });
-  $("palette").addEventListener("click", (event) => { if (event.target === $("palette")) $("palette").close(); });
 
   // The agent.
-  for (const id of ["agent-form", "setup-agent-form", "chat-signin-form"]) {
-    const field = {"agent-form": "agent-credential", "setup-agent-form": "setup-agent-credential", "chat-signin-form": "chat-credential"}[id];
-    const result = {"agent-form": "agent-result", "setup-agent-form": "setup-agent-result", "chat-signin-form": "chat-signin-result"}[id];
-    $(id).addEventListener("submit", (event) => signInAgent(event, field, result));
-  }
+  $("agent-form").addEventListener("submit", (event) => signInAgent(event, "agent-credential", "agent-result"));
+  $("chat-signin-form").addEventListener("submit", (event) => signInAgent(event, "chat-credential", "chat-signin-result"));
   const composer = $("composer-text");
   const grow = () => { composer.style.height = "auto"; composer.style.height = `${Math.min(composer.scrollHeight, 180)}px`; };
   composer.addEventListener("input", grow);
@@ -2422,55 +2739,14 @@ document.addEventListener("DOMContentLoaded", () => {
     grow();
     if (!(await sendChat(text, "composer-result"))) { composer.value = text; grow(); }
   });
-  $("home-ask").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const field = $("home-ask-text");
-    const text = field.value;
-    if (!text.trim()) { say("home-ask-result", "info", "Write a question first, or pick one below."); field.focus(); return; }
-    field.value = "";
-    openAgent(false);
-    if (!(await sendChat(text, "home-ask-result"))) field.value = text;
-  });
   $("chat-stop").addEventListener("click", () => press($("chat-stop"), "composer-result", "Stopping…", async () => {
     await api("/api/chat/stop", {});
     pollChat();
     return "";
   }));
-  $("chat-copy").addEventListener("click", () => copyConversation($("chat-copy")));
-  $("chat-new").addEventListener("click", async () => {
-    if (chat.busy || chat.pending.length) {
-      const ok = await confirmDialog({title: "Start a new conversation?", text: "The agent stops what it is doing, and waiting requests expire.", yes: "Start over", danger: false});
-      $("chat-new").focus();
-      if (!ok) return;
-    }
-    try {
-      await api("/api/chat/new", {});
-      pollChat();
-      composer.focus();
-    } catch (error) { say("composer-result", "error", error.message); }
-  });
-  $("chat-mode").addEventListener("click", () => {
-    go("agent/settings");
-    setTimeout(() => { const button = document.querySelector('#modes [aria-pressed="true"]'); if (button) button.focus(); }, 30);
-  });
-  $("modes").addEventListener("click", async (event) => {
-    const input = event.target.closest(".mode");
-    if (!input) return;
-    const mode = input.dataset.mode;
-    if (mode === state.chat.mode) return;
-    if (mode === "yolo") {
-      const ok = await confirmDialog({title: "Let the agent act without asking?", text: "In YOLO it runs every command, script and setup run it decides on, without waiting for you, including reboots and deleting. What is always blocked stays blocked, and every action is logged.", yes: "Turn on YOLO", word: "yolo"});
-      if (!ok) { input.focus(); return; }
-    }
-    try {
-      say("mode-result", "busy", "Saving…");
-      await saveSettings({mode});
-      say("mode-result", "ok", `${MODE_NAMES[mode]}. The agent knows from its next step.`);
-      input.focus();
-    } catch (error) {
-      renderMode(state.chat);
-      say("mode-result", "error", error.message);
-    }
+  $("modes").addEventListener("click", (event) => {
+    const button = event.target.closest(".choice");
+    if (button) setMode(button.dataset.mode, "mode-result", button);
   });
   $("auto-fix").addEventListener("change", async () => {
     try {
@@ -2482,6 +2758,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
   $("log-refresh").addEventListener("click", loadAgentLog);
+  $("log-filter").addEventListener("input", paintAgentLog);
 
   const powers = (on) => press($("agent-powers"), "agent-powers-result", on ? "Giving the operator root on Proxmox…" : "Taking its key off Proxmox…", async () => {
     try {
@@ -2544,6 +2821,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const choices = $("choices-form");
   choices.addEventListener("change", onChoicesChanged);
   choices.addEventListener("input", onChoicesChanged);
+  $("choices-discard").addEventListener("click", () => {
+    renderChoices(state);
+    onChoicesChanged();
+    say("choices-result", "info", "Back to what is saved.");
+  });
   choices.addEventListener("submit", (event) => {
     event.preventDefault();
     const field = $("owner-login");

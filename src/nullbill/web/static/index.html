@@ -65,6 +65,12 @@
   <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M14.5 4.5v15"/></symbol>
   <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2.5" y="6.5" width="19" height="11" rx="2"/><path d="M6 10h.01M9 10h.01M12 10h.01M15 10h.01M18 10h.01M7.5 14h9"/></symbol>
   <symbol id="i-null" viewBox="0 0 32 32"><circle cx="16" cy="16" r="9.5"/><path d="M7 25L25 7"/></symbol>
+  <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></symbol>
+  <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="M10 7l5 5-5 5"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.5"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4"/></symbol>
+  <symbol id="i-overview" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="4.5" rx="1.5"/><rect x="13" y="10.5" width="7" height="9.5" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/></symbol>
+  <symbol id="i-dots" viewBox="0 0 24 24"><path d="M6 12h.01M12 12h.01M18 12h.01"/></symbol>
 </svg>
 
 <a class="skip" href="#main">Skip to content</a>
@@ -73,74 +79,80 @@
 
 <!-- Sign-in -->
 <div id="gate" class="gate">
-  <div class="gate-glow" aria-hidden="true"></div>
-  <div class="gate-card">
-    <div class="brand gate-brand"><svg class="logo" aria-hidden="true"><use href="#i-null"/></svg><span>NullBill</span></div>
+  <div class="gate-box">
+    <div class="gate-brand"><svg class="logo" aria-hidden="true"><use href="#i-null"/></svg><span>NullBill</span></div>
     <p id="loading" class="loading"><span class="spin" aria-hidden="true"></span> Loading…</p>
     <section id="login" aria-labelledby="login-title" hidden>
       <h1 id="login-title">Sign in</h1>
-      <p id="login-hint" class="muted"></p>
-      <form id="login-form" class="stack" novalidate>
-        <label class="field"><span class="field-label">Setup code or password</span>
+      <p id="login-hint" class="help"></p>
+      <form id="login-form" class="form" novalidate>
+        <label class="field"><span class="label">Setup code or password</span>
           <input id="secret" type="password" autocomplete="current-password" autocapitalize="characters" spellcheck="false" aria-describedby="login-result">
         </label>
-        <button type="submit" class="btn primary wide">Sign in</button>
+        <button type="submit" class="btn primary block">Sign in</button>
         <p class="feedback" id="login-result" role="status"></p>
       </form>
     </section>
     <section id="password" aria-labelledby="password-title" hidden>
       <h1 id="password-title">Choose a password</h1>
-      <p class="muted">From now on you sign in with it instead of the setup code. At least 12 characters; keep it in your password manager.</p>
-      <form id="password-form" class="stack" novalidate>
-        <label class="field"><span class="field-label">New password</span>
+      <p class="help">You sign in with it from now on, instead of the setup code. At least 12 characters.</p>
+      <form id="password-form" class="form" novalidate>
+        <label class="field"><span class="label">New password</span>
           <input id="new-password" type="password" autocomplete="new-password" aria-describedby="password-count password-result">
         </label>
-        <p class="hint" id="password-count"></p>
-        <button type="submit" class="btn primary wide">Save password</button>
+        <p class="help" id="password-count"></p>
+        <button type="submit" class="btn primary block">Save password</button>
         <p class="feedback" id="password-result" role="status"></p>
       </form>
     </section>
   </div>
-  <p class="gate-foot">Self-hosted. No bill.</p>
 </div>
 
 <!-- The app -->
 <div id="app" class="shell" hidden>
-  <header class="topbar">
-    <a class="brand" href="#home" aria-label="NullBill, home"><svg class="logo" aria-hidden="true"><use href="#i-null"/></svg><span class="brand-name">NullBill</span></a>
-    <a id="jobpill" class="jobpill" href="#activity" data-state="idle" aria-describedby="jobpill-sub">
-      <span class="jobpill-dot" aria-hidden="true"></span>
-      <span class="jobpill-text"><span id="jobpill-title">Nothing has run yet</span><span id="jobpill-sub" class="jobpill-sub"></span></span>
-      <span class="jobpill-bar" aria-hidden="true"><span class="fill"></span></span>
-    </a>
-    <div class="topbar-actions">
-      <button type="button" class="btn primary" data-action="apply" title="Run setup (builds what you chose)"><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg><span class="label">Run setup</span><span class="pending-dot" id="pending-dot" hidden><span class="sr-only">(changes waiting)</span></span></button>
-      <button type="button" class="btn ghost" data-action="verify" title="Run the checks"><svg class="icon" aria-hidden="true"><use href="#i-checks"/></svg><span class="label">Checks</span></button>
-      <button type="button" class="btn ghost" data-action="upgrade" title="Update NullBill"><svg class="icon" aria-hidden="true"><use href="#i-update"/></svg><span class="label">Update</span></button>
-      <button type="button" class="btn ghost icon-only" id="open-palette" title="Search and commands (Ctrl+K)" aria-keyshortcuts="Control+K Meta+K"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><span class="sr-only">Search and commands</span><kbd class="kbd-hint">Ctrl K</kbd></button>
-      <button type="button" class="btn ghost icon-only" id="toggle-dock" title="Show or hide the agent (Alt+A)" aria-keyshortcuts="Alt+A" aria-controls="dock" aria-expanded="true"><svg class="icon" aria-hidden="true"><use href="#i-panel"/></svg><span class="sr-only">Agent panel</span></button>
+  <nav class="sidebar" id="sidebar" aria-label="Main">
+    <div class="side-head">
+      <a class="brand" href="#overview"><svg class="logo" aria-hidden="true"><use href="#i-null"/></svg><span>NullBill</span></a>
+      <span class="host" id="host-line"></span>
     </div>
-    <p class="feedback topbar-feedback" id="actions-result" role="status"></p>
-  </header>
-
-  <nav class="rail" aria-label="Main">
-    <ul id="nav">
-      <li><a href="#home" data-view="home" aria-keyshortcuts="G H"><svg class="icon" aria-hidden="true"><use href="#i-home"/></svg><span class="nav-label">Home</span><span class="nav-badge" hidden></span></a></li>
-      <li><a href="#agent" data-view="agent" aria-keyshortcuts="G A"><svg class="icon" aria-hidden="true"><use href="#i-agent"/></svg><span class="nav-label">Agent</span><span class="nav-badge" hidden></span></a></li>
-      <li><a href="#services" data-view="services" aria-keyshortcuts="G S"><svg class="icon" aria-hidden="true"><use href="#i-services"/></svg><span class="nav-label">Services</span><span class="nav-badge" hidden></span></a></li>
-      <li><a href="#setup" data-view="setup" aria-keyshortcuts="G U"><svg class="icon" aria-hidden="true"><use href="#i-setup"/></svg><span class="nav-label">Setup</span><span class="nav-badge" hidden></span></a></li>
-      <li><a href="#access" data-view="access" aria-keyshortcuts="G X"><svg class="icon" aria-hidden="true"><use href="#i-access"/></svg><span class="nav-label">Access</span><span class="nav-badge" hidden></span></a></li>
-      <li><a href="#alerts" data-view="alerts" aria-keyshortcuts="G L"><svg class="icon" aria-hidden="true"><use href="#i-alerts"/></svg><span class="nav-label">Alerts</span><span class="nav-badge" hidden></span></a></li>
-      <li><a href="#activity" data-view="activity" aria-keyshortcuts="G Y"><svg class="icon" aria-hidden="true"><use href="#i-activity"/></svg><span class="nav-label">Activity</span><span class="nav-badge" hidden></span></a></li>
+    <button type="button" class="search" id="open-palette" aria-keyshortcuts="Control+K Meta+K"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><span>Search or run</span><kbd>Ctrl K</kbd></button>
+    <ul class="nav" id="nav">
+      <li><a href="#overview" data-view="overview"><svg class="icon" aria-hidden="true"><use href="#i-overview"/></svg><span>Overview</span><span class="count" hidden></span></a></li>
+      <li><a href="#services" data-view="services"><svg class="icon" aria-hidden="true"><use href="#i-services"/></svg><span>Services</span><span class="count" hidden></span></a></li>
+      <li><a href="#activity" data-view="activity"><svg class="icon" aria-hidden="true"><use href="#i-activity"/></svg><span>Activity</span><span class="count" hidden></span></a></li>
+      <li><a href="#alerts" data-view="alerts"><svg class="icon" aria-hidden="true"><use href="#i-alerts"/></svg><span>Alerts</span><span class="count" hidden></span></a></li>
     </ul>
-    <div class="rail-foot">
-      <button type="button" id="install-app" class="rail-btn" hidden><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg><span class="nav-label">Install app</span></button>
-      <button type="button" id="theme" class="rail-btn" title="Light or dark"><svg class="icon" aria-hidden="true"><use href="#i-moon"/></svg><span class="nav-label">Theme</span></button>
-      <button type="button" id="shortcuts" class="rail-btn" title="Keyboard shortcuts (?)"><svg class="icon" aria-hidden="true"><use href="#i-keyboard"/></svg><span class="nav-label">Shortcuts</span></button>
-      <button type="button" id="logout" class="rail-btn"><svg class="icon" aria-hidden="true"><use href="#i-logout"/></svg><span class="nav-label">Sign out</span></button>
-      <p id="conn" class="conn" role="status"><span class="dot" aria-hidden="true"></span><span id="conn-text" class="nav-label">Connected</span></p>
+    <p class="nav-group" id="nav-config">Configure</p>
+    <ul class="nav" aria-labelledby="nav-config">
+      <li><a href="#setup" data-view="setup"><svg class="icon" aria-hidden="true"><use href="#i-setup"/></svg><span>Setup</span><span class="count" hidden></span></a></li>
+      <li><a href="#access" data-view="access"><svg class="icon" aria-hidden="true"><use href="#i-access"/></svg><span>Access</span><span class="count" hidden></span></a></li>
+      <li><a href="#agent" data-view="agent"><svg class="icon" aria-hidden="true"><use href="#i-agent"/></svg><span>Agent</span><span class="count" hidden></span></a></li>
+    </ul>
+    <div class="side-foot">
+      <p id="conn" class="conn" role="status" hidden><span class="dot bad" aria-hidden="true"></span><span id="conn-text">Not connected</span></p>
+      <button type="button" class="side-btn" id="account" aria-haspopup="menu" aria-expanded="false"><svg class="icon" aria-hidden="true"><use href="#i-cog"/></svg><span>Preferences</span><svg class="icon end" aria-hidden="true"><use href="#i-chevron-down"/></svg></button>
     </div>
   </nav>
+  <button type="button" class="scrim" id="side-scrim" tabindex="-1" aria-hidden="true"></button>
+
+  <header class="topbar">
+    <button type="button" class="icon-btn only-narrow" id="open-side" aria-controls="sidebar" aria-expanded="false" title="Menu"><svg class="icon" aria-hidden="true"><use href="#i-menu"/></svg><span class="sr-only">Menu</span></button>
+    <a class="brand only-phone" href="#overview" aria-label="NullBill, overview"><svg class="logo" aria-hidden="true"><use href="#i-null"/></svg></a>
+    <a id="run" class="runbox" href="#activity" data-state="idle">
+      <span class="run-mark" aria-hidden="true"></span>
+      <span class="run-text"><span id="run-title">No runs yet</span><span id="run-sub" class="run-sub"></span></span>
+    </a>
+    <div class="top-actions">
+      <button type="button" class="btn ghost" id="guide-btn" aria-haspopup="dialog" hidden><span class="ring" aria-hidden="true"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="8"/><circle class="ring-fill" cx="10" cy="10" r="8"/></svg></span><span class="hide-phone">Setup guide</span><span class="sr-only" id="guide-count"></span></button>
+      <div class="split" role="group" aria-label="Runs">
+        <button type="button" class="btn primary" data-action="apply" id="run-setup"><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg><span>Run setup</span><span class="pending" id="pending-dot" hidden><span class="sr-only">(changes waiting)</span></span></button>
+        <button type="button" class="btn primary split-more" id="run-menu" aria-haspopup="menu" aria-expanded="false" title="More runs"><svg class="icon" aria-hidden="true"><use href="#i-chevron-down"/></svg><span class="sr-only">More runs</span></button>
+      </div>
+      <button type="button" class="btn ghost agent-btn" id="toggle-dock" aria-controls="dock" aria-expanded="true" aria-keyshortcuts="Alt+A"><svg class="icon" aria-hidden="true"><use href="#i-agent"/></svg><span class="hide-phone">Agent</span><span class="count" id="agent-count" hidden></span></button>
+    </div>
+    <p class="feedback top-feedback" id="actions-result" role="status"></p>
+    <span class="run-line" aria-hidden="true"><span class="fill" id="run-fill"></span></span>
+  </header>
 
   <div id="banner" class="banner" role="region" aria-label="Needs you now" hidden>
     <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
@@ -150,409 +162,416 @@
 
   <main id="main" tabindex="-1">
 
-    <!-- Home -->
-    <section class="view" id="view-home" data-title="Home" aria-labelledby="h-home" hidden>
-      <h1 id="h-home" class="sr-only" tabindex="-1">Home</h1>
-      <div class="home-grid">
-        <section class="panel hero" aria-labelledby="hero-title">
-          <div class="hero-head">
-            <span class="hero-icon" id="hero-icon" data-state="idle" aria-hidden="true"><svg class="icon"><use href="#i-circle"/></svg></span>
-            <div class="hero-text">
-              <p class="overline" id="hero-over">Server</p>
-              <h2 id="hero-title">Checking…</h2>
-              <p id="hero-sub" class="muted"></p>
-            </div>
-          </div>
-          <div class="row hero-actions" id="hero-actions"></div>
-          <ul id="hero-alerts" class="alert-list"></ul>
-          <ul id="stats" class="stats"></ul>
-        </section>
-
-        <section class="panel next" aria-labelledby="next-title">
-          <div class="panel-head"><h2 id="next-title">Next</h2><span class="badge" id="progress-count"></span></div>
-          <div class="meter" aria-hidden="true"><span class="fill" id="progress-meter"></span></div>
-          <ol id="checklist" class="checklist"></ol>
-        </section>
-
-        <section class="panel ask-panel" id="home-ask-panel" aria-labelledby="ask-title">
-          <div class="panel-head"><h2 id="ask-title"><svg class="icon accent-2" aria-hidden="true"><use href="#i-agent"/></svg>Ask the agent</h2><span class="badge" id="home-mode"></span></div>
-          <form id="home-ask" class="ask-form">
-            <label class="sr-only" for="home-ask-text">Ask the agent</label>
-            <input id="home-ask-text" autocomplete="off" placeholder="Why did setup stop? Is everything healthy?">
-            <button type="submit" class="btn primary icon-only" title="Send"><svg class="icon" aria-hidden="true"><use href="#i-send"/></svg><span class="sr-only">Send</span></button>
-          </form>
-          <div class="chips" id="home-chips"></div>
-          <p class="feedback" id="home-ask-result" role="status"></p>
-        </section>
-
-        <section class="panel glance-panel" aria-labelledby="glance-title">
-          <div class="panel-head"><h2 id="glance-title">Services</h2><a href="#services" class="link-arrow">All<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></a></div>
-          <p id="glance-empty" class="muted" hidden>Your services show here once there is a plan.</p>
-          <ul id="glance" class="glance"></ul>
-        </section>
-      </div>
-    </section>
-
-    <!-- Agent: settings and log; on a phone also the chat -->
-    <section class="view" id="view-agent" data-title="Agent" aria-labelledby="h-agent" hidden>
-      <header class="view-head">
-        <h1 id="h-agent" tabindex="-1">Agent</h1>
-        <div class="seg" role="tablist" aria-label="Agent" id="agent-tabs">
-          <button type="button" role="tab" id="tab-chat" aria-controls="agent-chat-slot" data-tab="chat">Chat</button>
-          <button type="button" role="tab" id="tab-settings" aria-controls="agent-settings" data-tab="settings">Settings</button>
-          <button type="button" role="tab" id="tab-log" aria-controls="agent-log" data-tab="log">Log</button>
-        </div>
+    <!-- Overview -->
+    <section class="view" id="view-overview" data-title="Overview" aria-labelledby="h-overview" hidden>
+      <header class="page-head">
+        <div><h1 id="h-overview" tabindex="-1">Overview</h1><p class="page-sub" id="overview-sub"></p></div>
       </header>
-      <div id="agent-chat-slot" class="agent-chat-slot" role="tabpanel" aria-labelledby="tab-chat"></div>
 
-      <div id="agent-settings" class="agent-settings" role="tabpanel" aria-labelledby="tab-settings">
-        <section class="panel" id="sec-signin" aria-labelledby="h-signin">
-          <div class="panel-head"><h2 id="h-signin">Sign in</h2><span class="badge" id="signin-state"></span></div>
-          <form id="agent-form" class="stack" novalidate>
-            <p class="muted">An Anthropic API key, or a Claude subscription token from <code>claude setup-token</code>. Kept encrypted on the server; the agent itself never sees it.</p>
-            <label class="field"><span class="field-label" id="agent-label">API key or subscription token</span>
-              <input id="agent-credential" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…" aria-describedby="agent-result">
-            </label>
-            <div class="row"><button type="submit" class="btn primary">Sign in the agent</button><p class="feedback" id="agent-result" role="status"></p></div>
-          </form>
-        </section>
+      <section class="block" id="guide-inline" aria-labelledby="h-guide" hidden>
+        <div class="block-head"><h2 id="h-guide">Set up your server</h2><span class="meta" id="guide-progress"></span>
+          <button type="button" class="btn small push" data-ask="Set this server up with me: read the hardware, suggest what it should run in a few lines, make the plan fit, then start setup. Ask me where the choice is mine, and fix what breaks." id="guide-agent"><svg class="icon" aria-hidden="true"><use href="#i-agent"/></svg>Let the agent do it</button></div>
+        <ol class="steps" id="guide-list"></ol>
+      </section>
 
-        <section class="panel" id="sec-mode" aria-labelledby="h-mode">
-          <div class="panel-head"><h2 id="h-mode">Access</h2><span class="badge" id="mode-state"></span></div>
-          <div class="modes" role="group" aria-labelledby="h-mode" id="modes">
-            <button type="button" class="mode" data-mode="manual" aria-pressed="false"><span class="mode-name">Manual</span><span class="mode-desc">Asks before every change. Reading and checks run freely.</span></button>
-            <button type="button" class="mode" data-mode="auto" aria-pressed="false"><span class="mode-name">Auto</span><span class="mode-desc">Restarts, installs, setup runs and updates go ahead. Deleting, rebooting and scripts wait for you.</span></button>
-            <button type="button" class="mode" data-mode="yolo" aria-pressed="false"><span class="mode-name">YOLO</span><span class="mode-desc">Nothing waits for you. Every action is still logged.</span></button>
-          </div>
-          <p class="hint"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg> Always blocked, in every mode: erasing disks, deleting backups, reading secrets, silencing the command log, and touching the NullBill container.</p>
-          <label class="switch-line"><input type="checkbox" id="auto-fix" role="switch"><span>Look into failed runs by itself</span></label>
-          <p class="feedback" id="mode-result" role="status"></p>
-        </section>
+      <section class="block" id="attention" aria-labelledby="h-attention" hidden>
+        <div class="block-head"><h2 id="h-attention">Needs attention</h2></div>
+        <ul class="rows" id="attention-list"></ul>
+      </section>
 
-        <section class="panel" id="sec-powers" aria-labelledby="h-powers">
-          <div class="panel-head"><h2 id="h-powers">Operator agent</h2><span class="badge" id="powers-state"></span></div>
-          <p class="muted" id="powers-what">A second agent for long work, in the operator container, used from the Proxmox shell or by remote agents. With this on it gets root on Proxmox and may run setup and updates; each run is announced on your phone. Off takes its key off Proxmox at once.</p>
-          <div class="row">
-            <button type="button" id="agent-powers" class="switch" role="switch" aria-checked="false" aria-describedby="powers-what"><span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span><span class="switch-label">Root on Proxmox</span></button>
-            <p class="feedback" id="agent-powers-result" role="status"></p>
-          </div>
-        </section>
+      <section class="block" id="health" aria-labelledby="h-health" hidden>
+        <div class="block-head"><h2 id="h-health">Health</h2><span class="meta" id="health-meta"></span></div>
+        <dl class="stats" id="stats"></dl>
+      </section>
 
-        <section class="panel" id="sec-github" aria-labelledby="h-github">
-          <div class="panel-head"><h2 id="h-github">Fixes as pull requests</h2><span class="badge" id="github-state"></span></div>
-          <form id="agent-github-form" class="stack" novalidate>
-            <p class="muted">Optional. A fine-grained GitHub token for NullBill's repository (Contents and Pull requests, read and write) lets the operator agent propose fixes. Run setup after saving.</p>
-            <label class="field"><span class="field-label">GitHub token</span><input id="agent-github-token" type="password" autocomplete="off" spellcheck="false" placeholder="github_pat_…" aria-describedby="agent-github-result"></label>
-            <div class="row"><button type="submit" class="btn secondary">Save token</button><button type="button" id="agent-github-remove" class="btn ghost" hidden>Remove</button><p class="feedback" id="agent-github-result" role="status"></p></div>
-          </form>
-        </section>
+      <section class="block" id="ov-services" aria-labelledby="h-ov-services" hidden>
+        <div class="block-head"><h2 id="h-ov-services">Services</h2><a class="link push" href="#services">All services</a></div>
+        <div class="table-wrap"><table class="table">
+          <caption class="sr-only">Services</caption>
+          <thead><tr><th scope="col">Name</th><th scope="col">Status</th><th scope="col" class="hide-phone">Address</th><th scope="col"><span class="sr-only">Open</span></th></tr></thead>
+          <tbody id="ov-services-rows"></tbody></table></div>
+      </section>
 
-        <section class="panel" id="sec-remote" aria-labelledby="h-remote">
-          <div class="panel-head"><h2 id="h-remote">Agents on other computers</h2></div>
-          <p class="muted">A token that lets an agent elsewhere run the checks and read their output over Tailscale, and nothing else.</p>
-          <form id="remote-agent-form" class="inline-form" novalidate>
-            <label class="field"><span class="field-label">Name</span><input id="remote-agent-name" autocomplete="off" placeholder="laptop" aria-describedby="remote-agent-result"></label>
-            <button type="submit" class="btn secondary">Make a token</button>
-          </form>
-          <p class="feedback" id="remote-agent-result" role="status"></p>
-          <div id="remote-agent-token-box" class="secret-box" hidden>
-            <div class="secret-box-head"><b>Shown once.</b> Keep it like a password.<button type="button" id="remote-agent-copy" class="btn ghost small"><svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg>Copy</button></div>
-            <pre id="remote-agent-token" tabindex="0" aria-label="The new agent's settings"></pre>
-          </div>
-          <ul id="remote-agents" class="item-list"></ul>
-        </section>
-      </div>
-
-      <div id="agent-log" class="agent-log" role="tabpanel" aria-labelledby="tab-log">
-        <section class="panel fill-panel" aria-labelledby="h-log">
-          <div class="panel-head"><h2 id="h-log">What the agent did</h2><button type="button" id="log-refresh" class="btn ghost small">Refresh</button></div>
-          <p class="muted small">Every action the agent asked for, written before it ran. Commands on Proxmox also go to its journal (<code>nb-cmd</code>), which ships to the log store.</p>
-          <div class="table-wrap"><table class="log-table"><thead><tr><th scope="col">When</th><th scope="col">What</th><th scope="col">Who</th><th scope="col">Tier</th></tr></thead><tbody id="log-rows"></tbody></table></div>
-        </section>
-      </div>
+      <section class="block" id="ov-runs" aria-labelledby="h-ov-runs" hidden>
+        <div class="block-head"><h2 id="h-ov-runs">Recent activity</h2><a class="link push" href="#activity">All activity</a></div>
+        <div class="table-wrap"><table class="table">
+          <caption class="sr-only">Recent runs</caption>
+          <thead><tr><th scope="col">Run</th><th scope="col">Result</th><th scope="col">Started</th><th scope="col" class="num hide-phone">Took</th></tr></thead>
+          <tbody id="ov-runs-rows"></tbody></table></div>
+      </section>
     </section>
 
     <!-- Services -->
     <section class="view" id="view-services" data-title="Services" aria-labelledby="h-services" hidden>
-      <header class="view-head">
-        <h1 id="h-services" tabindex="-1">Services</h1>
-        <p class="view-sub" id="services-sub">Open these from a device on your Tailscale.</p>
+      <header class="page-head">
+        <div><h1 id="h-services" tabindex="-1">Services</h1><p class="page-sub" id="services-sub">Open these from a device on your Tailscale network. Select a row for addresses and sign-in.</p></div>
       </header>
-      <div id="services-unbuilt" class="callout info" hidden><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><div><b>Not built yet.</b> These are what your plan makes. <b>Run setup</b> builds them.</div></div>
+      <p id="services-unbuilt" class="note" hidden><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><span>Not built yet. This is what the plan makes; <a href="#setup/build">Run setup</a> builds it.</span></p>
       <div id="services-empty" class="empty" hidden>
-        <svg class="icon" aria-hidden="true"><use href="#i-services"/></svg>
         <h2>No services yet</h2>
         <p>Read the hardware and choose what to run; your services show here.</p>
-        <a class="btn primary" href="#setup">Go to Setup</a>
+        <a class="btn" href="#setup">Open Setup</a>
       </div>
-      <ul id="service-list" class="services"></ul>
-      <p id="services-background" class="muted small"></p>
+      <div class="table-wrap" id="services-table" hidden><table class="table services">
+        <caption class="sr-only">Services</caption>
+        <thead><tr><th scope="col">Name</th><th scope="col">Status</th><th scope="col" class="hide-phone">Address</th><th scope="col" class="hide-narrow">Sign-in</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+        <tbody id="service-rows"></tbody></table></div>
+      <p id="services-background" class="foot-note"></p>
+    </section>
+
+    <!-- Activity -->
+    <section class="view" id="view-activity" data-title="Activity" aria-labelledby="h-activity" hidden>
+      <div id="activity-list">
+        <header class="page-head">
+          <div><h1 id="h-activity" tabindex="-1">Activity</h1><p class="page-sub">Setup runs, checks and updates. Select one for its stages and log.</p></div>
+        </header>
+        <div id="runs-empty" class="empty" hidden><h2>Nothing has run yet</h2><p>Runs show here as they happen.</p><a class="btn" href="#setup">Open Setup</a></div>
+        <div class="table-wrap" id="runs-table"><table class="table runs">
+          <caption class="sr-only">Runs, newest first</caption>
+          <thead><tr><th scope="col">Run</th><th scope="col">Result</th><th scope="col">Started</th><th scope="col" class="num hide-phone">Took</th><th scope="col" class="hide-phone">By</th></tr></thead>
+          <tbody id="runs-rows"></tbody></table></div>
+      </div>
+      <div id="activity-detail" hidden>
+        <nav class="crumbs" aria-label="Breadcrumb"><a href="#activity">Activity</a><svg class="icon" aria-hidden="true"><use href="#i-chevron-right"/></svg><span id="crumb-run" aria-current="page"></span></nav>
+        <div id="job-slot"></div>
+      </div>
+    </section>
+
+    <!-- Alerts -->
+    <section class="view" id="view-alerts" data-title="Alerts" aria-labelledby="h-alerts" hidden>
+      <header class="page-head"><div><h1 id="h-alerts" tabindex="-1">Alerts</h1><p class="page-sub">What is firing now, and where alerts go.</p></div></header>
+      <section class="block" aria-labelledby="h-firing">
+        <div class="block-head"><h2 id="h-firing">Firing now</h2><span class="meta" id="firing-meta"></span></div>
+        <p id="firing-empty" class="empty-line"></p>
+        <div class="table-wrap" id="firing-table" hidden><table class="table">
+          <caption class="sr-only">Firing alerts</caption>
+          <thead><tr><th scope="col">Severity</th><th scope="col">Alert</th><th scope="col" class="hide-phone">Summary</th></tr></thead>
+          <tbody id="firing-rows"></tbody></table></div>
+      </section>
+      <section class="block" aria-labelledby="h-delivery">
+        <div class="block-head"><h2 id="h-delivery">Delivery</h2></div>
+        <div class="settings">
+          <div class="setting">
+            <div class="setting-text"><h3>Phone, through ntfy</h3><p>Install the free <a href="https://ntfy.sh/" rel="noopener noreferrer" target="_blank">ntfy</a> app and subscribe to this topic. Keep the topic to yourself.</p></div>
+            <div class="setting-control">
+              <div class="copy-line"><code id="ntfy-topic"></code><button type="button" id="copy-topic" class="icon-btn" title="Copy the topic"><svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg><span class="sr-only">Copy the topic</span></button></div>
+              <div class="row"><button type="button" id="test-alerts" class="btn">Send a test alert</button><p class="feedback" id="test-result" role="status"></p></div>
+            </div>
+          </div>
+          <form class="setting" id="alerts-form" novalidate>
+            <div class="setting-text"><h3>When the server goes silent</h3><p>Optional. A free <a href="https://healthchecks.io/" rel="noopener noreferrer" target="_blank">Healthchecks.io</a> check, 10-minute period and grace, tells you when the server stops checking in.</p></div>
+            <div class="setting-control">
+              <label class="field"><span class="label">Ping URL</span><input id="healthchecks-url" type="url" placeholder="https://hc-ping.com/…" aria-describedby="alerts-result"></label>
+              <div class="row"><button type="submit" class="btn">Save URL</button><p class="feedback" id="alerts-result" role="status"></p></div>
+            </div>
+          </form>
+        </div>
+      </section>
     </section>
 
     <!-- Setup -->
     <section class="view" id="view-setup" data-title="Setup" aria-labelledby="h-setup" hidden>
-      <header class="view-head">
-        <h1 id="h-setup" tabindex="-1">Setup</h1>
-        <ol class="stepper" id="stepper" aria-label="Setup steps">
-          <li><a href="#setup/agent" data-step="agent"><span class="step-dot" aria-hidden="true">1</span><span class="step-name">Agent</span></a></li>
-          <li><a href="#setup/hardware" data-step="hardware"><span class="step-dot" aria-hidden="true">2</span><span class="step-name">Hardware</span></a></li>
-          <li><a href="#setup/choices" data-step="choices"><span class="step-dot" aria-hidden="true">3</span><span class="step-name">Choices</span></a></li>
-          <li><a href="#setup/plan" data-step="plan"><span class="step-dot" aria-hidden="true">4</span><span class="step-name">Plan</span></a></li>
-          <li><a href="#setup/build" data-step="build"><span class="step-dot" aria-hidden="true">5</span><span class="step-name">Build</span></a></li>
-        </ol>
-      </header>
+      <header class="page-head"><div><h1 id="h-setup" tabindex="-1">Setup</h1><p class="page-sub">What the server runs, and building it. Safe to run again: finished parts are kept.</p></div></header>
+      <nav class="tabs" id="stepper" aria-label="Setup steps">
+        <a href="#setup/hardware" data-step="hardware"><span class="tab-mark" aria-hidden="true"></span>Hardware</a>
+        <a href="#setup/choices" data-step="choices"><span class="tab-mark" aria-hidden="true"></span>What to run</a>
+        <a href="#setup/plan" data-step="plan"><span class="tab-mark" aria-hidden="true"></span>Plan</a>
+        <a href="#setup/build" data-step="build"><span class="tab-mark" aria-hidden="true"></span>Build</a>
+      </nav>
 
-      <section class="step panel" id="step-agent" aria-labelledby="h-step-agent" hidden>
-        <div class="panel-head"><h2 id="h-step-agent" tabindex="-1">Sign in your agent</h2><span class="badge" id="step-agent-state"></span></div>
-        <p class="lead">Do this first. The agent reads the hardware for you, explains each step, and when a run fails it finds out why and proposes the fix, which you approve with one tap.</p>
-        <form id="setup-agent-form" class="stack" novalidate>
-          <label class="field"><span class="field-label">Anthropic API key or Claude subscription token</span>
-            <input id="setup-agent-credential" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…" aria-describedby="setup-agent-result"></label>
-          <details class="howto"><summary>Where do I get one?</summary>
-            <p><b>Claude Pro or Max:</b> on any computer with Claude Code, run <code>claude setup-token</code> and paste what it prints (it lasts a year). <b>API:</b> make a key at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer">console.anthropic.com</a>; that works from a phone too.</p>
-          </details>
-          <div class="row"><button type="submit" class="btn primary">Sign in</button><a class="btn ghost" href="#setup/hardware">Skip for now</a><p class="feedback" id="setup-agent-result" role="status"></p></div>
-        </form>
-        <div id="step-agent-done" class="callout success" hidden><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg><div><p><b>The agent is signed in.</b> It is in the panel beside every page (on a phone: the Agent tab).</p>
-          <div class="row"><button type="button" class="btn primary" data-ask="Set this server up with me: read the hardware, suggest what it should run in a few lines, make the plan fit, then start setup. Ask me where the choice is mine, and fix what breaks.">Let the agent set it up</button><a class="btn ghost" href="#setup/hardware">Do it myself</a></div></div></div>
-      </section>
-
-      <section class="step panel" id="step-hardware" aria-labelledby="h-step-hardware" hidden>
-        <div class="panel-head"><h2 id="h-step-hardware" tabindex="-1">Hardware</h2><span class="badge" id="hardware-state"></span></div>
-        <p class="muted">NullBill reads the CPU, memory, disks and graphics cards. Reading changes nothing.</p>
-        <ul id="hardware" class="specs" hidden></ul>
+      <section class="step" id="step-hardware" aria-labelledby="h-step-hardware" hidden>
+        <div class="block-head"><h2 id="h-step-hardware" tabindex="-1">Hardware</h2><span class="meta" id="hardware-state"></span></div>
+        <p class="help">NullBill reads the processor, memory, disks and graphics cards. Reading changes nothing.</p>
+        <dl class="props" id="hardware" hidden></dl>
         <div class="row step-foot">
-          <button type="button" class="btn primary" data-action="probe" id="probe-button"><svg class="icon" aria-hidden="true"><use href="#i-chip"/></svg><span>Read the hardware</span></button>
+          <button type="button" class="btn primary" data-action="probe" id="probe-button"><span>Read the hardware</span></button>
           <p class="feedback" id="probe-result" role="status"></p>
-          <a class="btn ghost push" href="#setup/choices">Next<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+          <a class="btn ghost push" href="#setup/choices">What to run<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></a>
         </div>
       </section>
 
-      <section class="step panel" id="step-choices" aria-labelledby="h-step-choices" hidden>
-        <form id="choices-form" class="choices" novalidate>
-          <div class="panel-head"><h2 id="h-step-choices" tabindex="-1">What to run</h2><span class="badge" id="choices-state"></span></div>
-          <div class="choices-body">
-            <fieldset class="tiles"><legend>Workloads</legend><div class="tile-grid" id="workload-tiles"></div></fieldset>
-            <fieldset class="tiles"><legend>Extras</legend>
-              <div class="tile-grid">
-                <label class="tile"><input type="checkbox" id="backups"><span class="tile-box" aria-hidden="true"></span><span class="tile-text"><span class="tile-title">Nightly backups</span><span class="tile-desc">Needs a second, empty disk to survive a disk failure.</span></span></label>
-                <label class="tile"><input type="checkbox" id="console"><span class="tile-box" aria-hidden="true"></span><span class="tile-text"><span class="tile-title">On-site screen</span><span class="tile-desc">This page on a monitor plugged into the server. About 512 MB of memory.</span></span></label>
-              </div>
-            </fieldset>
-            <fieldset id="gpus" hidden><legend>Graphics card</legend>
-              <p class="muted small">Proxmox cannot read the card's memory before a driver is installed; give it as on the box.</p>
-              <div id="gpu-list" class="field-row"></div>
-            </fieldset>
-            <fieldset id="disks" hidden><legend>Other disks</legend>
-              <p class="muted small">A disk you leave alone is not touched. A kept disk's files are shared to you, read-only unless you allow changes, and not backed up.</p>
-              <div id="disk-list" class="stack"></div>
-            </fieldset>
-            <label class="field narrow-field"><span class="field-label">Your Tailscale login (email)</span>
+      <section class="step" id="step-choices" aria-labelledby="h-step-choices" hidden>
+        <form id="choices-form" novalidate>
+          <div class="block-head"><h2 id="h-step-choices" tabindex="-1">What to run</h2><span class="meta" id="choices-state"></span></div>
+          <fieldset class="group"><legend>Workloads</legend><div class="options" id="workload-tiles"></div></fieldset>
+          <fieldset class="group"><legend>Extras</legend>
+            <div class="options">
+              <label class="option"><input type="checkbox" id="backups"><span class="option-text"><span class="option-title">Nightly backups</span><span class="option-desc">Needs a second, empty disk to survive a disk failure.</span></span></label>
+              <label class="option"><input type="checkbox" id="console"><span class="option-text"><span class="option-title">On-site screen</span><span class="option-desc">This page on a monitor plugged into the server. About 512 MB of memory.</span></span></label>
+            </div>
+          </fieldset>
+          <fieldset class="group" id="gpus" hidden><legend>Graphics card</legend>
+            <p class="help">Proxmox cannot read the card's memory before a driver is installed; give it as on the box.</p>
+            <div id="gpu-list" class="fields"></div>
+          </fieldset>
+          <fieldset class="group" id="disks" hidden><legend>Other disks</legend>
+            <p class="help">A disk you leave alone is not touched. A kept disk's files are shared to you, read-only unless you allow changes, and not backed up.</p>
+            <div id="disk-list" class="disks"></div>
+          </fieldset>
+          <fieldset class="group"><legend>Your Tailscale login</legend>
+            <label class="field narrow"><span class="label">Email you sign in to Tailscale with</span>
               <input id="owner-login" type="email" autocomplete="email" placeholder="you@example.com" aria-describedby="choices-result"></label>
-          </div>
-          <div class="savebar">
+          </fieldset>
+          <div class="savebar" id="savebar">
+            <span class="savebar-text" id="savebar-text">Saving makes a new plan. Nothing on the server changes until you run setup.</span>
             <p class="feedback" id="choices-result" role="status"></p>
+            <button type="button" class="btn ghost" id="choices-discard" hidden>Discard</button>
             <button type="submit" class="btn primary">Save and plan</button>
           </div>
         </form>
       </section>
 
-      <section class="step panel" id="step-plan" aria-labelledby="h-step-plan" hidden>
-        <div class="panel-head"><h2 id="h-step-plan" tabindex="-1">Plan</h2><span class="badge" id="plan-state"></span></div>
-        <p id="plan-hint" class="muted">Read the hardware and save your choices to see what NullBill will build.</p>
-        <div id="plan-stale" class="callout warn" hidden><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg><div>Your choices are not saved; this plan is for the last saved ones.</div></div>
-        <div id="plan-problems" class="callout danger" hidden><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
-          <div><h3>The plan does not fit yet</h3><ul id="plan-errors"></ul><h4>What to do</h4><ul id="plan-advice"></ul>
-            <div class="row"><button type="button" class="btn secondary small ask-agent" data-ask="The plan does not fit. Look at my hardware and choices and tell me the smallest change that makes it fit."><svg class="icon" aria-hidden="true"><use href="#i-agent"/></svg>Ask the agent</button></div></div>
+      <section class="step" id="step-plan" aria-labelledby="h-step-plan" hidden>
+        <div class="block-head"><h2 id="h-step-plan" tabindex="-1">Plan</h2><span class="meta" id="plan-state"></span></div>
+        <p id="plan-hint" class="help">Read the hardware and save your choices to see what NullBill builds.</p>
+        <p id="plan-stale" class="note warn" hidden><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg><span>Your choices are not saved; this plan is for the last saved ones.</span></p>
+        <div id="plan-problems" class="problem" hidden>
+          <h3>The plan does not fit yet</h3>
+          <ul id="plan-errors"></ul>
+          <h4>What to do</h4>
+          <ul id="plan-advice"></ul>
+          <div class="row"><button type="button" class="btn small" data-ask="The plan does not fit. Look at my hardware and choices and tell me the smallest change that makes it fit."><svg class="icon" aria-hidden="true"><use href="#i-agent"/></svg>Ask the agent</button></div>
         </div>
-        <div id="plan-ok" class="plan-ok" hidden>
-          <div class="memory-block">
-            <div class="memory-head"><span class="overline">Memory</span><span id="memory-total" class="muted small"></span></div>
+        <div id="plan-ok" hidden>
+          <div class="memory-block" id="memory-block">
+            <div class="memory-head"><span class="label">Memory</span><span id="memory-total" class="meta"></span></div>
             <div id="memory" class="memory" aria-hidden="true"><span class="m-reserve"></span><span class="m-guests"></span><span class="m-free"></span></div>
             <ul class="legend" id="memory-legend"></ul>
-            <p id="plan-ok-text" class="muted small"></p>
+            <p id="plan-ok-text" class="help"></p>
           </div>
-          <div class="table-wrap plan-table">
-            <table class="guests"><caption class="sr-only">What the plan builds</caption>
-              <thead><tr><th scope="col">Guest</th><th scope="col">Kind</th><th scope="col">Zone</th><th scope="col" class="num-col">Cores</th><th scope="col" class="num-col">Memory</th></tr></thead>
-              <tbody id="plan-guests"></tbody></table>
-          </div>
+          <div class="table-wrap"><table class="table">
+            <caption class="sr-only">What the plan builds</caption>
+            <thead><tr><th scope="col">Guest</th><th scope="col">Kind</th><th scope="col" class="hide-phone">Zone</th><th scope="col" class="num">Cores</th><th scope="col" class="num">Memory</th></tr></thead>
+            <tbody id="plan-guests"></tbody></table></div>
         </div>
-        <details id="plan-details"><summary>The full plan</summary><pre id="plan" tabindex="0" aria-label="The full plan"></pre></details>
-        <div class="row step-foot"><a class="btn ghost" href="#setup/choices"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg>Choices</a><a class="btn primary push" id="plan-next" href="#setup/build">Next: build<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></a></div>
+        <details id="plan-details" class="disclosure"><summary>The full plan</summary><pre id="plan" aria-label="The full plan"></pre></details>
+        <div class="row step-foot"><a class="btn ghost" href="#setup/choices"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg>What to run</a><a class="btn primary push" id="plan-next" href="#setup/build">Build<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></a></div>
       </section>
 
-      <section class="step panel" id="step-build" aria-labelledby="h-step-build" hidden>
-        <div class="panel-head"><h2 id="h-step-build" tabindex="-1">Build</h2></div>
-        <p class="muted">Setup runs one stage after another and checks everything at the end. Safe to run again: finished parts are kept. The first run takes a while.</p>
+      <section class="step" id="step-build" aria-labelledby="h-step-build" hidden>
+        <div class="block-head"><h2 id="h-step-build" tabindex="-1">Build</h2></div>
+        <p class="help">Setup runs one stage after another and checks everything at the end. The first run takes about 20 minutes, more with local AI models.</p>
         <ul id="ready-list" class="ready"></ul>
-        <div id="removals" class="callout danger" hidden><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
-          <div><h3>Setup stopped before deleting <span id="removals-names"></span></h3>
-            <p>Deleting erases everything on <span id="removals-disks">its disk</span>, for good. To keep it, tick it again under Choices, save, and run setup.</p>
-            <div class="row"><button type="button" class="btn danger" data-action="remove-guests" data-confirm="remove"><span>Delete and run setup</span></button><p class="feedback" role="status"></p></div></div>
+        <div id="removals" class="problem" hidden>
+          <h3>Setup stopped before deleting <span id="removals-names"></span></h3>
+          <p>Deleting erases everything on <span id="removals-disks">its disk</span>, for good. To keep it, tick it again under What to run, save, and run setup.</p>
+          <div class="row"><button type="button" class="btn danger" data-action="remove-guests"><span>Delete and run setup</span></button><p class="feedback" role="status"></p></div>
         </div>
-        <div class="row step-foot">
-          <button type="button" class="btn primary big" data-action="apply"><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg><span>Run setup</span></button>
+        <div class="row step-foot" id="build-start">
+          <button type="button" class="btn primary" data-action="apply"><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg><span>Run setup</span></button>
           <p class="feedback" id="build-result" role="status"></p>
         </div>
+        <div id="build-job"></div>
       </section>
     </section>
 
     <!-- Access -->
     <section class="view" id="view-access" data-title="Access" aria-labelledby="h-access" hidden>
-      <header class="view-head">
-        <h1 id="h-access" tabindex="-1">Access</h1>
-        <div class="seg" role="tablist" aria-label="Access" id="access-tabs">
-          <button type="button" role="tab" id="tab-tailscale" aria-controls="sec-tailscale" data-tab="tailscale">Tailscale</button>
-          <button type="button" role="tab" id="tab-lan" aria-controls="sec-lan" data-tab="lan">Home network</button>
-          <button type="button" role="tab" id="tab-trust" aria-controls="sec-trust" data-tab="trust">Trust this server</button>
-        </div>
-      </header>
+      <header class="page-head"><div><h1 id="h-access" tabindex="-1">Access</h1><p class="page-sub">How you reach the server from your own devices, and only from them.</p></div></header>
+      <div class="tabs" role="tablist" aria-label="Access" id="access-tabs">
+        <button type="button" role="tab" id="tab-tailscale" aria-controls="sec-tailscale" data-tab="tailscale"><span class="tab-mark" aria-hidden="true"></span>Tailscale</button>
+        <button type="button" role="tab" id="tab-lan" aria-controls="sec-lan" data-tab="lan"><span class="tab-mark" aria-hidden="true"></span>Home network</button>
+        <button type="button" role="tab" id="tab-trust" aria-controls="sec-trust" data-tab="trust"><span class="tab-mark" aria-hidden="true"></span>Trust this server</button>
+      </div>
 
-      <section class="panel tabpanel" id="sec-tailscale" role="tabpanel" aria-labelledby="tab-tailscale">
-        <div class="panel-head"><h2>Tailscale</h2><span class="badge" id="tailscale-state"></span></div>
-        <p class="muted">Your server joins your free <a href="https://tailscale.com/" rel="noopener noreferrer" target="_blank">Tailscale</a> network, so this page and your services work from your own devices anywhere.</p>
-        <div class="two-col">
-          <form id="tailscale-client-form" class="stack substep" novalidate>
-            <h3><span class="step-dot small" id="ts-dot-client" aria-hidden="true">1</span>OAuth client</h3>
-            <p class="muted small">Each setup run uses it to put your access policy in place. In the Tailscale admin console: <b>Settings, Trust credentials</b>, add an OAuth client with <b>Policy file</b> and <b>DNS</b>, both write. DNS makes names such as forgejo.nullbill.internal work on your devices.</p>
-            <p id="tailscale-client-saved" class="callout success compact" hidden><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg><span>Saved. Paste a new one to replace it.</span></p>
-            <label class="field"><span class="field-label">Client ID</span><input id="tailscale-client-id" autocomplete="off" spellcheck="false" aria-describedby="tailscale-client-result"></label>
-            <label class="field"><span class="field-label">Client secret</span><input id="tailscale-client-secret" type="password" autocomplete="off" placeholder="tskey-client-…" aria-describedby="tailscale-client-result"></label>
-            <div class="row"><button type="submit" class="btn secondary">Save client</button><p class="feedback" id="tailscale-client-result" role="status"></p></div>
+      <section class="tabpanel" id="sec-tailscale" role="tabpanel" aria-labelledby="tab-tailscale">
+        <dl class="props compact"><div><dt>Status</dt><dd id="tailscale-state"></dd></div></dl>
+        <p class="help">Your server joins your free <a href="https://tailscale.com/" rel="noopener noreferrer" target="_blank">Tailscale</a> network, so this page and your services open from your devices anywhere, and from nothing else.</p>
+        <div class="settings">
+          <form id="tailscale-client-form" class="setting" novalidate>
+            <div class="setting-text"><h3><span class="num-mark" id="ts-dot-client">1</span>OAuth client</h3>
+              <p>Each setup run uses it to put your access policy in place. In the Tailscale admin console: <b>Settings, Trust credentials</b>, add an OAuth client with <b>Policy file</b> and <b>DNS</b>, both write. DNS makes names such as forgejo.nullbill.internal work on your devices.</p>
+              <p id="tailscale-client-saved" class="saved" hidden><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg>Saved. Paste a new one to replace it.</p></div>
+            <div class="setting-control">
+              <label class="field"><span class="label">Client ID</span><input id="tailscale-client-id" autocomplete="off" spellcheck="false" aria-describedby="tailscale-client-result"></label>
+              <label class="field"><span class="label">Client secret</span><input id="tailscale-client-secret" type="password" autocomplete="off" placeholder="tskey-client-…" aria-describedby="tailscale-client-result"></label>
+              <div class="row"><button type="submit" class="btn">Save client</button><p class="feedback" id="tailscale-client-result" role="status"></p></div>
+            </div>
           </form>
-          <form id="vpn-form" class="stack substep" novalidate>
-            <h3><span class="step-dot small" id="ts-dot-key" aria-hidden="true">2</span>Auth key</h3>
-            <p class="muted small">After one setup run with the client: <b>Settings, Keys, Generate auth key</b>, Pre-approved on, tag <code>tag:nb-vpn</code>. Used once, then forgotten; run setup again.</p>
-            <p id="vpn-saved" class="callout success compact" hidden><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg><span>A key waits for the next setup run.</span></p>
-            <label class="field"><span class="field-label">Auth key</span><input id="tailscale-key" type="password" autocomplete="off" placeholder="tskey-auth-…" aria-describedby="vpn-result"></label>
-            <div class="row"><button type="submit" class="btn secondary">Save auth key</button><p class="feedback" id="vpn-result" role="status"></p></div>
+          <form id="vpn-form" class="setting" novalidate>
+            <div class="setting-text"><h3><span class="num-mark" id="ts-dot-key">2</span>Auth key</h3>
+              <p>After one setup run with the client: <b>Settings, Keys, Generate auth key</b>, Pre-approved on, tag <code>tag:nb-vpn</code>. Used once, then forgotten; run setup again.</p>
+              <p id="vpn-saved" class="saved" hidden><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg>A key waits for the next setup run.</p></div>
+            <div class="setting-control">
+              <label class="field"><span class="label">Auth key</span><input id="tailscale-key" type="password" autocomplete="off" placeholder="tskey-auth-…" aria-describedby="vpn-result"></label>
+              <div class="row"><button type="submit" class="btn">Save auth key</button><p class="feedback" id="vpn-result" role="status"></p></div>
+            </div>
           </form>
         </div>
-        <p class="muted small">On your devices, names such as <code>forgejo.nullbill.internal</code> work once a setup run had DNS on the client. On Android, set <b>Settings, Private DNS</b> to <b>Automatic</b> if it names a provider; on Linux, run <code>sudo tailscale set --accept-routes --accept-dns</code>. Addresses keep working either way.</p>
-        <details id="tailnet-details" hidden><summary>The Tailscale policy setup puts in place</summary><pre id="tailnet-policy" tabindex="0" aria-label="Tailscale policy"></pre></details>
+        <details class="disclosure"><summary>Names on your devices</summary><p class="help">Names such as <code>forgejo.nullbill.internal</code> work once a setup run had DNS on the client. On Android, set <b>Settings, Private DNS</b> to <b>Automatic</b> if it names a provider; on Linux, run <code>sudo tailscale set --accept-routes --accept-dns</code>. Addresses keep working either way.</p></details>
+        <details id="tailnet-details" class="disclosure" hidden><summary>The Tailscale policy setup puts in place</summary><pre id="tailnet-policy" aria-label="Tailscale policy"></pre></details>
       </section>
 
-      <section class="panel tabpanel" id="sec-lan" role="tabpanel" aria-labelledby="tab-lan" hidden>
-        <div class="panel-head"><h2>Home network</h2><span class="badge" id="lan-state"></span></div>
-        <p class="muted">Once this page opens over Tailscale, close Proxmox's web UI and SSH to your home network. Press <b>Keep it closed</b> here, over Tailscale, within <span id="lan-minutes">15</span> minutes, or the server opens it again by itself, so a mistake cannot lock you out.</p>
-        <p id="lan-status" class="callout compact"></p>
+      <section class="tabpanel" id="sec-lan" role="tabpanel" aria-labelledby="tab-lan" hidden>
+        <dl class="props compact"><div><dt>Status</dt><dd id="lan-state"></dd></div></dl>
+        <p class="help" id="lan-status"></p>
+        <p class="help">Once this page opens over Tailscale, close Proxmox's web UI and SSH to your home network. Then press <b>Keep it closed</b> here, over Tailscale, within <span id="lan-minutes">15</span> minutes, or the server opens it again by itself, so a mistake cannot lock you out.</p>
         <div class="row">
           <button type="button" class="btn primary" data-action="close-lan" id="lan-close"><svg class="icon" aria-hidden="true"><use href="#i-lock"/></svg><span>Close to the home network</span></button>
           <button type="button" class="btn primary" data-action="keep-lan-closed" id="lan-keep"><svg class="icon" aria-hidden="true"><use href="#i-lock"/></svg><span>Keep it closed</span></button>
-          <button type="button" class="btn secondary" data-action="open-lan" id="lan-open"><svg class="icon" aria-hidden="true"><use href="#i-unlock"/></svg><span>Reopen to the home network</span></button>
+          <button type="button" class="btn" data-action="open-lan" id="lan-open"><svg class="icon" aria-hidden="true"><use href="#i-unlock"/></svg><span>Reopen to the home network</span></button>
           <p class="feedback" id="lan-result" role="status"></p>
         </div>
       </section>
 
-      <section class="panel tabpanel" id="sec-trust" role="tabpanel" aria-labelledby="tab-trust" hidden>
-        <div class="panel-head"><h2>Trust this server, install the app</h2><span class="badge" id="trust-state"></span></div>
-        <p class="muted">Browsers warn on this page, Proxmox, Forgejo and Grafana because their certificates come from your server, not from a company browsers already know. The connection is encrypted either way. Install your server's root certificate once on each device: the warnings stop, and your phone can install this page as an app. It vouches only for your server's own addresses and names, never for any other website.</p>
-        <div class="two-col">
-          <div class="stack">
-            <a id="trust-download" class="btn primary" href="/nullbill-root.crt" download="nullbill-root.crt" hidden><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Download root certificate</a>
-            <p id="trust-wait" class="callout info compact"><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><span>The first setup run makes it.</span></p>
-            <p class="muted small" id="trust-fingerprint"></p>
-            <p class="muted small">Proxmox gets this certificate at the first setup run after you close the server to the home network. For the local AI model in a browser extension such as Page Assist, use the gateway's address, https://10.42.4.21:4000/v1 on most servers (Services shows yours), not its name. Jellyfin uses plain HTTP inside Tailscale's encryption, so browsers mark it "Not secure" in the address bar but show no warning page.</p>
-          </div>
-          <div class="stack">
-            <details class="howto" open><summary>Android</summary>
-              <ol>
-                <li>On the phone, press <b>Download root certificate</b>.</li>
-                <li>Open <b>Settings</b> and search for <b>CA certificate</b>. On most phones it is under <b>Security and privacy, More security settings, Install from device storage</b>. Tap <b>CA certificate</b>, then <b>Install anyway</b>, and pick <b>nullbill-root.crt</b> from Downloads.</li>
-                <li>Open this page in Chrome again and choose <b>Install app</b>. If Firefox still warns: in Firefox open <b>Settings, About Firefox</b> and tap the Firefox logo until it says the debug menu is on. Back in <b>Settings</b>, open <b>Secret Settings</b>, turn on <b>Use third party CA certificates</b>, then close Firefox and open it again.</li>
-              </ol>
-            </details>
-            <details class="howto"><summary>Windows</summary>
-              <ol>
-                <li>Press <b>Download root certificate</b> and open the file.</li>
-                <li>Press <b>Install Certificate</b>, choose <b>Current User</b>, then <b>Place all certificates in the following store</b>, <b>Browse</b>, <b>Trusted Root Certification Authorities</b>. Press <b>Next</b>, <b>Finish</b>, and <b>Yes</b> to the warning.</li>
-                <li>Close the browser and open it again. Edge, Chrome and Firefox all use it.</li>
-              </ol>
-            </details>
-            <details class="howto"><summary>iPhone and iPad</summary>
-              <ol>
-                <li>Open this page in Safari, press <b>Download root certificate</b> and allow the download.</li>
-                <li>Open <b>Settings, Profile Downloaded</b> and press <b>Install</b>.</li>
-                <li>Open <b>Settings, General, About, Certificate Trust Settings</b> and turn on <b>NullBill browser CA</b>. Add the page to the Home Screen from the share menu.</li>
-              </ol>
-            </details>
-          </div>
+      <section class="tabpanel" id="sec-trust" role="tabpanel" aria-labelledby="tab-trust" hidden>
+        <dl class="props compact"><div><dt>Status</dt><dd id="trust-state"></dd></div></dl>
+        <p class="help">Browsers warn on this page, Proxmox, Forgejo and Grafana because their certificates come from your server, not from a company browsers know. The connection is encrypted either way. Install the server's root certificate once on each device: the warnings stop, and your phone can install this page as an app. It vouches only for your server's own addresses and names.</p>
+        <div class="row">
+          <a id="trust-download" class="btn primary" href="/nullbill-root.crt" download="nullbill-root.crt" hidden><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Download root certificate</a>
+          <button type="button" id="install-app-2" class="btn" hidden><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Install the app</button>
+          <p class="feedback" id="pwa-state" role="status"></p>
         </div>
-        <div class="row"><button type="button" id="install-app-2" class="btn secondary" hidden><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Install the app</button><p class="feedback" id="pwa-state" role="status"></p></div>
+        <p id="trust-wait" class="note"><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><span>The first setup run makes it.</span></p>
+        <dl class="props" id="trust-props" hidden><div><dt>SHA-256</dt><dd><code id="trust-fingerprint" class="wrap"></code></dd></div></dl>
+        <div class="tabs sub" role="tablist" aria-label="Your device" id="platform-tabs">
+          <button type="button" role="tab" id="tab-android" aria-controls="howto-android" data-tab="android">Android</button>
+          <button type="button" role="tab" id="tab-windows" aria-controls="howto-windows" data-tab="windows">Windows</button>
+          <button type="button" role="tab" id="tab-apple" aria-controls="howto-apple" data-tab="apple">iPhone and iPad</button>
+        </div>
+        <ol class="howto" id="howto-android" role="tabpanel" aria-labelledby="tab-android">
+          <li>On the phone, press <b>Download root certificate</b>.</li>
+          <li>Open <b>Settings</b> and search for <b>CA certificate</b>. On most phones it is under <b>Security and privacy, More security settings, Install from device storage</b>. Tap <b>CA certificate</b>, then <b>Install anyway</b>, and pick <b>nullbill-root.crt</b> from Downloads.</li>
+          <li>Open this page in Chrome again and choose <b>Install app</b>.</li>
+          <li>Firefox still warns? Open <b>Settings, About Firefox</b> and tap the Firefox logo until it says the debug menu is on. Back in <b>Settings</b>, open <b>Secret Settings</b>, turn on <b>Use third party CA certificates</b>, then close Firefox and open it again.</li>
+        </ol>
+        <ol class="howto" id="howto-windows" role="tabpanel" aria-labelledby="tab-windows" hidden>
+          <li>Press <b>Download root certificate</b> and open the file.</li>
+          <li>Press <b>Install Certificate</b>, choose <b>Current User</b>, then <b>Place all certificates in the following store</b>, <b>Browse</b>, <b>Trusted Root Certification Authorities</b>. Press <b>Next</b>, <b>Finish</b>, and <b>Yes</b> to the warning.</li>
+          <li>Close the browser and open it again. Edge, Chrome and Firefox all use it.</li>
+        </ol>
+        <ol class="howto" id="howto-apple" role="tabpanel" aria-labelledby="tab-apple" hidden>
+          <li>Open this page in Safari, press <b>Download root certificate</b> and allow the download.</li>
+          <li>Open <b>Settings, Profile Downloaded</b> and press <b>Install</b>.</li>
+          <li>Open <b>Settings, General, About, Certificate Trust Settings</b> and turn on <b>NullBill browser CA</b>. Add the page to the Home Screen from the share menu.</li>
+        </ol>
+        <p class="foot-note">Proxmox gets this certificate at the first setup run after you close the server to the home network. For the local AI model in a browser extension such as Page Assist, use the gateway's address from Services, not its name. Jellyfin uses plain HTTP inside Tailscale's encryption, so browsers mark it "Not secure" but show no warning page.</p>
       </section>
     </section>
 
-    <!-- Alerts -->
-    <section class="view" id="view-alerts" data-title="Alerts" aria-labelledby="h-alerts" hidden>
-      <header class="view-head"><h1 id="h-alerts" tabindex="-1">Alerts</h1><p class="view-sub">On your phone, and when the server goes silent.</p></header>
-      <div class="two-col">
-        <section class="panel" aria-labelledby="h-ntfy">
-          <div class="panel-head"><h2 id="h-ntfy">Your phone</h2><span class="badge good">Recommended</span></div>
-          <p class="muted">Install the free <a href="https://ntfy.sh/" rel="noopener noreferrer" target="_blank">ntfy</a> app and subscribe to this topic. Keep the topic to yourself.</p>
-          <div class="copy-field"><code id="ntfy-topic"></code><button type="button" id="copy-topic" class="btn secondary small"><svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg>Copy</button></div>
-          <div class="row"><button type="button" id="test-alerts" class="btn secondary"><svg class="icon" aria-hidden="true"><use href="#i-alerts"/></svg>Send a test alert</button><p class="feedback" id="test-result" role="status"></p></div>
-        </section>
-        <section class="panel" aria-labelledby="h-hc">
-          <div class="panel-head"><h2 id="h-hc">When it goes silent</h2><span class="badge" id="hc-state"></span></div>
-          <form id="alerts-form" class="stack" novalidate>
-            <p class="muted">Optional. A free <a href="https://healthchecks.io/" rel="noopener noreferrer" target="_blank">Healthchecks.io</a> check (10 minute period and grace) tells you when the server stops checking in.</p>
-            <label class="field"><span class="field-label">Ping URL</span><input id="healthchecks-url" type="url" placeholder="https://hc-ping.com/…" aria-describedby="alerts-result"></label>
-            <div class="row"><button type="submit" class="btn secondary">Save URL</button><p class="feedback" id="alerts-result" role="status"></p></div>
-          </form>
-        </section>
+    <!-- Agent: settings and log; on a phone also the chat -->
+    <section class="view" id="view-agent" data-title="Agent" aria-labelledby="h-agent" hidden>
+      <header class="page-head"><div><h1 id="h-agent" tabindex="-1">Agent</h1><p class="page-sub">What the agent may do, how it signs in, and everything it did.</p></div></header>
+      <div class="tabs" role="tablist" aria-label="Agent" id="agent-tabs">
+        <button type="button" role="tab" id="tab-chat" aria-controls="agent-chat-slot" data-tab="chat">Chat</button>
+        <button type="button" role="tab" id="tab-settings" aria-controls="agent-settings" data-tab="settings">Settings</button>
+        <button type="button" role="tab" id="tab-log" aria-controls="agent-log" data-tab="log">Log</button>
       </div>
-    </section>
+      <div id="agent-chat-slot" class="agent-chat-slot" role="tabpanel" aria-labelledby="tab-chat"></div>
 
-    <!-- Activity -->
-    <section class="view" id="view-activity" data-title="Activity" aria-labelledby="h-activity" hidden>
-      <header class="view-head"><h1 id="h-activity" tabindex="-1">Activity</h1><p class="view-sub">Setup runs, checks and updates, stage by stage.</p></header>
-      <div class="activity-grid">
-        <div id="job-slot"></div>
-        <div id="job-none" class="empty" hidden>
-          <svg class="icon" aria-hidden="true"><use href="#i-activity"/></svg><h2>Nothing has run yet</h2><p>Runs show here, live.</p><a class="btn primary" href="#setup">Go to Setup</a>
+      <div id="agent-settings" role="tabpanel" aria-labelledby="tab-settings">
+        <div class="settings">
+          <form class="setting" id="agent-form" novalidate>
+            <div class="setting-text"><h3 id="h-signin">Sign-in</h3>
+              <p>An Anthropic API key, or a Claude subscription token from <code>claude setup-token</code>. Kept encrypted on the server; the agent itself never sees it.</p>
+              <p class="status-line" id="signin-state"></p></div>
+            <div class="setting-control">
+              <label class="field"><span class="label" id="agent-label">API key or subscription token</span>
+                <input id="agent-credential" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…" aria-describedby="agent-result"></label>
+              <div class="row"><button type="submit" class="btn">Sign in the agent</button><p class="feedback" id="agent-result" role="status"></p></div>
+              <details class="disclosure small"><summary>Where do I get one?</summary>
+                <p><b>Claude Pro or Max:</b> on any computer with Claude Code, run <code>claude setup-token</code> and paste what it prints; it lasts a year. <b>API:</b> make a key at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer">console.anthropic.com</a>; that works from a phone too.</p></details>
+            </div>
+          </form>
+
+          <div class="setting" id="sec-mode">
+            <div class="setting-text"><h3 id="h-mode">Access mode</h3>
+              <p>What the agent may run without asking you.</p>
+              <p class="hard-blocks"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg><span>Blocked in every mode: erasing disks, deleting backups, reading secrets, silencing the command log, and touching the NullBill container.</span></p></div>
+            <div class="setting-control">
+              <div class="choice-list" role="group" aria-labelledby="h-mode" id="modes">
+                <button type="button" class="choice" data-mode="manual" aria-pressed="false"><span class="radio" aria-hidden="true"></span><span><span class="choice-title">Manual</span><span class="choice-desc">Asks before every change. Reading and checks run freely.</span></span></button>
+                <button type="button" class="choice" data-mode="auto" aria-pressed="false"><span class="radio" aria-hidden="true"></span><span><span class="choice-title">Auto</span><span class="choice-desc">Restarts, installs, setup runs and updates go ahead. Deleting, rebooting and scripts wait for you.</span></span></button>
+                <button type="button" class="choice" data-mode="yolo" aria-pressed="false"><span class="radio" aria-hidden="true"></span><span><span class="choice-title">YOLO</span><span class="choice-desc">Nothing waits for you. Every action is still logged.</span></span></button>
+              </div>
+              <label class="switch-row"><input type="checkbox" id="auto-fix" role="switch"><span class="switch" aria-hidden="true"></span><span>Look into failed runs by itself</span></label>
+              <p class="feedback" id="mode-result" role="status"></p>
+            </div>
+          </div>
+
+          <div class="setting" id="sec-powers">
+            <div class="setting-text"><h3 id="h-powers">Operator agent</h3>
+              <p id="powers-what">A second agent for long work, in the operator container, used from the Proxmox shell or by remote agents. With root on it may run any command on Proxmox, setup and updates; each run is announced on your phone. Off takes its key off Proxmox at once.</p></div>
+            <div class="setting-control">
+              <div class="row"><button type="button" id="agent-powers" class="switch-btn" role="switch" aria-checked="false" aria-describedby="powers-what"><span class="switch" aria-hidden="true"></span><span>Root on Proxmox</span></button>
+                <p class="feedback" id="agent-powers-result" role="status"></p></div>
+              <p class="status-line" id="powers-state"></p>
+            </div>
+          </div>
+
+          <form class="setting" id="agent-github-form" novalidate>
+            <div class="setting-text"><h3 id="h-github">Fixes as pull requests</h3>
+              <p>Optional. A fine-grained GitHub token for NullBill's repository, with Contents and Pull requests read and write, lets the operator agent propose fixes. Run setup after saving.</p>
+              <p class="status-line" id="github-state"></p></div>
+            <div class="setting-control">
+              <label class="field"><span class="label">GitHub token</span><input id="agent-github-token" type="password" autocomplete="off" spellcheck="false" placeholder="github_pat_…" aria-describedby="agent-github-result"></label>
+              <div class="row"><button type="submit" class="btn">Save token</button><button type="button" id="agent-github-remove" class="btn ghost" hidden>Remove</button><p class="feedback" id="agent-github-result" role="status"></p></div>
+            </div>
+          </form>
+
+          <div class="setting" id="sec-remote">
+            <div class="setting-text"><h3 id="h-remote">Agents on other computers</h3>
+              <p>A token that lets an agent elsewhere run the checks and read their output over Tailscale, and nothing else.</p></div>
+            <div class="setting-control">
+              <form id="remote-agent-form" class="inline-form" novalidate>
+                <label class="field"><span class="label">Name</span><input id="remote-agent-name" autocomplete="off" placeholder="laptop" aria-describedby="remote-agent-result"></label>
+                <button type="submit" class="btn">Make a token</button>
+              </form>
+              <p class="feedback" id="remote-agent-result" role="status"></p>
+              <div id="remote-agent-token-box" class="secret-box" hidden>
+                <div class="secret-box-head"><span><b>Shown once.</b> Keep it like a password.</span><button type="button" id="remote-agent-copy" class="btn small"><svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg>Copy</button></div>
+                <pre id="remote-agent-token" tabindex="0" aria-label="The new agent's settings"></pre>
+              </div>
+              <ul id="remote-agents" class="mini-list"></ul>
+            </div>
+          </div>
         </div>
-        <section class="panel history" id="history-card" aria-labelledby="h-history" hidden>
-          <div class="panel-head"><h2 id="h-history">Latest of each kind</h2></div>
-          <ul id="history" class="item-list"></ul>
-        </section>
+      </div>
+
+      <div id="agent-log" role="tabpanel" aria-labelledby="tab-log">
+        <div class="toolbar">
+          <label class="filter"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><span class="sr-only">Filter the log</span><input id="log-filter" type="search" placeholder="Filter" autocomplete="off"></label>
+          <p class="meta">Each action is written here before it runs. Commands on Proxmox also go to its journal as <code>nb-cmd</code>.</p>
+          <button type="button" id="log-refresh" class="btn small push">Refresh</button>
+        </div>
+        <div class="table-wrap"><table class="table log-table"><caption class="sr-only">What the agent did, newest first</caption>
+          <thead><tr><th scope="col">When</th><th scope="col">Action</th><th scope="col">What</th><th scope="col" class="hide-phone">By</th><th scope="col" class="hide-phone">Tier</th></tr></thead>
+          <tbody id="log-rows"></tbody></table></div>
       </div>
     </section>
   </main>
 
-  <!-- The agent: docked beside every page on a wide screen -->
-  <button type="button" class="scrim" id="dock-scrim" tabindex="-1" aria-hidden="true"></button>
+  <!-- The agent: a panel beside every page on a wide screen -->
   <aside id="dock" class="dock" aria-label="Agent">
     <div id="chat" class="chat">
       <div class="chat-head">
-        <span class="agent-mark" aria-hidden="true"><svg class="icon"><use href="#i-agent"/></svg></span>
-        <div class="chat-title"><h2 id="chat-title">Agent</h2><span id="chat-status" class="chat-status">Not signed in</span></div>
-        <button type="button" id="chat-mode" class="mode-pill" title="Change the access mode">Manual</button>
-        <button type="button" id="chat-copy" class="btn ghost icon-only small" title="Copy the conversation"><svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg><span class="sr-only">Copy the conversation</span></button>
-        <button type="button" id="chat-new" class="btn ghost icon-only small" title="New conversation"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg><span class="sr-only">New conversation</span></button>
-        <button type="button" id="chat-close" class="btn ghost icon-only small dock-only" title="Hide the agent (Alt+A)"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg><span class="sr-only">Hide the agent</span></button>
+        <h2 id="chat-title">Agent</h2>
+        <span id="chat-status" class="chat-status">Not signed in</span>
+        <button type="button" id="chat-mode" class="mode-btn" aria-haspopup="menu" aria-expanded="false">Manual<svg class="icon" aria-hidden="true"><use href="#i-chevron-down"/></svg></button>
+        <button type="button" id="chat-more" class="icon-btn" aria-haspopup="menu" aria-expanded="false" title="Conversation"><svg class="icon" aria-hidden="true"><use href="#i-dots"/></svg><span class="sr-only">Conversation</span></button>
+        <button type="button" id="chat-close" class="icon-btn dock-only" title="Hide the agent (Alt+A)"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg><span class="sr-only">Hide the agent</span></button>
       </div>
       <div id="chat-log" class="chat-log" role="log" aria-live="polite" aria-relevant="additions" aria-labelledby="chat-title" tabindex="0"></div>
       <div id="chat-signin" class="chat-signin" hidden>
-        <div class="chat-hello">
-          <svg class="icon big accent-2" aria-hidden="true"><use href="#i-agent"/></svg>
-          <h3>Sign in your agent</h3>
-          <p class="muted small">It debugs setup with you from the first minute. You approve what it changes.</p>
-        </div>
-        <form id="chat-signin-form" class="stack" novalidate>
-          <label class="field"><span class="field-label">API key or subscription token</span><input id="chat-credential" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…" aria-describedby="chat-signin-result"></label>
-          <button type="submit" class="btn primary wide">Sign in</button>
+        <h3>Sign in the agent</h3>
+        <p class="help">It reads the hardware, explains each step and, when a run fails, finds out why and proposes the fix. You approve what it changes.</p>
+        <form id="chat-signin-form" class="form" novalidate>
+          <label class="field"><span class="label">API key or subscription token</span><input id="chat-credential" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…" aria-describedby="chat-signin-result"></label>
+          <button type="submit" class="btn primary block">Sign in</button>
           <p class="feedback" id="chat-signin-result" role="status"></p>
-          <p class="muted small">From <code>claude setup-token</code> (Claude Pro or Max) or <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer">console.anthropic.com</a>.</p>
+          <p class="help">From <code>claude setup-token</code> (Claude Pro or Max) or <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer">console.anthropic.com</a>.</p>
         </form>
       </div>
       <div class="chat-foot">
         <div class="chips" id="chat-chips"></div>
         <form id="composer" class="composer">
           <label class="sr-only" for="composer-text">Message the agent</label>
-          <textarea id="composer-text" rows="1" placeholder="Ask or tell the agent…" aria-keyshortcuts="/" enterkeyhint="send"></textarea>
-          <button type="button" id="chat-stop" class="btn danger icon-only" title="Stop the agent" hidden><svg class="icon" aria-hidden="true"><use href="#i-stop"/></svg><span class="sr-only">Stop</span></button>
-          <button type="submit" id="chat-send" class="btn primary icon-only" title="Send (Enter)"><svg class="icon" aria-hidden="true"><use href="#i-send"/></svg><span class="sr-only">Send</span></button>
+          <textarea id="composer-text" rows="1" placeholder="Ask or tell the agent" aria-keyshortcuts="/" enterkeyhint="send"></textarea>
+          <div class="composer-bar">
+            <span class="composer-hint hide-phone">Enter sends, Shift Enter for a new line</span>
+            <button type="button" id="chat-stop" class="btn small danger" hidden><svg class="icon" aria-hidden="true"><use href="#i-stop"/></svg>Stop</button>
+            <button type="submit" id="chat-send" class="icon-btn send" title="Send (Enter)"><svg class="icon" aria-hidden="true"><use href="#i-send"/></svg><span class="sr-only">Send</span></button>
+          </div>
         </form>
         <p class="feedback" id="composer-result" role="status"></p>
       </div>
@@ -560,106 +579,121 @@
   </aside>
 
   <nav class="tabbar" aria-label="Main">
-    <a href="#home" data-view="home"><svg class="icon" aria-hidden="true"><use href="#i-home"/></svg><span>Home</span></a>
+    <a href="#overview" data-view="overview"><svg class="icon" aria-hidden="true"><use href="#i-overview"/></svg><span>Overview</span></a>
     <a href="#services" data-view="services"><svg class="icon" aria-hidden="true"><use href="#i-services"/></svg><span>Services</span></a>
-    <a href="#agent" data-view="agent" class="tab-agent"><span class="tab-agent-mark"><svg class="icon" aria-hidden="true"><use href="#i-agent"/></svg></span><span>Agent</span><span class="tab-badge" id="tab-agent-badge" hidden></span></a>
-    <a href="#setup" data-view="setup"><svg class="icon" aria-hidden="true"><use href="#i-setup"/></svg><span>Setup</span></a>
-    <button type="button" id="tab-more" aria-haspopup="dialog"><svg class="icon" aria-hidden="true"><use href="#i-more"/></svg><span>More</span></button>
+    <a href="#agent/chat" data-view="agent"><svg class="icon" aria-hidden="true"><use href="#i-agent"/></svg><span>Agent</span><span class="count" id="tab-agent-badge" hidden></span></a>
+    <a href="#activity" data-view="activity"><svg class="icon" aria-hidden="true"><use href="#i-activity"/></svg><span>Activity</span></a>
+    <button type="button" id="tab-more" aria-haspopup="dialog"><svg class="icon" aria-hidden="true"><use href="#i-menu"/></svg><span>More</span></button>
   </nav>
 </div>
+
+<!-- Menus -->
+<div id="menu" class="menu" role="menu" hidden></div>
+
+<!-- Setup guide -->
+<dialog id="guide" class="popover-dialog" aria-labelledby="h-guide-pop">
+  <form method="dialog">
+    <div class="dialog-head"><h2 id="h-guide-pop">Setup guide</h2><span class="meta" id="guide-pop-progress"></span><button class="icon-btn push" title="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg><span class="sr-only">Close</span></button></div>
+    <ol class="steps" id="guide-pop-list"></ol>
+  </form>
+</dialog>
 
 <!-- Command palette -->
 <dialog id="palette" class="palette" aria-label="Search and commands">
   <form method="dialog" class="palette-box">
     <div class="palette-input"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>
-      <input id="palette-q" autocomplete="off" spellcheck="false" placeholder="Go to, run, or ask the agent…" role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list"></div>
+      <input id="palette-q" autocomplete="off" spellcheck="false" placeholder="Go to a page, run something, or ask the agent" role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list"></div>
     <ul id="palette-list" class="palette-list" role="listbox" aria-label="Results"></ul>
-    <p class="palette-foot"><kbd>↑</kbd><kbd>↓</kbd> move <kbd>Enter</kbd> run <kbd>Esc</kbd> close</p>
+    <p class="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>Enter</kbd> run</span><span><kbd>Esc</kbd> close</span></p>
   </form>
 </dialog>
 
 <!-- Confirm -->
-<dialog id="confirm" class="confirm" aria-labelledby="confirm-title" aria-describedby="confirm-text">
-  <form method="dialog" class="stack">
+<dialog id="confirm" class="dialog" aria-labelledby="confirm-title" aria-describedby="confirm-text">
+  <form method="dialog" class="form">
     <h2 id="confirm-title"></h2>
-    <p id="confirm-text" class="muted"></p>
-    <label class="field" id="confirm-word-field" hidden><span class="field-label" id="confirm-word-label"></span><input id="confirm-word" autocomplete="off" spellcheck="false"></label>
-    <div class="row end"><button type="button" class="btn ghost" id="confirm-no">Cancel</button><button type="submit" class="btn danger" id="confirm-yes"></button></div>
+    <p id="confirm-text" class="help"></p>
+    <label class="field" id="confirm-word-field" hidden><span class="label" id="confirm-word-label"></span><input id="confirm-word" autocomplete="off" spellcheck="false"></label>
+    <div class="row end"><button type="button" class="btn" id="confirm-no">Cancel</button><button type="submit" class="btn danger" id="confirm-yes"></button></div>
   </form>
 </dialog>
 
 <!-- Shortcuts -->
-<dialog id="keys" class="confirm" aria-labelledby="keys-title">
-  <form method="dialog" class="stack">
-    <h2 id="keys-title">Keyboard</h2>
+<dialog id="keys" class="dialog" aria-labelledby="keys-title">
+  <form method="dialog" class="form">
+    <h2 id="keys-title">Keyboard shortcuts</h2>
     <dl class="keys">
       <dt><kbd>Ctrl</kbd> <kbd>K</kbd></dt><dd>Search and commands</dd>
       <dt><kbd>/</kbd></dt><dd>Write to the agent</dd>
-      <dt><kbd>Alt</kbd> <kbd>A</kbd></dt><dd>Show or hide the agent panel</dd>
-      <dt><kbd>g</kbd> then <kbd>h</kbd> <kbd>a</kbd> <kbd>s</kbd> <kbd>u</kbd> <kbd>x</kbd> <kbd>l</kbd> <kbd>y</kbd></dt><dd>Home, Agent, Services, Setup, Access, Alerts, Activity</dd>
+      <dt><kbd>Alt</kbd> <kbd>A</kbd></dt><dd>Show or hide the agent</dd>
+      <dt><kbd>g</kbd> then <kbd>o</kbd> <kbd>s</kbd> <kbd>y</kbd> <kbd>l</kbd> <kbd>u</kbd> <kbd>x</kbd> <kbd>a</kbd></dt><dd>Overview, Services, Activity, Alerts, Setup, Access, Agent</dd>
       <dt><kbd>[</kbd> <kbd>]</kbd></dt><dd>Previous and next setup step</dd>
       <dt><kbd>Enter</kbd> / <kbd>Shift</kbd> <kbd>Enter</kbd></dt><dd>Send / new line, in the agent's box</dd>
       <dt><kbd>Alt</kbd> <kbd>Y</kbd> / <kbd>Alt</kbd> <kbd>N</kbd></dt><dd>Go to the agent's waiting request; inside it, approve / decline</dd>
       <dt><kbd>?</kbd></dt><dd>This list</dd>
     </dl>
-    <label class="switch-line"><input type="checkbox" id="single-keys" role="switch"><span>Single-letter shortcuts (<kbd>/</kbd> <kbd>?</kbd> <kbd>g</kbd> <kbd>[</kbd> <kbd>]</kbd>)</span></label>
-    <div class="row end"><button class="btn secondary">Close</button></div>
+    <label class="switch-row"><input type="checkbox" id="single-keys" role="switch"><span class="switch" aria-hidden="true"></span><span>Single-key shortcuts (<kbd>/</kbd> <kbd>?</kbd> <kbd>g</kbd> <kbd>[</kbd> <kbd>]</kbd>)</span></label>
+    <div class="row end"><button class="btn">Close</button></div>
   </form>
 </dialog>
 
 <!-- More (phone) -->
 <dialog id="more" class="sheet" aria-label="More">
   <form method="dialog">
-    <nav aria-label="More pages"><ul class="sheet-list">
-      <li><a href="#access"><svg class="icon" aria-hidden="true"><use href="#i-access"/></svg>Access</a></li>
+    <ul class="sheet-list">
+      <li><a href="#setup"><svg class="icon" aria-hidden="true"><use href="#i-setup"/></svg>Setup</a></li>
       <li><a href="#alerts"><svg class="icon" aria-hidden="true"><use href="#i-alerts"/></svg>Alerts</a></li>
-      <li><a href="#activity"><svg class="icon" aria-hidden="true"><use href="#i-activity"/></svg>Activity</a></li>
-      <li><button type="button" data-run="verify"><svg class="icon" aria-hidden="true"><use href="#i-checks"/></svg>Run the checks</button></li>
+      <li><a href="#access"><svg class="icon" aria-hidden="true"><use href="#i-access"/></svg>Access</a></li>
+      <li><a href="#agent/settings"><svg class="icon" aria-hidden="true"><use href="#i-cog"/></svg>Agent settings</a></li>
+      <li class="sep"><button type="button" data-run="verify"><svg class="icon" aria-hidden="true"><use href="#i-checks"/></svg>Run the checks</button></li>
       <li><button type="button" data-run="upgrade"><svg class="icon" aria-hidden="true"><use href="#i-update"/></svg>Update NullBill</button></li>
       <li><button type="button" data-run="install"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Install the app</button></li>
-      <li><button type="button" data-run="theme"><svg class="icon" aria-hidden="true"><use href="#i-moon"/></svg>Light or dark</button></li>
+      <li class="sep"><button type="button" data-run="theme"><svg class="icon" aria-hidden="true"><use href="#i-moon"/></svg>Light or dark</button></li>
       <li><button type="button" data-run="logout"><svg class="icon" aria-hidden="true"><use href="#i-logout"/></svg>Sign out</button></li>
-    </ul></nav>
-    <div class="row end"><button class="btn ghost">Close</button></div>
+    </ul>
+    <div class="row end"><button class="btn">Close</button></div>
   </form>
 </dialog>
 
 <div id="toast" class="toast" role="alert" hidden>
-  <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg><span id="toast-text"></span>
-  <button type="button" id="toast-close" class="btn ghost small">Dismiss</button>
+  <span id="toast-text"></span>
+  <button type="button" id="toast-close" class="icon-btn" title="Dismiss"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg><span class="sr-only">Dismiss</span></button>
 </div>
 
 <template id="job-template">
-  <section class="panel job" aria-labelledby="job-title">
-    <div class="job-head">
-      <span class="job-icon" aria-hidden="true"></span>
-      <div class="job-heading"><h2 class="job-title" id="job-title" tabindex="-1"></h2><p class="job-sub muted"></p></div>
-      <span class="badge job-badge"></span>
-    </div>
+  <section class="job" aria-labelledby="job-title">
+    <header class="job-head">
+      <div class="job-heading">
+        <h2 class="job-title" id="job-title" tabindex="-1"></h2>
+        <p class="job-sub"><span class="job-state"></span><span class="job-meta"></span></p>
+      </div>
+      <div class="row job-actions">
+        <p class="feedback job-stop-result" role="status"></p>
+        <button type="button" class="btn job-stop" hidden><svg class="icon" aria-hidden="true"><use href="#i-stop"/></svg>Stop this run</button>
+        <button type="button" class="btn job-again" hidden></button>
+      </div>
+    </header>
     <div class="bar" role="progressbar" aria-labelledby="job-title" aria-valuemin="0" aria-valuemax="100"><span class="fill"></span></div>
     <p class="job-now"></p>
-    <div class="row job-stopper" hidden><button type="button" class="btn secondary small job-stop">Stop this run</button><p class="feedback job-stop-result" role="status"></p></div>
-    <div class="callout danger job-error" hidden><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
-      <div>
-        <h3 class="job-error-title" tabindex="-1">What went wrong</h3>
-        <p class="job-message"></p>
-        <ul class="job-more"></ul>
-        <div class="job-detail" hidden><h4 class="job-detail-title"></h4><pre class="job-detail-text" tabindex="0"></pre></div>
-        <h3>What to do</h3>
-        <p class="job-advice"></p>
-        <div class="row">
-          <button type="button" class="btn primary job-agent"><svg class="icon" aria-hidden="true"><use href="#i-agent"/></svg>Ask the agent to fix it</button>
-          <button type="button" class="btn secondary job-retry">Run setup again</button>
-          <button type="button" class="btn ghost job-copy"><svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg>Copy details</button>
-          <p class="feedback job-copy-result" role="status"></p>
-        </div>
+    <div class="problem job-error" hidden>
+      <h3 class="job-error-title" tabindex="-1">What went wrong</h3>
+      <p class="job-message"></p>
+      <ul class="job-more"></ul>
+      <div class="job-detail" hidden><h4 class="job-detail-title"></h4><pre class="job-detail-text"></pre></div>
+      <h4>What to do</h4>
+      <p class="job-advice"></p>
+      <div class="row">
+        <button type="button" class="btn primary job-agent"><svg class="icon" aria-hidden="true"><use href="#i-agent"/></svg>Ask the agent to fix it</button>
+        <button type="button" class="btn job-retry">Run setup again</button>
+        <button type="button" class="btn ghost job-copy"><svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg>Copy details</button>
+        <p class="feedback job-copy-result" role="status"></p>
       </div>
     </div>
-    <div class="callout success job-ok" hidden><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg><div><h3 class="job-ok-title"></h3><p class="job-ok-text"></p><div class="row job-ok-next"></div></div></div>
-    <div class="job-verify" hidden><ul class="counts"></ul><ul class="problems"></ul></div>
+    <div class="done-note job-ok" hidden><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg><div><p><b class="job-ok-title"></b> <span class="job-ok-text"></span></p><div class="row job-ok-next"></div></div></div>
+    <div class="job-verify" hidden><p class="counts"></p><ul class="problems"></ul></div>
     <div class="job-cols">
-      <details class="job-stages" open><summary>Stages</summary><ol class="stages"></ol></details>
-      <details class="job-log"><summary>Full log</summary><pre tabindex="0" aria-label="Full log"></pre></details>
+      <section class="job-stages" aria-label="Stages"><h3 class="mini-head">Stages</h3><ol class="stages"></ol></section>
+      <section class="job-log" aria-label="Log"><h3 class="mini-head">Log</h3><pre class="log" aria-label="Log"></pre></section>
     </div>
   </section>
 </template>

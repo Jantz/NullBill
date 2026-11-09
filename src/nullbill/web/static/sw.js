@@ -6,7 +6,7 @@
 // the app still opens (and says it cannot reach the server) when offline.
 // Nothing under /api/ is ever stored here.
 
-const CACHE = "nullbill-shell-2";
+const CACHE = "nullbill-shell-3";
 const SHELL = ["/", "/app.js", "/style.css", "/theme.js", "/manifest.webmanifest", "/icon.svg", "/icon-192.png", "/icon-512.png",
   "/icon-maskable-512.png"];
 

@@ -335,7 +335,7 @@ def summarize(action: str, text: str, state: str, times: dict) -> dict:
                 status = "waiting"
             end = begun.get(later[0]) if later else (times["now"] if state == "running" else times["ended"])
             begin = begun.get(name)
-            seconds = round(end - begin) if status != "waiting" and begin is not None and end is not None else None
+            seconds = max(0, round(end - begin)) if status != "waiting" and begin is not None and end is not None else None
             steps.append({"name": name, "text": STAGE_TEXT.get(name, name), "status": status, "seconds": seconds})
         out["steps"] = steps
     if state == "running":

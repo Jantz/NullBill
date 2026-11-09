@@ -1036,6 +1036,21 @@ class App:
             out[job.action] = {"id": job.id, "state": job.state(), "started": job.started}
         return out
 
+    def runs(self, limit: int = 30) -> list[dict]:
+        """The latest jobs, newest first, for the page's Activity list."""
+        out = []
+        for job in sorted(self.jobs.values(), key=lambda j: j.started, reverse=True)[:limit]:
+            state = job.state()
+            ended = job.rc_file.stat().st_mtime if state != "running" and job.rc_file.exists() else None
+            seconds = round((ended or time.time()) - job.started)
+            out.append({"id": job.id, "action": job.action, "state": state, "started": job.started, "seconds": seconds, "by": job.by})
+        return out
+
+    def built(self) -> bool:
+        """A setup run has finished at least once: the guests exist, even
+        while a later run is going or after one stopped."""
+        return any(j.action in ("apply", "remove-guests") and j.state() == "done" for j in self.jobs.values())
+
     def config_changed(self) -> bool:
         """The choices were saved after the start of the last setup run that
         finished, so the server does not follow them yet."""
@@ -1079,6 +1094,8 @@ class App:
             "probed": (self.home / "probe" / "latest" / "facts.json").is_file(),
             "hardware": self.hardware(),
             "last_jobs": self.last_jobs(),
+            "runs": self.runs(),
+            "built": self.built(),
             "config_changed": self.config_changed(),
             "remote_agents_ready": self.guest_ip("nullbill") is not None and self.guest_ip("vpn") is not None,
             "choices": self.choices(),

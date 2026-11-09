@@ -259,6 +259,23 @@ def test_choices_saved_after_the_last_good_setup_run_are_waiting(site):
     assert client.call("/api/state")[1]["config_changed"] is True
 
 
+def test_activity_lists_runs_newest_first_and_built_waits_for_a_good_setup_run(site):
+    app, client = site
+    sign_in(app, client)
+    st = client.call("/api/state")[1]
+    assert st["runs"] == [] and st["built"] is False
+    failed = client.call("/api/jobs", {"action": "apply", "stage": "host"})[1]
+    wait(client, failed["id"])
+    assert client.call("/api/state")[1]["built"] is False  # a failed run built nothing
+    good = client.call("/api/jobs", {"action": "apply"})[1]
+    wait(client, good["id"])
+    st = client.call("/api/state")[1]
+    assert st["built"] is True
+    assert [r["id"] for r in st["runs"]] == [good["id"], failed["id"]]
+    assert st["runs"][1]["state"] == "failed" and st["runs"][0]["by"] == "owner"
+    assert all(r["seconds"] >= 0 for r in st["runs"])
+
+
 def test_one_job_at_a_time(site, tmp_path):
     app, client = site
     sign_in(app, client)

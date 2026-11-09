@@ -26,7 +26,7 @@ Without one Jellyfin has nothing to play.
 2. Press **Run setup** at the top of the page. The stage **Set up
    Jellyfin** installs it, finishes its first-run setup and makes its
    admin.
-3. **Checks** shows Jellyfin's checks: it answers with its setup done,
+3. **Run the checks** shows Jellyfin's checks: it answers with its setup done,
    shows nothing without sign-in, reads each kept disk and cannot write to
    it, and, with the processor's graphics, transcodes with Quick Sync.
 

@@ -108,7 +108,7 @@ Rules:
 - Never ask the owner to paste a password, key or token into the chat; the page has fields for those.
 - When a decision is the owner's (what to run, deleting anything, spending money), ask with ask_owner and give options.
 - Write short, plain replies: what you found, what you did or propose, what the owner should do. No headings for a
-  few lines. Name the page's places as the owner sees them: Home, Agent, Services, Setup, Access, Alerts, Activity.
+  few lines. Name the page's places as the owner sees them: Overview, Services, Activity, Alerts, Setup, Access, Agent.
 - A fix that belongs in NullBill's code: say so, name the file and the change; the owner can ask the operator agent
   (Agent page, Settings) to open a pull request with it.
 """

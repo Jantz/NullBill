@@ -240,11 +240,14 @@ must hand out addresses by DHCP: the NullBill container takes one.
 
 ## 9. The setup page: first setup run
 
-The page has a rail with its pages, **Home**, **Agent**, **Services**,
-**Setup**, **Access**, **Alerts** and **Activity** (on a phone, a tab bar
-with **More**). **Run setup**, **Checks** and **Update** sit at the top of
-every page, and the agent sits beside every page (on a phone, its own
-tab). **Ctrl K** finds any page or command; **?** lists the shortcuts.
+The page has a sidebar with its pages, **Overview**, **Services**,
+**Activity** and **Alerts**, then **Setup**, **Access** and **Agent** under
+**Configure** (on a phone, a tab bar with **More**). The top bar shows the
+latest run, the **Setup guide** and **Run setup**; the arrow beside it has
+**Run the checks**, **Update NullBill** and **Read the hardware**. The agent
+sits beside every page (on a phone, its own tab). **Ctrl K** finds any page
+or command; **?** lists the shortcuts. Until the first setup run finishes,
+**Overview** lists these steps in order and links each one.
 
 **You need:** the address, fingerprint and setup code from part 8, your
 Tailscale login from part 1, a new password of at least 12 characters
@@ -261,15 +264,15 @@ made one.
 3. **Choose a password**: the page asks for one at this first sign-in. Use
    at least 12 characters and keep it in your password manager. From now
    on you sign in with it.
-4. **Setup**, step 1 **Agent**: paste the API key or subscription token
-   and press **Sign in**. The agent greets you in its panel and can read
+4. **Agent** page, **Settings**, **Sign-in** (or the agent's panel): paste
+   the API key or subscription token and press **Sign in the agent**. The agent greets you in its panel and can read
    the hardware for you; from now on, ask it whenever a step is unclear or
    fails. It asks before it changes anything (the **Manual** access mode;
    **Agent** page, **Settings** has **Auto** and **YOLO**). A
    subscription token lasts a year; paste a new one there before then.
-5. **Setup**, step 2 **Hardware**: press **Read the hardware**. It only
+5. **Setup** page, **Hardware** tab: press **Read the hardware**. It only
    reads.
-6. **Setup**, step 3 **Choices**:
+6. **Setup** page, **What to run** tab:
    - Any of **AI agents**, **Linux CI runners**, **Local AI models on the
      GPU** and **A Windows desktop VM**: on 16 GB they fit together, with
      one CI runner at a time. Containers count at half their memory limit
@@ -289,10 +292,10 @@ made one.
      fully (part 2), and only if you need to.
    - **Your Tailscale login**: exactly as noted in part 1.
    - Press **Save and plan**.
-7. **Setup**, step 4 **Plan**: a green box says the plan fits and how
-   the memory is shared out; a red box lists what does not fit and what to
+7. **Setup** page, **Plan** tab: **Fits** and a memory bar show how the
+   memory is shared out; a red block lists what does not fit and what to
    change. Change your choices in **What to run** and save again until it
-   is green, or press **Ask the agent** in the red box. Open **The full
+   fits, or press **Ask the agent** in the red block. Open **The full
    plan** and check: the system disk shows as
    `use: system`, a backup disk as `use: pbs`, a kept disk as
    `use: legacy` with each partition it keeps.
@@ -313,10 +316,10 @@ made one.
    **Save client**. You can skip Tailscale for now: the vpn stage then waits and
    everything else still runs, but the page stays reachable only from
    home.
-10. **Setup**, step 5 **Build**: press **Run setup**. The bar at the top shows
-    its progress; the **Activity** page lists every stage, ticks each one
-    off as it finishes and shows what the running one does now, and **Full
-    log** has every line. The first run downloads images and packages and
+10. **Setup** page, **Build** tab: press **Run setup**. The top bar shows
+    its progress; the **Build** tab (and the run's page under **Activity**)
+    lists every stage, ticks each one off as it finishes, shows what the
+    running one does now, and the log beside it has every line. The first run downloads images and packages and
     takes a while; creating the guests, building the CI images and the
     first backup are the longest. Without an auth key yet, the vpn stage
     reports `vpn: waiting for a Tailscale auth key`. That is expected.
@@ -374,8 +377,8 @@ Until now Proxmox's web UI and SSH answer anyone on your home network. This
 closes them, so only Tailscale gets in.
 
 **You need:** the page open over Tailscale (part 10, step 5), and the
-host's `mgmt` address: in **The full plan** in the **Setup** page's
-**Plan** step, under `zones`, `mgmt`, `host_ip` (normally `10.42.1.254`).
+host's `mgmt` address: in **The full plan** on the **Setup** page's
+**Plan** tab, under `zones`, `mgmt`, `host_ip` (normally `10.42.1.254`).
 
 1. On the page opened over Tailscale, open the **Access** page and,
    on its **Home network** tab, press **Close to the home network**.
@@ -389,7 +392,7 @@ host's `mgmt` address: in **The full plan** in the **Setup** page's
 
 If you do not press it in time, the server opens the home network again by
 itself after 15 minutes, or when it restarts first, so a mistake cannot
-lock you out. Until it is closed, **Checks** reports the open home
+lock you out. Until it is closed, **Run the checks** reports the open home
 network as DEGRADED. Once closed, the page answers only over Tailscale and
 on the on-site screen; **Reopen to the home network** gives the home
 network its access back. [vpn.md](vpn.md) says what to do if Tailscale is down.
@@ -403,7 +406,7 @@ an authenticator app on your phone (any TOTP app).
    password. Add TOTP and recovery keys as
    [pve-totp.md](pve-totp.md) describes, and do not close your first
    session until signing in with the code works.
-2. Press **Checks** on the page. Each line is PASS, FAIL, SKIP or
+2. Press **Run the checks** (the arrow beside **Run setup**) on the page. Each line is PASS, FAIL, SKIP or
    DEGRADED. SKIP means the check could not run yet, never that it passed.
    Copy any FAIL into the chat.
 

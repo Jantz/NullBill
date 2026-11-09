@@ -150,7 +150,7 @@ key to the operator (issue #22).
 ## Without the agent
 
 Everything the agent does, you can do yourself with your own access:
-**Checks** on the page, `pct`/`qm` in the Proxmox Shell, the PVE web
+**Run the checks** on the page, `pct`/`qm` in the Proxmox Shell, the PVE web
 UI, and `pct enter <vmid>` into a guest. Roll back a snapshot yourself
 (`pct rollback`/`qm rollback`); the agent can take snapshots but cannot
 roll back.

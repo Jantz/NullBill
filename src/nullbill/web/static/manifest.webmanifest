@@ -4,7 +4,7 @@
   "description": "Your NullBill server and its agent.",
   "id": "/",
   "launch_handler": {"client_mode": "focus-existing"},
-  "start_url": "/#home",
+  "start_url": "/#overview",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",

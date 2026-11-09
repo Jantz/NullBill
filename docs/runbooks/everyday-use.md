@@ -67,14 +67,15 @@ no longer works.
 
 ## Every day
 
-- **The page** is where you manage NullBill. Its **Home** page shows
-  firing alerts, guests that stopped answering and guests waiting for a
-  security update's reboot. **Checks**, at the top of every page, runs
-  every check again; **Run setup** applies a change you made on the
-  **Setup**, **Alerts**, **Agent** or **Access** page and replaces
-  certificates that expired while the server was off. **Update** moves the
-  page and setup to NullBill's newest version; press **Run setup** after
-  it. The page installs as an app on your phone once it trusts the
+- **The page** is where you manage NullBill. Its **Overview** page lists
+  what needs you (firing alerts, guests that stopped answering, security
+  updates waiting, a request from the agent), then health, services and
+  recent runs. **Run setup**, at the top of every page, applies a change
+  you made on the **Setup**, **Alerts**, **Agent** or **Access** page and
+  replaces certificates that expired while the server was off; the arrow
+  beside it has **Run the checks**, which runs every check again, and
+  **Update NullBill**, which moves the page and setup to NullBill's newest
+  version (press **Run setup** after it). The page installs as an app on your phone once it trusts the
   server (**Access**, **Trust this server**).
 - **The agent** sits beside every page (on a phone, the **Agent** tab).
   Ask it why something broke, to update everything, or what to do next.
@@ -86,12 +87,12 @@ no longer works.
   disks, deleting backups, reading secrets, silencing the command log and
   touching the NullBill container are refused in every mode. Every action
   is listed under **Agent**, **Log**. After a run fails, it looks into it
-  by itself. The bar at the top shows a run's progress, and the
-  **Activity** page shows it in full. You no longer need to run
+  by itself. The top bar shows a run's progress; press it, or open the
+  run on the **Activity** page, to see it in full. You no longer need to run
   `install.sh` again for that.
 - **A run that hangs**: the **Activity** page says when a run has printed
   nothing for half an hour. **Stop this run** under its progress ends it;
-  what it finished stays done. Press **Update**, in case a fix is
+  what it finished stays done. Press **Update NullBill**, in case a fix is
   out, then start it again. A package download it left waiting in a guest
   is ended by the next run.
 - **Alerts** come to the ntfy topic the page's **Alerts** page shows. Each
