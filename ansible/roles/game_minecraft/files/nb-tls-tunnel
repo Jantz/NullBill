@@ -108,6 +108,7 @@ async def serve(proxy: tuple[str, int]) -> None:
 
 def check(name: str) -> None:
     context = ssl.create_default_context()
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
     with socket.create_connection(LISTEN, HELLO_TIMEOUT_S) as sock, context.wrap_socket(sock, server_hostname=name):
         print("ok")
 
