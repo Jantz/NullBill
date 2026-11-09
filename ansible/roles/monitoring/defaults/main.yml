@@ -2,8 +2,9 @@
 # certificates must not expire; the plan fills both from its guests.
 monitoring_node_targets: []
 monitoring_tls_targets: []
-# The step-ca root, so certificate probes verify the chain they report on.
-monitoring_ca_file: /usr/local/share/ca-certificates/nullbill-root.crt
+# PEM: step-ca's root and the browser CA's (apply.both_roots), so certificate
+# probes verify the chain they report on; Forgejo's name has the browser CA's.
+monitoring_probe_ca: ""
 
 # Grafana's signed apt repository, key pinned by checksum. Loki ships there too.
 monitoring_grafana_repo_signer_sha256: 3d4029689bc7e4444ec00abafa07f21e9c812b41f1123ab5bbe6f8c3e3f7ff8c

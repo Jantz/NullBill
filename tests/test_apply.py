@@ -799,7 +799,10 @@ def test_monitoring_stage_watches_every_guest_and_alerts_the_owner(ctx):
         "forgejo.nullbill.internal:443",
         "runner-dispatcher.nullbill.internal:8443",
     ]
-    assert variables["monitoring_ca_file"] == "/etc/nullbill/tls/root_ca.crt"
+    # Forgejo's name has the browser CA's certificate, the other targets step-ca's.
+    assert variables["monitoring_probe_ca"] == apply.both_roots(c, "monitoring")
+    assert apply.browser_root(c).read_text().strip() in variables["monitoring_probe_ca"]
+    assert apply.ca_root(c, "monitoring").strip() in variables["monitoring_probe_ca"]
     assert variables["monitoring_ntfy_url"] == "https://ntfy.sh/nullbill-topic"
     assert variables["monitoring_healthchecks_url"] == "https://hc-ping.com/example-check"
     assert variables["monitoring_https_proxy"] == "http://10.42.2.10:3128"

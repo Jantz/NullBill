@@ -18,6 +18,8 @@ import json, sys
 read = lambda f: open(f"/tmp/pki/{f}").read()
 json.dump({
     "monitoring_shipper_ca": read("shipper-ca.crt"),
+    # As apply.both_roots: step-ca's root, then the browser CA's.
+    "monitoring_probe_ca": read("ca.crt").strip() + "\n" + open("/tmp/browser/browser-ca.crt").read(),
     "monitoring_browser_cert": open("/tmp/browser/browser.crt").read(),
     "monitoring_browser_key": open("/tmp/browser/browser.key").read(),
     # A stand-in for ntfy.sh and Healthchecks.io, started below.
@@ -162,3 +164,16 @@ code=$(curl -s -o /dev/null -w '%{http_code}' "${grafana[@]:0:2}" -u "admin:$sto
 [ "$code" = 401 ] || fail "default admin password still works ($code)"
 if curl -fsS -m 3 "http://$guest:3001/api/health" >/dev/null 2>&1; then fail "grafana answers on the guest address without TLS"; fi
 pass "grafana answers over HTTPS with the browser CA's certificate, provisions both data sources and refuses the default password"
+
+# Certificate probes: Loki's gate has a step-ca certificate, Grafana the
+# browser CA's (as Forgejo's name does); blackbox must verify both.
+# shellcheck disable=SC1091 # written by the role
+. /etc/default/prometheus-blackbox-exporter
+# shellcheck disable=SC2086 # ARGS is a flag list, as in the unit
+setpriv --reuid=prometheus --regid=prometheus --init-groups prometheus-blackbox-exporter $ARGS >/tmp/blackbox.log 2>&1 &
+wait_for http://127.0.0.1:9115/-/healthy || { cat /tmp/blackbox.log; fail "blackbox ready"; }
+for target in monitoring.nullbill.internal:3100 monitoring.nullbill.internal:3000; do
+  grep -qx "probe_success 1" <<<"$(curl -fsS "http://127.0.0.1:9115/probe?module=tls&target=$target")" ||
+    { curl -sS "http://127.0.0.1:9115/probe?module=tls&target=$target&debug=true" | tail -20; fail "blackbox verifies $target"; }
+done
+pass "certificate probes verify both step-ca's and the browser CA's certificates"

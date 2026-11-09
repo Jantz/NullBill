@@ -5,7 +5,7 @@ runner_dispatcher_listen: "0.0.0.0:8443"
 
 runner_dispatcher_forgejo_url: https://forgejo.nullbill.internal
 # PEM roots Forgejo's certificate is checked against: step-ca's and the
-# browser CA's, whose certificate Forgejo's name has (apply.forgejo_ca).
+# browser CA's, whose certificate Forgejo's name has (apply.both_roots).
 runner_dispatcher_forgejo_ca: ""
 # A Forgejo access token with scope write:admin, for the runner endpoints.
 # apply makes it with `nb-forgejo admin user generate-access-token` on the

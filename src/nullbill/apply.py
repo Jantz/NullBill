@@ -1359,9 +1359,6 @@ def shipper_cert(ctx: Context, stage: str, name: str) -> tuple[str, str]:
     return crt.read_text(), key.read_text()
 
 
-ROOT_CA = "/etc/nullbill/tls/root_ca.crt"  # tls_cert writes it on every guest it runs on
-
-
 def tls_targets(ctx: Context) -> list[str]:
     """Endpoints that speak TLS from the first byte, so blackbox can see their
     certificates renew; PostgreSQL negotiates TLS inside its own protocol."""
@@ -1376,7 +1373,7 @@ def monitoring_vars(ctx: Context) -> dict:
         "monitoring_node_targets": [f"{fqdn(ctx, n)}:9100" for n, g in guests.items() if node_exporter_guest(g)],
         "monitoring_host_target": f"pve.{ctx.bare['domain']}:9100",
         "monitoring_tls_targets": tls_targets(ctx),
-        "monitoring_ca_file": ROOT_CA,
+        "monitoring_probe_ca": both_roots(ctx, "monitoring"),
         "monitoring_tls_name": fqdn(ctx, "monitoring"),
         "monitoring_shipper_ca": shipper_ca(ctx, "monitoring"),
         "monitoring_ntfy_url": NTFY + topic if topic else "",
@@ -1751,9 +1748,10 @@ def forgejo_token(ctx: Context) -> str:
     return ctx.secrets.ensure("forgejo_dispatcher_token", make)
 
 
-def forgejo_ca(ctx: Context, stage: str) -> str:
-    """What Forgejo's clients trust: its name has the browser CA's
-    certificate (stage_forgejo), step-ca's root covers the rest."""
+def both_roots(ctx: Context, stage: str) -> str:
+    """What clients of Forgejo's name trust, and monitoring's certificate
+    probes: Forgejo's name has the browser CA's certificate (stage_forgejo),
+    step-ca's root covers the rest."""
     return ca_root(ctx, stage).strip() + "\n" + browser_root(ctx).read_text()
 
 
@@ -1775,7 +1773,7 @@ def dispatcher_vars(ctx: Context) -> dict:
     return {
         "runner_dispatcher_tls_name": fqdn(ctx, "runner-dispatcher"),
         "runner_dispatcher_forgejo_url": f"https://{fqdn(ctx, 'forgejo')}",
-        "runner_dispatcher_forgejo_ca": forgejo_ca(ctx, "ci"),
+        "runner_dispatcher_forgejo_ca": both_roots(ctx, "ci"),
         "runner_dispatcher_forgejo_token": forgejo_token(ctx),
         "runner_dispatcher_pve_url": f"https://pve.{ctx.bare['domain']}:8006",
         "runner_dispatcher_node": host_out(ctx, "ci", "hostname").strip(),
