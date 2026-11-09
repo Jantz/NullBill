@@ -1919,7 +1919,7 @@ WantedBy=multi-user.target
           "cores": 1
         },
         "memory": {
-          "dedicated": 512,
+          "dedicated": 1024,
           "swap": 0
         },
         "disk": {

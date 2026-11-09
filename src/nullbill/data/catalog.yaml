@@ -279,7 +279,10 @@ services:
     zone: inference
     workload: inference
     description: LiteLLM, one OpenAI-compatible API in front of the local model.
-    floor: {cores: 1, memory_mib: 512, disk_gib: 4}
+    # LiteLLM alone holds about 330 MiB; with nginx, the certificate renewer
+    # and the hourly apt jobs a 512 MiB container sat full and stopped
+    # answering.
+    floor: {cores: 1, memory_mib: 1024, disk_gib: 4}
     ports:
       - {port: 4000, proto: tcp, from: ["zone:build", "role:owner", "service:monitoring"]}
   windows-runner:

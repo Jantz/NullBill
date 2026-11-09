@@ -42,6 +42,15 @@ groups:
         labels: {severity: warn}
         annotations:
           summary: "The PVE host has under 10% of its memory available; stop a guest or lower a container's limit"
+      # A guest at its memory limit has no swap to fall back on: it drops and
+      # rereads its own program files over and over, answers slowly or not at
+      # all, and setup waits on it.
+      - alert: GuestMemoryFull
+        expr: node_memory_MemAvailable_bytes{job="node"} / node_memory_MemTotal_bytes{job="node"} < 0.05
+        for: 15m
+        labels: {severity: page}
+        annotations:
+          summary: "{{ $labels.instance }} has used up its memory and barely runs; restart it in Proxmox; if it fills up again, it needs a larger memory limit"
       - alert: CertificateExpiresSoon
         # step-ca certificates last 24 h and renew with 8 h left, so under
         # 6 h means renewal has stopped.

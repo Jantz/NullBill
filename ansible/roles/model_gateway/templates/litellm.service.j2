@@ -9,6 +9,9 @@ User=litellm
 Group=litellm
 WorkingDirectory=/var/lib/litellm
 Environment=HOME=/var/lib/litellm
+# The model price list ships with LiteLLM; without this it asks GitHub for a
+# newer one at each start, which this guest cannot reach.
+Environment=LITELLM_LOCAL_MODEL_COST_MAP=True
 EnvironmentFile=/etc/litellm/env
 ExecStart={{ model_gateway_venv }}/bin/litellm --config /etc/litellm/config.yaml --host 127.0.0.1 --port 4001 --num_workers 1 --telemetry False
 Restart=always
