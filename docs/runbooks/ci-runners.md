@@ -7,8 +7,9 @@ labels come from `$NULLBILL_HOME/plan.yaml`: `template_vmid` and
 
 ## Use it
 
-In a repository, enable Actions (Settings, Units), then add
-`.forgejo/workflows/<name>.yml` with `runs-on: linux`. Jobs run directly
+Actions is on in new repositories. Add `.forgejo/workflows/<name>.yml`
+with `runs-on: linux`; the **Services** page's **Linux CI** entry has an
+example to copy. Jobs run directly
 on the clone as the user `runner`, with git and Node.js installed. Network
 access beyond Forgejo goes through the egress proxy's allow-list.
 

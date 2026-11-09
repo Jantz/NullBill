@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from nullbill import applied, backups, browserca, ci, hostroot, lan, legacy, llm, media, names
+from nullbill import applied, backups, browserca, ci, hostroot, lan, legacy, llm, media, names, owner
 from nullbill.artifacts import write_build
 from nullbill.errors import NullBillError
 from nullbill.flows import mac
@@ -1410,6 +1410,30 @@ def stage_forgejo(ctx: Context) -> None:
     # Changed at first login; kept so the owner has it for that login.
     password = guest_out(ctx, "forgejo", "forgejo", ["cat", "/etc/forgejo/admin-password"]).strip()
     ctx.secrets.set("forgejo_admin_password", password)
+    forgejo_owner(ctx)
+
+
+NB_FORGEJO_OWNER = "/usr/local/sbin/nb-forgejo-owner"
+
+
+def forgejo_owner(ctx: Context) -> None:
+    """The owner's own Forgejo user with the SSH keys from the page. Its name
+    comes from the owner's Tailscale login once and is kept in the secrets."""
+    person = owner.person(ctx.model)
+    if not person:
+        return
+    user = ctx.secrets.ensure("forgejo_owner_user", lambda: owner.forgejo_user(person["login"]))
+    keys = owner.keys(ctx.model)
+    argv = [NB_FORGEJO_OWNER, user, f"{user}@{ctx.bare['domain']}"]
+    lines = guest_out(ctx, "forgejo", "forgejo", argv, stdin="".join(k + "\n" for k in keys)).strip().splitlines()
+    for line in lines[:-1]:
+        ctx.say(f"forgejo: Forgejo {line.replace('refused: ', 'refused your SSH key ', 1)}")
+    if lines[-1:] == ["changed"]:
+        ctx.say(f"forgejo: your own user {user} has {len(keys)} SSH key(s) from the page")
+    # Written when setup made the user; absent if the owner made it by hand.
+    kept = guest_out(ctx, "forgejo", "forgejo", ["sh", "-c", "cat /etc/forgejo/owner-password 2>/dev/null || true"]).strip()
+    if kept:
+        ctx.secrets.set("forgejo_owner_password", kept)
 
 
 # The container's memory limit while llama.cpp builds: one file of its
@@ -1564,8 +1588,8 @@ NB_JELLYFIN = "/usr/local/sbin/nb-jellyfin"
 def stage_media(ctx: Context) -> None:
     """Jellyfin in its guest: the integrated graphics when it transcodes there,
     the role, then nb-jellyfin finishes its first-run setup at once (until
-    then anyone who reaches it could make themselves its admin) and sets
-    how it transcodes."""
+    then anyone who reaches it could make themselves its admin), sets how it
+    transcodes and adds each kept disk as a library, once."""
     if not media.enabled(ctx.bare):
         return
     guest = ctx.bare["guests"][media.JELLYFIN]
@@ -1577,6 +1601,9 @@ def stage_media(ctx: Context) -> None:
     encoding = ["qsv", node] if node else ["none"]
     if guest_out(ctx, "media", media.JELLYFIN, [NB_JELLYFIN, "encoding", *encoding]).strip() == "changed":
         ctx.say(f"media: Jellyfin transcodes {'with Quick Sync on the integrated graphics' if node else 'on the CPU'}")
+    for share in media.library(ctx.bare):
+        if guest_out(ctx, "media", media.JELLYFIN, [NB_JELLYFIN, "library", share, f"{media.MEDIA_ROOT}/{share}"]).strip() == "changed":
+            ctx.say(f"media: Jellyfin has a library of {media.MEDIA_ROOT}/{share} and reads it now")
     password = guest_out(ctx, "media", media.JELLYFIN, ["cat", media.PASSWORD_FILE]).strip()
     ctx.secrets.set("jellyfin_admin_password", password)
     url = f"http://{guest['ip']}:{media.PORT}"
@@ -1808,9 +1835,52 @@ def agent_guests(ctx: Context) -> list[str]:
     return [n for n, g in ctx.bare["guests"].items() if g.get("agent_managed") and g["kind"] != "vm-pool"]
 
 
+# Root's authorized_keys on the workspace keeps the owner's keys from the
+# page between these lines; keys outside them (OpenTofu's, the owner's own)
+# stay. Reads the keys on stdin, prints "changed" or "same".
+OWNER_KEYS = r"""
+import os, sys
+path, begin, end = "/root/.ssh/authorized_keys", "# nullbill: owner keys (the page's Access, SSH keys)", "# nullbill: end"
+try:
+    old = open(path).read()
+except FileNotFoundError:
+    old = ""
+lines, inside, kept = old.splitlines(), False, []
+for line in lines:
+    if line == begin:
+        inside = True
+    elif line == end and inside:
+        inside = False
+    elif not inside:
+        kept.append(line)
+keys = [k.strip() for k in sys.stdin if k.strip()]
+new = "".join(k + "\n" for k in kept + ([begin, *keys, end] if keys else []))
+if new == old:
+    print("same")
+    sys.exit()
+os.makedirs("/root/.ssh", mode=0o700, exist_ok=True)
+fd = os.open(path + ".nb", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as f:
+    f.write(new)
+os.replace(path + ".nb", path)
+print("changed")
+"""
+
+
+def workspace_keys(ctx: Context) -> None:
+    """The owner's SSH keys from the page, for root on the workspace."""
+    if not planned(ctx, "workspace") or not owner.person(ctx.model):
+        return
+    keys = owner.keys(ctx.model)
+    out = guest_out(ctx, "agents", "workspace", ["python3", "-c", OWNER_KEYS], stdin="".join(k + "\n" for k in keys))
+    if out.strip() == "changed":
+        ctx.say(f"agents: the workspace takes {len(keys)} SSH key(s) of yours for root")
+
+
 def stage_agents(ctx: Context) -> None:
-    """The operator with the agent CLI and its tokens, and agent SSH on each
-    agent-managed guest."""
+    """The owner's keys on the workspace, the operator with the agent CLI and
+    its tokens, and agent SSH on each agent-managed guest."""
+    workspace_keys(ctx)
     if not planned(ctx, "operator"):
         return
     stored = {var: ctx.secrets.data.get(name, "") for name, var in AGENT_CREDENTIALS.items()}

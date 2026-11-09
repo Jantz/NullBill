@@ -63,6 +63,12 @@ $defs:
       role: {$ref: "#/$defs/name"}
       # The person's Tailscale login, e.g. dev-b@example.internal.
       login: {type: string, pattern: "^[^@\\s]+@[^@\\s]+$"}
+      # SSH public keys (owner.py): the owner's go on the workspace and on
+      # the owner's own Forgejo user.
+      ssh_keys:
+        type: array
+        maxItems: 20
+        items: {type: string, pattern: "^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\\.com|sk-ecdsa-sha2-nistp256@openssh\\.com) [A-Za-z0-9+/]{40,}={0,3}( [^\\r\\n]{0,200})?$"}
 
   service:
     type: object

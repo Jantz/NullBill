@@ -102,11 +102,12 @@
     state: link
   notify: Restart forgejo
 
-- name: Command line wrapper
+- name: Command line wrapper and the owner's user
   ansible.builtin.copy:
-    src: nb-forgejo
-    dest: /usr/local/sbin/nb-forgejo
+    src: "{{ item }}"
+    dest: "/usr/local/sbin/{{ item }}"
     mode: "0700"
+  loop: [nb-forgejo, nb-forgejo-owner]
 
 # Generated on the guest once and read by Forgejo through *_URI settings,
 # so app.ini stays a template and nothing secret passes through apply.

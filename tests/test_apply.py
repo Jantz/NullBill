@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from conftest import fixture_config
 
-from nullbill import applied, apply, backups, browserca, ci, flows, hostroot, lan, llm, names
+from nullbill import applied, apply, backups, browserca, ci, flows, hostroot, lan, llm, names, owner
 from nullbill.apply import ApplyError, Context, connection, run_apply
 from nullbill.artifacts import render_all
 from nullbill.errors import NullBillError
@@ -93,6 +93,9 @@ class FakeReach:
         self.media_ct = {"exists": False, "status": "running", "mps": {}, "devs": {}, "restarts": 0}
         self.render_nodes = {"0000:00:02.0": "/dev/dri/renderD128"}
         self.jellyfin = []
+        # nb-forgejo-owner's runs, and the keys given to the workspace, with what each read on stdin.
+        self.forgejo_owner = []
+        self.workspace_keys = []
         # Each machine's digests of its playbooks' last good runs (applied.py),
         # by machine ("host", a VMID, or a VM's address) and playbook. Kept
         # out of self.calls, which then reads as the work itself.
@@ -234,7 +237,7 @@ class FakeReach:
         if "proxmox-backup-client key create --kdf none" in command:
             return 0, json.dumps({"kdf": None, "data": f"key-{len(self.calls)}"}) + "\n", ""
         if command.startswith("pct exec "):
-            return self.guest(shlex.split(command)[2], shlex.split(command)[4:])
+            return self.guest(shlex.split(command)[2], shlex.split(command)[4:], stdin)
         return 127, "", f"fake host: unexpected {command}"
 
     def copy(self, command):
@@ -386,8 +389,16 @@ class FakeReach:
             return 0, "", ""
         return 127, "", f"fake host: unexpected {command}"
 
-    def guest(self, vmid, argv):
+    def guest(self, vmid, argv, stdin=None):
         """Containers, reached with pct exec: step-ca answers for its CA."""
+        if argv[0] == apply.NB_FORGEJO_OWNER:
+            self.forgejo_owner.append((argv[1:], stdin))
+            return 0, "changed\n" if len(self.forgejo_owner) == 1 else "same\n", ""
+        if argv == ["sh", "-c", "cat /etc/forgejo/owner-password 2>/dev/null || true"]:
+            return 0, "owner-password\n", ""
+        if argv[:2] == ["python3", "-c"] and argv[2] == apply.OWNER_KEYS:
+            self.workspace_keys.append((vmid, stdin))
+            return 0, "changed\n", ""
         if argv == ["sh", "-c", "systemctl stop nb-dispatcher 2>/dev/null || true"]:
             self.dispatcher_stopped = True
             return 0, "", ""
@@ -2240,3 +2251,54 @@ def test_jellyfin_gets_each_kept_disk_read_only_and_lets_go_before_the_host_unmo
     unmount = index_of(calls, f"{apply.LEGACY} unmount data")
     assert index_of(calls, "pct shutdown 2024") < index_of(calls, "pct set 2024 --delete mp0") < unmount
     assert ct["mps"] == {} and ct["status"] == "running"
+
+
+def test_media_stage_adds_each_kept_disk_as_a_library(ctx):
+    c = made_by_tofu(ctx("large", config=media_legacy_config()))
+    apply.stage_media(c)
+    assert ["library", "data", "/media/data"] in c.reach.jellyfin
+
+
+# The owner's own accounts (owner.py).
+KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOwnerKeyForTestsOnlyNotARealKey00000000 laptop"
+
+
+def owner_config(fixture="small", keys=(KEY,)):
+    config = fixture_config(fixture)
+    (name,) = [n for n, p in config["people"].items() if p["role"] == "owner"]
+    config["people"][name] = {**config["people"][name], **({"ssh_keys": list(keys)} if keys else {})}
+    return config
+
+
+def test_forgejo_stage_makes_the_owners_user_with_the_keys_from_the_page(ctx):
+    c = ctx("small", config=owner_config())
+    login = owner.person(c.model)["login"]
+    apply.stage_forgejo(c)
+    user = owner.forgejo_user(login)
+    assert c.reach.forgejo_owner == [([user, f"{user}@nullbill.internal"], KEY + "\n")]
+    assert (c.secrets.data["forgejo_owner_user"], c.secrets.data["forgejo_owner_password"]) == (user, "owner-password")
+    assert f"forgejo: your own user {user} has 1 SSH key(s) from the page" in c.log
+    # A later login change keeps the user setup made.
+    owner.person(c.model)["login"] = "someone-else@example.internal"
+    apply.stage_forgejo(c)
+    assert c.reach.forgejo_owner[-1][0][0] == user
+
+
+def test_agents_stage_gives_the_workspace_the_owners_keys_even_without_an_agent_credential(ctx):
+    c = ctx("small", config=owner_config())
+    apply.stage_agents(c)
+    assert c.reach.workspace_keys == [("2019", KEY + "\n")]
+    assert "agents: the workspace takes 1 SSH key(s) of yours for root" in c.log
+    # No keys on the page: the block goes, so a key taken off the page stops working.
+    c = ctx("small", config=owner_config(keys=()))
+    apply.stage_agents(c)
+    assert c.reach.workspace_keys == [("2019", "")]
+
+
+@pytest.mark.parametrize(
+    ("login", "user"),
+    [("dev-b@example.internal", "dev-b"), ("First.Last+tag@example.internal", "first.last-tag"), ("admin@example.internal", "owner"),
+     ("__@example.internal", "owner"), ("a..b@github", "a-b")],
+)  # fmt: skip
+def test_the_owners_forgejo_user_is_named_from_the_login(login, user):
+    assert owner.forgejo_user(login) == user

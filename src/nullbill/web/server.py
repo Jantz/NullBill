@@ -37,7 +37,7 @@ from pathlib import Path
 
 import yaml
 
-from nullbill import browserca, hostroot, lan, legacy, llm, names
+from nullbill import browserca, hostroot, lan, legacy, llm, names, owner
 from nullbill.apply import NTFY, REMOVALS, SPKI, STAGES
 from nullbill.cli import plan_text, reach_target
 from nullbill.errors import NullBillError
@@ -506,12 +506,13 @@ class App:
 
     def choices(self) -> dict:
         config = self.config() or {}
-        owner = next((p["login"] for p in config.get("people", {}).values() if p.get("role") == "owner"), "")
+        login = (owner.person(config) or {}).get("login", "")
         return {
             "workloads": config.get("intent", {}).get("workloads", ["agents", "linux-ci"]),
             "backups": config.get("services", {}).get("pbs", {}).get("enabled", True),
             "console": config.get("host", {}).get("console", {}).get("enabled", False),
-            "owner_login": owner,
+            "owner_login": login,
+            "ssh_keys": owner.keys(config),
         }
 
     # Disks besides the system disk: what the probe saw, and what the owner
@@ -632,7 +633,27 @@ class App:
 
     def services(self) -> dict:
         path = self.home / "plan.yaml"
-        return services((yaml.safe_load(path.read_text()) or {}) if path.exists() else {}, names.active(self.home))
+        plan = (yaml.safe_load(path.read_text()) or {}) if path.exists() else {}
+        data = Secrets(self.codec(self.home)).data
+        # The owner's own Forgejo user, once setup made it with a password.
+        forgejo_user = data.get("forgejo_owner_user") if data.get("forgejo_owner_password") else None
+        return services(plan, names.active(self.home), forgejo_user=forgejo_user, ssh_keys=len(owner.keys(self.config() or {})))
+
+    def save_ssh_keys(self, body: dict) -> list[str]:
+        """The owner's SSH public keys, for the workspace and their Forgejo user
+        at the next setup run."""
+        keys = owner.parse(str(body.get("keys", "")))
+        config = self.config() or {}
+        person = owner.person(config)
+        if person is None:
+            raise NullBillError("save your choices under Setup, What to run, first; they hold your Tailscale login")
+        if keys:
+            person["ssh_keys"] = keys
+        else:
+            person.pop("ssh_keys", None)
+        build_model(config)
+        _write_private(self.home / "config.yaml", yaml.safe_dump(config, sort_keys=False))
+        return keys
 
     def password(self, name: str) -> str:
         if name not in PASSWORDS:
@@ -681,7 +702,8 @@ class App:
         config["target"] = {"ssh": f"root@{install['host']}"}
         config["intent"] = {"workloads": workloads}
         people = {n: p for n, p in config.get("people", {}).items() if p.get("role") != "owner"}
-        config["people"] = {"owner": {"role": "owner", "login": login}, **people}
+        keys = owner.keys(config)
+        config["people"] = {"owner": {"role": "owner", "login": login} | ({"ssh_keys": keys} if keys else {}), **people}
         services = config.setdefault("services", {})
         if body.get("backups", True):
             services.get("pbs", {}).pop("enabled", None)
@@ -1409,6 +1431,8 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 if self.path == "/api/vpn":
                     app.save_tailscale_key(body)
                     return self.json(200, {"ok": True, "tailscale_key": app.tailscale_key()})
+                if self.path == "/api/ssh-keys":
+                    return self.json(200, {"ok": True, "ssh_keys": app.save_ssh_keys(body)})
                 if self.path == "/api/password-reveal":
                     return self.json(200, {"password": app.password(str(body.get("name", "")))})
                 if self.path == "/api/alerts/test":

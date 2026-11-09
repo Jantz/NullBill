@@ -91,3 +91,14 @@ grep -q '"VaapiDevice":"/dev/dri/renderD128"' <<<"$(encoding)" || fail "render n
 [ "$(nb-jellyfin encoding none)" = changed ] || fail "back to the CPU"
 grep -q '"HardwareAccelerationType":"none"' <<<"$(encoding)" || fail "CPU set"
 pass "transcoding switches between the CPU and Quick Sync, and says when nothing changed"
+
+# The kept disk as a library, once.
+folders() { curl -sS -H "$pascal" -H "$(key)" http://127.0.0.1:8096/Library/VirtualFolders; }
+[ "$(nb-jellyfin library old-hdd /media/old-hdd)" = changed ] || fail "a library for the kept disk"
+[ "$(nb-jellyfin library old-hdd /media/old-hdd)" = same ] || fail "the library again changes nothing"
+python3 -c 'import json,sys; f=json.load(sys.stdin); assert [(x["Name"], x["Locations"], x.get("CollectionType")) for x in f] == [("old-hdd", ["/media/old-hdd"], "mixed")], f' \
+  <<<"$(folders)" || fail "one mixed library of /media/old-hdd (got $(folders))"
+curl -fsS -X DELETE -H "$(key)" "http://127.0.0.1:8096/Library/VirtualFolders?name=old-hdd" || fail "remove the library"
+[ "$(nb-jellyfin library old-hdd /media/old-hdd)" = same ] || fail "a removed library stays removed"
+[ "$(folders)" = "[]" ] || fail "no library after the owner removed it (got $(folders))"
+pass "each kept disk becomes a library once, and one the owner removed is not made again"

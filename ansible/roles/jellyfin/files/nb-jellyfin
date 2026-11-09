@@ -9,8 +9,11 @@ its API on 127.0.0.1, as apply's media stage runs them.
                                    apply and verify use (API_KEY_FILE)
   nb-jellyfin encoding none        transcode on the CPU
   nb-jellyfin encoding qsv DEVICE  transcode with Intel Quick Sync on DEVICE
+  nb-jellyfin library NAME PATH    add a library NAME of PATH, once: never when a
+                                   library holds PATH already, or after the
+                                   owner removed the one made here (ADDED_DIR)
 
-setup and encoding print "changed" or "same". Until the first-run setup is
+setup, encoding and library print "changed" or "same". Until the first-run setup is
 done, anyone who reaches Jellyfin could make themselves its admin, so apply
 runs setup right after Jellyfin first starts.
 """
@@ -21,11 +24,18 @@ import secrets
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 URL = "http://127.0.0.1:8096"
 PASSWORD_FILE = "/etc/nullbill/jellyfin-admin-password"
 API_KEY_FILE = "/etc/nullbill/jellyfin-api-key"
+# One file per path a library was added for, so a library the owner removed
+# stays removed.
+ADDED_DIR = "/var/lib/nullbill/jellyfin-libraries"
+# Films and series found by name, the rest by folder: a kept disk holds
+# whatever its owner put there.
+COLLECTION = "mixed"
 APP = "NullBill"
 CLIENT = 'MediaBrowser Client="nullbill", Device="apply", DeviceId="nullbill-apply", Version="1"'
 # Jellyfin answers in camelCase unless asked for the names its API documents.
@@ -164,6 +174,22 @@ def encoding(kind: str, device: str | None) -> None:
     print("changed")
 
 
+def library(name: str, path: str) -> None:
+    key = read_secret(API_KEY_FILE)
+    if not key_works(key):
+        die("no working API key; run nb-jellyfin setup first")
+    marker = os.path.join(ADDED_DIR, path.strip("/").replace("/", "_"))
+    held = any(path in (f.get("Locations") or []) for f in call("GET", "/Library/VirtualFolders", token=key))
+    if held or os.path.exists(marker):
+        print("same")
+        return
+    query = urllib.parse.urlencode({"name": name, "collectionType": COLLECTION, "refreshLibrary": "true"})
+    call("POST", f"/Library/VirtualFolders?{query}", {"LibraryOptions": {"PathInfos": [{"Path": path}]}}, token=key)
+    os.makedirs(ADDED_DIR, mode=0o700, exist_ok=True)
+    open(marker, "w").close()
+    print("changed")
+
+
 def main(argv: list[str]) -> None:
     if argv[:1] == ["wait"] and len(argv) == 1:
         wait()
@@ -171,8 +197,10 @@ def main(argv: list[str]) -> None:
         setup(argv[1])
     elif argv[:1] == ["encoding"] and len(argv) in (2, 3):
         encoding(argv[1], argv[2] if len(argv) == 3 else None)
+    elif argv[:1] == ["library"] and len(argv) == 3:
+        library(argv[1], argv[2])
     else:
-        die("usage: nb-jellyfin wait | setup USER | encoding none | encoding qsv DEVICE")
+        die("usage: nb-jellyfin wait | setup USER | encoding none | encoding qsv DEVICE | library NAME PATH")
 
 
 if __name__ == "__main__":

@@ -227,6 +227,46 @@ def test_choices_write_config_and_probe_gives_a_plan(site):
     assert "host" not in yaml.safe_load((app.home / "config.yaml").read_text())
 
 
+ED25519 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOwnerKeyForTestsOnlyNotARealKey00000000"
+RSA = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCownerkeyfortestsonlynotarealkey0000000000"
+
+
+def test_ssh_keys_go_into_the_owners_person_and_survive_saving_choices(site):
+    app, client = site
+    sign_in(app, client)
+    status, data = client.call("/api/ssh-keys", {"keys": ED25519})
+    assert status == 400 and "save your choices" in data["error"]
+    choices = {"workloads": ["agents", "linux-ci"], "owner_login": "owner-a@example.internal"}
+    client.call("/api/choices", choices)
+    for bad, why in (("ssh-ed25519 short", "line 1 is not an SSH public key"), ("-----BEGIN OPENSSH PRIVATE KEY-----", "private key")):
+        status, data = client.call("/api/ssh-keys", {"keys": bad})
+        assert status == 400 and why in data["error"], data
+    # Blank lines, spaces and a duplicate (same key, other comment) are dropped.
+    pasted = f"\n  {ED25519}   laptop  \n\n{RSA}\n{ED25519} again\n"
+    status, data = client.call("/api/ssh-keys", {"keys": pasted})
+    assert status == 200 and data["ssh_keys"] == [f"{ED25519} laptop", RSA]
+    person = yaml.safe_load((app.home / "config.yaml").read_text())["people"]["owner"]
+    assert person == {"role": "owner", "login": "owner-a@example.internal", "ssh_keys": [f"{ED25519} laptop", RSA]}
+    client.call("/api/choices", {**choices, "workloads": ["agents"]})
+    assert client.call("/api/state")[1]["choices"]["ssh_keys"] == [f"{ED25519} laptop", RSA]
+    # The steps that need a key are done once one is saved.
+    golden = Path(__file__).parent / "golden" / "small.plan.yaml"
+    (app.home / "plan.yaml").write_text(golden.read_text())
+    items = {s["name"]: s for s in client.call("/api/state")[1]["services"]["items"]}
+    assert [st["done"] for st in items["workspace"]["steps"] if st.get("href") == "#access/ssh"] == [True]
+    # Forgejo leads with nullbill-admin until setup made the owner's own user.
+    assert (items["forgejo"]["user"], items["forgejo"]["password"]) == ("nullbill-admin", "forgejo")
+    secrets = app.codec(app.home).data
+    secrets |= {"forgejo_owner_user": "owner-a", "forgejo_owner_password": "owner-pw"}
+    forgejo = next(s for s in client.call("/api/state")[1]["services"]["items"] if s["name"] == "forgejo")
+    assert (forgejo["user"], forgejo["password"]) == ("owner-a", "forgejo-owner")
+    assert any(st.get("code") == "git clone git@10.42.2.17:owner-a/<repository>.git" for st in forgejo["steps"])
+    assert client.call("/api/password-reveal", {"name": "forgejo-owner"}) == (200, {"password": "owner-pw"})
+    # Empty takes them all off again.
+    assert client.call("/api/ssh-keys", {"keys": " \n"}) == (200, {"ok": True, "ssh_keys": []})
+    assert "ssh_keys" not in yaml.safe_load((app.home / "config.yaml").read_text())["people"]["owner"]
+
+
 def test_jobs_report_failure_and_offsets(site):
     app, client = site
     sign_in(app, client)
@@ -491,11 +531,17 @@ def test_services_list_what_the_plan_runs_and_reveal_only_their_passwords(site):
     assert items["grafana"]["url"] == "https://10.42.1.14:3000"
     assert (items["grafana"]["user"], items["grafana"]["password"]) == ("admin", "grafana")
     assert (items["forgejo"]["url"], items["forgejo"]["user"]) == ("https://10.42.2.17/", "nullbill-admin")
-    assert items["workspace"]["addresses"] == ["ssh root@10.42.3.19"] and "pct enter 2019" in items["workspace"]["how"]
-    assert "pct enter 2016" in items["operator"]["how"]
+    steps = {name: [st.get("code", "") + " " + st["text"] for st in s["steps"]] for name, s in items.items()}
+    assert items["workspace"]["addresses"] == ["ssh root@10.42.3.19"] and any("pct enter 2019" in st for st in steps["workspace"])
+    assert any(st.startswith("pct enter 2016\nsu - agent") for st in steps["operator"])
+    # Until a key is saved, the steps that need one are not done and link to where it goes.
+    (key_step,) = [st for st in items["workspace"]["steps"] if st.get("href") == "#access/ssh"]
+    assert key_step["done"] is False and key_step["link"] == "Access, SSH keys"
+    assert any("runs-on: linux" in st for st in steps["linux-runner"]) and items["linux-runner"]["watch"] == "runner-dispatcher"
+    assert any("Two Factor" in st for st in steps["proxmox"])
     jellyfin = items["jellyfin"]
     assert (jellyfin["url"], jellyfin["user"], jellyfin["password"]) == ("http://10.42.7.24:8096/", "nullbill-admin", "jellyfin")
-    assert jellyfin["watch"] == "jellyfin" and "Keep a disk" in jellyfin["how"]
+    assert jellyfin["watch"] == "jellyfin" and any("Keep a disk" in st["text"] for st in jellyfin["steps"])
     background = ["router", "internet proxy", "certificate authority", "PostgreSQL", "CI dispatcher", "Tailscale entry", "backup server"]
     assert services["background"] == background
     # Once setup has the tailnet resolving names, each leads with its name
@@ -517,7 +563,7 @@ def test_services_list_what_the_plan_runs_and_reveal_only_their_passwords(site):
     files = next(s for s in client.call("/api/state")[1]["services"]["items"] if s["name"] == "files")
     assert files["addresses"] == ["\\\\10.42.1.23\\data"] and files["password"] == "files"
     jellyfin = next(s for s in client.call("/api/state")[1]["services"]["items"] if s["name"] == "jellyfin")
-    assert "a folder under /media/data" in jellyfin["how"]
+    assert any("library for each disk you kept (/media/data)" in st["text"] for st in jellyfin["steps"])
     secrets = app.codec(app.home).data
     secrets |= {"grafana_admin_password": "grafana-pw", "forgejo_admin_password": "forgejo-pw", "page_password": "never"}
     secrets["jellyfin_admin_password"] = "jellyfin-pw"

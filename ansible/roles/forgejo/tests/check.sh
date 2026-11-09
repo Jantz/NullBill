@@ -105,3 +105,41 @@ GIT_SSH_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o Use
   git ls-remote git@forgejo.nullbill.internal:nullbill-admin/probe.git >/dev/null 2>&1 \
   && fail "SSH without a registered key reached a private repository"
 pass "SSH without a registered key is refused"
+
+# The owner's own user, as apply's forgejo stage makes it with the keys from the page.
+ssh-keygen -q -t ed25519 -N '' -C 'owner laptop' -f /tmp/id_owner
+ssh-keygen -q -t ed25519 -N '' -f /tmp/id_spare
+test "$(nb-forgejo-owner dev-b dev-b@nullbill.internal </tmp/id_owner.pub)" = changed || fail "owner user made"
+test "$(stat -c '%U %a' /etc/forgejo/owner-password /etc/forgejo/nullbill-token)" = "$(printf 'root 600\nroot 600')" \
+  || fail "the owner's password and the token are root's alone"
+owner=$(printf 'dev-b:%s' "$(cat /etc/forgejo/owner-password)" | base64 -w0)
+me=$(curl -fsS "${tls[@]}" -H "Authorization: Basic $owner" "$url/api/v1/user") || fail "the owner's password logs in"
+grep -q '"is_admin":true' <<<"$me" || fail "the owner is an administrator"
+grep -q '"must_change_password":true' <<<"$me" && fail "the owner must not change the password at first sign-in"
+pass "the owner's user is an administrator that signs in with the stored password"
+test "$(nb-forgejo-owner dev-b dev-b@nullbill.internal </tmp/id_owner.pub)" = same || fail "a second run changes nothing"
+pass "the owner's user and keys are left alone when nothing changed"
+
+curl -fsS "${tls[@]}" -H "Authorization: Basic $owner" "$url/api/v1/user/repos" -H 'Content-Type: application/json' \
+  -d '{"name":"mine","private":true}' >/dev/null || fail "the owner makes a repository"
+grep -q '"has_actions":true' <<<"$(curl -fsS "${tls[@]}" -H "Authorization: Basic $owner" "$url/api/v1/repos/dev-b/mine")" \
+  || fail "a new repository has Actions on"
+pass "a new repository has Actions on, so Linux CI needs no setting"
+GIT_SSH_COMMAND="ssh -i /tmp/id_owner -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/known_hosts" \
+  git -C /tmp/work push -q git@forgejo.nullbill.internal:dev-b/mine.git main >/tmp/push.log 2>&1 \
+  || { cat /tmp/push.log; fail "the owner's key pushes to the owner's repository"; }
+pass "the key from the page pushes to the owner's own repository over SSH"
+
+# A key the owner added in Forgejo stays; one taken off the page goes.
+curl -fsS "${tls[@]}" -H "Authorization: Basic $owner" -H 'Content-Type: application/json' "$url/api/v1/user/keys" \
+  -d "{\"title\":\"by hand\",\"key\":\"$(cut -d' ' -f1-2 /tmp/id_spare.pub)\"}" >/dev/null || fail "add a key by hand"
+test "$(nb-forgejo-owner dev-b dev-b@nullbill.internal </dev/null)" = changed || fail "a removed key is deleted"
+titles=$(curl -fsS "${tls[@]}" -H "Authorization: Basic $owner" "$url/api/v1/user/keys" | python3 -c 'import json,sys; print(",".join(sorted(k["title"] for k in json.load(sys.stdin))))')
+test "$titles" = "by hand" || fail "only the key added by hand is left (got '$titles')"
+pass "keys taken off the page are deleted, keys added in Forgejo stay"
+
+# Forgejo refuses a key another user holds: said, not fatal.
+out=$(cut -d' ' -f1-2 /tmp/id_check.pub | nb-forgejo-owner dev-b dev-b@nullbill.internal)
+grep -q '^refused: key 1: ' <<<"$out" || fail "a refused key is reported (got '$out')"
+test "$(tail -1 <<<"$out")" = same || fail "a refused key changes nothing (got '$out')"
+pass "a key Forgejo refuses is reported and the rest goes on"

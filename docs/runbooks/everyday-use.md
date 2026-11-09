@@ -128,9 +128,14 @@ order, and certificates that expired while it was off are replaced by
 
 ## Forgejo
 
-Sign in as `nullbill-admin`, set its new password, then make your own
-everyday user under **Site administration, User accounts** and add your SSH
-public key to it (**Settings, SSH / GPG keys**). Clone and push over SSH:
+Setup makes your own Forgejo user, an administrator named after your
+Tailscale login (the part before the @), with a password the **Services**
+page shows under **Forgejo**; Forgejo does not ask you to change it. Paste
+your SSH public key on the page under **Access**, **SSH keys** and press
+**Run setup**: the key goes on that user, and a key you take off there goes
+too. Keys you add in Forgejo yourself (**Settings, SSH / GPG keys**) stay.
+`nullbill-admin` is a spare administrator you do not need. Clone and push
+over SSH:
 `git clone git@forgejo.nullbill.internal:<user>/<repo>.git` with the hosts
 line above. Git over HTTPS from a laptop fails on the certificate. With
 Linux CI on, [ci-runners.md](ci-runners.md) says how a repository runs
@@ -151,16 +156,12 @@ on it. It reaches the internet only through the proxy, and only the names
 on its allow-list (Debian, PyPI, npm, GitHub and the others under
 `proxy.allow` in `catalog.yaml`). apt uses it already; for other tools run
 `export http_proxy=http://10.42.2.10:3128 https_proxy=http://10.42.2.10:3128`
-first. It takes SSH as `root` with keys
-only, and setup gave it no key of yours. Add one from the Proxmox Shell,
-with your public key in place of the quoted text:
-
-```sh
-pct exec 2019 -- sh -c 'mkdir -p -m 700 /root/.ssh && echo "ssh-ed25519 AAAA... you@laptop" >> /root/.ssh/authorized_keys'
-```
-
-Then `ssh root@10.42.3.19` from your device. `pct enter 2019` in the Shell
-works without a key.
+first. It takes SSH as `root` with keys only: paste your public key on the
+page under **Access**, **SSH keys** and press **Run setup**, then
+`ssh root@workspace.nullbill.internal` from your device. Setup keeps those
+keys between two `# nullbill:` lines in `/root/.ssh/authorized_keys`; keys
+you add outside them stay. `pct enter 2019` in the Proxmox Shell works
+without a key.
 
 ## Operator agent
 

@@ -35,7 +35,15 @@ i9-9900K, the BIOS setting that keeps integrated graphics on beside a
 graphics card (often **IGPU Multi-Monitor**). Press **Read the hardware**
 on the **Setup** page again after changing it. A 9900KF has none.
 
-## 2. Add your libraries
+## 2. Libraries
+
+Setup adds one library for each kept disk, named after its share, of the
+type **Mixed Movies and Shows**: Jellyfin finds films and series by their
+names and shows everything else by folder. It does that once; a library you
+remove stays removed. Reading a big disk the first time takes a while.
+
+To keep films, series or music apart, with their own posters and views,
+add a library of that kind for their folder and remove the first one:
 
 **You need:** Jellyfin open and signed in.
 

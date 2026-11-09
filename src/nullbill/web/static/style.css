@@ -629,6 +629,18 @@ tr.detail > td { background: var(--bg-sub); padding: 14px 16px 16px 56px; }
 .kv .icon-btn { width: 28px; height: 28px; }
 .kv code.masked { letter-spacing: 2px; color: var(--text-3); }
 .svc-note { margin-top: 10px; color: var(--text-2); font-size: 12px; max-width: 80ch; }
+.svc-steps { margin-top: 14px; max-width: 88ch; }
+.svc-steps h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--text-2); }
+.steps-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; font-size: 13px; }
+.steps-list li { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 10px; align-items: start; }
+.steps-list li.done .step-body > span { color: var(--text-3); }
+.step-mark { display: grid; place-items: center; width: 18px; height: 18px; margin-top: 1px; border-radius: 50%; border: 1px solid var(--line-strong); font-size: 11px; color: var(--text-3); }
+.step-mark.done { background: var(--good-dot); border-color: var(--good-dot); color: #fff; }
+.step-mark .icon { width: 12px; height: 12px; }
+.step-code-row { display: flex; align-items: flex-start; gap: 4px; margin-top: 6px; }
+.step-code { flex: 0 1 auto; min-width: 0; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg-sub); font-size: 12px; }
+.step-code-row .icon-btn { width: 28px; height: 28px; flex: none; }
+#ssh-keys { width: 100%; min-height: 84px; font-family: var(--mono, ui-monospace, monospace); font-size: 12px; resize: vertical; }
 .services td.actions .btn { min-width: 70px; }
 
 /* Toolbar above a table. */

@@ -19,7 +19,7 @@ const VIEWS = ["overview", "services", "activity", "alerts", "setup", "access", 
 const ALIASES = {home: "overview", agents: "agent", "": ""};
 const STEPS = ["hardware", "choices", "plan", "build"];
 const AGENT_TABS = ["chat", "settings", "log"];
-const ACCESS_TABS = ["tailscale", "lan", "trust"];
+const ACCESS_TABS = ["tailscale", "lan", "trust", "ssh"];
 const PLATFORMS = ["android", "windows", "apple"];
 // Runs that open their page when they start; the others show in the top
 // bar while the owner stays where they pressed.
@@ -475,6 +475,16 @@ function scrollChatToNews() {
   const card = latestRequest();
   if (card) card.scrollIntoView({block: "center"});
   else $("chat-log").scrollTop = $("chat-log").scrollHeight;
+}
+
+let sshDirty = false; // the owner is editing the SSH keys field
+
+function renderSshKeys(st) {
+  const keys = (st.choices && st.choices.ssh_keys) || [];
+  const n = keys.length;
+  $("ssh-state").replaceChildren(!n ? status("", "No keys yet")
+    : st.config_changed ? status("warn", `${n} saved: run setup`) : status("good", `${n} key${n === 1 ? "" : "s"}`));
+  if (!sshDirty) $("ssh-keys").value = keys.join("\n");
 }
 
 function showAccessTab(tab) {
@@ -1051,6 +1061,7 @@ function paintStates() {
   $("ts-dot-client").classList.toggle("done", st.tailscale_client);
   $("ts-dot-key").classList.toggle("done", ts.kind === "done");
   show("tailscale-client-saved", st.tailscale_client);
+  renderSshKeys(st);
   show("vpn-saved", st.tailscale_key);
   show("pending-dot", Boolean(st.config_changed || st.tailscale_key));
   // Run setup is the page's main action only when there is something to build.
@@ -1355,9 +1366,28 @@ function serviceDetail(s, feedback) {
     s.what ? make("p", {className: "svc-note", textContent: s.what, style: "margin-top:0;margin-bottom:10px"}) : null,
     rows.length ? make("dl", {className: "kv"}, ...rows) : null,
     s.password_note ? make("p", {className: "svc-note", textContent: s.password_note}) : null,
-    s.how ? make("p", {className: "svc-note", textContent: s.how}) : null,
+    serviceSteps(s, feedback),
     feedback,
   ];
+}
+
+// What to do to set a service up, in order; a step the page can tell is
+// done says so, and one done on another page links there.
+function serviceSteps(s, feedback) {
+  const steps = s.steps || [];
+  if (!steps.length) return null;
+  const items = steps.map((st, n) => {
+    const mark = st.done === true ? make("span", {className: "step-mark done", title: "Done"}, icon("check"), make("span", {className: "sr-only", textContent: "Done: "}))
+      : make("span", {className: "step-mark", textContent: String(n + 1), ariaHidden: "true"});
+    const body = make("div", {className: "step-body"}, make("span", {textContent: st.text}));
+    if (st.href) body.append(" ", make("a", {className: "link", href: st.href, textContent: st.link || "Open"}));
+    if (st.code) {
+      const pre = make("pre", {className: "step-code"}, make("code", {textContent: st.code}));
+      body.append(make("div", {className: "step-code-row"}, pre, copyButton(`Copy step ${n + 1} of ${s.title}`, () => st.code, feedback)));
+    }
+    return make("li", {className: st.done === true ? "done" : ""}, mark, body);
+  });
+  return make("div", {className: "svc-steps"}, make("h3", {textContent: "Set it up"}), make("ol", {className: "steps-list"}, ...items));
 }
 
 function renderServices(st) {
@@ -2920,6 +2950,19 @@ document.addEventListener("DOMContentLoaded", () => {
       return "Saved. The next setup run puts the policy in place with it.";
     }, missing || id);
   });
+  $("ssh-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const field = $("ssh-keys");
+    press(submitter(event), "ssh-result", "Saving…", async () => {
+      const result = await api("/api/ssh-keys", {keys: field.value});
+      field.value = result.ssh_keys.join("\n");
+      sshDirty = false;
+      await refresh();
+      const n = result.ssh_keys.length;
+      return n ? `Saved ${n} key${n === 1 ? "" : "s"}. Run setup to put them in place.` : "Saved: no keys. Run setup to take them off.";
+    }, field);
+  });
+  $("ssh-keys").addEventListener("input", () => { sshDirty = true; });
   $("vpn-form").addEventListener("submit", (event) => {
     event.preventDefault();
     const field = $("tailscale-key");
