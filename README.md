@@ -30,6 +30,9 @@ is that first run.
 - **Jellyfin**, optional: the films, series and music on a disk you kept,
   on your phone, TV app or browser
   ([media.md](docs/runbooks/media.md)).
+- **Game servers**, optional: Minecraft, Terraria and Factorio, each the
+  maker's own server in a container of its own, for you and the friends
+  you tick it for ([games.md](docs/runbooks/games.md)).
 
 ## How it works, in short
 
@@ -183,7 +186,9 @@ intent:
 people:                                  # Tailscale logins; one owner is required
   owner-a: {role: owner, login: owner-a@example.internal}
   dev-b: {role: default, login: dev-b@example.internal}
-  alex: {role: friend, login: alex@example.internal, services: [jellyfin]}  # a friend: only what is listed
+  alex: {role: friend, login: alex@example.internal, services: [jellyfin, minecraft]}  # a friend: only what is listed
+games:
+  minecraft: {eula: true, admins: [owner_a]}  # you agree to https://aka.ms/MinecraftEULA; admins are player names
 overrides:
   linux-runner: {count: 2}
 disks:

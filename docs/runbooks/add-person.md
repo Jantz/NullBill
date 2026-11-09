@@ -21,8 +21,8 @@ Tailscale's free plan holds six people, you included.
 1. On the page open **Access**, **People**, and press **Add a person**.
 2. Give them a short name for yourself (`alex`), their Tailscale login, and
    tick what they may open. Only services meant for other people are
-   listed: Forgejo, Jellyfin, the local AI model. Proxmox, this page,
-   Grafana and the rest stay yours alone.
+   listed: Forgejo, Jellyfin, the local AI model, each game server.
+   Proxmox, this page, Grafana and the rest stay yours alone.
 3. Press **Add**. The page sends the new access policy to Tailscale, which
    runs the policy's own tests first (your friend reaches what you ticked
    and is refused everywhere else). When it says **In force now**, it is.

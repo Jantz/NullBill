@@ -467,7 +467,8 @@ certificates.
   runners yet. Installing Windows in the desktop VM is done by hand
   ([windows-desktop.md](windows-desktop.md)). Local AI models are set up by
   setup itself ([local-models.md](local-models.md)); turn Secure Boot off
-  first if you tick them. So is Jellyfin ([media.md](media.md)).
+  first if you tick them. So are Jellyfin ([media.md](media.md)) and the
+  game servers ([games.md](games.md)).
 - Taking the certificate authority's root key offline
   ([step-ca-root-key.md](step-ca-root-key.md)). It is written for a separate
   controller computer; it is not needed for the test.

@@ -73,7 +73,8 @@ answered items move to the decisions list at the bottom.
 - Addresses: router `.1`, service `.<id>`, pool clones `.128/26`, PVE host
   `.254` on mgmt. VMIDs are `2000 + id`. DNS domain `nullbill.internal`.
 - Zone egress: services and access go out directly (never into private
-  ranges); mgmt, build, inference, windows and media only through the proxy.
+  ranges); mgmt, build, inference, windows, media and games only through
+  the proxy.
 - Proxy allow-list: Debian, Proxmox, Ubuntu, PyPI, npm, crates.io, Go,
   GitHub, Docker Hub, GHCR, Hugging Face and Windows Update, in
   `catalog.yaml` under `proxy.allow`. mgmt guests use the proxy too, so they
@@ -130,6 +131,11 @@ answered items move to the decisions list at the bottom.
 - Media server: Jellyfin's latest release (12.4) from its repository, admin
   `nullbill-admin`, the kept disks read-only, Quick Sync on integrated
   Intel graphics, libraries added by you (docs/adr/0009-media-server.md).
+- Game servers: the makers' own servers (Minecraft: Java Edition 26.3,
+  Terraria 1.4.5.8, Factorio 2.1.24 without the Space Age expansion), a
+  new world each, no mods, players checked against their accounts, 3 GiB
+  for Minecraft and 1.5 GiB each for the others
+  (docs/adr/0012-game-servers.md, docs/runbooks/games.md).
 - Plan output: YAML with a comment above each decision.
 - Updates: unattended-upgrades on the host (Debian security only) and on
   every Linux guest (Debian security and point releases, as Debian's own
@@ -145,6 +151,8 @@ answered items move to the decisions list at the bottom.
 
 ## Decisions
 
+- Game servers for Minecraft, Terraria and Factorio, built into NullBill
+  (owner, 2026-11-09).
 - Jellyfin, built into NullBill (owner, 2026-11-08).
 - Disks from a previous OS (question 10): `ntfs-3g` on the host and Samba
   in a `files` guest, approved (owner, 2026-11-07;

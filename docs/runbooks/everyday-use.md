@@ -29,10 +29,11 @@ works too, and the **Services** page shows both.
 | Coding agent | inside the operator guest (2016) | see [Coding agent](#coding-agent) |
 | Model gateway (local AI) | `https://10.42.4.21:4000/v1` by address (from the workspace `https://model-gateway.nullbill.internal:4000/v1`) | the API key from **Show key** under **Local AI model** on the **Services** page; see [local-models.md](local-models.md) |
 | Jellyfin (media) | `http://jellyfin.nullbill.internal:8096` (`10.42.7.24`) | `nullbill-admin`, **Show password** on the page; see [media.md](media.md) |
+| Minecraft, Terraria, Factorio | in the game: `minecraft.nullbill.internal:25565` (`10.42.8.25`), `terraria.nullbill.internal` port 7777 (`10.42.8.26`), `factorio.nullbill.internal:34197` (`10.42.8.27`) | your own account in the game; see [games.md](games.md) |
 | Windows desktop | Remote Desktop to `windows-dev.nullbill.internal` (`10.42.5.22`) | the account you make when installing ([windows-desktop.md](windows-desktop.md)) |
 
-To let a friend open Forgejo, Jellyfin or the local AI model, and nothing
-else, see [add-person.md](add-person.md).
+To let a friend open Forgejo, Jellyfin, the local AI model or a game
+server, and nothing else, see [add-person.md](add-person.md).
 
 The other guests have nothing for you to open: the router, the internet
 proxy (10.42.2.10), step-ca (10.42.1.12), PostgreSQL (10.42.2.13), the CI
