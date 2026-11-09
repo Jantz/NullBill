@@ -265,8 +265,12 @@ services:
     agent_managed: true
     gpu: true
     # The model lives in the GPU's VRAM (gpus.<pci>.consumers budgets it);
-    # memory holds the server and the file cache it loads from, which the
-    # kernel takes back under pressure.
+    # memory holds the server, the Vulkan driver's host buffers, the part
+    # of the model llama.cpp keeps on the CPU, and the recurrent state it
+    # saves for each context checkpoint (150 MiB each for bonsai-2-27b).
+    # With llama.cpp's default of 32 checkpoints and its prompt cache, the
+    # kernel killed llama-server mid-conversation; the inference role allows
+    # 2 checkpoints and no prompt cache, which keeps it well inside this.
     floor: {cores: 2, memory_mib: 2048, disk_gib: 64}
     # NVIDIA's driver, whose user-space half must match the host's
     # (ansible/roles/inference).

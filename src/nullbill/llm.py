@@ -93,8 +93,10 @@ def _host_checks(plan: dict) -> list[tuple[str, str, str]]:
     ]
 
 
-ANSWER_SECONDS = 90
+ANSWER_SECONDS = 100
+RETRY_SECONDS = 5
 BUSY = "busy"
+LOADING = "loading"
 
 
 def _gateway_checks(plan: dict) -> list[tuple[str, str, str]]:
@@ -102,23 +104,33 @@ def _gateway_checks(plan: dict) -> list[tuple[str, str, str]]:
     name = f"{GATEWAY}.{plan['domain']}"
     url = f"https://{name}:{GATEWAY_PORT}/v1/chat/completions"
     body = shlex.quote('{"model": "local", "max_tokens": 16, "messages": [{"role": "user", "content": "Say OK."}]}')
-    # Under ssh_run's limit, so a model that does not answer in time is
-    # reported here rather than cut off there.
-    curl = (
-        f"curl -sS --max-time {ANSWER_SECONDS} --cacert {ROOT_CA} --resolve {name}:{GATEWAY_PORT}:127.0.0.1 -o /dev/null "
-        f"-w '%{{http_code}}' -H 'Content-Type: application/json' -d {body} {url}"
-    )
-    # llama-server answers one request at a time, so a long answer to
-    # someone else holds this one back; curl's timeout (28) says so.
+
+    def curl(max_time: str) -> str:
+        return (
+            f"curl -sS --max-time {max_time} --cacert {ROOT_CA} --resolve {name}:{GATEWAY_PORT}:127.0.0.1 -o /dev/null "
+            f"-w '%{{http_code}}' -H 'Content-Type: application/json' -d {body} {url}"
+        )
+
+    # All of it under ssh_run's limit, so a model that does not answer in
+    # time is reported here rather than cut off there. llama-server answers
+    # one request at a time, so a long answer to someone else holds this one
+    # back (curl's timeout, 28: busy); while it loads the model after a
+    # start it answers 503, which is asked again until the time is up.
     with_key = (
-        f'. /etc/litellm/env; code=$({curl} -H "Authorization: Bearer $NB_GATEWAY_KEY"); '
-        f'rc=$?; if [ "$rc" = 28 ]; then echo {BUSY}; else echo "$code"; fi'
+        f". /etc/litellm/env; end=$((SECONDS + {ANSWER_SECONDS})); "
+        "while :; do "
+        f'code=$({curl("$((end - SECONDS))")} -H "Authorization: Bearer $NB_GATEWAY_KEY"); rc=$?; '
+        f'if [ "$rc" = 28 ]; then echo {BUSY}; break; fi; '
+        f'if [ "$code" = 503 ]; then '
+        f"if [ $((end - SECONDS)) -gt $(({RETRY_SECONDS} * 2)) ]; then sleep {RETRY_SECONDS}; continue; fi; "
+        f"echo {LOADING}; break; fi; "
+        'echo "$code"; break; done'
     )
     return [
         ("the local model answers through the model gateway with its key", with_key, "200"),
         (
             "the model gateway refuses a wrong key",
-            f'wrong=not-the-key; code=$({curl} -H "Authorization: Bearer $wrong"); '
+            f'wrong=not-the-key; code=$({curl(str(ANSWER_SECONDS))} -H "Authorization: Bearer $wrong"); '
             'case $code in 2*) echo "$code" ;; *) echo refused ;; esac',
             "refused",
         ),
@@ -138,6 +150,15 @@ def skipped(plan_with_notes: dict, reason: str) -> list[Result]:
     return [Result("SKIP", label, reason) for label, _, _ in commands(plan)] if enabled(plan) else []
 
 
+WAITING = {
+    BUSY: (
+        f"no answer within {ANSWER_SECONDS} s; the model answers one request at a time "
+        "and may be busy with another, so run the checks again when it is idle"
+    ),
+    LOADING: f"still loading the model after {ANSWER_SECONDS} s; run the checks again in a few minutes",
+}
+
+
 def check(plan_with_notes: dict, target: str, run: Runner) -> list[Result]:
     plan = strip_notes(plan_with_notes)
     if not enabled(plan):
@@ -146,12 +167,8 @@ def check(plan_with_notes: dict, target: str, run: Runner) -> list[Result]:
     for label, command, want in commands(plan):
         rc, out, err = run(target, command)
         got = out.strip()
-        if got == BUSY:
-            why = (
-                f"no answer within {ANSWER_SECONDS} s; the model answers one request at a time "
-                "and may be busy with another, so run the checks again when it is idle"
-            )
-            results.append(Result("DEGRADED", label, why))
+        if got in WAITING:
+            results.append(Result("DEGRADED", label, WAITING[got]))
             continue
         results.append(Result("PASS", label) if got == want else Result("FAIL", label, (got or err.strip() or f"exit {rc}")[:120]))
     return results

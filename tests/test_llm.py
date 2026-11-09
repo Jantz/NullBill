@@ -71,5 +71,17 @@ def test_a_model_busy_with_another_answer_is_degraded_not_failed(facts):
     results = {r.name: r.status for r in llm.check(plan, TARGET, lambda target, command: (0, answers[command], ""))}
     assert results["the local model answers through the model gateway with its key"] == "DEGRADED"
     # curl gives up before ssh_run would, and says so in the guest.
-    assert f"--max-time {llm.ANSWER_SECONDS} " in ask and llm.ANSWER_SECONDS < probe.SSH_TIMEOUT_S
+    assert f"end=$((SECONDS + {llm.ANSWER_SECONDS}))" in ask and llm.ANSWER_SECONDS < probe.SSH_TIMEOUT_S - 10
     assert 'if [ "$rc" = 28 ]; then echo busy' in ask
+
+
+def test_a_model_still_loading_is_asked_again_then_degraded(facts):
+    plan = build_plan(build_model(fixture_config("mid")), facts("mid"))
+    answers = service_answers(plan, "")
+    ask = next(c for label, c, _ in llm.commands(strip_notes(plan)) if label.startswith("the local model answers"))
+    # llama-server answers 503 while it loads; the guest asks again until the time is up.
+    assert 'if [ "$code" = 503 ]; then' in ask and f"sleep {llm.RETRY_SECONDS}; continue" in ask
+    answers[ask] = llm.LOADING + "\n"
+    results = {r.name: (r.status, r.detail) for r in llm.check(plan, TARGET, lambda target, command: (0, answers[command], ""))}
+    status, detail = results["the local model answers through the model gateway with its key"]
+    assert status == "DEGRADED" and "still loading" in detail

@@ -218,3 +218,33 @@
     state: started
     daemon_reload: true
   when: inference_manage_services | bool
+
+# A restart this run asked for happens now, so the wait below sees it.
+- name: Restart llama-server if anything above changed
+  ansible.builtin.meta: flush_handlers
+
+# The model takes minutes to load (longer the first time, while the Vulkan
+# driver compiles its shaders), and llama-server answers 503 until then.
+# Setup goes on only once it answers, so nothing after it, verify
+# included, meets a model that is still loading.
+- name: Wait for llama-server to load the model
+  ansible.builtin.uri:
+    url: "http://{{ '127.0.0.1' if inference_listen == '0.0.0.0' else inference_listen }}:{{ inference_port }}/health"
+    use_proxy: false
+    timeout: 10
+  register: inference_health
+  until: inference_health.status == 200
+  retries: "{{ (inference_ready_seconds | int) // 10 }}"
+  delay: 10
+  failed_when: false
+  changed_when: false
+  when: inference_manage_services | bool
+
+- name: llama-server serves the model
+  ansible.builtin.assert:
+    that: inference_health.status == 200
+    fail_msg: >-
+      llama-server did not finish loading {{ inference_model_name }} within {{ inference_ready_seconds }} s
+      (its health check answered {{ inference_health.status }}). In the inference container,
+      journalctl -u llama-server -n 50 shows why.
+  when: inference_manage_services | bool

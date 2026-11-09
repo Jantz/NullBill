@@ -89,4 +89,5 @@ want = {"temperature": 0.7, "top_p": 0.8, "top_k": 20, "min_p": 0.0, "presence_p
 assert all(abs(p[k] - v) < 1e-6 for k, v in want.items()), {k: p[k] for k in want}
 PY
 grep -q -- '--reasoning auto --reasoning-effort medium' "$unit" || fail "the unit passes reasoning and its effort"
+grep -q -- '--ctx-checkpoints 2 --cache-ram 0 ' "$unit" || fail "the unit bounds the host memory llama-server spends on reuse"
 pass "llama-server samples with the model card's settings"

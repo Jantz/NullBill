@@ -33,8 +33,19 @@ inference_sampling: {}
 inference_reasoning: auto
 inference_reasoning_effort: ""
 inference_cache_type: f16
+# Host memory llama-server may spend on reuse. Each context checkpoint
+# holds a copy of the model's recurrent state (150 MiB for bonsai-2-27b);
+# llama.cpp's default of 32 per slot, with its 8 GiB prompt cache,
+# outgrew the container and the kernel killed the server. The newest two
+# cover the usual case, a conversation going on where it left off; without
+# the prompt cache, switching between conversations reads the prompt
+# again, which the card does quickly.
+inference_ctx_checkpoints: 2
+inference_cache_ram_mib: 0
 
 inference_listen: 0.0.0.0
+# How long setup waits for llama-server to load the model after it starts.
+inference_ready_seconds: 900
 inference_port: 8080
 # The model gateway's key to this server; apply keeps it in sops.
 inference_api_key: ""
