@@ -5,7 +5,7 @@ import hashlib
 import json
 import sys
 
-from nullbill import lan
+from nullbill import browserca, lan
 from nullbill.apply import STAGES, Context, SshReach, confirm_lan, run_apply, split_target
 from nullbill.artifacts import render_all, write_build
 from nullbill.errors import NullBillError
@@ -125,7 +125,14 @@ def cmd_verify(_args: argparse.Namespace) -> int:
     target = reach_target(home, configured, plan) if configured else None
     lan_host = split_target(configured)[1] if configured else None
     results = run_verify(
-        plan, model, target, ssh_run, lan_state=lan.state(home), lan_host=lan_host, say=lambda r: print(r.line(), flush=True)
+        plan,
+        model,
+        target,
+        ssh_run,
+        lan_state=lan.state(home),
+        lan_host=lan_host,
+        say=lambda r: print(r.line(), flush=True),
+        browser_root=home / browserca.DIR / "ca.crt",
     )
     counts = {s: sum(r.status == s for r in results) for s in ("PASS", "FAIL", "SKIP", "DEGRADED")}
     print(", ".join(f"{n} {s}" for s, n in counts.items()))

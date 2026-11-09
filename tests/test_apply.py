@@ -2,13 +2,14 @@ import copy
 import hashlib
 import json
 import shlex
+import subprocess
 import time
 from pathlib import Path
 
 import pytest
 from conftest import fixture_config
 
-from nullbill import applied, apply, backups, ci, flows, hostroot, lan, llm
+from nullbill import applied, apply, backups, browserca, ci, flows, hostroot, lan, llm
 from nullbill.apply import ApplyError, Context, connection, run_apply
 from nullbill.artifacts import render_all
 from nullbill.errors import NullBillError
@@ -700,6 +701,66 @@ def test_ca_stage_issues_each_tls_service_a_certificate_from_a_one_time_token(ct
     # Tokens are made on the CA guest, by pct exec through the host.
     tokens = [call[1] for call in c.reach.calls if call[0] == "host" and " token " in call[1]]
     assert all(t.startswith("pct exec 2012 -- env STEPPATH=/etc/step-ca step ca token ") for t in tokens) and len(tokens) == 4
+
+
+def test_ca_stage_signs_the_pages_own_key_with_the_browser_ca(ctx):
+    from nullbill.web.server import ensure_certificate
+
+    c = ctx("small")
+    cert, key = ensure_certificate(c.home)
+    # The on-site screen and the agents pin the key, not the certificate.
+    before = subprocess.run(["sh", "-c", apply.SPKI, "sh", str(cert)], capture_output=True, text=True).stdout
+    apply.stage_ca(c)
+    root = c.home / browserca.DIR / "ca.crt"
+    wanted = browserca.sans(["nullbill.nullbill.internal"], ["10.42.1.2"])
+    assert browserca.current(root, cert, wanted)
+    assert subprocess.run(["sh", "-c", apply.SPKI, "sh", str(cert)], capture_output=True, text=True).stdout == before
+    assert "ca: gave the page a certificate from the browser CA" in c.log
+    signed = cert.read_text()
+    apply.stage_ca(c)
+    assert cert.read_text() == signed
+
+
+def test_browsers_get_certificates_for_grafana_and_forgejo_by_address(ctx):
+    c = ctx("small")
+    apply.stage_monitoring(c)
+    apply.stage_forgejo(c)
+    root = c.home / browserca.DIR / "ca.crt"
+    for name, ip in (("monitoring", "10.42.1.14"), ("forgejo", "10.42.2.17")):
+        variables = playbook_vars(c, f"{name}.yml")
+        crt = c.home / browserca.DIR / f"{name}.crt"
+        assert variables[f"{name}_browser_cert"] == crt.read_text()
+        assert variables[f"{name}_browser_key"] == (c.home / browserca.DIR / f"{name}.key").read_text()
+        assert browserca.current(root, crt, browserca.sans([f"{name}.nullbill.internal"], [ip]))
+
+
+def test_proxmox_gets_the_browser_cas_certificate_only_while_the_lan_is_closed(ctx, tmp_path):
+    def host_vars(**kw):
+        c = ctx(**kw)
+        c.reach.calls.clear()
+        apply.stage_host(c)
+        return playbook_vars(c, "host-baseline.yml")
+
+    # Open: apply and the owner reach Proxmox at its LAN address, which the
+    # browser CA cannot name, so PVE's own CA signs it.
+    assert "host_baseline_api_cert" not in host_vars()
+    lan.write(tmp_path, lan.CLOSED)
+    closed = host_vars()
+    crt = tmp_path / browserca.DIR / "pve.crt"
+    assert closed["host_baseline_api_cert"] == crt.read_text()
+    assert closed["host_baseline_api_key"] == (tmp_path / browserca.DIR / "pve.key").read_text()
+    assert browserca.current(tmp_path / browserca.DIR / "ca.crt", crt, browserca.sans(["pve.nullbill.internal"], ["10.42.1.254"]))
+    assert "host_baseline_api_cert" not in host_vars(open_lan=True)
+
+
+def test_pve_api_clients_trust_pves_ca_and_the_browser_ca(ctx):
+    c = ctx("small")
+    bundle = apply.pve_ca(c, "agents")
+    root = (c.home / browserca.DIR / "ca.crt").read_text()
+    assert bundle == "-----BEGIN CERTIFICATE-----\nexample\n-----END CERTIFICATE-----\n" + root
+    c.secrets.set("anthropic_api_key", "sk-ant-credential")
+    apply.stage_agents(c)
+    assert playbook_vars(c, "operator.yml")["operator_pve_ca"] == bundle
 
 
 def playbook_vars(c, playbook):
@@ -1408,7 +1469,8 @@ def test_verify_reports_an_open_lan_as_degraded_not_failed(ctx, monkeypatch):
     monkeypatch.setattr(apply, "run_verify", lambda *a, **kw: seen.update(kw) or [Result("PASS", "x")])
     c = ctx()
     apply.stage_verify(c)
-    assert seen.pop("say") and seen == {"lan_state": "open", "lan_host": "pve.internal"}
+    assert seen.pop("say") and seen.pop("browser_root") == c.home / "browser-ca" / "ca.crt"
+    assert seen == {"lan_state": "open", "lan_host": "pve.internal"}
 
 
 def test_a_failed_playbook_stops_apply_before_later_stages(ctx):

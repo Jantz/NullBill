@@ -1,0 +1,166 @@
+"""The certificate authority the owner's browsers trust (docs/runbooks/trust-this-server.md).
+
+step-ca's root has no name constraints, so a device that trusted it would
+take a certificate for any website from whoever holds the CA guest's keys.
+This root is made and kept in NULLBILL_HOME (like the log shipper CA) and is
+constrained to the plan's domain and network, so trusting it on a phone
+vouches for this server and nothing else. It signs only what the owner opens
+in a browser by address: the page, Proxmox, Forgejo and Grafana. Services
+keep step-ca's certificates for each other.
+"""
+
+import hashlib
+import ipaddress
+import secrets
+import shlex
+import ssl
+import subprocess
+import tempfile
+from pathlib import Path
+
+from nullbill.probe import Runner
+from nullbill.render import strip_notes
+from nullbill.results import Result
+
+DIR = "browser-ca"
+CA_DAYS = 3650
+# Apple refuses a TLS certificate valid for longer than 825 days, from any root.
+DAYS = 825
+# apply issues a new one when fewer days than this are left; verify warns at WARN_DAYS.
+RENEW_DAYS = 90
+WARN_DAYS = 30
+NAME = "NullBill browser CA"
+
+
+def _openssl(args: list[str], stdin: str | None = None) -> str:
+    done = subprocess.run(["openssl", *args], input=stdin, capture_output=True, text=True, check=False)
+    if done.returncode != 0:
+        raise RuntimeError(f"openssl {args[0]}: {done.stderr.strip()[:200]}")
+    return done.stdout
+
+
+def constraints(domain: str, network: str) -> str:
+    net = ipaddress.ip_network(network)
+    return f"critical,permitted;DNS:{domain},permitted;IP:{net.network_address}/{net.netmask}"
+
+
+def root(home: Path, domain: str, network: str) -> Path:
+    """The CA's certificate, made once, limited to domain and network."""
+    directory = home / DIR
+    crt, key = directory / "ca.crt", directory / "ca.key"
+    if not crt.exists():
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        _openssl(
+            ["req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-days", str(CA_DAYS)]
+            + ["-subj", f"/CN={NAME}/O=NullBill", "-keyout", str(key), "-out", str(crt)]
+            + ["-addext", "basicConstraints=critical,CA:TRUE,pathlen:0", "-addext", "keyUsage=critical,keyCertSign,cRLSign"]
+            + ["-addext", f"nameConstraints={constraints(domain, network)}"]
+        )
+        key.chmod(0o600)
+    return crt
+
+
+def der(crt: Path) -> bytes:
+    return ssl.PEM_cert_to_DER_cert(crt.read_text())
+
+
+def fingerprint(crt: Path) -> str:
+    """SHA-256, as Android and Firefox show it."""
+    return ":".join(f"{b:02X}" for b in hashlib.sha256(der(crt)).digest())
+
+
+def sans(names: list[str], addresses: list[str]) -> list[str]:
+    return [f"DNS:{n}" for n in names] + [f"IP:{a}" for a in addresses]
+
+
+def _san_list(pem: str) -> list[str]:
+    out = _openssl(["x509", "-noout", "-ext", "subjectAltName"], pem)
+    found = out.splitlines()[1:] if "Subject Alternative Name" in out else []
+    entries = [e.strip() for e in ",".join(found).split(",") if e.strip()]
+    return sorted(e.replace("IP Address:", "IP:") for e in entries)
+
+
+def current(ca: Path, crt: Path, wanted: list[str], days: int = RENEW_DAYS) -> bool:
+    """crt is ca's, names exactly wanted and is good for another `days`."""
+    if not crt.exists():
+        return False
+    pem = crt.read_text()
+    verified = subprocess.run(["openssl", "verify", "-CAfile", str(ca), str(crt)], capture_output=True, check=False)
+    if verified.returncode != 0:
+        return False
+    ending = subprocess.run(["openssl", "x509", "-checkend", str(days * 86400), "-noout"], input=pem.encode(), capture_output=True)
+    return ending.returncode == 0 and _san_list(pem) == sorted(wanted)
+
+
+def issue(home: Path, ca: Path, crt: Path, key: Path, wanted: list[str]) -> bool:
+    """A new certificate at crt for wanted, unless the one there is current.
+    Keeps an existing key, so pins of the page's public key still hold.
+    Returns whether it issued one."""
+    if current(ca, crt, wanted):
+        return False
+    if not key.exists():
+        key.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        _openssl(["genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256", "-out", str(key)])
+        key.chmod(0o600)
+    common = next(s for s in wanted if s.startswith("DNS:")).removeprefix("DNS:")
+    csr = _openssl(["req", "-new", "-key", str(key), "-subj", f"/CN={common}"])
+    extensions = "\n".join(
+        [
+            "basicConstraints=critical,CA:FALSE",
+            "keyUsage=critical,digitalSignature",
+            "extendedKeyUsage=serverAuth",
+            f"subjectAltName={','.join(wanted)}",
+            "",
+        ]
+    )
+    with tempfile.NamedTemporaryFile("w", dir=home / DIR, suffix=".ext") as ext:
+        ext.write(extensions)
+        ext.flush()
+        signed = _openssl(
+            ["x509", "-req", "-CA", str(ca), "-CAkey", str(ca.with_suffix(".key")), "-days", str(DAYS)]
+            + ["-set_serial", f"0x{secrets.token_hex(16)}", "-extfile", ext.name],
+            csr,
+        )
+    fresh = crt.with_suffix(".new")
+    fresh.write_text(signed)
+    fresh.replace(crt)
+    return True
+
+
+def _endpoints(plan: dict) -> list[tuple[str, str]]:
+    """(label, URL) a browser opens, which verify can reach from the host."""
+    bare = strip_notes(plan)
+    return [
+        ("browsers trust the page", f"https://{bare['guests']['nullbill']['ip']}:8443/"),
+        ("browsers trust Proxmox", f"https://{bare['zones']['mgmt']['host_ip']}:8006/"),
+    ]
+
+
+def skipped(plan: dict, reason: str) -> list[Result]:
+    return [Result("SKIP", label, reason) for label, _ in _endpoints(plan)]
+
+
+def check(plan: dict, root_crt: Path, target: str, run: Runner, lan_closed: bool) -> list[Result]:
+    """Each endpoint's certificate as a browser that trusts only this root
+    sees it, by address, from the host. Proxmox serves the browser CA's
+    only once the home network is closed (apply.stage_host)."""
+    if not root_crt.is_file():
+        return skipped(plan, "no setup run has made the browser CA yet")
+    endpoints = _endpoints(plan)
+    if not lan_closed:
+        endpoints, later = endpoints[:1], endpoints[1:]
+    script = "f=$(mktemp); trap 'rm -f \"$f\"' EXIT; cat > \"$f\" <<'PEM'\n" + root_crt.read_text().strip() + "\nPEM\n"
+    for _, url in endpoints:
+        script += f'out=$(curl -sS -o /dev/null -m 10 --noproxy \'*\' --cacert "$f" {shlex.quote(url)} 2>&1); echo "rc=$? $out"\n'
+    rc, out, err = run(target, script)
+    lines = out.splitlines()
+    results = []
+    for i, (label, url) in enumerate(endpoints):
+        line = lines[i] if rc == 0 and i < len(lines) else f"rc=? {(err or out).strip()[:120]}"
+        if line.startswith("rc=0 "):
+            results.append(Result("PASS", label))
+        else:
+            results.append(Result("DEGRADED", label, f"{url}: {line.partition(' ')[2] or line} (run setup)"))
+    if not lan_closed:
+        results += [Result("SKIP", label, "Proxmox gets it once the home network is closed") for label, _ in later]
+    return results

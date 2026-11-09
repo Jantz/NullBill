@@ -234,11 +234,34 @@
     path: /usr/bin/pvenode
   register: host_baseline_pvenode
 
+# Browsers trust it once the owner installs NullBill's root (apply passes
+# it once the home network is closed); kept here for the script to compare.
+- name: Certificate for browsers from apply
+  ansible.builtin.file:
+    path: /etc/nullbill/pve-api
+    state: "{{ 'directory' if host_baseline_api_cert | length > 0 else 'absent' }}"
+    mode: "0700"
+
+- name: Its certificate and key
+  ansible.builtin.copy:
+    dest: "/etc/nullbill/pve-api/{{ item.file }}"
+    content: "{{ item.value | trim }}\n"
+    mode: "0600"
+  loop:
+    - {file: cert.pem, value: "{{ host_baseline_api_cert }}"}
+    - {file: key.pem, value: "{{ host_baseline_api_key }}"}
+  loop_control:
+    label: "{{ item.file }}"
+  no_log: true
+  when: host_baseline_api_cert | length > 0
+
 - name: API certificate that also names the mgmt address
   ansible.builtin.command:
-    argv: [/usr/local/sbin/nb-pve-api-cert, "{{ host_baseline_api_name }}", "{{ host_baseline_api_address }}"]
-  register: host_baseline_api_cert
-  changed_when: host_baseline_api_cert.stdout == "issued"
+    argv: "{{ ['/usr/local/sbin/nb-pve-api-cert', host_baseline_api_name, host_baseline_api_address] + host_baseline_api_browser }}"
+  vars:
+    host_baseline_api_browser: "{{ ['/etc/nullbill/pve-api/cert.pem', '/etc/nullbill/pve-api/key.pem'] if host_baseline_api_cert | length > 0 else [] }}"
+  register: host_baseline_api_cert_run
+  changed_when: host_baseline_api_cert_run.stdout == "issued"
   when: host_baseline_api_name | length > 0 and host_baseline_pvenode.stat.exists
 
 - name: Run auditd

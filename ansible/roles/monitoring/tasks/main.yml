@@ -193,17 +193,32 @@
     mode: "0644"
   notify: Reload nginx
 
+- name: Browser certificate and key for Grafana
+  ansible.builtin.copy:
+    dest: "/etc/nginx/nullbill/browser.{{ item.ext }}"
+    content: "{{ item.value | trim }}\n"
+    mode: "{{ item.mode }}"
+  loop:
+    - {ext: crt, value: "{{ monitoring_browser_cert }}", mode: "0644"}
+    - {ext: key, value: "{{ monitoring_browser_key }}", mode: "0600"}
+  loop_control:
+    label: "browser.{{ item.ext }}"
+  no_log: true
+  when: monitoring_browser_cert | length > 0
+  notify: Reload nginx
+
 - name: No default nginx site
   ansible.builtin.file:
     path: /etc/nginx/sites-enabled/default
     state: absent
   notify: Reload nginx
 
-- name: Loki gate
+- name: Loki gate and Grafana over HTTPS
   ansible.builtin.template:
-    src: nullbill-loki.conf.j2
-    dest: /etc/nginx/conf.d/nullbill-loki.conf
+    src: "{{ item }}.j2"
+    dest: "/etc/nginx/conf.d/{{ item }}"
     mode: "0644"
+  loop: [nullbill-loki.conf, nullbill-grafana.conf]
   notify: Reload nginx
 
 - name: nginx accepts its configuration

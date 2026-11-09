@@ -14,8 +14,9 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 
-from nullbill import agent, backups, ci, forge, hostroot, lan, legacy, llm, media
+from nullbill import agent, backups, browserca, ci, forge, hostroot, lan, legacy, llm, media
 from nullbill.errors import NullBillError
 from nullbill.flows import HOST, HOST_PORTS, resolve_flows
 from nullbill.probe import Runner
@@ -244,6 +245,7 @@ def run_verify(
     lan_state: str = lan.CLOSED,
     lan_host: str | None = None,
     say: Callable[[Result], None] | None = None,
+    browser_root: Path | None = None,
 ) -> list[Result]:
     """Every check's result, in a fixed order; `say` hears each one as soon as
     it and those before it are in, so a long run shows its progress."""
@@ -274,6 +276,7 @@ def run_verify(
             *llm.skipped(plan, reason),
             *legacy.skipped(plan, reason),
             *media.skipped(plan, reason),
+            *(browserca.skipped(plan, reason) if browser_root is not None else []),
         )
         return results
     name = model["verify"]["public_name"]
@@ -318,4 +321,6 @@ def run_verify(
     add(*llm.check(plan, target, run))
     add(*legacy.check(plan, target, run))
     add(*media.check(plan, target, run))
+    if browser_root is not None:
+        add(*browserca.check(plan, browser_root, target, run, lan_closed=lan_state == lan.CLOSED))
     return results

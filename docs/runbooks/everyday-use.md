@@ -18,7 +18,7 @@ its number is `2000 + <service id>`.
 |---|---|---|
 | NullBill page | `https://10.42.1.2:8443` | your page password (chosen at first sign-in) |
 | Proxmox web UI | `https://10.42.1.254:8006` | `root`, realm Linux PAM, the password from the Proxmox installer |
-| Grafana (metrics, logs) | `http://10.42.1.14:3000` | `admin`, **Show password** on the page |
+| Grafana (metrics, logs) | `https://10.42.1.14:3000` | `admin`, **Show password** on the page |
 | Forgejo (Git, CI) | `https://10.42.2.17`, Git over SSH on `10.42.2.17` port 22 | `nullbill-admin`, **Show password** on the page; Forgejo asks for a new one |
 | Kept disk share | `\\10.42.1.23\<share>` | `nbshare`, **Show password** on the page |
 | Workspace | SSH to `10.42.3.19` | see [Workspace](#workspace) |
@@ -32,14 +32,14 @@ proxy (10.42.2.10), step-ca (10.42.1.12), PostgreSQL (10.42.2.13), the CI
 dispatcher (10.42.2.18) and the vpn guest. Prometheus and Alertmanager
 answer only inside the server; Grafana shows their data.
 
-Your browser warns about the page's, Proxmox's and Forgejo's certificates.
-Proxmox and the page use their own self-signed certificates; Forgejo's
-comes from NullBill's certificate authority (step-ca), which your devices
-do not trust, and it names `forgejo.nullbill.internal`, not the address.
-Accept the warning for these addresses only. Do not add step-ca's root to
-your devices' trusted certificates: the root is not limited to
-`nullbill.internal`, so a device that trusts it would accept a certificate
-it issued for any site.
+Your browser warns about the page's, Proxmox's, Forgejo's and Grafana's
+certificates until the device trusts NullBill's browser CA: on the page,
+**Remote access**, **Trust this server**, download the root certificate and
+install it ([trust-this-server.md](trust-this-server.md)). That root is
+limited to your server's addresses and to `nullbill.internal`. Do not add
+step-ca's root to your devices' trusted certificates instead: it is not
+limited, so a device that trusts it would accept a certificate it issued for
+any site.
 
 Names under `nullbill.internal` do not resolve on your devices yet. Forgejo
 shows `forgejo.nullbill.internal` in its clone and mail links; on a laptop,

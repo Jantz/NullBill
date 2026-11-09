@@ -62,7 +62,7 @@ def _entries(plan: dict, guests: dict) -> list[dict]:
                 "name": "grafana",
                 "title": "Grafana",
                 "what": "Metrics and logs of every guest. Open Explore and pick Prometheus or Loki.",
-                "url": f"http://{ip('monitoring')}:3000",
+                "url": f"https://{ip('monitoring')}:3000",
                 "user": "admin",
                 "password": "grafana",
                 "watch": "monitoring",

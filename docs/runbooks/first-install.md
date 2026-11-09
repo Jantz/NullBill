@@ -372,6 +372,8 @@ host's `mgmt` address: in **The full plan** in the **Setup** page's
 3. Back on the page opened over Tailscale, press **Keep it closed**. The
    page accepts it only when it arrives through Tailscale, which proves the
    way in works.
+4. Press **Run setup** once more. Proxmox then gets a certificate from
+   NullBill's browser CA, which your devices can trust (part 14).
 
 If you do not press it in time, the server opens the home network again by
 itself after 15 minutes, or when it restarts first, so a mistake cannot
@@ -407,6 +409,14 @@ Tailscale.
    other systems.
 
 ## 14. Use it
+
+**You need:** each phone or computer you use, on Tailscale.
+
+1. On each device, open the page's **Remote access** page, **Trust this
+   server**: press **Download root certificate** and follow the steps for
+   that system. The certificate warnings on the page, Proxmox, Forgejo and
+   Grafana stop. [trust-this-server.md](trust-this-server.md) says what the
+   certificate vouches for.
 
 The page's **Services** page lists what runs, opens each service and shows
 the passwords setup made for it. [everyday-use.md](everyday-use.md) says

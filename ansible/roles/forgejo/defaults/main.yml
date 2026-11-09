@@ -12,6 +12,11 @@ forgejo_url: "https://codeberg.org/forgejo/forgejo/releases/download/v{{ forgejo
 forgejo_domain: forgejo.nullbill.internal
 forgejo_tls_name: "{{ forgejo_domain }}"
 forgejo_ssh_port: 22
+# The browser CA's certificate and key (src/nullbill/browserca.py) for
+# browsers, which open Forgejo by address and send no name: nginx's default
+# server answers them with it. apply sets both; empty leaves that server out.
+forgejo_browser_cert: ""
+forgejo_browser_key: ""
 
 # The shared PostgreSQL, verified against step-ca's root (sslmode
 # verify-full). apply supplies the password from sops; the postgres role

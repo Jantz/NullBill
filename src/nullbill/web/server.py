@@ -1,7 +1,8 @@
 """The setup and status page (docs/adr/0006-nullbill-on-the-server.md).
 
 Standard library only. One page and a small JSON API over HTTPS, with a
-self-signed certificate until the CA exists. Until the owner sets a
+self-signed certificate until apply's ca stage signs the same key with the
+browser CA (browserca.py), whose root the page offers for download. Until the owner sets a
 password, the one-time setup code install.sh printed is the only way in.
 
 Long work (probe, apply, verify) runs as a `nullbill` subprocess whose
@@ -34,7 +35,7 @@ from pathlib import Path
 
 import yaml
 
-from nullbill import hostroot, lan, legacy, llm
+from nullbill import browserca, hostroot, lan, legacy, llm
 from nullbill.apply import NTFY, REMOVALS, SPKI, STAGES
 from nullbill.cli import plan_text, reach_target
 from nullbill.errors import NullBillError
@@ -64,6 +65,7 @@ SCHEDULED = {"rebake-ci": ["apply", "--stage", "ci"]}
 REMOVE_ACTIONS = {"remove-guests": ["apply", "--remove-guests"]}
 REBAKE_WEEKDAY, REBAKE_HOUR = 6, 3
 SCHEDULE_CHECK_S = 60
+ROOT_CERT = "/nullbill-root.crt"
 # An optional Healthchecks.io check notices silence; alerts go to NTFY.
 HEALTHCHECKS = re.compile(r"https://hc-ping\.com/[A-Za-z0-9_-]{8,}(/[a-z0-9_-]+)?")
 # The agent CLI signs in with an Anthropic API key or a Claude subscription
@@ -1024,6 +1026,15 @@ class App:
             "pve_version": facts.get("pve_version"),
         }
 
+    def browser_root(self) -> Path | None:
+        crt = self.home / browserca.DIR / "ca.crt"
+        return crt if crt.is_file() else None
+
+    def trust(self) -> dict:
+        """The root certificate a device installs so browsers trust this server."""
+        crt = self.browser_root()
+        return {"ready": crt is not None, "fingerprint": browserca.fingerprint(crt) if crt else None}
+
     def state(self, authed: bool, client: str = "") -> dict:
         has_password = self.owner_file.exists()
         if not authed:
@@ -1052,6 +1063,7 @@ class App:
             "tailscale_key": self.tailscale_key(),
             "tailscale_client": self.tailscale_client(),
             "remote_agents": sorted(self.remote_agents()),
+            "trust": self.trust(),
             "agent_powers": self.agent_powers(),
             "agent_github": self.agent_github(),
             "lan": {"state": lan.state(self.home), "via_vpn": self.via_vpn(client), "minutes": lan.REVERT_AFTER_S // 60},
@@ -1124,6 +1136,13 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 name, kind = STATIC[path]
                 body = resources.files("nullbill.web").joinpath("static", name).read_bytes()
                 return self.send(200, body, f"{kind}; charset=utf-8")
+            # Public: a certificate, which a phone downloads to install.
+            if path == ROOT_CERT:
+                crt = app.browser_root()
+                if crt is None:
+                    return self.json(404, {"error": "no root certificate yet; run setup first"})
+                disposition = {"Content-Disposition": 'attachment; filename="nullbill-root.crt"'}
+                return self.send(200, browserca.der(crt), "application/x-x509-ca-cert", disposition)
             if path.startswith("/api/agent/"):
                 return self.agent_get(path, query)
             authed = app.valid(self.token())
@@ -1279,8 +1298,15 @@ def serve(home: Path, listen: str) -> None:
     print(f"nullbill web on https://{listen}, certificate SHA-256 {fingerprint(cert)}", flush=True)
 
     def schedule() -> None:
+        loaded = cert.stat().st_mtime
         while True:
             time.sleep(SCHEDULE_CHECK_S)
+            # apply's ca stage signs the same key anew (apply.page_certificate);
+            # connections from now on get the new certificate.
+            if cert.stat().st_mtime != loaded:
+                loaded = cert.stat().st_mtime
+                tls.load_cert_chain(cert, key)
+                print(f"nullbill web: new certificate, SHA-256 {fingerprint(cert)}", flush=True)
             app.scheduled(time.time())
 
     threading.Thread(target=schedule, daemon=True).start()

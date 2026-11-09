@@ -8,6 +8,8 @@ source /usr/local/lib/role-check.sh
 
 # What tls_cert leaves behind on both guests, from one throwaway CA.
 test_pki /tmp/pki forgejo.nullbill.internal postgres.nullbill.internal
+guest=$(hostname -i | cut -d' ' -f1)
+browser_pki /tmp/browser forgejo.nullbill.internal "$guest"
 apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql-common openssh-client >/dev/null 2>&1
 getent group postgres >/dev/null || groupadd -r postgres
 install -d -m 0755 /etc/nullbill/tls
@@ -27,6 +29,8 @@ print(json.dumps({
     "postgres_databases": [{"name": "forgejo", "client": "127.0.0.1", "password": sys.argv[1]}],
     "forgejo_manage_services": False,
     "forgejo_db_password": sys.argv[1],
+    "forgejo_browser_cert": open("/tmp/browser/browser.crt").read(),
+    "forgejo_browser_key": open("/tmp/browser/browser.key").read(),
 }))
 PY
 converge postgres.yml -e @/tmp/vars.json
@@ -42,6 +46,9 @@ start_forgejo /tmp/pki/ca.crt
 url=https://forgejo.nullbill.internal
 tls=(--cacert /tmp/pki/ca.crt)
 pass "forgejo answers over HTTPS with the step-ca certificate"
+curl -fsS --cacert /tmp/browser/browser-ca.crt "https://$guest/api/healthz" >/dev/null \
+  || fail "a browser that opens the address trusts Forgejo with the browser CA alone"
+pass "a browser that opens the address gets the browser CA's certificate"
 basic=$(printf 'nullbill-admin:%s' "$(cat /etc/forgejo/admin-password)" | base64 -w0)
 grep -q '"is_admin":true' <<<"$(curl -fsS "${tls[@]}" -H "Authorization: Basic $basic" "$url/api/v1/user")" \
   || fail "the stored admin password logs in"

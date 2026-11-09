@@ -5,6 +5,10 @@ host_baseline_pve_keyring: /usr/share/keyrings/proxmox-archive-keyring.gpg
 # (pve.<domain>, zones.mgmt.host_ip). Empty leaves PVE's certificate alone.
 host_baseline_api_name: ""
 host_baseline_api_address: ""
+# PEM certificate and key from NullBill's browser CA for the same name and
+# address; apply sets them once the home network is closed. Empty: PVE's CA.
+host_baseline_api_cert: ""
+host_baseline_api_key: ""
 
 # Start, reload and load services. Only the container test turns this off,
 # because a container has neither an init system nor kernel audit.

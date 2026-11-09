@@ -387,6 +387,38 @@
           <details id="tailnet-details" hidden><summary>The Tailscale policy setup puts in place</summary><pre id="tailnet-policy" tabindex="0" aria-label="Tailscale policy"></pre></details>
         </section>
 
+        <section class="card section" id="sec-trust" aria-labelledby="h-trust">
+          <div class="card-head">
+            <h2 id="h-trust">Trust this server</h2>
+          </div>
+          <p class="muted">Browsers warn on this page, Proxmox, Forgejo and Grafana because their certificates come from your server, not from a company browsers already know. The connection is encrypted either way. Install your server's root certificate once on each device and the warnings stop. It vouches only for your server's own addresses and names, never for any other website. It is there after the first setup run.</p>
+          <div class="row">
+            <a class="btn primary" href="/nullbill-root.crt" download="nullbill-root.crt"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg><span>Download root certificate</span></a>
+          </div>
+          <details class="howto"><summary>Android</summary>
+            <ol>
+              <li>On the phone, press <b>Download root certificate</b> above.</li>
+              <li>Open <b>Settings</b> and search for <b>CA certificate</b>. On most phones it is under <b>Security and privacy, More security settings, Install from device storage</b>. Tap <b>CA certificate</b>, then <b>Install anyway</b>, and pick <b>nullbill-root.crt</b> from Downloads.</li>
+              <li>Chrome and most apps trust it at once. If Firefox still warns: in Firefox open <b>Settings, About Firefox</b> and tap the Firefox logo until it says the debug menu is on. Back in <b>Settings</b>, open <b>Secret Settings</b>, turn on <b>Use third party CA certificates</b>, then close Firefox and open it again.</li>
+            </ol>
+          </details>
+          <details class="howto"><summary>Windows</summary>
+            <ol>
+              <li>Press <b>Download root certificate</b> above and open the file.</li>
+              <li>Press <b>Install Certificate</b>, choose <b>Current User</b>, then <b>Place all certificates in the following store</b>, <b>Browse</b>, <b>Trusted Root Certification Authorities</b>. Press <b>Next</b>, <b>Finish</b>, and <b>Yes</b> to the warning.</li>
+              <li>Close the browser and open it again. Edge, Chrome and Firefox all use it.</li>
+            </ol>
+          </details>
+          <details class="howto"><summary>iPhone and iPad</summary>
+            <ol>
+              <li>Open this page in Safari, press <b>Download root certificate</b> and allow the download.</li>
+              <li>Open <b>Settings, Profile Downloaded</b> and press <b>Install</b>.</li>
+              <li>Open <b>Settings, General, About, Certificate Trust Settings</b> and turn on <b>NullBill browser CA</b>.</li>
+            </ol>
+          </details>
+          <p class="muted small">Proxmox gets this certificate at the first setup run after you close the server to the home network. Jellyfin uses plain HTTP inside Tailscale's encryption, so browsers mark it "Not secure" in the address bar but show no warning page.</p>
+        </section>
+
         <section class="card section" id="sec-lan" aria-labelledby="h-lan">
           <div class="card-head">
             <h2 id="h-lan">Home network</h2>

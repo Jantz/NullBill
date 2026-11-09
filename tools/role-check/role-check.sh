@@ -69,6 +69,25 @@ test_pki() {
   )
 }
 
+# What src/nullbill/browserca.py makes, written to $1: browser-ca.crt,
+# constrained to nullbill.internal and address $3, and browser.crt/.key for
+# DNS:$2 and IP:$3.
+browser_pki() {
+  local d=$1 name=$2 ip=$3
+  mkdir -p "$d"
+  (
+    cd "$d" || exit 1
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 -subj "/CN=test browser CA" \
+      -addext "basicConstraints=critical,CA:TRUE,pathlen:0" -addext "keyUsage=critical,keyCertSign,cRLSign" \
+      -addext "nameConstraints=critical,permitted;DNS:nullbill.internal,permitted;IP:$ip/255.255.255.255" \
+      -keyout browser-ca.key -out browser-ca.crt 2>/dev/null
+    openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=$name" -keyout browser.key -out browser.csr 2>/dev/null
+    openssl x509 -req -in browser.csr -CA browser-ca.crt -CAkey browser-ca.key -CAcreateserial -days 2 \
+      -extfile <(printf 'basicConstraints=critical,CA:FALSE\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:%s,IP:%s\n' "$name" "$ip") \
+      -out browser.crt 2>/dev/null
+  )
+}
+
 # After the postgres and forgejo roles: start Forgejo the way its unit does,
 # and nginx in front, and wait until it answers over HTTPS. $1 is the CA
 # that signed its certificate.

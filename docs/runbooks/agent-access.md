@@ -112,8 +112,8 @@ in `jobs/<id>.json`). **Revoke** on the page refuses the token at once.
 
 Commands it ran as root on Proxmox: `{job="commands", host="pve"} |= "ssh: "`.
 
-In Grafana (`http://<monitoring address>:3000` over Tailscale, normally
-`http://10.42.1.14:3000`; Explore, Loki) or with
+In Grafana (`https://<monitoring address>:3000` over Tailscale, normally
+`https://10.42.1.14:3000`; Explore, Loki) or with
 `curl -G https://<monitoring address>:3100/loki/api/v1/query_range`:
 
 - `{job="commands"}`: every agent CLI tool call (`tool Bash: ...`) and

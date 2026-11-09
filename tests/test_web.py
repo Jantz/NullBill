@@ -16,6 +16,7 @@ import pytest
 import yaml
 from fixturedata import fixture_config, write_raw
 
+from nullbill import browserca
 from nullbill.probe import parse
 from nullbill.web import progress
 from nullbill.web import server as web
@@ -134,6 +135,24 @@ def test_page_and_headers(site):
     assert client.headers["Content-Security-Policy"] == "default-src 'self'; frame-ancestors 'none'"
     assert client.headers["Cache-Control"] == "no-store"
     assert client.call("/app.js")[0] == 200
+
+
+def test_the_root_certificate_downloads_without_signing_in_once_setup_made_it(site):
+    app, client = site
+    conn = http.client.HTTPSConnection("127.0.0.1", client.port, context=client.tls, timeout=30)
+    conn.request("GET", "/nullbill-root.crt")
+    response = conn.getresponse()
+    assert response.status == 404 and b"run setup first" in response.read()
+
+    root = browserca.root(app.home, "nullbill.internal", "10.42.0.0/16")
+    conn.request("GET", "/nullbill-root.crt")
+    response = conn.getresponse()
+    assert response.status == 200 and response.read() == browserca.der(root)
+    assert response.getheader("Content-Type") == "application/x-x509-ca-cert"
+    assert response.getheader("Content-Disposition") == 'attachment; filename="nullbill-root.crt"'
+
+    sign_in(app, client)
+    assert client.call("/api/state")[1]["trust"] == {"ready": True, "fingerprint": browserca.fingerprint(root)}
 
 
 def test_setup_code_then_password(site):
@@ -447,7 +466,7 @@ def test_services_list_what_the_plan_runs_and_reveal_only_their_passwords(site):
     items = {s["name"]: s for s in services["items"]}
     assert list(items) == ["proxmox", "grafana", "forgejo", "jellyfin", "workspace", "operator", "linux-runner"]
     assert items["proxmox"]["url"] == "https://10.42.1.254:8006" and items["proxmox"]["watch"] == "pve"
-    assert items["grafana"]["url"] == "http://10.42.1.14:3000"
+    assert items["grafana"]["url"] == "https://10.42.1.14:3000"
     assert (items["grafana"]["user"], items["grafana"]["password"]) == ("admin", "grafana")
     assert (items["forgejo"]["url"], items["forgejo"]["user"]) == ("https://10.42.2.17/", "nullbill-admin")
     assert items["workspace"]["addresses"] == ["ssh root@10.42.3.19"] and "pct enter 2019" in items["workspace"]["how"]

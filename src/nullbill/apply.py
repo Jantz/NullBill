@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from nullbill import applied, backups, ci, hostroot, lan, legacy, llm, media
+from nullbill import applied, backups, browserca, ci, hostroot, lan, legacy, llm, media
 from nullbill.artifacts import write_build
 from nullbill.errors import NullBillError
 from nullbill.flows import mac
@@ -315,11 +315,17 @@ def stage_render(ctx: Context) -> None:
 
 
 def stage_host(ctx: Context) -> None:
+    address = ctx.bare["zones"]["mgmt"]["host_ip"]
     api = {
         "host_baseline_api_name": f"pve.{ctx.bare['domain']}",
-        "host_baseline_api_address": ctx.bare["zones"]["mgmt"]["host_ip"],
+        "host_baseline_api_address": address,
         "host_baseline_ntfs": any(m["fstype"] == "ntfs" for m in legacy.mounts(ctx.bare)),
     }
+    # The browser CA's certificate names the mgmt address only, so apply
+    # and the owner reach Proxmox there: only once the LAN is closed.
+    if lan.state(ctx.home) == lan.CLOSED and not ctx.open_lan:
+        cert, key = browser_cert(ctx, "host", "pve", address)
+        api |= {"host_baseline_api_cert": cert, "host_baseline_api_key": key}
     run_playbook(ctx, "host", "host-baseline.yml", None, api)
     # Before the firewall: a close in this run ends the LAN path apply came by.
     run_playbook(ctx, "host", "console.yml", None, console_vars(ctx))
@@ -408,6 +414,35 @@ def page_url(ctx: Context) -> str:
     return f"https://{ctx.bare['guests']['nullbill']['ip']}:8443/"
 
 
+def browser_root(ctx: Context) -> Path:
+    return browserca.root(ctx.home, ctx.bare["domain"], ctx.model["network"]["base"])
+
+
+def browser_cert(ctx: Context, stage: str, name: str, address: str) -> tuple[str, str]:
+    """name's certificate and key for browsers, which open it by address."""
+    directory = ctx.home / browserca.DIR
+    crt, key = directory / f"{name}.crt", directory / f"{name}.key"
+    if browserca.issue(ctx.home, browser_root(ctx), crt, key, browserca.sans([fqdn(ctx, name)], [address])):
+        ctx.say(f"{stage}: made {name}'s certificate for browsers")
+    return crt.read_text(), key.read_text()
+
+
+def page_certificate(ctx: Context) -> None:
+    """The page's certificate from the browser CA, for the key it has, so the
+    on-site screen's and the agents' pins of that key still hold. The page
+    takes it up within a minute (web/server.py)."""
+    web = ctx.home / "web"
+    wanted = browserca.sans([fqdn(ctx, "nullbill")], [ctx.bare["guests"]["nullbill"]["ip"]])
+    if browserca.issue(ctx.home, browser_root(ctx), web / "cert.pem", web / "key.pem", wanted):
+        ctx.say("ca: gave the page a certificate from the browser CA")
+
+
+def pve_ca(ctx: Context, stage: str) -> str:
+    """What PVE API clients trust: PVE's CA, and the browser CA, whose
+    certificate the host serves once the LAN is closed (stage_host)."""
+    return host_out(ctx, stage, "cat /etc/pve/pve-root-ca.pem") + browser_root(ctx).read_text()
+
+
 def console_vars(ctx: Context) -> dict:
     """The on-site screen: on or off, and the page it shows with its key pinned."""
     if not ctx.model["host"]["console"]["enabled"]:
@@ -481,7 +516,7 @@ def tofu_env(ctx: Context, stage: str = "tofu") -> dict[str, str]:
     iso = windows_iso(ctx, stage)
     keys = [line for line in host_out(ctx, stage, "cat /root/.ssh/authorized_keys").splitlines() if line.startswith("ssh-")]
     ca = ctx.home / "pve-root-ca.pem"
-    ca.write_text(host_out(ctx, stage, "cat /etc/pve/pve-root-ca.pem"))
+    ca.write_text(pve_ca(ctx, stage))
     key = Path.home() / ".ssh" / "id_ed25519"
     env = {
         "PROXMOX_VE_API_TOKEN": api_token(ctx),
@@ -492,7 +527,7 @@ def tofu_env(ctx: Context, stage: str = "tofu") -> dict[str, str]:
         # systemd gives the page's service none.
         "HOME": str(Path.home()),
         "TF_VAR_pve_ssh_address": host,
-        # PVE's certificate is signed by its own CA.
+        # PVE's certificate is signed by its own CA, or the browser CA once the LAN is closed.
         "SSL_CERT_FILE": str(ca),
         "TF_VAR_pve_endpoint": f"https://{host}:8006/",
         "TF_VAR_node_name": host_out(ctx, stage, "hostname").strip(),
@@ -1221,7 +1256,8 @@ TLS = {
 
 
 def stage_ca(ctx: Context) -> None:
-    """step-ca, then a certificate for each planned TLS service."""
+    """The page's certificate for browsers, step-ca, then a certificate for each planned TLS service."""
+    page_certificate(ctx)
     domain = ctx.bare["domain"]
     run_playbook(ctx, "ca", "step-ca.yml", "step-ca", {"step_ca_domain": domain})
     root = ca_root(ctx, "ca")
@@ -1352,7 +1388,8 @@ def monitoring_vars(ctx: Context) -> dict:
 def stage_monitoring(ctx: Context) -> None:
     if not planned(ctx, "monitoring"):
         return
-    variables = monitoring_vars(ctx)
+    cert, key = browser_cert(ctx, "monitoring", "monitoring", ctx.bare["guests"]["monitoring"]["ip"])
+    variables = monitoring_vars(ctx) | {"monitoring_browser_cert": cert, "monitoring_browser_key": key}
     if not variables["monitoring_ntfy_url"]:
         ctx.say("monitoring: no ntfy topic yet, so alerts stay on the server; set a password on the page to make one")
     run_playbook(ctx, "monitoring", "monitoring.yml", "monitoring", variables)
@@ -1370,6 +1407,8 @@ def stage_forgejo(ctx: Context) -> None:
         "forgejo_db_password": ctx.secrets.ensure("postgres_forgejo"),
         "forgejo_admin_email": f"admin@{ctx.bare['domain']}",
     }
+    cert, key = browser_cert(ctx, "forgejo", "forgejo", ctx.bare["guests"]["forgejo"]["ip"])
+    variables |= {"forgejo_browser_cert": cert, "forgejo_browser_key": key}
     run_playbook(ctx, "forgejo", "forgejo.yml", "forgejo", variables)
     # Changed at first login; kept so the owner has it for that login.
     password = guest_out(ctx, "forgejo", "forgejo", ["cat", "/etc/forgejo/admin-password"]).strip()
@@ -1718,7 +1757,7 @@ def dispatcher_vars(ctx: Context) -> dict:
         "runner_dispatcher_pve_url": f"https://pve.{ctx.bare['domain']}:8006",
         "runner_dispatcher_node": host_out(ctx, "ci", "hostname").strip(),
         "runner_dispatcher_pve_token": tofu_output(ctx, "ci", "dispatcher_token").strip(),
-        "runner_dispatcher_pve_ca": host_out(ctx, "ci", "cat /etc/pve/pve-root-ca.pem"),
+        "runner_dispatcher_pve_ca": pve_ca(ctx, "ci"),
         "runner_dispatcher_pools": pools,
     }
 
@@ -1762,7 +1801,7 @@ def stage_agents(ctx: Context) -> None:
         "operator_proxy_url": proxy_url(ctx, "operator"),
         "operator_ca_url": f"https://{fqdn(ctx, 'step-ca')}",
         "operator_pve_token": tofu_output(ctx, "agents", "agent_token").strip(),
-        "operator_pve_ca": host_out(ctx, "agents", "cat /etc/pve/pve-root-ca.pem"),
+        "operator_pve_ca": pve_ca(ctx, "agents"),
         "operator_ca_root": ca_root(ctx, "agents"),
         "operator_step_password": guest_out(ctx, "agents", "step-ca", ["cat", f"{STEP}/secrets/agent-password"]).strip(),
     }
@@ -2044,7 +2083,14 @@ def stage_vpn(ctx: Context) -> None:
 def stage_verify(ctx: Context) -> None:
     lan_host = ctx.lan_host or split_target(ctx.target)[1]
     results = run_verify(
-        ctx.plan, ctx.model, ctx.target, ctx.run, lan_state=lan.state(ctx.home), lan_host=lan_host, say=lambda r: ctx.say(r.line())
+        ctx.plan,
+        ctx.model,
+        ctx.target,
+        ctx.run,
+        lan_state=lan.state(ctx.home),
+        lan_host=lan_host,
+        say=lambda r: ctx.say(r.line()),
+        browser_root=ctx.home / browserca.DIR / "ca.crt",
     )
     failed = [r for r in results if r.status == "FAIL"]
     flag = ctx.home / FULL_NEXT

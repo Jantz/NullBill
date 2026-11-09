@@ -19,6 +19,14 @@ monitoring_prometheus_listen: "0.0.0.0:9090"
 # certificate from monitoring_shipper_ca may push, and nobody may delete.
 monitoring_loki_internal_port: 3101
 monitoring_loki_port: 3100
+# Grafana, on localhost too. Browsers reach it through nginx with TLS on
+# monitoring_grafana_port, with the browser CA's certificate (apply sets
+# monitoring_browser_cert and _key, src/nullbill/browserca.py) or, without
+# one, monitoring_tls_name's.
+monitoring_grafana_port: 3000
+monitoring_grafana_internal_port: 3001
+monitoring_browser_cert: ""
+monitoring_browser_key: ""
 # nginx's certificate, kept renewed by the tls_cert role (group www-data).
 monitoring_tls_name: monitoring.nullbill.internal
 # PEM: the shipper CA, whose key stays on the controller, so no guest (and

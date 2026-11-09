@@ -5,7 +5,7 @@ set -euo pipefail
 
 play() {
   ansible-playbook -i localhost, -c local -e host_baseline_manage_services=false \
-    -e host_baseline_ntfs=true -e host_baseline_api_name=pve.nullbill.internal -e host_baseline_api_address=10.42.1.254 /ansible/host-baseline.yml
+    -e host_baseline_ntfs=true -e host_baseline_api_name=pve.nullbill.internal -e host_baseline_api_address=10.42.1.254 "$@" /ansible/host-baseline.yml
 }
 fail() {
   echo "FAIL $1"
@@ -87,6 +87,27 @@ for check in "-verify_hostname pve.nullbill.internal" "-verify_ip 10.42.1.254" "
 done
 grep -q "^nb_pve_api_cert_expiry_timestamp_seconds [0-9]" /var/lib/prometheus/node-exporter/nullbill-pve-api.prom || fail "API certificate metric"
 echo "ok   the PVE API certificate names the mgmt name and address besides PVE's own, from PVE's CA"
+
+# Once the home network is closed, apply hands over a certificate from the
+# browser CA (src/nullbill/browserca.py); reopened, PVE's own CA signs again.
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 -subj "/CN=test browser CA" \
+  -addext "basicConstraints=critical,CA:TRUE,pathlen:0" -addext "keyUsage=critical,keyCertSign,cRLSign" \
+  -addext "nameConstraints=critical,permitted;DNS:nullbill.internal,permitted;IP:10.42.0.0/255.255.0.0" \
+  -keyout /tmp/browser-ca.key -out /tmp/browser-ca.crt 2>/dev/null
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=pve.nullbill.internal" \
+  -keyout /tmp/pve-browser.key -out /tmp/pve-browser.csr 2>/dev/null
+openssl x509 -req -in /tmp/pve-browser.csr -CA /tmp/browser-ca.crt -CAkey /tmp/browser-ca.key -CAcreateserial -days 2 \
+  -extfile <(echo "subjectAltName=DNS:pve.nullbill.internal,IP:10.42.1.254") -out /tmp/pve-browser.crt 2>/dev/null
+python3 -c 'import json; print(json.dumps({"host_baseline_api_cert": open("/tmp/pve-browser.crt").read(), "host_baseline_api_key": open("/tmp/pve-browser.key").read()}))' >/tmp/browser.json
+play -e @/tmp/browser.json >/tmp/browser.log 2>&1 || { cat /tmp/browser.log; fail "run with the browser CA's certificate"; }
+openssl verify -CAfile /tmp/browser-ca.crt -verify_ip 10.42.1.254 "$api" | grep -q ": OK" || fail "PVE serves the browser CA's certificate"
+cmp -s "/etc/pve/nodes/$node/pveproxy-ssl.key" /tmp/pve-browser.key || fail "PVE has the browser certificate's key"
+play -e @/tmp/browser.json >/tmp/browser2.log 2>&1 || { cat /tmp/browser2.log; fail "second run with the browser CA's certificate"; }
+grep -Eq 'localhost +: ok=[0-9]+ +changed=0 ' /tmp/browser2.log || { grep -B3 changed: /tmp/browser2.log; fail "second run changed something"; }
+play >/tmp/reopened.log 2>&1 || { cat /tmp/reopened.log; fail "run without it"; }
+openssl verify -CAfile /etc/pve/pve-root-ca.pem -verify_ip 192.0.2.10 "$api" | grep -q ": OK" || fail "reopened: PVE's CA signs again"
+test ! -e /etc/nullbill/pve-api || fail "the browser certificate's key stays behind"
+echo "ok   with the browser CA's certificate, PVE serves it, unchanged on a second run; without, PVE's CA signs again"
 
 # The backup disk: a loop device with a filesystem on it, real LVM without
 # udev, and a pvesm that records what it is asked to add.

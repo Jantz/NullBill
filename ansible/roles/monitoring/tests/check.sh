@@ -6,6 +6,8 @@ set -euo pipefail
 source /usr/local/lib/role-check.sh
 
 test_pki /tmp/pki
+guest=$(hostname -i | cut -d' ' -f1)
+browser_pki /tmp/browser monitoring.nullbill.internal "$guest"
 # What tls_cert leaves behind, from a throwaway CA instead of step-ca.
 install -d -m 0755 /etc/nullbill/tls
 install -m 0644 /tmp/pki/loki.crt /etc/nullbill/tls/monitoring.nullbill.internal.crt
@@ -16,6 +18,8 @@ import json, sys
 read = lambda f: open(f"/tmp/pki/{f}").read()
 json.dump({
     "monitoring_shipper_ca": read("shipper-ca.crt"),
+    "monitoring_browser_cert": open("/tmp/browser/browser.crt").read(),
+    "monitoring_browser_key": open("/tmp/browser/browser.key").read(),
     # A stand-in for ntfy.sh and Healthchecks.io, started below.
     "monitoring_ntfy_url": "http://127.0.0.1:8099/nullbill-topic",
     "monitoring_healthchecks_url": "http://127.0.0.1:8099/ping/check",
@@ -141,14 +145,20 @@ for path in "loki/api/v1/delete?query=%7Bjob%3D%22auth%22%7D&start=0" loki/api/v
 done
 code=$(curl -sS -o /dev/null -w '%{http_code}' "${tls[@]}" "$gate/config")
 test "$code" = 403 || fail "/config answered $code"
-guest=$(hostname -i | cut -d' ' -f1)
 if curl -fsS -m 3 "http://$guest:3101/ready" >/dev/null 2>&1; then fail "loki answers on the guest address"; fi
 pass "no push without a shipper certificate; no deletes, rule changes or other paths; loki itself is local"
 
-wait_for http://127.0.0.1:3000/api/health || { tail -20 /tmp/grafana.log; fail "grafana health"; }
+# As a browser opens it: by address, trusting only the browser CA.
+grafana=(--cacert /tmp/browser/browser-ca.crt "https://$guest:3000")
+wait_for_grafana() {
+  for _ in $(seq 60); do curl -fsS "${grafana[0]}" "${grafana[1]}" "${grafana[2]}/api/health" >/dev/null 2>&1 && return 0; sleep 1; done
+  return 1
+}
+wait_for_grafana || { tail -20 /tmp/grafana.log; fail "grafana health over HTTPS"; }
 pw=$(cat /etc/grafana/admin-password)
-grep -q '"type":"loki"' <<<"$(curl -fsS -u "admin:$pw" http://127.0.0.1:3000/api/datasources)" || fail "grafana data sources"
+grep -q '"type":"loki"' <<<"$(curl -fsS "${grafana[@]:0:2}" -u "admin:$pw" "${grafana[2]}/api/datasources")" || fail "grafana data sources"
 stock="admin"  # Grafana's out-of-the-box admin password
-code=$(curl -s -o /dev/null -w '%{http_code}' -u "admin:$stock" http://127.0.0.1:3000/api/datasources)
+code=$(curl -s -o /dev/null -w '%{http_code}' "${grafana[@]:0:2}" -u "admin:$stock" "${grafana[2]}/api/datasources")
 [ "$code" = 401 ] || fail "default admin password still works ($code)"
-pass "grafana provisions both data sources and refuses the default password"
+if curl -fsS -m 3 "http://$guest:3001/api/health" >/dev/null 2>&1; then fail "grafana answers on the guest address without TLS"; fi
+pass "grafana answers over HTTPS with the browser CA's certificate, provisions both data sources and refuses the default password"
