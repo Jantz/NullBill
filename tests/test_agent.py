@@ -175,7 +175,7 @@ def test_loki_query_finds_the_marker_and_prints_its_uids():
             pass
 
     server = http.server.HTTPServer(("127.0.0.1", 0), Loki)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     try:
         script = agent.LOKI_QUERY % ("workspace", "nb-verify-00ff", f"http://127.0.0.1:{server.server_port}")
         done = subprocess.run(["python3", "-c", script], capture_output=True, text=True, timeout=30)

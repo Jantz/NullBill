@@ -81,7 +81,7 @@ def api():
                 return self.reply(200, state.policy)
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     state.url = f"http://127.0.0.1:{server.server_port}/api/v2/"
     yield state
     server.shutdown()

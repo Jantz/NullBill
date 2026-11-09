@@ -98,7 +98,7 @@ def agent(tmp_path, monkeypatch):
     tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     tls.load_cert_chain(cert, key)
     server.socket = tls.wrap_socket(server.socket, server_side=True, do_handshake_on_connect=False)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     client = Client(server.server_address[1], cert)
     sign_in(app, client)
     yield app, client, host

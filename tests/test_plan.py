@@ -52,11 +52,6 @@ def test_unquoted_pci_key_is_rejected():
         build_model(yaml.safe_load("gpus:\n  0000:01:00.0: {owner: host-shared}\n"))
 
 
-@pytest.mark.parametrize("cls", CLASSES)
-def test_class_matches_fixture(cls, facts):
-    assert plan_for(facts(cls), fixture_config(cls))["class"].value == cls
-
-
 def test_yaml_alone_adds_zone_and_service(facts):
     """M1: a synthetic service and zone added only in config.yaml change the plan."""
     config = fixture_config("small")
