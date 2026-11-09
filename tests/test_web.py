@@ -855,7 +855,7 @@ def test_the_owner_gives_the_gpu_memory_the_probe_could_not_read(site):
     app.codec(app.home).data["model_gateway_key"] = "sk-gateway-key"
     assert client.call("/api/password-reveal", gateway) == (200, {"password": "sk-gateway-key"})
     item = next(s for s in state["services"]["items"] if s["name"] == "model-gateway")
-    assert item["addresses"] == [want["url"], f"Hosts line for your device: 10.42.4.21 {name}"]
+    assert item["addresses"] == ["From your devices: https://10.42.4.21:4000/v1", f"From the workspace: {want['url']}"]
     assert (item["password"], item["watch"]) == ("model-gateway", "model-gateway") and "qwen3.5-9b" in item["what"]
     # Cleared again, the pin goes.
     client.call("/api/choices", {**choices, "gpus": {"0000:01:00.0": ""}})

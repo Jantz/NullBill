@@ -12,6 +12,12 @@ model_gateway_version: 1.108.3
 model_gateway_domain: model-gateway.nullbill.internal
 model_gateway_tls_name: "{{ model_gateway_domain }}"
 model_gateway_port: 4000
+# The browser CA's certificate and key (src/nullbill/browserca.py) for
+# browsers and their extensions, which open the gateway by address and send
+# no name: nginx's default server answers them with it. apply sets both;
+# empty leaves that server out.
+model_gateway_browser_cert: ""
+model_gateway_browser_key: ""
 
 # The key clients send (Authorization: Bearer). apply keeps it in sops and
 # the page shows it. LiteLLM wants it to start with sk-.

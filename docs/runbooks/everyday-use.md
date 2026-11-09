@@ -23,7 +23,7 @@ its number is `2000 + <service id>`.
 | Kept disk share | `\\10.42.1.23\<share>` | `nbshare`, **Show password** on the page |
 | Workspace | SSH to `10.42.3.19` | see [Workspace](#workspace) |
 | Coding agent | inside the operator guest (2016) | see [Coding agent](#coding-agent) |
-| Model gateway (local AI) | `https://model-gateway.nullbill.internal:4000/v1`, with a hosts line for `10.42.4.21` | the API key from **Show key** under **Local AI model** on the **Services** page; see [local-models.md](local-models.md) |
+| Model gateway (local AI) | `https://10.42.4.21:4000/v1` (from the workspace `https://model-gateway.nullbill.internal:4000/v1`) | the API key from **Show key** under **Local AI model** on the **Services** page; see [local-models.md](local-models.md) |
 | Jellyfin (media) | `http://10.42.7.24:8096` | `nullbill-admin`, **Show password** on the page; see [media.md](media.md) |
 | Windows desktop | Remote Desktop to `10.42.5.22` | the account you make when installing ([windows-desktop.md](windows-desktop.md)) |
 

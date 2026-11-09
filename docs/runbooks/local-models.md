@@ -7,7 +7,7 @@ with one key. Why it is built this way: [ADR 0008](../adr/0008-local-models.md).
 
 | What | Where |
 |---|---|
-| Model gateway (LiteLLM) | `https://model-gateway.nullbill.internal:4000/v1` (guest 2021, `10.42.4.21`) |
+| Model gateway (LiteLLM) | `https://model-gateway.nullbill.internal:4000/v1` from the workspace, `https://10.42.4.21:4000/v1` from your devices (guest 2021) |
 | Model server (llama.cpp) | guest 2020, `10.42.4.20` port 8080, reached only by the gateway |
 | Model | the page's **Services** page, **Local AI model** card; for a 12 GB card, `qwen3.5-9b` |
 | Key | the same card, **Show key** (or **Copy**) |
@@ -50,18 +50,13 @@ Any OpenAI-compatible client works the same way: base URL
 `https://model-gateway.nullbill.internal:4000/v1`, the key as API key, and
 `local` (or the model's own name) as the model.
 
-From a device on your tailnet, two things first:
-
-1. Add the line `10.42.4.21 model-gateway.nullbill.internal` to the hosts
-   file (`/etc/hosts`, or `C:\Windows\System32\drivers\etc\hosts` edited as
-   administrator).
-2. The gateway's certificate comes from NullBill's own certificate
-   authority. Do not add it to your device's trusted certificates (see
-   [everyday-use.md](everyday-use.md)); give it to the one program instead.
-   Copy the root from the Proxmox Shell, `pct exec 2012 -- cat
-   /etc/step-ca/certs/root_ca.crt`, into a file such as `nullbill-root.crt`,
-   then use `curl --cacert nullbill-root.crt ...`, or for Python clients
-   `SSL_CERT_FILE=nullbill-root.crt` in that program's environment.
+From a device on your tailnet, use the address instead of the name:
+`https://10.42.4.21:4000/v1`. There the gateway answers with a certificate
+from NullBill's browser CA, so once the device trusts that root (the page's
+**Remote access**, **Trust this server**, [trust-this-server.md](trust-this-server.md))
+browsers and browser extensions such as Page Assist accept it, with no hosts
+line and no exception to renew. The name still gets step-ca's certificate,
+which renews daily, so a browser exception for it lasts a day at most.
 
 ## 3. Choose another model
 

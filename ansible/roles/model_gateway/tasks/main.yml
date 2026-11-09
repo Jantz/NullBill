@@ -117,6 +117,26 @@
     state: absent
   notify: Reload nginx
 
+- name: nginx certificate directory
+  ansible.builtin.file:
+    path: /etc/nginx/nullbill
+    state: directory
+    mode: "0750"
+
+- name: Browser certificate and key
+  ansible.builtin.copy:
+    dest: "/etc/nginx/nullbill/browser.{{ item.ext }}"
+    content: "{{ item.value | trim }}\n"
+    mode: "{{ item.mode }}"
+  loop:
+    - {ext: crt, value: "{{ model_gateway_browser_cert }}", mode: "0644"}
+    - {ext: key, value: "{{ model_gateway_browser_key }}", mode: "0600"}
+  loop_control:
+    label: "browser.{{ item.ext }}"
+  no_log: true
+  when: model_gateway_browser_cert | length > 0
+  notify: Reload nginx
+
 - name: HTTPS in front of LiteLLM
   ansible.builtin.template:
     src: nullbill-model-gateway.conf.j2

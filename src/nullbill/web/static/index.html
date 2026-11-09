@@ -416,7 +416,7 @@
               <li>Open <b>Settings, General, About, Certificate Trust Settings</b> and turn on <b>NullBill browser CA</b>.</li>
             </ol>
           </details>
-          <p class="muted small">Proxmox gets this certificate at the first setup run after you close the server to the home network. Jellyfin uses plain HTTP inside Tailscale's encryption, so browsers mark it "Not secure" in the address bar but show no warning page.</p>
+          <p class="muted small">Proxmox gets this certificate at the first setup run after you close the server to the home network. For the local AI model in a browser extension such as Page Assist, use the gateway's address, https://10.42.4.21:4000/v1 on most servers (Services shows yours), not its name. Jellyfin uses plain HTTP inside Tailscale's encryption, so browsers mark it "Not secure" in the address bar but show no warning page.</p>
         </section>
 
         <section class="card section" id="sec-lan" aria-labelledby="h-lan">

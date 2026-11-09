@@ -1698,6 +1698,11 @@ def test_inference_stage_gives_the_container_the_card_once_and_room_to_build(ctx
     assert inference["inference_api_key"] == gateway["model_gateway_backend_key"] == c.secrets.data["inference_key"]
     assert gateway["model_gateway_key"] == c.secrets.data["model_gateway_key"] and gateway["model_gateway_key"].startswith("sk-")
     assert gateway["model_gateway_backend"] == "http://inference.nullbill.internal:8080/v1"
+    # Browsers and extensions open it by address, with the browser CA's certificate.
+    crt = c.home / browserca.DIR / "model-gateway.crt"
+    assert gateway["model_gateway_browser_cert"] == crt.read_text()
+    want = browserca.sans(["model-gateway.nullbill.internal"], [c.bare["guests"]["model-gateway"]["ip"]])
+    assert browserca.current(c.home / browserca.DIR / "ca.crt", crt, want)
     assert gateway["model_gateway_model"] == c.bare["inference"]["model"]
     # Clients in the build zone check the gateway's certificate.
     assert c.reach.trusted == ["2019"]

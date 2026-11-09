@@ -1504,6 +1504,8 @@ def stage_inference(ctx: Context) -> None:
         "model_gateway_backend": f"http://{fqdn(ctx, llm.INFERENCE)}:{llm.INFERENCE_PORT}/v1",
         "model_gateway_backend_key": backend_key,
     }
+    cert, key = browser_cert(ctx, "inference", llm.GATEWAY, ctx.bare["guests"][llm.GATEWAY]["ip"])
+    gateway |= {"model_gateway_browser_cert": cert, "model_gateway_browser_key": key}
     run_playbook(ctx, "inference", "model-gateway.yml", llm.GATEWAY, gateway)
     trust_ca(ctx, "inference", llm.gateway_clients(ctx.bare, ctx.model))
     url = f"https://{fqdn(ctx, llm.GATEWAY)}:{llm.GATEWAY_PORT}/v1"

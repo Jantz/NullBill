@@ -169,9 +169,12 @@ def _entries(plan: dict, guests: dict) -> list[dict]:
                 "name": "model-gateway",
                 "title": "Local AI model",
                 "what": f"{model} on your graphics card, behind an OpenAI-compatible API. Ask for it as local.",
-                "addresses": [f"https://{name}:4000/v1", f"Hosts line for your device: {ip('model-gateway')} {name}"],
+                "addresses": [f"From your devices: https://{ip('model-gateway')}:4000/v1", f"From the workspace: https://{name}:4000/v1"],
                 "password": "model-gateway",
-                "password_note": "This is the API key. Your coding agents in the workspace reach the API as it is (local-models.md).",
+                "password_note": (
+                    "This is the API key. On your devices, browsers and extensions such as Page Assist trust the address once you "
+                    "install the root certificate from Remote access, Trust this server (local-models.md)."
+                ),
                 "watch": "model-gateway",
             }
         )

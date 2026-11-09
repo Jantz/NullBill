@@ -10,6 +10,8 @@ source /usr/local/lib/role-check.sh
 
 name="model-gateway.nullbill.internal"
 test_pki /tmp/pki "$name"
+guest=$(hostname -i | cut -d' ' -f1)
+browser_pki /tmp/browser "$name" "$guest"
 apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nginx-light >/dev/null 2>&1
 install -d -m 0755 /etc/nullbill/tls
 install -m 0644 /tmp/pki/ca.crt /etc/nullbill/tls/root_ca.crt
@@ -19,10 +21,15 @@ echo "127.0.0.1 $name inference.nullbill.internal" >>/etc/hosts
 
 key=sk-check-gateway-key-0123456789
 backend_key=check-inference-key-0123456789
-cat >/tmp/vars.json <<EOF
-{"model_gateway_manage_services": false, "model_gateway_key": "$key",
- "model_gateway_backend_key": "$backend_key", "model_gateway_model": "qwen3.5-9b"}
-EOF
+python3 - "$key" "$backend_key" >/tmp/vars.json <<'PY'
+import json, sys
+print(json.dumps({
+    "model_gateway_manage_services": False, "model_gateway_key": sys.argv[1],
+    "model_gateway_backend_key": sys.argv[2], "model_gateway_model": "qwen3.5-9b",
+    "model_gateway_browser_cert": open("/tmp/browser/browser.crt").read(),
+    "model_gateway_browser_key": open("/tmp/browser/browser.key").read(),
+}))
+PY
 converge model-gateway.yml -e @/tmp/vars.json
 
 systemd-analyze verify /etc/systemd/system/litellm.service >/tmp/unit.log 2>&1 || { cat /tmp/unit.log; fail "litellm unit"; }
@@ -73,6 +80,9 @@ url="https://$name:4000"
 for _ in $(seq 90); do curl -fsS --cacert /tmp/pki/ca.crt "$url/health/liveliness" >/dev/null 2>&1 && break; sleep 1; done
 curl -fsS --cacert /tmp/pki/ca.crt "$url/health/liveliness" >/dev/null || { tail -30 /tmp/litellm.log; fail "the gateway answers over HTTPS"; }
 pass "LiteLLM answers over HTTPS with the step-ca certificate"
+curl -fsS --cacert /tmp/browser/browser-ca.crt "https://$guest:4000/health/liveliness" >/dev/null \
+  || fail "a browser that opens the address trusts the gateway with the browser CA alone"
+pass "a browser that opens the address gets the browser CA's certificate"
 
 ask() { # key model
   curl -sS --cacert /tmp/pki/ca.crt -o /tmp/answer.json -w '%{http_code}' "$url/v1/chat/completions" \

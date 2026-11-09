@@ -1,6 +1,6 @@
 # Trust this server in your browsers
 
-Browsers warn on the page, Proxmox, Forgejo and Grafana until the device
+Browsers warn on the page, Proxmox, Forgejo, Grafana and the model gateway until the device
 trusts NullBill's browser CA. The connection is encrypted either way; the
 warning says only that the browser does not know who signed the
 certificate. Install the root certificate once on each device you use.
@@ -27,6 +27,7 @@ It signs, for their addresses and `<name>.nullbill.internal`:
 | Proxmox | `https://10.42.1.254:8006` | the **host** step of the first setup run after you close the server to the home network; until then PVE's own CA signs it, since apply still reaches Proxmox at its home network address, which the root cannot name |
 | Forgejo | `https://10.42.2.17` | the **forgejo** step; clients that ask for `forgejo.nullbill.internal` still get step-ca's |
 | Grafana | `https://10.42.1.14:3000` | the **monitoring** step |
+| Model gateway | `https://10.42.4.21:4000` | the **inference** step; for browsers and extensions such as Page Assist; clients that ask for `model-gateway.nullbill.internal` still get step-ca's |
 
 Each lasts 825 days, the longest Apple devices accept; a setup run makes a
 new one when fewer than 90 days are left. **Run checks** reports
@@ -35,7 +36,7 @@ browser with only this root would warn.
 
 Jellyfin (`http://10.42.7.24:8096`) is plain HTTP inside Tailscale's
 encryption: browsers mark it "Not secure" in the address bar but show no
-warning page. The model gateway is for programs, which trust step-ca's root.
+warning page.
 
 ## Install it
 
