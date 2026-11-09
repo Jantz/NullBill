@@ -86,3 +86,17 @@ def test_run_probe_fails_on_required_command(tmp_path):
 
     with pytest.raises(NullBillError, match="lsblk"):
         run_probe("root@pve.internal", tmp_path, run)
+
+
+def test_a_command_past_the_ssh_timeout_is_a_failed_command(monkeypatch):
+    # verify's gateway check outlived it and the traceback ended the run
+    # with "It ended without saying why".
+    import subprocess
+
+    from nullbill import probe
+
+    def hang(argv, **kwargs):
+        raise subprocess.TimeoutExpired(argv, kwargs["timeout"], output=b"partial")
+
+    monkeypatch.setattr(probe.subprocess, "run", hang)
+    assert probe.ssh_run("root@192.0.2.1", "true") == (124, "partial", f"no answer within {probe.SSH_TIMEOUT_S} s")

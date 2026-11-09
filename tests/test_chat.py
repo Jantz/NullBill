@@ -1,9 +1,12 @@
 """The page's agent: turns, its tools through the gate, approvals, questions."""
 
 import json
+import os
+import stat
 import sys
 import threading
 import time
+import types
 from pathlib import Path
 
 import pytest
@@ -260,6 +263,22 @@ def test_tool_socket_needs_the_turns_token(agent):
     conn = agenttools.UnixConnection(str(app.tools_socket))
     conn.request("POST", "/call", body=json.dumps({"name": "status", "args": {}}), headers={"Authorization": "Bearer nope"})
     assert conn.getresponse().status == 401
+
+
+def test_tool_socket_is_open_to_the_agents_group_under_the_pages_umask(tmp_path):
+    # The page runs with UMask=0077; mkdir(mode=0o750) under it made the
+    # directory 0700 and nbagent could not reach the socket.
+    app = types.SimpleNamespace(tools_socket=tmp_path / "run" / "tools.sock", agent_user=None)
+    old = os.umask(0o077)
+    try:
+        server = web.serve_tools(app)
+    finally:
+        os.umask(old)
+    try:
+        assert stat.S_IMODE(app.tools_socket.parent.stat().st_mode) == 0o750
+        assert stat.S_IMODE(app.tools_socket.stat().st_mode) == 0o660
+    finally:
+        server.shutdown()
 
 
 def test_mcp_server_lists_and_refuses_unknown_methods():

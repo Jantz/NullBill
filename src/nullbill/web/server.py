@@ -1451,7 +1451,7 @@ def tools_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
 def serve_tools(app: App) -> ToolServer:
     """The socket, in a directory only root and the agent's user may enter."""
     path = app.tools_socket
-    path.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.unlink(missing_ok=True)
     server = ToolServer(str(path), tools_handler(app))
     if app.agent_user:
@@ -1460,7 +1460,10 @@ def serve_tools(app: App) -> ToolServer:
         gid = pwd.getpwnam(app.agent_user).pw_gid
         os.chown(path.parent, 0, gid)
         os.chown(path, 0, gid)
-        path.chmod(0o660)
+    # Set, not asked of mkdir: the page's UMask=0077 turned mode=0o750 into
+    # 0700, and the agent's tools got "Permission denied" on every call.
+    path.parent.chmod(0o750)
+    path.chmod(0o660)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
 
