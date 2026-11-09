@@ -50,6 +50,22 @@ def test_dispatcher_token_can_clone_the_template_and_manage_only_the_ci_pool(fac
     assert config["output"]["dispatcher_token"]["sensitive"] is True
 
 
+def test_the_templates_acls_are_made_anew_with_a_rebaked_template(facts):
+    """PVE deletes a VM's ACLs with it, and a bake replaces the template
+    (apply.retire): without a new ACL the dispatcher held nothing on it."""
+    config, plan = resources(facts, "mid")
+    templates = {f"/vms/{plan['guests'][n]['template_vmid']}": n for n in ci.pools(plan)}
+    assert len(templates) == 2
+    acls = config["resource"]["proxmox_acl"].values()
+    for path, name in templates.items():
+        mine = [a for a in acls if a["path"] == path]
+        assert len(mine) == 2
+        for acl in mine:
+            assert acl["lifecycle"] == {"replace_triggered_by": [f"proxmox_virtual_environment_vm.{name}.id"]}
+    others = [a for a in acls if a["path"] not in templates]
+    assert others and all("lifecycle" not in a for a in others)
+
+
 def test_template_is_in_no_pool_and_clones_have_their_own_vmids(facts):
     config, plan = resources(facts, "mid")
     template = config["resource"]["proxmox_virtual_environment_vm"]["linux-runner"]

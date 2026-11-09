@@ -2676,7 +2676,12 @@ WantedBy=multi-user.target
           "proxmox_virtual_environment_role.clone_source",
           "proxmox_virtual_environment_vm.linux-runner",
           "proxmox_virtual_environment_user.dispatcher"
-        ]
+        ],
+        "lifecycle": {
+          "replace_triggered_by": [
+            "proxmox_virtual_environment_vm.linux-runner.id"
+          ]
+        }
       },
       "dispatcher_user_bridge_vmbr103": {
         "path": "/sdn/zones/localnetwork/vmbr103",
@@ -2697,7 +2702,12 @@ WantedBy=multi-user.target
           "proxmox_virtual_environment_role.clone_source",
           "proxmox_virtual_environment_vm.windows-runner",
           "proxmox_virtual_environment_user.dispatcher"
-        ]
+        ],
+        "lifecycle": {
+          "replace_triggered_by": [
+            "proxmox_virtual_environment_vm.windows-runner.id"
+          ]
+        }
       },
       "dispatcher_user_bridge_vmbr105": {
         "path": "/sdn/zones/localnetwork/vmbr105",
@@ -2738,7 +2748,12 @@ WantedBy=multi-user.target
           "proxmox_virtual_environment_role.clone_source",
           "proxmox_virtual_environment_vm.linux-runner",
           "proxmox_user_token.dispatcher"
-        ]
+        ],
+        "lifecycle": {
+          "replace_triggered_by": [
+            "proxmox_virtual_environment_vm.linux-runner.id"
+          ]
+        }
       },
       "dispatcher_token_bridge_vmbr103": {
         "path": "/sdn/zones/localnetwork/vmbr103",
@@ -2759,7 +2774,12 @@ WantedBy=multi-user.target
           "proxmox_virtual_environment_role.clone_source",
           "proxmox_virtual_environment_vm.windows-runner",
           "proxmox_user_token.dispatcher"
-        ]
+        ],
+        "lifecycle": {
+          "replace_triggered_by": [
+            "proxmox_virtual_environment_vm.windows-runner.id"
+          ]
+        }
       },
       "dispatcher_token_bridge_vmbr105": {
         "path": "/sdn/zones/localnetwork/vmbr105",

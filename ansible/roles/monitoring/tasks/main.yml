@@ -13,9 +13,10 @@
     that: monitoring_tls_key.stat.exists
     fail_msg: "run tls-cert.yml for {{ monitoring_tls_name }} with tls_cert_group=www-data first"
 
-- name: Prometheus, Alertmanager, blackbox exporter, promtool and nginx from Debian
+- name: Prometheus, Alertmanager, blackbox exporter, promtool, nginx and curl from Debian
   ansible.builtin.apt:
-    name: [prometheus, prometheus-alertmanager, prometheus-blackbox-exporter, nginx-light]
+    # curl: verify opens Grafana by name from inside this guest (browserca.py).
+    name: [prometheus, prometheus-alertmanager, prometheus-blackbox-exporter, nginx-light, curl]
     update_cache: true
 
 - name: Keyring directory

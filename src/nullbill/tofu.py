@@ -435,12 +435,21 @@ def _ci_resources(plan: dict) -> dict:
             [source, f"proxmox_virtual_environment_vm.{name}"],
         )
         grants[f"bridge_{bridge}"] = (f"/sdn/zones/localnetwork/{bridge}", ci.BRIDGE_ROLE, [_bridge_ref(bridge)])
+    acls = _acls("dispatcher", ci.USER, ci.TOKEN_ID, grants)
+    for name in ci.pools(plan):
+        # PVE deletes a VM's ACLs with the VM, and apply replaces a golden
+        # image to bake it again (apply.retire): its ACLs must be made anew
+        # with it, or state still lists them and the dispatcher cannot clone.
+        for holder in ("user", "token"):
+            acls[f"dispatcher_{holder}_template_{_tf_name(name)}"]["lifecycle"] = {
+                "replace_triggered_by": [f"proxmox_virtual_environment_vm.{name}.id"]
+            }
     return _identity("dispatcher", ci.USER, ci.TOKEN, "Runner dispatcher; token only, in its container") | {
         "proxmox_virtual_environment_role": {
             "dispatcher": {"role_id": ci.ROLE, "privileges": ci.PRIVILEGES},
             "clone_source": {"role_id": ci.SOURCE_ROLE, "privileges": ci.SOURCE_PRIVILEGES},
         },
-        "proxmox_acl": _acls("dispatcher", ci.USER, ci.TOKEN_ID, grants),
+        "proxmox_acl": acls,
     }
 
 
