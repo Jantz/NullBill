@@ -21,6 +21,10 @@ for pair in forgejo:www-data postgres:postgres runner-dispatcher:nb-dispatcher; 
   install -m 0640 -g "$group" "/tmp/pki/$name.key" /etc/nullbill/tls/
 done
 echo "127.0.0.1 forgejo.nullbill.internal postgres.nullbill.internal runner-dispatcher.nullbill.internal pve.nullbill.internal" >>/etc/hosts
+# Forgejo's name has the browser CA's certificate, as apply sets it up: the
+# dispatcher and the runner must trust that root as well as step-ca's.
+browser_pki /tmp/browser forgejo.nullbill.internal "$(hostname -i | cut -d' ' -f1)"
+cat /tmp/pki/ca.crt /tmp/browser/browser-ca.crt >/tmp/forgejo-ca.pem
 
 python3 - >/tmp/forge.json <<'PY'
 import json
@@ -29,11 +33,14 @@ print(json.dumps({
     "postgres_databases": [{"name": "forgejo", "client": "127.0.0.1", "password": "check-only"}],
     "forgejo_manage_services": False,
     "forgejo_db_password": "check-only",
+    "forgejo_browser_cert": open("/tmp/browser/browser.crt").read(),
+    "forgejo_browser_key": open("/tmp/browser/browser.key").read(),
+    "forgejo_browser_root": open("/tmp/browser/browser-ca.crt").read(),
 }))
 PY
 ansible-playbook -i localhost, -c local -e @/tmp/forge.json /ansible/postgres.yml >/tmp/pg.log 2>&1 || { cat /tmp/pg.log; fail "postgres role"; }
 ansible-playbook -i localhost, -c local -e @/tmp/forge.json /ansible/forgejo.yml >/tmp/fj.log 2>&1 || { cat /tmp/fj.log; fail "forgejo role"; }
-start_forgejo /tmp/pki/ca.crt
+start_forgejo /tmp/browser/browser-ca.crt
 token=$(nb-forgejo admin user generate-access-token --username nullbill-admin --token-name dispatcher --scopes write:admin --raw)
 user_token=$(nb-forgejo admin user generate-access-token --username nullbill-admin --token-name check --scopes write:repository,write:user --raw)
 
@@ -44,6 +51,7 @@ python3 - "$token" "$pve_token" >/tmp/vars.json <<'PY'
 import json, sys
 print(json.dumps({
     "ci_runner_ca_root": open("/tmp/pki/ca.crt").read(),
+    "ci_runner_browser_root": open("/tmp/browser/browser-ca.crt").read(),
     "ci_runner_serial_file": "/run/fake-pve/serial",
     "ci_runner_poweroff": "true",
     "ci_runner_manage_services": False,
@@ -51,6 +59,7 @@ print(json.dumps({
     "runner_dispatcher_pve_token": sys.argv[2],
     "runner_dispatcher_pve_url": "https://pve.nullbill.internal:8006",
     "runner_dispatcher_pve_ca": open("/tmp/pki/ca.crt").read(),
+    "runner_dispatcher_forgejo_ca": open("/tmp/forgejo-ca.pem").read(),
     "runner_dispatcher_node": "pve",
     "runner_dispatcher_pools": [{"name": "linux-runner", "template": 2030, "vmids": [6000, 6001], "labels": ["linux"],
                                  "runner_labels": ["linux:host"], "max_job_seconds": 600}],
@@ -75,7 +84,7 @@ setpriv --reuid=nb-dispatcher --regid=nb-dispatcher --init-groups \
   /usr/local/sbin/nb-dispatcher /etc/nullbill/dispatcher/config.json >/tmp/dispatcher.log 2>&1 &
 
 url=https://forgejo.nullbill.internal
-api() { curl -fsS --cacert /tmp/pki/ca.crt -H "Authorization: token $user_token" -H 'Content-Type: application/json' "$@"; }
+api() { curl -fsS --cacert /tmp/browser/browser-ca.crt -H "Authorization: token $user_token" -H 'Content-Type: application/json' "$@"; }
 api "$url/api/v1/user/repos" -d '{"name":"ci","private":true}' >/dev/null || fail "create a repository"
 api -X PATCH "$url/api/v1/repos/nullbill-admin/ci" -d '{"has_actions":true}' >/dev/null || fail "enable actions"
 git init -q -b main /tmp/ci
@@ -90,7 +99,7 @@ jobs:
 YAML
 git -C /tmp/ci add -A
 git -C /tmp/ci -c user.name=check -c user.email=check@example.internal commit -q -m ci
-GIT_SSL_CAINFO=/tmp/pki/ca.crt git -C /tmp/ci push -q "https://nullbill-admin:$user_token@forgejo.nullbill.internal/nullbill-admin/ci.git" main \
+GIT_SSL_CAINFO=/tmp/browser/browser-ca.crt git -C /tmp/ci push -q "https://nullbill-admin:$user_token@forgejo.nullbill.internal/nullbill-admin/ci.git" main \
   >/tmp/push.log 2>&1 || { cat /tmp/push.log; fail "push the workflow"; }
 
 status=""
@@ -112,7 +121,7 @@ grep -Eq '^PUT /api2/json/nodes/pve/qemu/6000/config \{"smbios1": "uuid=u6000,se
 grep -E 'qemu/(2017|2030)' "$state/calls.log" | grep -v '2030/clone' && fail "touched a guest other than its clones"
 pass "the clone was linked from the template into the CI pool, handed its job by serial, and destroyed"
 
-runners=$(curl -fsS --cacert /tmp/pki/ca.crt -H "Authorization: token $token" "$url/api/v1/admin/actions/runners")
+runners=$(curl -fsS --cacert /tmp/browser/browser-ca.crt -H "Authorization: token $token" "$url/api/v1/admin/actions/runners")
 grep -q '"name":"nb-' <<<"$runners" && fail "a runner registration was left behind: $runners"
 pass "no runner registration outlives its clone"
 

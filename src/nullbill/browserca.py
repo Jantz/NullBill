@@ -5,8 +5,10 @@ take a certificate for any website from whoever holds the CA guest's keys.
 This root is made and kept in NULLBILL_HOME (like the log shipper CA) and is
 constrained to the plan's domain and network, so trusting it on a phone
 vouches for this server and nothing else. It signs only what the owner opens
-in a browser by address: the page, Proxmox, Forgejo and Grafana. Services
-keep step-ca's certificates for each other.
+in a browser: the page, Proxmox, Forgejo and Grafana, by address or by name,
+and the model gateway by address. Services keep step-ca's certificates for
+each other, except that Forgejo's clients (the CI dispatcher and runners)
+trust this root too, since people and runners open Forgejo by one name.
 """
 
 import hashlib
@@ -17,6 +19,7 @@ import ssl
 import subprocess
 import tempfile
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from nullbill.probe import Runner
 from nullbill.render import strip_notes
@@ -127,40 +130,74 @@ def issue(home: Path, ca: Path, crt: Path, key: Path, wanted: list[str]) -> bool
     return True
 
 
-def _endpoints(plan: dict) -> list[tuple[str, str]]:
-    """(label, URL) a browser opens, which verify can reach from the host."""
+# (label, guest that runs curl or None for the host, URL, address the URL's
+# name resolves to there or None).
+Endpoint = tuple[str, str | None, str, str | None]
+
+
+def _endpoints(plan: dict) -> list[Endpoint]:
+    """What a browser opens, by address and by name, as verify reaches it:
+    the page and Proxmox from the host, Forgejo and Grafana inside their
+    guests (the host has no way to them)."""
     bare = strip_notes(plan)
-    return [
-        ("browsers trust the page", f"https://{bare['guests']['nullbill']['ip']}:8443/"),
-        ("browsers trust Proxmox", f"https://{bare['zones']['mgmt']['host_ip']}:8006/"),
+    domain, guests = bare["domain"], bare["guests"]
+    page, host = guests["nullbill"]["ip"], bare["zones"]["mgmt"]["host_ip"]
+    out: list[Endpoint] = [
+        ("browsers trust the page", None, f"https://{page}:8443/", None),
+        ("browsers trust the page by name", None, f"https://nullbill.{domain}:8443/", page),
+        ("browsers trust Proxmox", None, f"https://{host}:8006/", None),
+        ("browsers trust Proxmox by name", None, f"https://pve.{domain}:8006/", host),
     ]
+    if "forgejo" in guests:
+        out.append(("browsers trust Forgejo by name", "forgejo", f"https://forgejo.{domain}/", "127.0.0.1"))
+    if "monitoring" in guests:
+        out.append(("browsers trust Grafana by name", "monitoring", f"https://monitoring.{domain}:3000/", "127.0.0.1"))
+    return out
+
+
+def _proxmox(label: str) -> bool:
+    return label.startswith("browsers trust Proxmox")
 
 
 def skipped(plan: dict, reason: str) -> list[Result]:
-    return [Result("SKIP", label, reason) for label, _ in _endpoints(plan)]
+    return [Result("SKIP", label, reason) for label, *_ in _endpoints(plan)]
+
+
+def _script(root_pem: str, endpoints: list[Endpoint]) -> str:
+    script = "f=$(mktemp); trap 'rm -f \"$f\"' EXIT; cat > \"$f\" <<'PEM'\n" + root_pem.strip() + "\nPEM\n"
+    for _, _, url, address in endpoints:
+        resolve = ""
+        if address:
+            parsed = urlsplit(url)
+            resolve = f"--resolve {shlex.quote(f'{parsed.hostname}:{parsed.port or 443}:{address}')} "
+        script += f'out=$(curl -sS -o /dev/null -m 10 --noproxy \'*\' --cacert "$f" {resolve}{shlex.quote(url)} 2>&1); echo "rc=$? $out"\n'
+    return script
 
 
 def check(plan: dict, root_crt: Path, target: str, run: Runner, lan_closed: bool) -> list[Result]:
     """Each endpoint's certificate as a browser that trusts only this root
-    sees it, by address, from the host. Proxmox serves the browser CA's
-    only once the home network is closed (apply.stage_host)."""
+    sees it. Proxmox serves the browser CA's only once the home network is
+    closed (apply.stage_host)."""
     if not root_crt.is_file():
         return skipped(plan, "no setup run has made the browser CA yet")
-    endpoints = _endpoints(plan)
-    if not lan_closed:
-        endpoints, later = endpoints[:1], endpoints[1:]
-    script = "f=$(mktemp); trap 'rm -f \"$f\"' EXIT; cat > \"$f\" <<'PEM'\n" + root_crt.read_text().strip() + "\nPEM\n"
-    for _, url in endpoints:
-        script += f'out=$(curl -sS -o /dev/null -m 10 --noproxy \'*\' --cacert "$f" {shlex.quote(url)} 2>&1); echo "rc=$? $out"\n'
-    rc, out, err = run(target, script)
-    lines = out.splitlines()
+    bare = strip_notes(plan)
+    endpoints = [e for e in _endpoints(plan) if lan_closed or not _proxmox(e[0])]
+    lines: dict[str, str] = {}
+    for guest in dict.fromkeys(e[1] for e in endpoints):
+        group = [e for e in endpoints if e[1] == guest]
+        script = _script(root_crt.read_text(), group)
+        command = script if guest is None else f"pct exec {bare['guests'][guest]['vmid']} -- bash -c {shlex.quote(script)}"
+        rc, out, err = run(target, command)
+        got = out.splitlines()
+        for i, (label, *_) in enumerate(group):
+            lines[label] = got[i] if rc == 0 and i < len(got) else f"rc=? {(err or out).strip()[:120]}"
     results = []
-    for i, (label, url) in enumerate(endpoints):
-        line = lines[i] if rc == 0 and i < len(lines) else f"rc=? {(err or out).strip()[:120]}"
-        if line.startswith("rc=0 "):
+    for label, _, url, _ in _endpoints(plan):
+        if label not in lines:
+            results.append(Result("SKIP", label, "Proxmox gets it once the home network is closed"))
+        elif lines[label].startswith("rc=0 "):
             results.append(Result("PASS", label))
         else:
+            line = lines[label]
             results.append(Result("DEGRADED", label, f"{url}: {line.partition(' ')[2] or line} (run setup)"))
-    if not lan_closed:
-        results += [Result("SKIP", label, "Proxmox gets it once the home network is closed") for label, _ in later]
     return results

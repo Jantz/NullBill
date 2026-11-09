@@ -58,7 +58,7 @@ def service_answers(plan: dict, wrong: str = "") -> dict[str, str]:
     the check labelled `wrong` gets a wrong answer."""
     import shlex
 
-    from nullbill import ci, forge, llm, media
+    from nullbill import ci, forge, llm, media, names
     from nullbill.render import strip_notes
 
     bare = strip_notes(plan)
@@ -73,7 +73,21 @@ def service_answers(plan: dict, wrong: str = "") -> dict[str, str]:
         answers |= {cmd: ("nope" if label == wrong else want) + "\n" for label, cmd, want in llm.commands(bare)}
     if media.enabled(bare):
         answers |= {cmd: ("nope" if label == wrong else want) + "\n" for label, cmd, want in media.commands(bare)}
+    if names.nameserver(bare):
+        server = "192.0.2.53" if wrong == names.LABEL else names.nameserver(bare)
+        answers[names.command(bare)] = dns_status(bare["domain"], server)
     return answers
+
+
+def dns_status(domain: str, server: str) -> str:
+    """`tailscale dns status` on a tailnet whose split DNS sends domain to
+    server, in the format of Tailscale 1.104's cmd/tailscale/cli/dns-status.go."""
+    return (
+        "\n=== 'Use Tailscale DNS' status ===\n\nTailscale DNS: disabled.\n\n=== MagicDNS configuration ===\n\n"
+        "MagicDNS: disabled tailnet-wide.\n\nResolvers (in preference order):\n"
+        "  (no resolvers configured, system default will be used: see 'System DNS configuration' below)\n\n"
+        f"Split DNS Routes:\n  - {domain + '.':<30s} -> {server}\n\n"
+    )
 
 
 def agent_api(

@@ -17,7 +17,9 @@ constraints: the plan's domain (`nullbill.internal`) and network
 or address, so trusting it on a phone vouches for your server and for
 nothing else. step-ca's root has no such limit, which is why the page offers
 this one and not step-ca's: services keep step-ca's certificates among
-themselves.
+themselves. Forgejo is the exception: people and the CI runners open it by
+the same name, so its name has this CA's certificate and the CI dispatcher
+and runner images trust this root as well as step-ca's.
 
 It signs, for their addresses and `<name>.nullbill.internal`:
 
@@ -25,14 +27,15 @@ It signs, for their addresses and `<name>.nullbill.internal`:
 |---|---|---|
 | The page | `https://10.42.1.2:8443` | each **ca** step; the page picks it up within a minute, with the same key, so the on-site screen's and the agents' pins hold |
 | Proxmox | `https://10.42.1.254:8006` | the **host** step of the first setup run after you close the server to the home network; until then PVE's own CA signs it, since apply still reaches Proxmox at its home network address, which the root cannot name |
-| Forgejo | `https://10.42.2.17` | the **forgejo** step; clients that ask for `forgejo.nullbill.internal` still get step-ca's |
-| Grafana | `https://10.42.1.14:3000` | the **monitoring** step |
+| Forgejo | `https://10.42.2.17` | the **forgejo** step; by its name too |
+| Grafana | `https://10.42.1.14:3000` | the **monitoring** step; by its name (`monitoring.nullbill.internal`) too |
 | Model gateway | `https://10.42.4.21:4000` | the **inference** step; for browsers and extensions such as Page Assist; clients that ask for `model-gateway.nullbill.internal` still get step-ca's |
 
 Each lasts 825 days, the longest Apple devices accept; a setup run makes a
 new one when fewer than 90 days are left. **Run checks** reports
-`browsers trust the page` and `browsers trust Proxmox` as DEGRADED when a
-browser with only this root would warn.
+`browsers trust the page`, `browsers trust Proxmox` and each `... by name`
+(the page, Proxmox, Forgejo and Grafana) as DEGRADED when a browser with
+only this root would warn.
 
 Jellyfin (`http://10.42.7.24:8096`) is plain HTTP inside Tailscale's
 encryption: browsers mark it "Not secure" in the address bar but show no

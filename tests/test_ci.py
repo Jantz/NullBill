@@ -117,7 +117,7 @@ def test_correct_dispatcher_and_forgejo_pass(facts):
         "dispatcher token may clone the linux-runner template, nothing else",
         "dispatcher token cannot change router",
         "dispatcher token cannot change the host",
-        "forgejo is healthy over HTTPS with its step-ca certificate",
+        "forgejo is healthy over HTTPS by its name",
         "forgejo refuses sign-up",
         "forgejo reaches postgres over TLS only",
     ):

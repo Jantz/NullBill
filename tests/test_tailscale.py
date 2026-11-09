@@ -7,7 +7,7 @@ from urllib.parse import parse_qs
 
 import pytest
 
-from nullbill.tailscale import Tailnet, TailscaleError
+from nullbill.tailscale import MissingScope, Tailnet, TailscaleError
 
 CLIENT = ("kExampleCNTRL", "tskey-client-kExampleCNTRL-secret")
 
@@ -17,7 +17,8 @@ class FakeAPI:
         self.policy = {"acls": [{"action": "accept", "src": ["*"], "dst": ["*:*"]}]}
         self.version = 0
         self.failing_tests = None
-        self.scopes = {"policy_file", "devices:core:read"}
+        self.scopes = {"policy_file", "devices:core:read", "dns"}
+        self.split_dns = {"example.com": ["192.0.2.53"]}
         self.requests = []
         self.devices = [{"id": "1", "hostname": "nullbill", "tags": ["tag:nb-vpn"]}]
 
@@ -58,6 +59,19 @@ def api():
                 self.reply(200, state.policy, {"ETag": f'"v{state.version}"'})
             elif self.path == "/api/v2/tailnet/-/devices" and self.authed("devices:core:read"):
                 self.reply(200, {"devices": state.devices})
+            elif self.path == "/api/v2/tailnet/-/dns/split-dns" and self.authed("dns"):
+                self.reply(200, state.split_dns)
+
+        def do_PATCH(self):
+            body = self.body()
+            state.requests.append(("PATCH", self.path, dict(self.headers)))
+            if self.path == "/api/v2/tailnet/-/dns/split-dns" and self.authed("dns"):
+                for domain, servers in json.loads(body).items():
+                    if servers is None:
+                        state.split_dns.pop(domain, None)
+                    else:
+                        state.split_dns[domain] = servers
+                self.reply(200, state.split_dns)
 
         def do_POST(self):
             body = self.body()
@@ -116,6 +130,16 @@ def test_a_wrong_client_or_a_missing_scope_says_what_to_fix(api):
     api.scopes = {"policy_file"}
     with pytest.raises(TailscaleError, match="lacks a scope .*devices:core:read"):
         Tailnet(*CLIENT, api=api.url).devices()
+
+
+def test_split_dns_changes_one_domain_and_needs_the_dns_scope(api):
+    tailnet = Tailnet(*CLIENT, api=api.url)
+    tailnet.set_split_dns("nullbill.internal", ["10.42.6.1"])
+    assert tailnet.split_dns() == {"example.com": ["192.0.2.53"], "nullbill.internal": ["10.42.6.1"]}
+    assert ("PATCH", "/api/v2/tailnet/-/dns/split-dns") in [r[:2] for r in api.requests]
+    api.scopes = {"policy_file", "devices:core:read"}
+    with pytest.raises(MissingScope, match="lacks a scope .*give it dns"):
+        Tailnet(*CLIENT, api=api.url).split_dns()
 
 
 def test_no_answer_is_an_error_not_a_crash():

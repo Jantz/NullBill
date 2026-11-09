@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from nullbill import applied, backups, browserca, ci, hostroot, lan, legacy, llm, media
+from nullbill import applied, backups, browserca, ci, hostroot, lan, legacy, llm, media, names
 from nullbill.artifacts import write_build
 from nullbill.errors import NullBillError
 from nullbill.flows import mac
@@ -38,8 +38,8 @@ from nullbill.probe import Runner
 from nullbill.proxy import PROXY, proxy_port
 from nullbill.render import strip_notes
 from nullbill.secretfile import Secrets
-from nullbill.tailnet import TAG, routes
-from nullbill.tailscale import Tailnet, TailscaleError
+from nullbill.tailnet import TAG, nameserver, routes
+from nullbill.tailscale import MissingScope, Tailnet, TailscaleError
 from nullbill.verify import run_verify
 
 ANSIBLE = REPO_ROOT / "ansible"
@@ -1408,7 +1408,7 @@ def stage_forgejo(ctx: Context) -> None:
         "forgejo_admin_email": f"admin@{ctx.bare['domain']}",
     }
     cert, key = browser_cert(ctx, "forgejo", "forgejo", ctx.bare["guests"]["forgejo"]["ip"])
-    variables |= {"forgejo_browser_cert": cert, "forgejo_browser_key": key}
+    variables |= {"forgejo_browser_cert": cert, "forgejo_browser_key": key, "forgejo_browser_root": browser_root(ctx).read_text()}
     run_playbook(ctx, "forgejo", "forgejo.yml", "forgejo", variables)
     # Changed at first login; kept so the owner has it for that login.
     password = guest_out(ctx, "forgejo", "forgejo", ["cat", "/etc/forgejo/admin-password"]).strip()
@@ -1690,13 +1690,28 @@ def bake(ctx: Context, name: str, guest: dict) -> bool:
     convert it to a template. A template is kept until it is
     ci.REBAKE_AFTER_S old, then replaced and baked again. True if it baked."""
     vmid = guest["template_vmid"]
+    runner = {
+        "ci_runner_ca_root": ca_root(ctx, "ci"),
+        "ci_runner_browser_root": browser_root(ctx).read_text(),
+        "ci_runner_dispatcher_url": f"https://{fqdn(ctx, 'runner-dispatcher')}:8443",
+        "ci_runner_proxy_url": proxy_url(ctx, name),
+        "ci_runner_no_proxy": f".{ctx.bare['domain']},localhost,127.0.0.1",
+    }
+    # What the image was baked with; clones of an image baked before a
+    # change (a new root, say) would fail their jobs until the weekly bake.
+    inputs = hashlib.sha256(json.dumps(runner, sort_keys=True).encode()).hexdigest()
+    inputs_file = f"{BAKING_DIR}/{name}.inputs"
     if "template: 1" in host_out(ctx, "ci", f"qm config {vmid}"):
         recorded = host_out(ctx, "ci", f"cat {ci.TEXTFILE_DIR}/{ci.baked_file(name)} 2>/dev/null || true")
         baked = ci.baked_time(recorded)
-        if baked is not None and time.time() - baked < ci.REBAKE_AFTER_S:
+        same = host_out(ctx, "ci", f"cat {inputs_file} 2>/dev/null || true").strip() == inputs
+        if baked is not None and time.time() - baked < ci.REBAKE_AFTER_S and same:
             ctx.say(f"ci: {name}'s golden image is baked")
             return False
-        ctx.say(f"ci: {name}'s golden image is over {ci.REBAKE_AFTER_S // 86400} days old; baking it again")
+        if same:
+            ctx.say(f"ci: {name}'s golden image is over {ci.REBAKE_AFTER_S // 86400} days old; baking it again")
+        else:
+            ctx.say(f"ci: {name}'s golden image was baked with other settings; baking it again")
         retire(ctx, name, guest)
     # A bake that stopped partway may have sealed the VM (no SSH host keys)
     # or left it half set up, so it starts again from a fresh VM.
@@ -1712,18 +1727,13 @@ def bake(ctx: Context, name: str, guest: dict) -> bool:
     wait = f"until (exec 3<>/dev/tcp/{address}/22) 2>/dev/null; do sleep 5; done"
     host_out(ctx, "ci", f"timeout 600 bash -c {shlex.quote(wait)}")
     forget_host_key(ctx, address)
-    runner = {
-        "ci_runner_ca_root": ca_root(ctx, "ci"),
-        "ci_runner_dispatcher_url": f"https://{fqdn(ctx, 'runner-dispatcher')}:8443",
-        "ci_runner_proxy_url": proxy_url(ctx, name),
-        "ci_runner_no_proxy": f".{ctx.bare['domain']},localhost,127.0.0.1",
-    }
     run_playbook(ctx, "ci", "ci-runner.yml", name, runner)
     if guest.get("agent_managed"):
         run_playbook(ctx, "ci", "agent-ssh.yml", name, {"agent_ssh_user_ca_key": ssh_user_ca(ctx, "ci")})
     run_playbook(ctx, "ci", "ci-runner-seal.yml", name)
     host_out(ctx, "ci", f"qm shutdown {vmid} --timeout 180 && qm template {vmid}")
     host_files(ctx, "ci", ci.TEXTFILE_DIR, {ci.baked_file(name): ci.baked_metric(name, time.time())})
+    host_files(ctx, "ci", BAKING_DIR, {f"{name}.inputs": inputs + "\n"})
     host_out(ctx, "ci", f"rm -f {marker}")
     ctx.say(f"ci: {name}'s golden image is a template")
     return True
@@ -1739,6 +1749,12 @@ def forgejo_token(ctx: Context) -> str:
         return guest_out(ctx, "ci", "forgejo", argv).strip()
 
     return ctx.secrets.ensure("forgejo_dispatcher_token", make)
+
+
+def forgejo_ca(ctx: Context, stage: str) -> str:
+    """What Forgejo's clients trust: its name has the browser CA's
+    certificate (stage_forgejo), step-ca's root covers the rest."""
+    return ca_root(ctx, stage).strip() + "\n" + browser_root(ctx).read_text()
 
 
 def dispatcher_vars(ctx: Context) -> dict:
@@ -1759,6 +1775,7 @@ def dispatcher_vars(ctx: Context) -> dict:
     return {
         "runner_dispatcher_tls_name": fqdn(ctx, "runner-dispatcher"),
         "runner_dispatcher_forgejo_url": f"https://{fqdn(ctx, 'forgejo')}",
+        "runner_dispatcher_forgejo_ca": forgejo_ca(ctx, "ci"),
         "runner_dispatcher_forgejo_token": forgejo_token(ctx),
         "runner_dispatcher_pve_url": f"https://pve.{ctx.bare['domain']}:8006",
         "runner_dispatcher_node": host_out(ctx, "ci", "hostname").strip(),
@@ -2047,13 +2064,44 @@ def push_policy(ctx: Context, stage: str) -> bool:
     return True
 
 
+def split_dns(ctx: Context, stage: str, api: Tailnet) -> None:
+    """Every tailnet device looks up the plan's names at the router
+    (names.py). An OAuth client without the dns scope leaves them to
+    addresses, which work all the same, and says how to change that."""
+    domain, server = ctx.bare["domain"], nameserver(ctx.bare)
+    try:
+        if api.split_dns().get(domain) == [server]:
+            ctx.say(f"{stage}: your devices look up {domain} names at the router ({server})")
+            names.record(ctx.home, domain, server)
+            return
+        api.set_split_dns(domain, [server])
+        back = api.split_dns().get(domain)
+    except MissingScope:
+        names.forget(ctx.home)
+        ctx.say(
+            f"{stage}: the Tailscale OAuth client cannot change DNS, so your devices reach the services by address only; {names.ADVICE}"
+        )
+        return
+    except TailscaleError as error:
+        raise ApplyError(stage, str(error)) from error
+    if back != [server]:
+        raise ApplyError(
+            stage, f"Tailscale's split DNS for {domain} reads back as {back}, not [{server}]; check the admin console's DNS page"
+        )
+    names.record(ctx.home, domain, server)
+    ctx.say(f"{stage}: your devices now look up {domain} names at the router ({server})")
+
+
 def stage_tailnet(ctx: Context) -> None:
     """Before anything on the host changes: the tailnet's policy, so nobody
-    reaches more than the plan grants once the vpn guest is in."""
+    reaches more than the plan grants once the vpn guest is in; then the
+    tailnet's DNS for the plan's names."""
     if not planned(ctx, "vpn"):
         return
     if not push_policy(ctx, "tailnet"):
         ctx.say("tailnet: no Tailscale OAuth client saved; the vpn guest stays off the tailnet until one is pasted on the page")
+        return
+    split_dns(ctx, "tailnet", tailnet_api(ctx))
 
 
 def stage_vpn(ctx: Context) -> None:
@@ -2076,7 +2124,8 @@ def stage_vpn(ctx: Context) -> None:
     if status.get("BackendState") == "Running":
         name = (status.get("Self") or {}).get("DNSName", "").rstrip(".")
         ctx.say(f"vpn: on the tailnet as {name or 'nullbill'}, advertising {', '.join(variables['vpn_routes'])}")
-        ctx.say(f"vpn: from your devices on the tailnet the page is https://{ctx.bare['guests']['nullbill']['ip']}:8443")
+        page = f"https://{fqdn(ctx, 'nullbill')}:8443" if names.active(ctx.home) else page_url(ctx).rstrip("/")
+        ctx.say(f"vpn: from your devices on the tailnet the page is {page}")
         # A one-time key is spent once it has logged in.
         ctx.secrets.drop("tailscale_auth_key")
     elif variables["vpn_auth_key"]:

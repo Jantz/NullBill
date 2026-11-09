@@ -1,3 +1,4 @@
+import shlex
 import socket
 import ssl
 import subprocess
@@ -9,6 +10,7 @@ from fixturedata import fixture_config
 from nullbill import browserca
 from nullbill.model import build_model
 from nullbill.plan import build_plan
+from nullbill.render import strip_notes
 
 
 def ca(tmp_path, network="10.42.0.0/16"):
@@ -114,8 +116,9 @@ def plan_of(facts):
     return build_plan(build_model(fixture_config("small")), facts("small"))
 
 
-def test_verify_checks_the_page_and_once_closed_proxmox_from_the_host(tmp_path, facts):
+def test_verify_checks_by_address_and_name_from_the_host_and_inside_the_guests(tmp_path, facts):
     plan = plan_of(facts)
+    bare = strip_notes(plan)
     root = ca(tmp_path)
     assert browserca.check(plan, tmp_path / "none.crt", "root@pve", None, lan_closed=True) == browserca.skipped(
         plan, "no setup run has made the browser CA yet"
@@ -125,15 +128,33 @@ def test_verify_checks_the_page_and_once_closed_proxmox_from_the_host(tmp_path, 
 
     def run(target, command):
         seen.append(command)
-        lines = [line for line in command.splitlines() if line.startswith("out=$(curl")]
-        answers = ["rc=0 ", "rc=60 curl: (60) SSL certificate problem: self-signed certificate"]
-        return 0, "".join(f"{a}\n" for a in answers[: len(lines)]), ""
+        script = shlex.split(command)[-1] if command.startswith("pct exec") else command
+        out = ""
+        for line in script.splitlines():
+            if line.startswith("out=$(curl"):
+                bad = "https://10.42.1.254:8006/" in line
+                out += "rc=60 curl: (60) SSL certificate problem: self-signed certificate\n" if bad else "rc=0 \n"
+        return 0, out, ""
 
     results = browserca.check(plan, root, "root@pve", run, lan_closed=True)
-    assert [(r.status, r.name) for r in results] == [("PASS", "browsers trust the page"), ("DEGRADED", "browsers trust Proxmox")]
-    assert "self-signed certificate" in results[1].detail and "https://10.42.1.254:8006/" in results[1].detail
-    assert root.read_text().strip() in seen[0] and "--cacert" in seen[0]
+    assert [(r.status, r.name) for r in results] == [
+        ("PASS", "browsers trust the page"),
+        ("PASS", "browsers trust the page by name"),
+        ("DEGRADED", "browsers trust Proxmox"),
+        ("PASS", "browsers trust Proxmox by name"),
+        ("PASS", "browsers trust Forgejo by name"),
+        ("PASS", "browsers trust Grafana by name"),
+    ]
+    assert "self-signed certificate" in results[2].detail and "https://10.42.1.254:8006/" in results[2].detail
+    host, forgejo, grafana = seen
+    assert root.read_text().strip() in host and "--cacert" in host
+    assert "--resolve nullbill.nullbill.internal:8443:10.42.1.2 " in host and "--resolve pve.nullbill.internal:8006:10.42.1.254 " in host
+    assert forgejo.startswith(f"pct exec {bare['guests']['forgejo']['vmid']} -- bash -c ")
+    assert "--resolve forgejo.nullbill.internal:443:127.0.0.1 " in forgejo and root.read_text().strip() in forgejo
+    assert grafana.startswith(f"pct exec {bare['guests']['monitoring']['vmid']} -- ")
+    assert "--resolve monitoring.nullbill.internal:3000:127.0.0.1 " in grafana
 
     results = browserca.check(plan, root, "root@pve", run, lan_closed=False)
-    assert [(r.status, r.name) for r in results] == [("PASS", "browsers trust the page"), ("SKIP", "browsers trust Proxmox")]
-    assert "https://10.42.1.254:8006/" not in seen[-1]
+    skipped = [(r.status, r.name) for r in results if r.status == "SKIP"]
+    assert skipped == [("SKIP", "browsers trust Proxmox"), ("SKIP", "browsers trust Proxmox by name")]
+    assert ":8006" not in seen[-3]

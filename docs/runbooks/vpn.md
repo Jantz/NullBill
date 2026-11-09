@@ -4,9 +4,12 @@ The vpn guest joins your Tailscale network as a subnet router tagged
 `tag:nb-vpn`. It advertises each zone that a role reaches; the policy NullBill
 renders decides which person reaches which address in them. Tailscale's free
 Personal plan is enough (plan.yaml's `tailnet` section counts what is used).
+Setup also points Tailscale's DNS for `nullbill.internal` at the router, so
+names such as `forgejo.nullbill.internal` work on every device on the
+tailnet ([Names](#names)).
 
 Reference: <https://tailscale.com/kb/1019/subnets>,
-<https://tailscale.com/kb/1085/auth-keys>.
+<https://tailscale.com/kb/1085/auth-keys>, <https://tailscale.com/kb/1054/dns>.
 
 ## Once
 
@@ -14,9 +17,9 @@ Reference: <https://tailscale.com/kb/1019/subnets>,
    the login you gave as the owner on the page (**Setup** page, **What to
    run** card). A new account gets a tailnet of its own on the free
    Personal plan.
-2. **Settings, Trust credentials**: add an **OAuth client** with the scope
-   **Policy file** set to write; the console adds the device scopes that
-   scope needs. Copy the client ID and the secret (`tskey-client-...`;
+2. **Settings, Trust credentials**: add an **OAuth client** with the scopes
+   **Policy file** and **DNS**, both set to write; the console adds the
+   device scopes that Policy file needs. Copy the client ID and the secret (`tskey-client-...`;
    Tailscale shows it once) and paste both in the **Tailscale** card on the
    page's **Access** page. OAuth clients do not expire. Every setup
    run then trades them for an
@@ -26,6 +29,9 @@ Reference: <https://tailscale.com/kb/1019/subnets>,
    - leaves the policy alone if it already equals the rendered one
      (`build/tailnet/policy.json`, shown on the page), and otherwise has
      Tailscale check it and run its tests, pushes it and reads it back.
+   - sends lookups under `nullbill.internal` to the router (split DNS),
+     unless they go there already. A client without the DNS scope only
+     skips this: addresses keep working, and the stage says so.
    A refusal stops setup with the test Tailscale names. The vpn guest does
    not join until the policy is in place, because Tailscale's default
    policy lets every device reach every route. Run setup once now: a key
@@ -42,7 +48,7 @@ Reference: <https://tailscale.com/kb/1019/subnets>,
 5. On your phone or laptop, install Tailscale and sign in with the same
    login. Linux needs `sudo tailscale set --accept-routes`; Windows, macOS,
    iOS and Android accept the routes by themselves. Open the address the
-   vpn stage printed.
+   vpn stage printed, `https://nullbill.nullbill.internal:8443`.
 
 The routes need no approval in the admin console: the policy's
 `autoApprovers` lets the tagged guest advertise addresses inside the
@@ -55,14 +61,45 @@ NullBill network only.
 - `tailnet: Tailscale refused the policy`: the message names the failing
   test. A person's role reaches something the policy's tests forbid; fix
   `people` or `roles` in the config.
-- `tailnet: ... lacks a scope`: make a new OAuth client with the scope in
-  step 2 and paste it.
+- `tailnet: ... lacks a scope`: make a new OAuth client with the scopes in
+  step 2 and paste it. Tailscale does not let you add a scope to a client
+  you have.
+- `tailnet: the Tailscale OAuth client cannot change DNS`: the client has
+  Policy file but not DNS. Names do not work until you paste one with both
+  and run setup; addresses work meanwhile.
 - `vpn.yml failed`: the log names the reason Tailscale gave. A one-time key
   works once and expires (90 days at most); generate a new one and paste it.
 - Joined, but nothing answers: check that the device accepts routes and
   that **Machines** in the admin console shows a **Subnets** badge on the
   `nullbill` machine, and that selecting it shows the routes as approved
   in its **Subnets** section.
+
+## Names
+
+Every guest has a name, `<guest>.nullbill.internal`, which the router's
+dnsmasq answers inside the server. The tailnet stage sets Tailscale's split
+DNS so each device on the tailnet asks the router for those names and
+nothing else, at the router's address in the access zone (`10.42.6.1`).
+The policy lets every person reach that address on port 53 only, and the
+vpn guest advertises it as a route of its own. Other people you add get
+the names by themselves; their access stays what their role allows.
+Addresses keep working everywhere.
+
+On a device, names need Tailscale's DNS on:
+
+- **Android**: if Settings, **Private DNS** names a provider (such as
+  `dns.google`), set it to **Automatic**. A named provider takes every
+  lookup past Tailscale.
+- **Linux**: `sudo tailscale set --accept-dns` (on by default), with
+  `--accept-routes` as in step 5.
+- **Windows, macOS, iOS**: nothing to do, unless **Use Tailscale DNS** was
+  turned off in the app.
+
+**Run checks** reports `tailnet devices look up server names at the
+router` as DEGRADED while Tailscale sends the domain elsewhere, and
+`browsers trust ... by name` for the page, Proxmox, Forgejo and Grafana.
+`nslookup forgejo.nullbill.internal` on a device should answer with
+Forgejo's address.
 
 ## Close Proxmox to the home network
 
@@ -72,8 +109,8 @@ them. Do it once Tailscale works:
 1. On a device on Tailscale, open the page at the address the vpn stage
    printed and, on the **Access** page, **Home network** tab, press
    **Close to the home network**.
-2. Within 15 minutes, open `https://<mgmt address>:8006` (the PVE host's
-   address in the plan's `mgmt` zone, `.254`) over Tailscale to check
+2. Within 15 minutes, open `https://pve.nullbill.internal:8006`, or the
+   PVE host's address in the plan's `mgmt` zone (`.254`), over Tailscale to check
    Proxmox answers, then press **Keep it closed** on the page you opened
    over Tailscale. The page accepts that press only when it arrives through
    the vpn guest, which is what proves the way in works.

@@ -14,18 +14,22 @@ its number is `2000 + <service id>`.
 
 ## Where things are
 
-| What | Address over Tailscale | First sign-in |
+Over Tailscale each guest answers to `<guest>.nullbill.internal` once a
+setup run has set Tailscale's DNS ([vpn.md](vpn.md#names)); its address
+works too, and the **Services** page shows both.
+
+| What | Name over Tailscale (address) | First sign-in |
 |---|---|---|
-| NullBill page | `https://10.42.1.2:8443` | your page password (chosen at first sign-in) |
-| Proxmox web UI | `https://10.42.1.254:8006` | `root`, realm Linux PAM, the password from the Proxmox installer |
-| Grafana (metrics, logs) | `https://10.42.1.14:3000` | `admin`, **Show password** on the page |
-| Forgejo (Git, CI) | `https://10.42.2.17`, Git over SSH on `10.42.2.17` port 22 | `nullbill-admin`, **Show password** on the page; Forgejo asks for a new one |
-| Kept disk share | `\\10.42.1.23\<share>` | `nbshare`, **Show password** on the page |
-| Workspace | SSH to `10.42.3.19` | see [Workspace](#workspace) |
+| NullBill page | `https://nullbill.nullbill.internal:8443` (`10.42.1.2`) | your page password (chosen at first sign-in) |
+| Proxmox web UI | `https://pve.nullbill.internal:8006` (`10.42.1.254`) | `root`, realm Linux PAM, the password from the Proxmox installer |
+| Grafana (metrics, logs) | `https://monitoring.nullbill.internal:3000` (`10.42.1.14`) | `admin`, **Show password** on the page |
+| Forgejo (Git, CI) | `https://forgejo.nullbill.internal`, Git over SSH on `forgejo.nullbill.internal` port 22 (`10.42.2.17`) | `nullbill-admin`, **Show password** on the page; Forgejo asks for a new one |
+| Kept disk share | `\\files.nullbill.internal\<share>` (`10.42.1.23`) | `nbshare`, **Show password** on the page |
+| Workspace | SSH to `workspace.nullbill.internal` (`10.42.3.19`) | see [Workspace](#workspace) |
 | Coding agent | inside the operator guest (2016) | see [Coding agent](#coding-agent) |
-| Model gateway (local AI) | `https://10.42.4.21:4000/v1` (from the workspace `https://model-gateway.nullbill.internal:4000/v1`) | the API key from **Show key** under **Local AI model** on the **Services** page; see [local-models.md](local-models.md) |
-| Jellyfin (media) | `http://10.42.7.24:8096` | `nullbill-admin`, **Show password** on the page; see [media.md](media.md) |
-| Windows desktop | Remote Desktop to `10.42.5.22` | the account you make when installing ([windows-desktop.md](windows-desktop.md)) |
+| Model gateway (local AI) | `https://10.42.4.21:4000/v1` by address (from the workspace `https://model-gateway.nullbill.internal:4000/v1`) | the API key from **Show key** under **Local AI model** on the **Services** page; see [local-models.md](local-models.md) |
+| Jellyfin (media) | `http://jellyfin.nullbill.internal:8096` (`10.42.7.24`) | `nullbill-admin`, **Show password** on the page; see [media.md](media.md) |
+| Windows desktop | Remote Desktop to `windows-dev.nullbill.internal` (`10.42.5.22`) | the account you make when installing ([windows-desktop.md](windows-desktop.md)) |
 
 The other guests have nothing for you to open: the router, the internet
 proxy (10.42.2.10), step-ca (10.42.1.12), PostgreSQL (10.42.2.13), the CI
@@ -41,13 +45,10 @@ step-ca's root to your devices' trusted certificates instead: it is not
 limited, so a device that trusts it would accept a certificate it issued for
 any site.
 
-Names under `nullbill.internal` do not resolve on your devices yet. Forgejo
-shows `forgejo.nullbill.internal` in its clone and mail links; on a laptop,
-add the line `10.42.2.17 forgejo.nullbill.internal` to the hosts file
-(`/etc/hosts`, or `C:\Windows\System32\drivers\etc\hosts` edited as
-administrator) so those links work. Put it below
-`# TailscaleHostsSectionEnd` if the file has that section: Tailscale
-rewrites everything between its start and end lines.
+Forgejo's clone and mail links use `forgejo.nullbill.internal`. If a
+device does not resolve it, check that Tailscale's DNS is on there
+([vpn.md](vpn.md#names)); the page's Services entry has the address as a
+fallback.
 
 ## Passwords
 

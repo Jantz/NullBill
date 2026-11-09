@@ -304,8 +304,10 @@ made one.
 9. **Access** page, **Tailscale** tab, **OAuth client**: in the
    Tailscale admin console (<https://console.tailscale.com/admin>), signed
    in with the login from part 1, open **Settings, Trust credentials** and
-   add an **OAuth client** with the scope **Policy file** set to write; the
-   console adds the device scopes it needs. Copy the client ID and the
+   add an **OAuth client** with the scopes **Policy file** and **DNS**, both
+   set to write; the console adds the device scopes Policy file needs. DNS
+   lets setup make names such as `forgejo.nullbill.internal` work on your
+   devices. Copy the client ID and the
    secret (`tskey-client-...`; Tailscale shows the secret once). Paste
    both under **Client ID** and **Client secret** and press
    **Save client**. You can skip Tailscale for now: the vpn stage then waits and
@@ -359,9 +361,12 @@ console, and the Tailscale app on the phone or laptop you will use.
    way in.
 4. On your phone or laptop, sign in to the Tailscale app with the same
    login. Windows, macOS, iOS and Android accept the server's routes by
-   themselves; on Linux run `sudo tailscale set --accept-routes`.
-5. With Tailscale on, open the address the vpn stage printed. Sign in with
-   your page password.
+   themselves; on Linux run `sudo tailscale set --accept-routes`. On
+   Android, if Settings, **Private DNS** names a provider, set it to
+   **Automatic**, or the server's names will not resolve there.
+5. With Tailscale on, open the address the vpn stage printed,
+   `https://nullbill.nullbill.internal:8443` (its number,
+   `https://10.42.1.2:8443`, works too). Sign in with your page password.
 
 ## 11. Close Proxmox to the home network
 
@@ -453,10 +458,6 @@ certificates.
   ([windows-desktop.md](windows-desktop.md)). Local AI models are set up by
   setup itself ([local-models.md](local-models.md)); turn Secure Boot off
   first if you tick them. So is Jellyfin ([media.md](media.md)).
-- Your devices do not resolve the services' names
-  (`forgejo.nullbill.internal`) over Tailscale yet, and the certificate
-  authority is not limited to those names, so your devices should not
-  trust it; open the services by address and accept the warning.
 - Taking the certificate authority's root key offline
   ([step-ca-root-key.md](step-ca-root-key.md)). It is written for a separate
   controller computer; it is not needed for the test.

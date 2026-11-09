@@ -5,6 +5,10 @@ address, so pve-firewall and the router cannot tell people apart. The
 tailnet policy is therefore the only per-person gate, and it grants exactly
 the flows whose `from` names a role: nothing a role's `reach` does not
 cover, and the PVE host and mgmt to the owner role only.
+
+Names: Tailscale's split DNS sends the plan's domain to the router's address
+in the access zone (apply's tailnet stage sets it), so every person's devices
+may ask the router on port 53 and the vpn guest advertises that one address.
 """
 
 import json
@@ -75,6 +79,15 @@ def _grants(plan: dict, model: dict) -> list[dict]:
     return [{"src": [group(role)], "dst": list(dst), "ip": ports} for (role, dst), ports in by_dest.items()]
 
 
+def nameserver(plan_with_notes: dict) -> str | None:
+    """Where tailnet devices ask for the plan's names: the router's leg in
+    the vpn guest's zone. Its dnsmasq answers there already (router.py)."""
+    plan = strip_notes(plan_with_notes)
+    if "vpn" not in plan["guests"]:
+        return None
+    return plan["zones"][plan["guests"]["vpn"]["zone"]]["gateway"]
+
+
 def _page(plan: dict) -> str | None:
     """The page's address, when remote agents can reach it over the tailnet."""
     guests = plan["guests"]
@@ -91,6 +104,8 @@ def _tests(plan: dict, model: dict) -> list[dict]:
     for role in sorted({p["role"] for p in model["people"].values()}):
         login = next(p["login"] for p in model["people"].values() if p["role"] == role)
         accept = [f"{f.dest_cidrs[0]}:{f.port}" for f in _role_flows(plan, model) if f.ref == f"role:{role}" and f.proto == "tcp"]
+        if nameserver(plan):
+            accept.append(f"{nameserver(plan)}:53")
         test = {"src": login, "proto": "tcp", "accept": sorted(set(accept))}
         if role != OWNER:
             test["deny"] = denied
@@ -105,7 +120,11 @@ def routes(plan_with_notes: dict, model: dict) -> list[str]:
     grants above still decide which person reaches which address in them."""
     plan = strip_notes(plan_with_notes)
     zones = {"mgmt" if f.dest == HOST else plan["guests"][f.dest]["zone"] for f in _role_flows(plan, model)}
-    return [plan["zones"][z]["subnet"] for z in plan["zones"] if z in zones]
+    out = [plan["zones"][z]["subnet"] for z in plan["zones"] if z in zones]
+    # The nameserver alone, not its zone: nothing else there is for people.
+    if nameserver(plan) and plan["guests"]["vpn"]["zone"] not in zones:
+        out.append(f"{nameserver(plan)}/32")
+    return out
 
 
 def render_tailnet(plan_with_notes: dict, model: dict) -> dict[str, str]:
@@ -116,6 +135,8 @@ def render_tailnet(plan_with_notes: dict, model: dict) -> dict[str, str]:
         groups.setdefault(group(person["role"]), []).append(person["login"])
     page = _page(plan)
     grants = _grants(plan, model)
+    if nameserver(plan):
+        grants.append({"src": sorted(groups), "dst": [nameserver(plan)], "ip": ["udp:53", "tcp:53"]})
     tag_owners = {TAG: [group(OWNER)]}
     if page:
         tag_owners[AGENT_TAG] = [group(OWNER)]

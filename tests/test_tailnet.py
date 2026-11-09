@@ -7,7 +7,7 @@ from nullbill.errors import NullBillError
 from nullbill.model import build_model, merge
 from nullbill.plan import build_plan
 from nullbill.render import strip_notes
-from nullbill.tailnet import render_tailnet
+from nullbill.tailnet import nameserver, render_tailnet, routes
 
 
 def person(name: str, role: str) -> dict:
@@ -88,6 +88,22 @@ def test_a_remote_agent_tag_reaches_the_page_and_nothing_else(facts):
     assert agent == [{"src": ["tag:nb-agent"], "dst": [page], "ip": ["tcp:8443"]}]
     (test,) = [t for t in p["tests"] if t["src"] == "tag:nb-agent"]
     assert test["accept"] == [f"{page}:8443"] and f"{bare['zones']['mgmt']['host_ip']}:22" in test["deny"]
+
+
+def test_every_person_asks_the_router_for_names_and_nothing_more(facts):
+    """Split DNS sends nullbill.internal to the router's leg in the access
+    zone: every group may reach it on 53, which the vpn guest advertises as
+    a single address, and Tailscale's tests check it for each role."""
+    plan, model = build(facts, "large", {})
+    pol = json.loads(render_tailnet(plan, model)["policy.json"])
+    assert nameserver(plan) == "10.42.6.1" == strip_notes(plan)["zones"]["access"]["gateway"]
+    dns = [g for g in pol["grants"] if g["dst"] == ["10.42.6.1"]]
+    assert dns == [{"src": ["group:nb-default", "group:nb-owner"], "dst": ["10.42.6.1"], "ip": ["udp:53", "tcp:53"]}]
+    for test in pol["tests"]:
+        if test["src"] != "tag:nb-agent":
+            assert "10.42.6.1:53" in test["accept"]
+    assert routes(plan, model)[-1] == "10.42.6.1/32"
+    assert "10.42.6.0/24" not in routes(plan, model)
 
 
 @pytest.mark.parametrize("cls", ["small", "mid", "large"])

@@ -34,9 +34,19 @@
     mode: "0644"
   register: ci_runner_root
 
+# Forgejo's name has the browser CA's certificate: checkout and the runner
+# open it by the name people use.
+- name: Trust the browser CA's root
+  ansible.builtin.copy:
+    dest: /usr/local/share/ca-certificates/nullbill-browser-root.crt
+    content: "{{ ci_runner_browser_root | trim }}\n"
+    mode: "0644"
+  register: ci_runner_browser_root_file
+  when: ci_runner_browser_root | length > 0
+
 - name: Rebuild the system trust store
   ansible.builtin.command: update-ca-certificates
-  when: ci_runner_root.changed
+  when: ci_runner_root.changed or ci_runner_browser_root_file.changed
   changed_when: true
 
 # Jobs run as this user, directly on the throwaway clone.

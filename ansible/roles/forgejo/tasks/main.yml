@@ -38,9 +38,19 @@
     mode: "0644"
   register: forgejo_root
 
+# Forgejo's own name has the browser CA's certificate (nullbill-forgejo.conf),
+# which verify's checks from this guest open.
+- name: Trust the browser CA's root
+  ansible.builtin.copy:
+    dest: /usr/local/share/ca-certificates/nullbill-browser-root.crt
+    content: "{{ forgejo_browser_root | trim }}\n"
+    mode: "0644"
+  register: forgejo_browser_root_file
+  when: forgejo_browser_root | length > 0
+
 - name: Rebuild the system trust store
   ansible.builtin.command: update-ca-certificates
-  when: forgejo_root.changed
+  when: forgejo_root.changed or forgejo_browser_root_file.changed
   changed_when: true
 
 - name: git user

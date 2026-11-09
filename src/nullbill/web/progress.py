@@ -130,8 +130,8 @@ ADVICE = [
     (r"another job is still running", "Wait until the running job finishes; its progress shows on this page."),
     (
         r"OAuth client lacks a scope",
-        "In the Tailscale admin console, give the OAuth client the Policy file (write) and Devices (read) scopes, "
-        "or make a new one, and save it again under Access.",
+        "In the Tailscale admin console, make a new OAuth client with Policy file and DNS, both write "
+        "(Tailscale cannot add scopes to one you have), and save it under Access.",
     ),
     (
         r"Tailscale.*\b(401|403)\b|invalid_client|unauthorized",

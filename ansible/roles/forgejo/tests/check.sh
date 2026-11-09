@@ -31,6 +31,7 @@ print(json.dumps({
     "forgejo_db_password": sys.argv[1],
     "forgejo_browser_cert": open("/tmp/browser/browser.crt").read(),
     "forgejo_browser_key": open("/tmp/browser/browser.key").read(),
+    "forgejo_browser_root": open("/tmp/browser/browser-ca.crt").read(),
 }))
 PY
 converge postgres.yml -e @/tmp/vars.json
@@ -42,13 +43,15 @@ test "$(stat -c '%U %a' /etc/forgejo/admin-password)" = "root 600" || fail "admi
 test -s /etc/forgejo/admin-password || fail "admin password written"
 nb-forgejo admin user list --admin | grep -q nullbill-admin || fail "administrator exists"
 
-start_forgejo /tmp/pki/ca.crt
+start_forgejo /tmp/browser/browser-ca.crt
 url=https://forgejo.nullbill.internal
-tls=(--cacert /tmp/pki/ca.crt)
-pass "forgejo answers over HTTPS with the step-ca certificate"
+tls=(--cacert /tmp/browser/browser-ca.crt)
+pass "a browser that opens the name trusts Forgejo with the browser CA alone"
 curl -fsS --cacert /tmp/browser/browser-ca.crt "https://$guest/api/healthz" >/dev/null \
   || fail "a browser that opens the address trusts Forgejo with the browser CA alone"
 pass "a browser that opens the address gets the browser CA's certificate"
+curl -fsS "$url/api/healthz" >/dev/null || fail "the guest's system store trusts Forgejo's name (verify's checks)"
+pass "the guest's own system store trusts the browser CA"
 basic=$(printf 'nullbill-admin:%s' "$(cat /etc/forgejo/admin-password)" | base64 -w0)
 grep -q '"is_admin":true' <<<"$(curl -fsS "${tls[@]}" -H "Authorization: Basic $basic" "$url/api/v1/user")" \
   || fail "the stored admin password logs in"
@@ -82,7 +85,7 @@ api "$url/api/v1/user/repos" -d '{"name":"probe","private":true}' >/dev/null || 
 ssh-keygen -q -t ed25519 -N '' -f /tmp/id_check
 api "$url/api/v1/user/keys" -d "{\"title\":\"check\",\"key\":\"$(cat /tmp/id_check.pub)\"}" >/dev/null || fail "add an SSH key"
 
-export GIT_SSL_CAINFO=/tmp/pki/ca.crt GIT_AUTHOR_NAME=check GIT_AUTHOR_EMAIL=check@example.internal
+export GIT_SSL_CAINFO=/tmp/browser/browser-ca.crt GIT_AUTHOR_NAME=check GIT_AUTHOR_EMAIL=check@example.internal
 export GIT_COMMITTER_NAME=check GIT_COMMITTER_EMAIL=check@example.internal
 export GIT_SSH_COMMAND="ssh -i /tmp/id_check -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/known_hosts"
 git init -q -b main /tmp/work

@@ -37,7 +37,7 @@ from pathlib import Path
 
 import yaml
 
-from nullbill import browserca, hostroot, lan, legacy, llm
+from nullbill import browserca, hostroot, lan, legacy, llm, names
 from nullbill.apply import NTFY, REMOVALS, SPKI, STAGES
 from nullbill.cli import plan_text, reach_target
 from nullbill.errors import NullBillError
@@ -632,7 +632,7 @@ class App:
 
     def services(self) -> dict:
         path = self.home / "plan.yaml"
-        return services((yaml.safe_load(path.read_text()) or {}) if path.exists() else {})
+        return services((yaml.safe_load(path.read_text()) or {}) if path.exists() else {}, names.active(self.home))
 
     def password(self, name: str) -> str:
         if name not in PASSWORDS:

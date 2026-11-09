@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from conftest import fixture_config
 
-from nullbill import applied, apply, backups, browserca, ci, flows, hostroot, lan, llm
+from nullbill import applied, apply, backups, browserca, ci, flows, hostroot, lan, llm, names
 from nullbill.apply import ApplyError, Context, connection, run_apply
 from nullbill.artifacts import render_all
 from nullbill.errors import NullBillError
@@ -1000,6 +1000,9 @@ def test_ci_stage_bakes_each_golden_image_once_then_runs_the_dispatcher(ctx):
     assert runner["ci_runner_proxy_url"] == "http://10.42.2.10:3128"
     assert runner["ci_runner_dispatcher_url"] == "https://runner-dispatcher.nullbill.internal:8443"
     assert runner["ci_runner_ca_root"].startswith("-----BEGIN CERTIFICATE-----")
+    # Forgejo's name has the browser CA's certificate: clones and the dispatcher trust its root too.
+    browser = (c.home / browserca.DIR / "ca.crt").read_text()
+    assert runner["ci_runner_browser_root"] == browser
     assert playbooks[1][2] == {"agent_ssh_user_ca_key": "ecdsa-sha2-nistp256 AAAAuserca"}
     host = [call[1] for call in c.reach.calls if call[0] == "host"]
     assert host.index("qm status 2030 | grep -q running || qm start 2030") < host.index(
@@ -1011,6 +1014,7 @@ def test_ci_stage_bakes_each_golden_image_once_then_runs_the_dispatcher(ctx):
     assert dispatcher["runner_dispatcher_pve_url"] == "https://pve.nullbill.internal:8006"
     assert dispatcher["runner_dispatcher_node"] == "pve"
     assert dispatcher["runner_dispatcher_pve_token"] == "secret-token"
+    assert dispatcher["runner_dispatcher_forgejo_ca"] == runner["ci_runner_ca_root"].strip() + "\n" + browser
     assert dispatcher["runner_dispatcher_pools"] == [
         {
             "name": "linux-runner",
@@ -1058,6 +1062,17 @@ def test_ci_stage_bakes_each_golden_image_once_then_runs_the_dispatcher(ctx):
     order = [i for i, call in enumerate(c.reach.calls) if call[0] in ("local", "playbook") and call[1] in (tofu[0], "ci-runner.yml")]
     assert len(order) == 2 and c.reach.calls[order[0]][1] == tofu[0]
     assert time.time() - ci.baked_time(c.reach.files[metric]) < 60
+
+    # An image baked with other settings (before the browser CA's root, say)
+    # is baked again however new it is.
+    c.reach.files[f"{apply.BAKING_DIR}/linux-runner.inputs"] = "0" * 64 + "\n"
+    c.reach.calls.clear()
+    apply.stage_ci(c)
+    assert "ci: linux-runner's golden image was baked with other settings; baking it again" in c.log
+    assert "ci-runner.yml" in [call[1] for call in c.reach.calls if call[0] == "playbook"]
+    c.reach.calls.clear()
+    apply.stage_ci(c)
+    assert [call[1] for call in c.reach.calls if call[0] == "playbook"] == []
 
 
 def test_retiring_a_golden_image_destroys_only_its_pool_clones(ctx, monkeypatch):
@@ -1265,6 +1280,9 @@ class FakeTailnet:
         self.refuse = None  # a validate error message
         self.mangle = False  # store something other than what was pushed
         self.pushes = []
+        self.dns = {"example.com": ["192.0.2.53"]}  # split DNS someone else set
+        self.dns_scope = True
+        self.dns_sets = []
 
     def devices(self):
         return self.devices_list
@@ -1281,6 +1299,15 @@ class FakeTailnet:
         self.pushes.append(policy)
         self.live = dict(policy, extra=True) if self.mangle else policy
         self.etag = f"e{len(self.pushes)}"
+
+    def split_dns(self):
+        if not self.dns_scope:
+            raise apply.MissingScope("reading the tailnet's split DNS: the OAuth client lacks a scope (...); give it dns")
+        return dict(self.dns)
+
+    def set_split_dns(self, domain, nameservers):
+        self.dns_sets.append((domain, nameservers))
+        self.dns[domain] = nameservers
 
 
 @pytest.fixture
@@ -1312,11 +1339,36 @@ def test_tailnet_stage_waits_for_an_oauth_client_and_then_pushes_the_policy(ctx,
     want = json.loads(c.files["tailnet/policy.json"])
     assert tailnet.credential == ("kExampleCNTRL", "tskey-client-kExampleCNTRL-secret")
     assert tailnet.pushes == [want] and tailnet.live == want
-    assert c.log[-1] == "tailnet: pushed the tailnet policy; Tailscale ran its tests (1 of 50 tagged devices)"
+    assert c.log[-2] == "tailnet: pushed the tailnet policy; Tailscale ran its tests (1 of 50 tagged devices)"
+    # Names: the domain goes to the router's leg in the access zone; other domains stay.
+    assert c.log[-1] == "tailnet: your devices now look up nullbill.internal names at the router (10.42.6.1)"
+    assert tailnet.dns == {"example.com": ["192.0.2.53"], "nullbill.internal": ["10.42.6.1"]}
+    assert names.active(c.home)
     # In place: not pushed again.
     apply.stage_tailnet(c)
-    assert len(tailnet.pushes) == 1 and c.log[-1] == "tailnet: the tailnet policy is in place (1 of 50 tagged devices)"
+    assert len(tailnet.pushes) == 1 and c.log[-2] == "tailnet: the tailnet policy is in place (1 of 50 tagged devices)"
+    assert len(tailnet.dns_sets) == 1 and c.log[-1] == "tailnet: your devices look up nullbill.internal names at the router (10.42.6.1)"
     assert c.reach.calls == []
+
+
+def test_an_oauth_client_without_dns_leaves_names_off_and_says_how_to_fix_it(ctx, tailnet):
+    c = with_client(ctx("small"))
+    names.record(c.home, "nullbill.internal", "10.42.6.1")
+    tailnet.dns_scope = False
+    apply.stage_tailnet(c)
+    assert tailnet.pushes and tailnet.dns_sets == []
+    assert c.log[-1].startswith(
+        "tailnet: the Tailscale OAuth client cannot change DNS, so your devices reach the services by address only;"
+    )
+    assert "DNS write as well as Policy file" in c.log[-1]
+    assert not names.active(c.home)
+
+
+def test_split_dns_read_back_must_match(ctx, tailnet, monkeypatch):
+    c = with_client(ctx("small"))
+    monkeypatch.setattr(tailnet, "set_split_dns", lambda domain, servers: None)
+    with pytest.raises(ApplyError, match=r"split DNS for nullbill.internal reads back as None, not \[10.42.6.1\]"):
+        apply.stage_tailnet(c)
 
 
 def test_tailnet_stage_stops_apply_before_the_host_when_tailscale_refuses(ctx, tailnet):
@@ -1343,7 +1395,7 @@ def test_tagged_devices_are_counted_from_the_tailnet(ctx, tailnet):
     # The vpn guest already on it counts once.
     tailnet.devices_list[0]["tags"] = ["tag:nb-vpn"]
     apply.stage_tailnet(c)
-    assert c.log[-1].endswith("(50 of 50 tagged devices)")
+    assert c.log[-2].endswith("(50 of 50 tagged devices)")
 
 
 def test_vpn_stage_waits_for_the_policy_then_a_key_then_logs_in_once_and_forgets_it(ctx, tailnet):
@@ -1360,9 +1412,9 @@ def test_vpn_stage_waits_for_the_policy_then_a_key_then_logs_in_once_and_forgets
     (_, playbook, hosts, variables), _ = c.reach.calls
     assert (playbook, hosts) == ("vpn.yml", {"vpn": connection(c, "vpn")})
     assert variables["vpn_tag"] == "tag:nb-vpn" and variables["vpn_auth_key"] == ""
-    # The owner reaches every zone that holds a service, mgmt included; access
-    # holds only the vpn guest itself.
-    assert variables["vpn_routes"] == [z["subnet"] for n, z in c.bare["zones"].items() if n != "access"]
+    # The owner reaches every zone that holds a service, mgmt included; of
+    # access, only the router's leg there, which answers the names.
+    assert variables["vpn_routes"] == [z["subnet"] for n, z in c.bare["zones"].items() if n != "access"] + ["10.42.6.1/32"]
     assert c.log[-1].startswith("vpn: waiting for a Tailscale auth key")
 
     c.secrets.set("tailscale_auth_key", "tskey-auth-example")
@@ -1371,6 +1423,10 @@ def test_vpn_stage_waits_for_the_policy_then_a_key_then_logs_in_once_and_forgets
     assert c.log[-2].startswith("vpn: on the tailnet as nullbill.example-tailnet.ts.net, advertising 10.42.1.0/24")
     assert c.log[-1] == f"vpn: from your devices on the tailnet the page is https://{c.bare['guests']['nullbill']['ip']}:8443"
     assert "tailscale_auth_key" not in c.secrets.data
+    names.record(c.home, "nullbill.internal", "10.42.6.1")
+    c.secrets.set("tailscale_auth_key", "tskey-auth-example")
+    apply.stage_vpn(c)
+    assert c.log[-1] == "vpn: from your devices on the tailnet the page is https://nullbill.nullbill.internal:8443"
 
     apply.stage_vpn(c)
     assert c.reach.calls[-2][3]["vpn_auth_key"] == ""
@@ -1384,7 +1440,7 @@ def test_vpn_routes_cover_only_zones_a_role_reaches(ctx):
     for name, svc in c.model["services"].items():
         for port in svc.get("ports", []):
             port["from"] = [r for r in port["from"] if not r.startswith("role:") or (r == "role:owner" and name == "forgejo")]
-    assert routes(c.plan, c.model) == [c.bare["zones"][c.bare["guests"]["forgejo"]["zone"]]["subnet"]]
+    assert routes(c.plan, c.model) == [c.bare["zones"][c.bare["guests"]["forgejo"]["zone"]]["subnet"], "10.42.6.1/32"]
 
 
 def test_host_stage_rewrites_only_what_changed(ctx):

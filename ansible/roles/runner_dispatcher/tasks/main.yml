@@ -5,6 +5,7 @@
       - runner_dispatcher_pve_token is match('^nb-dispatcher@pve!dispatcher=')
       - runner_dispatcher_pve_url is match('^https://')
       - runner_dispatcher_pve_ca | length > 0
+      - runner_dispatcher_forgejo_ca | length > 0
       - runner_dispatcher_node | length > 0
       - runner_dispatcher_pools | length > 0
     fail_msg: apply supplies the tokens, the PVE details and the pools from the plan
@@ -43,7 +44,7 @@
     group: nb-dispatcher
     mode: "0750"
 
-- name: Tokens and PVE's root CA, readable by the dispatcher only
+- name: Tokens and the roots it checks PVE and Forgejo with, readable by the dispatcher only
   ansible.builtin.copy:
     dest: "/etc/nullbill/dispatcher/{{ item.file }}"
     content: "{{ item.value | trim }}\n"
@@ -54,6 +55,7 @@
     - {file: forgejo-token, value: "{{ runner_dispatcher_forgejo_token }}"}
     - {file: pve-token, value: "{{ runner_dispatcher_pve_token }}"}
     - {file: pve-root-ca.pem, value: "{{ runner_dispatcher_pve_ca }}"}
+    - {file: forgejo-ca.pem, value: "{{ runner_dispatcher_forgejo_ca }}"}
   loop_control:
     label: "{{ item.file }}"
   no_log: true

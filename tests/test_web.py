@@ -477,6 +477,20 @@ def test_services_list_what_the_plan_runs_and_reveal_only_their_passwords(site):
     assert jellyfin["watch"] == "jellyfin" and "Keep a disk" in jellyfin["how"]
     background = ["router", "internet proxy", "certificate authority", "PostgreSQL", "CI dispatcher", "Tailscale entry", "backup server"]
     assert services["background"] == background
+    # Once setup has the tailnet resolving names, each leads with its name
+    # and keeps the address as a fallback.
+    from nullbill import names
+
+    names.record(app.home, "nullbill.internal", "10.42.6.1")
+    items = {s["name"]: s for s in client.call("/api/state")[1]["services"]["items"]}
+    assert items["proxmox"]["url"] == "https://pve.nullbill.internal:8006"
+    assert items["proxmox"]["addresses"] == ["By address: https://10.42.1.254:8006"]
+    assert items["grafana"]["url"] == "https://monitoring.nullbill.internal:3000"
+    assert items["forgejo"]["url"] == "https://forgejo.nullbill.internal/"
+    assert items["forgejo"]["addresses"] == ["Git over SSH: git@forgejo.nullbill.internal", "By address: https://10.42.2.17/"]
+    assert items["jellyfin"]["url"] == "http://jellyfin.nullbill.internal:8096/"
+    assert items["workspace"]["addresses"] == ["ssh root@workspace.nullbill.internal", "By address: ssh root@10.42.3.19"]
+    names.forget(app.home)
     legacy_plan = yaml.safe_load((golden.parent / "large-legacy.plan.yaml").read_text())
     (app.home / "plan.yaml").write_text(yaml.safe_dump(legacy_plan))
     files = next(s for s in client.call("/api/state")[1]["services"]["items"] if s["name"] == "files")

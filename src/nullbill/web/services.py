@@ -1,7 +1,9 @@
 """What the owner opens on the server, for the page's Services card.
 
 Each entry is shown only when the plan has its guest. Addresses come from
-the plan; passwords are the secrets apply keeps, revealed on request only.
+the plan; once the last setup run left the tailnet resolving the plan's
+names (names.py), each entry leads with the name and keeps the address as a
+fallback. Passwords are the secrets apply keeps, revealed on request only.
 `watch` is the instance name monitoring gives the guest (prometheus.yml.j2),
 so the page can say whether it answers.
 """
@@ -36,9 +38,19 @@ BACKGROUND = {
 }
 
 
-def _entries(plan: dict, guests: dict) -> list[dict]:
+def _entries(plan: dict, guests: dict, by_name: bool) -> list[dict]:
+    domain = plan.get("domain", "nullbill.internal")
+
     def ip(name: str) -> str | None:
         return (guests.get(name) or {}).get("ip")
+
+    def at(name: str) -> str | None:
+        """How the owner's devices reach a guest: its name, or its address."""
+        return f"{name}.{domain}" if by_name and ip(name) else ip(name)
+
+    def fallback(name: str, url: str) -> list[str]:
+        """The address form of a URL that leads with the name."""
+        return [f"By address: {url.replace(f'{name}.{domain}', ip(name), 1)}"] if by_name else []
 
     def vmid(name: str) -> int | None:
         return (guests.get(name) or {}).get("vmid")
@@ -50,7 +62,8 @@ def _entries(plan: dict, guests: dict) -> list[dict]:
             "name": "proxmox",
             "title": "Proxmox",
             "what": "Each guest's console, start and stop, snapshots, the host's own updates and its Shell.",
-            "url": f"https://{host}:8006" if host else None,
+            "url": (f"https://pve.{domain}:8006" if by_name else f"https://{host}:8006") if host else None,
+            "addresses": [f"By address: https://{host}:8006"] if host and by_name else [],
             "user": "root, realm Linux PAM",
             "password_note": "Its password is the one you chose when installing Proxmox.",
             "watch": "pve",
@@ -62,7 +75,8 @@ def _entries(plan: dict, guests: dict) -> list[dict]:
                 "name": "grafana",
                 "title": "Grafana",
                 "what": "Metrics and logs of every guest. Open Explore and pick Prometheus or Loki.",
-                "url": f"https://{ip('monitoring')}:3000",
+                "url": f"https://{at('monitoring')}:3000",
+                "addresses": fallback("monitoring", f"https://{at('monitoring')}:3000"),
                 "user": "admin",
                 "password": "grafana",
                 "watch": "monitoring",
@@ -74,8 +88,8 @@ def _entries(plan: dict, guests: dict) -> list[dict]:
                 "name": "forgejo",
                 "title": "Forgejo",
                 "what": "Your Git repositories and CI. Make your own user and add your SSH key to it.",
-                "url": f"https://{ip('forgejo')}/",
-                "addresses": [f"Git over SSH: git@{ip('forgejo')}"],
+                "url": f"https://{at('forgejo')}/",
+                "addresses": [f"Git over SSH: git@{at('forgejo')}", *fallback("forgejo", f"https://{at('forgejo')}/")],
                 "user": "nullbill-admin",
                 "password": "forgejo",
                 "password_note": "Forgejo asks for a new password at the first sign-in; this one then stops working.",
@@ -88,12 +102,12 @@ def _entries(plan: dict, guests: dict) -> list[dict]:
                 "name": "files",
                 "title": "Kept disk files",
                 "what": "The files on the disk you kept, over SMB. Not backed up.",
-                "addresses": [f"\\\\{ip('files')}\\{share}" for share in shares(plan)],
+                "addresses": [f"\\\\{at('files')}\\{share}" for share in shares(plan)] + fallback("files", f"\\\\{at('files')}"),
                 "user": "nbshare",
                 "password": "files",
                 "how": (
                     "Windows: paste the address into File Explorer's address bar. macOS: in Finder, Go, Connect to Server, "
-                    f"as smb://{ip('files')}/<share>. Linux: your file manager's Other Locations, the same way."
+                    f"as smb://{at('files')}/<share>. Linux: your file manager's Other Locations, the same way."
                 ),
                 "watch": "files",
             }
@@ -106,7 +120,8 @@ def _entries(plan: dict, guests: dict) -> list[dict]:
                 "name": media.JELLYFIN,
                 "title": "Jellyfin",
                 "what": "Films, series and music from the disks you kept, in the browser or Jellyfin's apps for phones and TVs.",
-                "url": f"http://{ip(media.JELLYFIN)}:{media.PORT}/",
+                "url": f"http://{at(media.JELLYFIN)}:{media.PORT}/",
+                "addresses": fallback(media.JELLYFIN, f"http://{at(media.JELLYFIN)}:{media.PORT}/"),
                 "user": media.ADMIN_USER,
                 "password": media.JELLYFIN,
                 "how": (
@@ -124,7 +139,7 @@ def _entries(plan: dict, guests: dict) -> list[dict]:
                 "name": "workspace",
                 "title": "Workspace",
                 "what": "Debian for your work and the coding agent, with nothing secret on it.",
-                "addresses": [f"ssh root@{ip('workspace')}"],
+                "addresses": [f"ssh root@{at('workspace')}", *fallback("workspace", f"ssh root@{at('workspace')}")],
                 "how": (
                     f"It takes SSH keys only and has none of yours yet. {shell} pct enter {vmid('workspace')}"
                     " and add your public key to /root/.ssh/authorized_keys."
@@ -148,7 +163,7 @@ def _entries(plan: dict, guests: dict) -> list[dict]:
                 "name": "windows-dev",
                 "title": "Windows desktop",
                 "what": "A Windows VM for you, over Remote Desktop.",
-                "addresses": [f"Remote Desktop: {ip('windows-dev')}"],
+                "addresses": [f"Remote Desktop: {at('windows-dev')}", *fallback("windows-dev", f"Remote Desktop: {at('windows-dev')}")],
                 "how": "Install Windows from the VM's console in Proxmox first and turn on Remote Desktop (windows-desktop.md).",
             }
         )
@@ -181,9 +196,9 @@ def _entries(plan: dict, guests: dict) -> list[dict]:
     return out
 
 
-def services(plan: dict) -> dict:
+def services(plan: dict, by_name: bool = False) -> dict:
     guests = plan.get("guests") or {}
     return {
-        "items": _entries(plan, guests) if guests else [],
+        "items": _entries(plan, guests, by_name) if guests else [],
         "background": [label for name, label in BACKGROUND.items() if name in guests],
     }

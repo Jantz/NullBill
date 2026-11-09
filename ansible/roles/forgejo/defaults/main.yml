@@ -6,17 +6,20 @@ forgejo_version: 15.0.11
 forgejo_sha256: 17b59b5f8a8f968126b7a6fcc1d45d9531228dbf293f172cf5565d2e72e999a3
 forgejo_url: "https://codeberg.org/forgejo/forgejo/releases/download/v{{ forgejo_version }}/forgejo-{{ forgejo_version }}-linux-amd64"
 
-# The name people and runners use. nginx serves HTTPS on 443 with the
-# certificate tls_cert keeps renewed for it (group www-data); Forgejo's own
+# The name people and runners use. nginx serves HTTPS on 443; Forgejo's own
 # SSH server takes port 22, so the guest runs no OpenSSH server.
 forgejo_domain: forgejo.nullbill.internal
 forgejo_tls_name: "{{ forgejo_domain }}"
 forgejo_ssh_port: 22
-# The browser CA's certificate and key (src/nullbill/browserca.py) for
-# browsers, which open Forgejo by address and send no name: nginx's default
-# server answers them with it. apply sets both; empty leaves that server out.
+# The browser CA's certificate (for the name and the address) and key
+# (src/nullbill/browserca.py), and its root: people's browsers and the CI
+# runners open Forgejo by the same name, so nginx answers every request with
+# it, and the root joins the system store here. apply sets all three; left
+# empty, nginx serves the certificate tls_cert keeps renewed for the name
+# (group www-data).
 forgejo_browser_cert: ""
 forgejo_browser_key: ""
+forgejo_browser_root: ""
 
 # The shared PostgreSQL, verified against step-ca's root (sslmode
 # verify-full). apply supplies the password from sops; the postgres role

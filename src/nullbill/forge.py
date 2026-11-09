@@ -1,7 +1,8 @@
 """verify's checks of Forgejo on a deployed host, run inside its guests.
 
-From the forgejo container, through nginx with step-ca's root: Forgejo is
-healthy over HTTPS, refuses sign-up and shows nothing without sign-in.
+From the forgejo container, through nginx by Forgejo's name with the guest's
+system store (step-ca's root and the browser CA's): Forgejo is healthy over
+HTTPS, refuses sign-up and shows nothing without sign-in.
 From the postgres container: every connection Forgejo holds uses TLS.
 """
 
@@ -11,15 +12,13 @@ from nullbill.probe import Runner
 from nullbill.render import strip_notes
 from nullbill.results import Result
 
-ROOT_CA = "/etc/nullbill/tls/root_ca.crt"
-
 
 def _checks(plan: dict) -> list[tuple[str, str, str, str]]:
     """(label, guest, command, expected output)."""
     name = f"forgejo.{plan['domain']}"
-    curl = f"curl -sS --cacert {ROOT_CA} --resolve {name}:443:127.0.0.1"
+    curl = f"curl -sS --resolve {name}:443:127.0.0.1"
     out = [
-        ("forgejo is healthy over HTTPS with its step-ca certificate", "forgejo",
+        ("forgejo is healthy over HTTPS by its name", "forgejo",
          f"{curl} -o /dev/null -w '%{{http_code}}' https://{name}/api/healthz", "200"),
         ("forgejo refuses sign-up", "forgejo",
          f"{curl} https://{name}/user/sign_up | grep -q 'Registration is disabled' && echo disabled", "disabled"),

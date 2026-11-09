@@ -9,6 +9,9 @@ ci_runner_url: "https://code.forgejo.org/forgejo/runner/releases/download/v{{ ci
 ci_runner_dispatcher_url: https://runner-dispatcher.nullbill.internal:8443
 # step-ca's root, PEM: the clone verifies the dispatcher and Forgejo with it.
 ci_runner_ca_root: ""
+# The browser CA's root, PEM (src/nullbill/browserca.py): Forgejo's name
+# has its certificate. apply sets it; empty adds nothing.
+ci_runner_browser_root: ""
 # The build zone's egress proxy, for jobs that fetch from the internet.
 ci_runner_proxy_url: ""
 ci_runner_no_proxy: ".nullbill.internal,localhost,127.0.0.1"

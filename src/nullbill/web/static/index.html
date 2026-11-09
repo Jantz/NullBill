@@ -415,7 +415,7 @@
         <div class="two-col">
           <form id="tailscale-client-form" class="stack substep" novalidate>
             <h3><span class="step-dot small" id="ts-dot-client" aria-hidden="true">1</span>OAuth client</h3>
-            <p class="muted small">Each setup run uses it to put your access policy in place. In the Tailscale admin console: <b>Settings, Trust credentials</b>, add an OAuth client with <b>Policy file</b> write.</p>
+            <p class="muted small">Each setup run uses it to put your access policy in place. In the Tailscale admin console: <b>Settings, Trust credentials</b>, add an OAuth client with <b>Policy file</b> and <b>DNS</b>, both write. DNS makes names such as forgejo.nullbill.internal work on your devices.</p>
             <p id="tailscale-client-saved" class="callout success compact" hidden><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg><span>Saved. Paste a new one to replace it.</span></p>
             <label class="field"><span class="field-label">Client ID</span><input id="tailscale-client-id" autocomplete="off" spellcheck="false" aria-describedby="tailscale-client-result"></label>
             <label class="field"><span class="field-label">Client secret</span><input id="tailscale-client-secret" type="password" autocomplete="off" placeholder="tskey-client-…" aria-describedby="tailscale-client-result"></label>
@@ -429,6 +429,7 @@
             <div class="row"><button type="submit" class="btn secondary">Save auth key</button><p class="feedback" id="vpn-result" role="status"></p></div>
           </form>
         </div>
+        <p class="muted small">On your devices, names such as <code>forgejo.nullbill.internal</code> work once a setup run had DNS on the client. On Android, set <b>Settings, Private DNS</b> to <b>Automatic</b> if it names a provider; on Linux, run <code>sudo tailscale set --accept-routes --accept-dns</code>. Addresses keep working either way.</p>
         <details id="tailnet-details" hidden><summary>The Tailscale policy setup puts in place</summary><pre id="tailnet-policy" tabindex="0" aria-label="Tailscale policy"></pre></details>
       </section>
 
