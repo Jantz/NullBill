@@ -119,6 +119,36 @@ class ApiError extends Error {
   constructor(message, status) { super(message); this.status = status; }
 }
 
+// The digest of the page's files this script came with; every answer names
+// the server's. They differ after Update NullBill restarted the server under
+// an open page, whose script cannot read the new server's answers: the page
+// reloads itself, once per version, unless that would lose what the owner is
+// in the middle of. Then it says so, and reloads when asked or when it can.
+const SHELL = (document.querySelector('meta[name="nb-shell"]') || {}).content || "";
+const RELOADED = "nb-reloaded";
+
+function midWork() {
+  const active = document.activeElement;
+  const typing = active && active.matches("input:not([type=checkbox]):not([type=radio])") && active.value;
+  const draft = [...document.querySelectorAll("textarea")].some((t) => t.value.trim());
+  return Boolean(choicesDirty() || document.querySelector("dialog[open]") || typing || draft);
+}
+
+// True when the page is on its way out and the answer need not be read.
+function outdated(shell) {
+  let tried = shell;
+  try { tried = sessionStorage.getItem(RELOADED); } catch { /* no storage: never reload unasked */ }
+  if (tried !== shell && !midWork()) {
+    try {
+      sessionStorage.setItem(RELOADED, shell);
+      location.reload();
+      return true;
+    } catch { /* say so instead */ }
+  }
+  show("outdated", true);
+  return false;
+}
+
 async function api(path, body) {
   const options = body === undefined ? {} : {
     method: "POST",
@@ -133,6 +163,8 @@ async function api(path, body) {
     throw new ApiError("The page cannot reach the NullBill server. If you just updated NullBill, wait a few seconds and try again.", 0);
   }
   connection(true);
+  const shell = response.headers.get("X-NullBill-Shell");
+  if (SHELL && shell && shell !== SHELL && outdated(shell)) return new Promise(() => {});
   let data = {};
   try { data = await response.json(); } catch { /* not JSON */ }
   if (response.status === 401 && path !== "/api/login") {
@@ -3153,6 +3185,7 @@ document.addEventListener("DOMContentLoaded", () => {
   setDock(!narrow.matches && store.get("nb-dock") !== "closed");
   placeChat();
   $("toast-close").addEventListener("click", () => toast(""));
+  $("outdated-reload").addEventListener("click", () => location.reload());
   // Logs and the plan: each scrolls on its own and copies whole.
   for (const pre of document.querySelectorAll("#plan, #tailnet-policy")) outputBox(pre);
   window.addEventListener("hashchange", () => route(true));

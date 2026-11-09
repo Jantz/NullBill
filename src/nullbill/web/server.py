@@ -11,6 +11,7 @@ server restarts (an update restarting it, say), and the restarted server
 shows it again.
 """
 
+import functools
 import hashlib
 import hmac
 import http.server
@@ -122,6 +123,8 @@ STATIC = {
     "/icon-512.png": ("icon-512.png", "image/png"),
     "/icon-maskable-512.png": ("icon-maskable-512.png", "image/png"),
 }
+SHELL_HEADER = "X-NullBill-Shell"
+SHELL_META = b'<meta name="nb-shell" content="">'
 # The page's agent (web/chat.py): the CLI, the user it runs as, its home,
 # and the socket its tools call the page on.
 AGENT_COMMAND = ["/usr/local/bin/claude"]
@@ -140,6 +143,19 @@ SECURITY_HEADERS = {
     "Strict-Transport-Security": "max-age=31536000",
     "Cache-Control": "no-store",
 }
+
+
+@functools.cache
+def shell() -> str:
+    """A digest of the page's own files, the same for as long as this server
+    runs. The page is served with it (SHELL_META) and every answer carries
+    it (SHELL_HEADER). An open page that reads another digest was loaded
+    from an earlier NullBill, before Update NullBill restarted the server:
+    its script cannot read this server's answers, so it reloads itself."""
+    digest = hashlib.sha256()
+    for name, _ in STATIC.values():
+        digest.update(resources.files("nullbill.web").joinpath("static", name).read_bytes())
+    return digest.hexdigest()[:16]
 
 
 def _write_private(path: Path, text: str) -> None:
@@ -1561,7 +1577,8 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
 
         def send(self, code: int, body: bytes, kind: str, headers: dict | None = None) -> None:
             self.send_response(code)
-            for name, value in (SECURITY_HEADERS | {"Content-Type": kind, "Content-Length": str(len(body))} | (headers or {})).items():
+            fixed = SECURITY_HEADERS | {SHELL_HEADER: shell(), "Content-Type": kind, "Content-Length": str(len(body))}
+            for name, value in (fixed | (headers or {})).items():
                 self.send_header(name, value)
             self.end_headers()
             self.wfile.write(body)
@@ -1592,6 +1609,8 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
             if path in STATIC:
                 name, kind = STATIC[path]
                 body = resources.files("nullbill.web").joinpath("static", name).read_bytes()
+                if path == "/":
+                    body = body.replace(SHELL_META, SHELL_META.replace(b'""', f'"{shell()}"'.encode()))
                 return self.send(200, body, kind if kind.startswith("image/") and kind != "image/svg+xml" else f"{kind}; charset=utf-8")
             # Public: a certificate, which a phone downloads to install.
             if path == ROOT_CERT:

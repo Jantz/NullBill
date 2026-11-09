@@ -136,6 +136,21 @@ def test_page_and_headers(site):
     assert client.call("/app.js")[0] == 200
 
 
+def test_every_answer_names_the_page_version_the_page_was_served_with(site):
+    # An open page compares the two and reloads itself after an update.
+    app, client = site
+    _, page = client.call("/")
+    served = re.search(r'<meta name="nb-shell" content="([0-9a-f]{16})">', page).group(1)
+    assert served == web.shell()
+    assert client.call("/api/state")[0] == 200 and client.headers["X-NullBill-Shell"] == served
+    assert client.call("/api/choices", {})[0] == 401 and client.headers["X-NullBill-Shell"] == served
+    sign_in(app, client)
+    assert client.call("/api/state")[1]["auth"] and client.headers["X-NullBill-Shell"] == served
+    # The digest is of the files as they are in the repository, not of the served page.
+    raw = (Path(web.__file__).parent / "static" / "index.html").read_text()
+    assert '<meta name="nb-shell" content="">' in raw
+
+
 def test_the_root_certificate_downloads_without_signing_in_once_setup_made_it(site):
     app, client = site
     conn = http.client.HTTPSConnection("127.0.0.1", client.port, context=client.tls, timeout=30)

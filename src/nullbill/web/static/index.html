@@ -6,6 +6,7 @@
 <meta name="color-scheme" content="dark light">
 <meta name="theme-color" content="#07090d">
 <meta name="description" content="Your NullBill server and its agent.">
+<meta name="nb-shell" content="">
 <title>NullBill</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
@@ -736,6 +737,11 @@
     <div class="row end"><button class="btn">Close</button></div>
   </form>
 </dialog>
+
+<div id="outdated" class="toast stale" role="alert" hidden>
+  <span>NullBill was updated while this page was open. Reload the page to go on; changes you have not saved here are lost.</span>
+  <button type="button" id="outdated-reload" class="btn small">Reload</button>
+</div>
 
 <div id="toast" class="toast" role="alert" hidden>
   <span id="toast-text"></span>
