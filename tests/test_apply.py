@@ -973,6 +973,7 @@ def test_tofu_stops_before_deleting_a_guest_until_the_owner_confirms(ctx):
     assert ["tofu", "apply", "-input=false", "-no-color", "nullbill.tfplan"] not in local
     assert json.loads((c.home / "removals.json").read_text()) == {"guests": ["windows-dev"], "gone": ["windows-dev"]}
     assert not (c.home / "tofu" / "nullbill.tfplan").exists()
+    assert not (c.home / "guests.json").exists()
     # Run setup again without confirming: still nothing.
     with pytest.raises(ApplyError, match="setup would delete windows-dev"):
         apply.stage_tofu(c)
@@ -992,6 +993,8 @@ def test_tofu_stops_before_deleting_a_guest_until_the_owner_confirms(ctx):
     assert "tofu: deleting windows-dev with everything on its disk, as you confirmed" in c.log
     assert ["tofu", "apply", "-input=false", "-no-color", "nullbill.tfplan"] in [call[1] for call in c.reach.calls if call[0] == "local"]
     assert not (c.home / "removals.json").exists()
+    # What the server now has, for the page to say what a changed choice would delete.
+    assert json.loads((c.home / "guests.json").read_text()) == {"guests": sorted(c.bare["guests"])}
 
 
 def test_a_plan_that_deletes_no_guest_clears_a_waiting_removal(ctx):

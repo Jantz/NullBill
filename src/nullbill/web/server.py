@@ -38,15 +38,15 @@ from pathlib import Path
 import yaml
 
 from nullbill import browserca, hostroot, lan, legacy, llm, names, owner
-from nullbill.apply import DISKS_FILE, NTFY, REMOVALS, SPKI, STAGES
+from nullbill.apply import DISKS_FILE, GUESTS, NTFY, REMOVALS, SPKI, STAGES
 from nullbill.cli import plan_text, reach_target
 from nullbill.errors import NullBillError
 from nullbill.model import build_model
-from nullbill.plan import guest_storage
+from nullbill.plan import guest_storage, planned_services
 from nullbill.probe import ssh_run
 from nullbill.secretfile import Codec, Secrets, Sops
 from nullbill.tailnet import render_tailnet
-from nullbill.web import chat, progress
+from nullbill.web import chat, progress, workloads
 from nullbill.web.services import PASSWORDS, services, shares
 
 SESSION_S = 12 * 3600
@@ -54,7 +54,9 @@ APPLY_STAGES = [name for name, _ in STAGES]
 MIN_PASSWORD = 12
 LOCKOUT_FAILURES = 10
 LOCKOUT_S = 300
-WORKLOADS = ["agents", "linux-ci", "inference", "media", "windows-ci", "windows-dev"]
+WORKLOADS = workloads.WORKLOADS
+# Ticked on the page before the owner has saved any choice.
+DEFAULT_WORKLOADS = ["agents", "linux-ci"]
 # upgrade moves NullBill itself to main's newest commit (nullbill/upgrade.py).
 ACTIONS = {"probe", "apply", "verify", "upgrade"}
 # Closing the LAN to Proxmox (nullbill/lan.py), run as apply's host stage.
@@ -508,7 +510,7 @@ class App:
         config = self.config() or {}
         login = (owner.person(config) or {}).get("login", "")
         return {
-            "workloads": config.get("intent", {}).get("workloads", ["agents", "linux-ci"]),
+            "workloads": config.get("intent", {}).get("workloads", DEFAULT_WORKLOADS),
             "backups": config.get("services", {}).get("pbs", {}).get("enabled", True),
             "console": config.get("host", {}).get("console", {}).get("enabled", False),
             "owner_login": login,
@@ -601,7 +603,7 @@ class App:
             )
         return out
 
-    def _disk_pins(self, config: dict, chosen: dict) -> dict:
+    def _disk_pins(self, config: dict, chosen: dict, confirm: bool = True) -> dict:
         pins = dict(config.get("disks") or {})
         known = {d["id"]: d for d in self.disks()}
         for disk_id, want in chosen.items():
@@ -624,7 +626,7 @@ class App:
                 old = pins.get(disk_id) if current["choice"] == "keep" else None
                 pin = {k: v for k, v in (old or {}).items() if k not in ("mode", "discard_journal")} | {"use": "legacy"}
                 if rw:
-                    pin |= {"mode": "rw"} | self._discard_pin(disk_id, current, pin, discard, want)
+                    pin |= {"mode": "rw"} | self._discard_pin(disk_id, current, pin, discard, want, confirm)
                 pins[disk_id] = pin
             elif choice in ("erase", "copy"):
                 if choice == "copy" and not current["kept"]:
@@ -633,7 +635,7 @@ class App:
                     raise NullBillError(f"{disk_id}: the guest storage is not LVM or LVM-thin, so the page cannot copy a disk there")
                 # Also when only what it becomes changes: a backup disk made
                 # storage loses its backups.
-                if str(want.get("confirm", "")).strip() != current["confirm"]:
+                if confirm and str(want.get("confirm", "")).strip() != current["confirm"]:
                     raise NullBillError(f"{disk_id}: type {current['confirm']}, the end of its name, to erase everything on it")
                 pin = {"use": DISK_USES[use_for], "wipe": True}
                 if choice == "copy":
@@ -646,7 +648,7 @@ class App:
                 raise NullBillError(f"{disk_id}: choose {DISK_CHOICE_TEXT}")
         return pins
 
-    def _discard_pin(self, disk_id: str, current: dict, pin: dict, discard: bool, want: dict) -> dict:
+    def _discard_pin(self, disk_id: str, current: dict, pin: dict, discard: bool, want: dict, confirm: bool = True) -> dict:
         """Changing files on a kept disk, as the last probe found it: refused
         with what to do while Windows has not left it fit, and, when the
         owner says what Windows left unfinished may go, the pin that names
@@ -668,7 +670,7 @@ class App:
             )
         if not write["can_discard"]:
             raise NullBillError(f"{disk_id}: its journal could not be read; read the hardware again")
-        if not write["discard"] and str(want.get("discard_confirm", "")).strip() != current["confirm"]:
+        if confirm and not write["discard"] and str(want.get("discard_confirm", "")).strip() != current["confirm"]:
             raise NullBillError(f"{disk_id}: type {current['confirm']}, the end of its name, to discard what Windows left unfinished on it")
         disk = next(d for d in (self.facts() or {}).get("disks", []) if d["id"] == disk_id)
         return {"discard_journal": legacy.journals(self._kept_parts(disk, pin))}
@@ -742,11 +744,104 @@ class App:
         planned = (yaml.safe_load(plan.read_text()) or {}).get("guests") or {} if plan.is_file() else {}
         return [n for n in names if not (n in gone and n in planned)]
 
+    def planned_guests(self) -> set[str] | None:
+        """The guests of the saved choices; None without a probe or choices."""
+        config, facts = self.config(), self.facts()
+        if config is None or facts is None:
+            return None
+        try:
+            return set(planned_services(build_model(config), facts))
+        except NullBillError:
+            return None
+
+    def existing_guests(self) -> set[str] | None:
+        """The guests on the server: those of the last OpenTofu apply that
+        finished (apply.GUESTS). A server built before apply kept that
+        record follows the saved choices until they change, which is when
+        save_choices writes it down. None when nothing says."""
+        path = self.home / GUESTS
+        try:
+            if path.is_file():
+                return {str(n) for n in json.loads(path.read_text())["guests"]}
+        except (ValueError, KeyError, TypeError):
+            return None
+        if self.built() and not self.config_changed():
+            return self.planned_guests()
+        return None
+
+    def planned_removals(self) -> list[str]:
+        """Guests on the server that the saved choices no longer plan: the
+        next setup run would delete them, and stops to ask first."""
+        existing, planned = self.existing_guests(), self.planned_guests()
+        if existing is None or planned is None:
+            return []
+        return sorted(existing - planned)
+
+    def options(self, config: dict | None = None) -> dict | None:
+        """What to run, choice by choice (workloads.options), for the saved
+        choices or for `config`, the form as it stands on the page."""
+        if config is None:
+            config = self.config() or {"intent": {"workloads": DEFAULT_WORKLOADS}}
+        try:
+            model = build_model(config)
+        except NullBillError as exc:
+            return {"items": [], "memory": None, "errors": exc.messages, "adds": None, "removes": None, "advice": []}
+        out = workloads.options(model, self.facts(), self.existing_guests())
+        other = "Turn off a choice, or change one, until this no longer applies."
+        out["advice"] = list(dict.fromkeys(progress.advice(m, default=other) for m in out["errors"]))
+        return out
+
+    def preview(self, body: dict) -> dict | None:
+        """The page's form, not saved: what it would come to."""
+        return self.options(self._choices_config(body, saving=False))
+
+    def removal_notes(self, names: list[str]) -> dict[str, str]:
+        """What deleting each of those guests loses."""
+        if not names:
+            return {}
+        try:
+            model = build_model(self.config() or {})
+        except NullBillError:
+            return {}
+        return {name: workloads.loss(name, model) for name in names}
+
+    def confirm_removals(self, seen: list[str] | None) -> None:
+        """The owner pressed Delete and run setup: REMOVALS names every guest
+        the page showed them (`seen`), those the last run stopped before
+        deleting and those the saved choices no longer plan. apply deletes
+        only guests it finds named there (apply.check_removals)."""
+        stopped, planned = self.removals(), self.planned_removals()
+        if not stopped and not planned:
+            raise NullBillError("setup is not waiting to delete anything")
+        if set(planned) - set(stopped):
+            if seen is None or set(seen) != {*stopped, *planned}:
+                names = ", ".join(sorted({*stopped, *planned}))
+                raise NullBillError(f"what setup would delete is now {names}; look at it again under Setup, Build, before you confirm")
+            path = self.home / REMOVALS
+            try:
+                gone = json.loads(path.read_text()).get("gone", []) if path.is_file() else []
+            except (ValueError, AttributeError):
+                gone = []
+            names = sorted({*stopped, *planned})
+            _write_private(path, json.dumps({"guests": names, "gone": sorted({*gone, *planned})}, indent=2) + "\n")
+
     def save_choices(self, body: dict) -> None:
+        config = self._choices_config(body)
+        build_model(config)  # validates against the schema before anything is written
+        existing = self.existing_guests()
+        if existing is not None and not (self.home / GUESTS).exists():
+            _write_private(self.home / GUESTS, json.dumps({"guests": sorted(existing)}, indent=2) + "\n")
+        _write_private(self.home / "config.yaml", yaml.safe_dump(config, sort_keys=False))
+
+    def _choices_config(self, body: dict, saving: bool = True) -> dict:
+        """config.yaml with the page's form put into it. Saving checks what
+        only a save needs: the owner's login and each erase confirmation."""
         workloads = [w for w in body.get("workloads", []) if w in WORKLOADS]
         login = str(body.get("owner_login", "")).strip()
         if not re.fullmatch(r"[^@\s]+@[^@\s]+", login):
-            raise NullBillError("your Tailscale login is the email address you sign in to Tailscale with")
+            if saving:
+                raise NullBillError("your Tailscale login is the email address you sign in to Tailscale with")
+            login = "owner@example.internal"
         install = self.install()
         if not install.get("host"):
             raise NullBillError("install.json is missing; run install.sh on the Proxmox host again")
@@ -777,13 +872,12 @@ class App:
         if isinstance(body.get("gpus"), dict):
             self._gpu_pins(config, body["gpus"])
         if isinstance(body.get("disks"), dict):
-            pins = self._disk_pins(config, body["disks"])
+            pins = self._disk_pins(config, body["disks"], confirm=saving)
             if pins:
                 config["disks"] = pins
             else:
                 config.pop("disks", None)
-        build_model(config)  # validates against the schema before anything is written
-        _write_private(self.home / "config.yaml", yaml.safe_dump(config, sort_keys=False))
+        return config
 
     def _gpu_pins(self, config: dict, answers: dict) -> None:
         """Pin the VRAM the owner gave, in GB, for GPUs the probe could not read."""
@@ -933,7 +1027,7 @@ class App:
             raise NullBillError("send enabled: true or false")
         key, operator, target = hostroot.public_key(self.home), self.guest_ip("operator"), self.host_target()
         if enabled and not (key and operator and target):
-            raise NullBillError("the agent's key comes from the operator: choose AI agents under Setup, What to run, and run setup first")
+            raise NullBillError("the agent's key comes from the operator: run setup first")
         rc, _, err = self.host_run(target, hostroot.command(hostroot.line(key, operator) if enabled else None)) if target else (0, "", "")
         if rc != 0 and enabled:
             raise NullBillError(f"could not give the agent's key root on the host: {err.strip()[:200] or f'exit {rc}'}")
@@ -983,14 +1077,14 @@ class App:
         return client.removeprefix("::ffff:") == self.network()[1]
 
     # Jobs.
-    def start(self, action: str, stage: str | None = None, client: str = "", by: str = "owner") -> Job:
+    def start(self, action: str, stage: str | None = None, client: str = "", by: str = "owner", guests: list[str] | None = None) -> Job:
         if action == "keep-lan-closed" and not self.via_vpn(client):
             raise NullBillError("press Keep it closed on the page opened over Tailscale; that press is what shows Tailscale works")
         fixed = LAN_ACTIONS | SCHEDULED | REMOVE_ACTIONS
         if action not in ACTIONS and action not in fixed:
             raise NullBillError(f"unknown action {action!r}")
-        if action in REMOVE_ACTIONS and not self.removals():
-            raise NullBillError("setup is not waiting to delete anything")
+        if action in REMOVE_ACTIONS:
+            self.confirm_removals(guests)
         with self.lock:
             if any(j.state() == "running" for j in self.jobs.values()):
                 raise NullBillError("another job is still running")
@@ -1179,6 +1273,8 @@ class App:
         if not authed:
             return {"auth": False, "has_password": has_password}
         latest = max(self.jobs.values(), key=lambda j: j.started, default=None)
+        stopped = self.removals()
+        removals = [*stopped, *(n for n in self.planned_removals() if n not in stopped)]
         return {
             "auth": True,
             "has_password": has_password,
@@ -1196,8 +1292,10 @@ class App:
             "files": self.files(),
             "services": self.services(),
             "gateway": self.gateway(),
-            "removals": self.removals(),
-            "workloads": WORKLOADS,
+            "removals": removals,
+            "removals_stopped": bool(stopped),
+            "removal_notes": self.removal_notes(removals),
+            "options": self.options(),
             "plan": self.plan(),
             "alerts": self.alerts() if has_password else None,
             "agent_credential": self.agent_credential(),
@@ -1436,6 +1534,8 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 if self.path == "/api/choices":
                     app.save_choices(body)
                     return self.json(200, {"ok": True, "plan": app.plan()})
+                if self.path == "/api/choices/preview":
+                    return self.json(200, app.preview(body))
                 if self.path == "/api/alerts":
                     app.save_alerts(body)
                     return self.json(200, {"ok": True, "alerts": app.alerts()})
@@ -1493,7 +1593,9 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                     return self.json(200, app.job_view(app.stop(match[1])))
                 if self.path == "/api/jobs":
                     stage = body.get("stage")
-                    job = app.start(str(body.get("action")), str(stage) if stage else None, self.client())
+                    seen = body.get("guests")
+                    guests = [str(n) for n in seen] if isinstance(seen, list) else None
+                    job = app.start(str(body.get("action")), str(stage) if stage else None, self.client(), guests=guests)
                     return self.json(200, app.job_view(job))
                 if self.path == "/api/logout":
                     with app.lock:

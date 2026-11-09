@@ -58,6 +58,9 @@ GUEST_RESOURCES = ("proxmox_virtual_environment_vm", "proxmox_virtual_environmen
 PLAN_FILE = "nullbill.tfplan"
 # Guests the last apply stopped before deleting, until the owner confirms.
 REMOVALS = "removals.json"
+# The guests the last OpenTofu apply that finished left on the server, so
+# the page can say what a changed choice would delete before setup runs.
+GUESTS = "guests.json"
 
 
 class Reach(Protocol):
@@ -598,6 +601,7 @@ def run_tofu(ctx: Context, stage: str, init: bool, replace: tuple[str, ...] = ()
         rc, _ = ctx.reach.local(["tofu", "apply", "-input=false", "-no-color", PLAN_FILE], work, env)
         if rc != 0:
             raise ApplyError(stage, f"tofu apply failed (exit {rc})")
+        (ctx.home / GUESTS).write_text(json.dumps({"guests": sorted(ctx.bare["guests"])}, indent=2) + "\n")
     finally:
         planned.unlink(missing_ok=True)
 

@@ -1,6 +1,7 @@
 """Load catalog.yaml and config.yaml, validate both, merge them."""
 
 import copy
+import functools
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -11,13 +12,21 @@ from jsonschema import Draft202012Validator
 from nullbill.errors import NullBillError
 
 
-def _data(name: str) -> Any:
+@functools.cache
+def _parsed(name: str) -> Any:
     return yaml.safe_load(resources.files("nullbill.data").joinpath(name).read_text())
 
 
+def _data(name: str) -> Any:
+    """A data file, parsed once: the page builds the model several times
+    for each request, and parsing the catalog took most of that time. A
+    copy, since the merged model is changed after it is built."""
+    return copy.deepcopy(_parsed(name))
+
+
+@functools.cache
 def _validator(definition: str) -> Draft202012Validator:
-    schema = _data("schema.yaml")
-    return Draft202012Validator({**schema, "$ref": f"#/$defs/{definition}"})
+    return Draft202012Validator({**_parsed("schema.yaml"), "$ref": f"#/$defs/{definition}"})
 
 
 def _check(definition: str, doc: Any, source: str) -> None:

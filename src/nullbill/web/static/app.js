@@ -6,15 +6,6 @@
 // server works, then done or the reason it was refused. The agent proposes;
 // the page decides by the owner's access mode and runs what is approved.
 
-const LABELS = {
-  "agents": ["AI agents", "The operator and a workspace container for coding agents."],
-  "linux-ci": ["Linux CI runners", "Forgejo Actions jobs in throwaway Linux VMs."],
-  "inference": ["Local AI models", "On the graphics card. Needs more memory."],
-  "media": ["Media server", "Jellyfin plays the films, series and music on the disks you keep."],
-  "windows-ci": ["Windows CI runners", "Needs a Windows ISO and more memory."],
-  "windows-dev": ["Windows desktop VM", "Upload the Windows 11 ISO in Proxmox first; you install Windows in it."],
-};
-
 const VIEWS = ["overview", "services", "activity", "alerts", "setup", "access", "agent"];
 const ALIASES = {home: "overview", agents: "agent", "": ""};
 const STEPS = ["hardware", "choices", "plan", "build"];
@@ -80,6 +71,9 @@ const store = {
 
 let state = null;          // the last /api/state
 let savedChoices = null;   // the choices form as last saved
+let optionsView = null;    // what the choices come to: state.options, or the server's answer for the unsaved form
+let previewTimer = null;
+let previewSeq = 0;
 let statusTimer = null;
 let lastStatus = null;     // the last /api/status
 let job = null;            // the followed run: {id, view, node, offset, timer, watched, feedback}
@@ -271,10 +265,12 @@ function markdown(text) {
 }
 
 // Dialogs.
-function confirmDialog({title, text, yes, word, danger = true}) {
+function confirmDialog({title, text, points, yes, word, danger = true}) {
   const dialog = $("confirm");
   $("confirm-title").textContent = title;
   $("confirm-text").textContent = text;
+  $("confirm-points").replaceChildren(...(points || []).map((t) => li(t)));
+  show("confirm-points", Boolean(points && points.length));
   const yesButton = $("confirm-yes");
   yesButton.textContent = yes;
   yesButton.className = `btn ${danger ? "danger" : "primary"}`;
@@ -597,11 +593,169 @@ function option(input, title, desc, why, cls) {
       why ? make("span", {className: "option-why", textContent: why}) : null));
 }
 
-function renderWorkloads(st) {
-  $("workload-tiles").replaceChildren(...st.workloads.map((name) => {
-    const [title, help] = LABELS[name] || [name, ""];
-    return option(make("input", {type: "checkbox", value: name, checked: st.choices.workloads.includes(name)}), title, help);
-  }));
+// What to run: a row per choice. The server says what each makes, takes
+// and deletes (web/workloads.py), for the saved choices in /api/state and
+// for the form as it stands through /api/choices/preview, so the meter and
+// each row follow every tick before anything is saved.
+function optionRow(item) {
+  const id = `opt-${item.name}`;
+  const input = make("input", {type: "checkbox", id, value: item.name});
+  input.setAttribute("aria-describedby", `${id}-desc ${id}-state ${id}-note`);
+  const memory = make("span", {className: "opt-num opt-memory"});
+  const disk = make("span", {className: "opt-num opt-disk"});
+  memory.dataset.label = "Memory";
+  disk.dataset.label = "Disk";
+  const row = make("div", {className: "opt"},
+    make("label", {className: "opt-main"}, input, make("span", {className: "opt-text"},
+      make("span", {className: "opt-title", textContent: item.title}),
+      make("span", {className: "opt-desc", id: `${id}-desc`, textContent: item.what}))),
+    memory,
+    disk,
+    make("span", {className: "opt-state", id: `${id}-state`}),
+    make("p", {className: "opt-note", id: `${id}-note`, hidden: true}),
+    make("p", {className: "opt-change", role: "status", hidden: true}),
+    make("details", {className: "opt-details"}, make("summary", {textContent: "What it makes, needs and deletes"}), make("dl", {className: "opt-facts"})));
+  row.dataset.name = item.name;
+  return row;
+}
+
+function optionsHead() {
+  return make("div", {className: "opts-head", ariaHidden: "true"}, make("span", {textContent: "Choice"}),
+    make("span", {className: "opt-num", textContent: "Memory"}), make("span", {className: "opt-num", textContent: "Disk"}), make("span", {textContent: "State"}));
+}
+
+// The rows are built once and then only repainted, so a refresh closes no
+// details and moves no focus.
+function renderOptions(st) {
+  const items = st.options ? st.options.items : [];
+  const have = [...$("pick").querySelectorAll(".opt")].map((r) => r.dataset.name).join();
+  if (have !== items.map((i) => i.name).join()) {
+    $("workload-rows").replaceChildren(optionsHead(), ...items.filter((i) => !i.extra).map(optionRow));
+    $("extra-rows").replaceChildren(optionsHead(), ...items.filter((i) => i.extra).map(optionRow));
+  }
+  for (const item of items) {
+    const input = $(`opt-${item.name}`);
+    input.checked = item.chosen;
+    // What cannot work here can still be turned off, never on.
+    input.disabled = Boolean(item.blocked) && !item.chosen;
+  }
+  optionsView = st.options;
+  paintOptions();
+}
+
+function guestLine(g) {
+  const size = `${g.cores} core${g.cores === 1 ? "" : "s"}, ${gib(g.memory_mib)} memory, ${g.disk_gib} GiB disk`;
+  if (g.kind === "vm-pool") return `${g.name}: a VM per job, ${g.count} at a time, each ${size}; one more disk for their image`;
+  return `${g.name}: a ${g.kind === "vm" ? "VM" : "container"}, ${size}`;
+}
+
+// What a tick comes to on the server. kind: on, add, delete, change, off, chosen.
+function optionState(item, checked) {
+  if (item.blocked && !checked) return {kind: "blocked", dot: "", text: "Not possible"};
+  const here = item.on_server;
+  if (!here) {
+    // No guest of its own, or no setup run yet to compare with.
+    const saved = Boolean((state.options.items.find((i) => i.name === item.name) || {}).chosen);
+    if (!built()) return checked ? {kind: "chosen", dot: "", text: "Chosen"} : {kind: "off", dot: "", text: "Off"};
+    if (checked === saved) return checked ? {kind: "on", dot: "good", text: "On"} : {kind: "off", dot: "", text: "Off"};
+    return {kind: "change", dot: "warn", text: checked ? "Will be turned on" : "Will be turned off"};
+  }
+  if (checked && here.length === item.guests.length) return {kind: "on", dot: "good", text: "On the server"};
+  if (checked) return {kind: "add", dot: "warn", text: "Will be added"};
+  if (here.length) return {kind: "delete", dot: "bad", text: "Will be deleted"};
+  return {kind: "off", dot: "", text: "Off"};
+}
+
+function paintOptions() {
+  const view = optionsView;
+  if (!view) return;
+  const share = view.memory ? view.memory.share_pct : 100;
+  for (const item of view.items) {
+    const row = $("pick").querySelector(`.opt[data-name="${item.name}"]`);
+    if (!row) continue;
+    const checked = $(`opt-${item.name}`).checked;
+    const st = optionState(item, checked);
+    row.dataset.state = st.kind;
+    row.querySelector(".opt-memory").replaceChildren(make("span", {className: "sr-only", textContent: "Memory "}), gib(item.memory_mib));
+    row.querySelector(".opt-disk").replaceChildren(make("span", {className: "sr-only", textContent: "Disk "}), item.disk_gib ? `${item.disk_gib} GiB` : "None");
+    row.querySelector(".opt-state").replaceChildren(status(st.dot, st.text));
+    const note = row.querySelector(".opt-note");
+    const noteText = item.blocked || (checked ? item.note : "");
+    note.hidden = !noteText;
+    note.textContent = noteText || "";
+    note.classList.toggle("why", Boolean(item.blocked));
+    const change = row.querySelector(".opt-change");
+    const text = {
+      add: item.on,
+      delete: `${item.off} Nothing is deleted until the next setup run, which asks you once more.`,
+      change: checked ? item.on : item.off,
+    }[st.kind];
+    change.hidden = !text;
+    // Said once, when the tick changes what happens: not again on each repaint.
+    if (change.textContent !== (text || "")) change.textContent = text || "";
+    const makes = item.guests.length
+      ? [make("ul", {}, ...item.guests.map((g) => li(guestLine(g)))),
+        make("p", {textContent: `The plan counts ${gib(item.memory_mib)} of memory for it: a VM holds all of its memory, a container counts at ${share}% of its limit because it takes memory only as it uses it.`})]
+      : [make("p", {textContent: `No guest: it runs on Proxmox itself, in ${gib(item.memory_mib)} of the memory left to Proxmox.`})];
+    const fact = (term, ...body) => [make("dt", {textContent: term}), make("dd", {}, ...body)];
+    row.querySelector(".opt-facts").replaceChildren(
+      ...fact("It makes", ...makes),
+      ...fact("You need", item.needs.length ? make("ul", {}, ...item.needs.map((n) => li(n))) : make("p", {textContent: "Nothing more."})),
+      ...fact("Turning it on", make("p", {textContent: item.on})),
+      ...fact("Turning it off", make("p", {textContent: item.off})));
+  }
+  paintBudget(view);
+}
+
+function paintBudget(view) {
+  const m = view.memory;
+  show("budget", Boolean(m));
+  show("budget-hint", !m);
+  show("budget-base", Boolean(m));
+  const hasErrors = view.errors.length > 0;
+  $("choices-errors").replaceChildren(...view.errors.map((e) => li(sentence(e))));
+  $("choices-advice").replaceChildren(...view.advice.map((a) => li(a)));
+  show("choices-problems", hasErrors);
+  if (!m) return;
+  const over = m.free_mib < 0;
+  $("budget-total").textContent = `${gib(m.host_mib)} in the server`;
+  const fit = hasErrors ? status("bad", over ? `Does not fit: ${gib(-m.free_mib)} too much` : "Does not fit") : status("good", `Fits, ${gib(m.free_mib)} free`);
+  if ($("budget-fit").textContent !== fit.textContent) $("budget-fit").replaceChildren(fit);
+  const bar = $("budget-bar");
+  bar.classList.toggle("over", over);
+  const room = Math.max(0, m.host_mib - m.reserve_mib - m.base_mib);
+  for (const [cls, v] of [["m-reserve", m.reserve_mib], ["m-base", m.base_mib], ["m-chosen", Math.min(m.chosen_mib, room)], ["m-free", Math.max(0, m.free_mib)]]) {
+    bar.querySelector(`.${cls}`).style.width = `${(100 * v) / m.host_mib}%`;
+  }
+  $("budget-legend").replaceChildren(
+    make("li", {className: "k-reserve", textContent: `Proxmox ${gib(m.reserve_mib)}`}),
+    make("li", {className: "k-base", textContent: `Always on ${gib(m.base_mib)}`}),
+    make("li", {className: over ? "k-over" : "k-chosen", textContent: `Your choices ${gib(m.chosen_mib)}`}),
+    make("li", {className: "k-free", textContent: over ? `${gib(-m.free_mib)} too much` : `Free ${gib(m.free_mib)}`}));
+  $("budget-base-text").textContent = `Always on: ${andList(m.base)}. They and Proxmox itself are not a choice. `
+    + `A VM counts with all of its memory; a container counts at ${m.share_pct}% of its limit, because it takes memory only as it uses it. `
+    + "Each row shows the least it takes; memory left free goes to more CI runners at a time.";
+}
+
+// The form changed: ask the server what it comes to. The newest answer wins.
+function previewChoices() {
+  clearTimeout(previewTimer);
+  const seq = ++previewSeq;
+  if (!choicesDirty()) {
+    optionsView = state.options;
+    paintOptions();
+    return;
+  }
+  paintOptions();
+  previewTimer = setTimeout(async () => {
+    try {
+      const view = await api("/api/choices/preview", choicesBody());
+      if (seq !== previewSeq || !choicesDirty()) return;
+      optionsView = view;
+      paintOptions();
+      paintSavebar();
+    } catch { /* the rows keep the last answer; saving says what is wrong */ }
+  }, 150);
 }
 
 const CHOICES = {
@@ -754,9 +908,9 @@ function choicesBody() {
     };
   }
   return {
-    workloads: [...$("workload-tiles").querySelectorAll("input:checked")].map((i) => i.value),
-    backups: $("backups").checked,
-    console: $("console").checked,
+    workloads: [...$("workload-rows").querySelectorAll("input:checked")].map((i) => i.value),
+    backups: Boolean($("opt-backups") && $("opt-backups").checked),
+    console: Boolean($("opt-console") && $("opt-console").checked),
     owner_login: $("owner-login").value.trim(),
     disks,
     gpus,
@@ -773,21 +927,43 @@ function choicesKey() {
 function choicesDirty() { return savedChoices !== null && choicesKey() !== savedChoices; }
 
 function renderChoices(st) {
-  renderWorkloads(st);
   renderDisks(st.disks);
   renderGpus(st.gpus);
-  $("backups").checked = st.choices.backups;
-  $("console").checked = st.choices.console;
   $("owner-login").value = st.choices.owner_login;
+  savedChoices = null;
+  renderOptions(st);
   savedChoices = choicesKey();
+}
+
+// The bar under the form: what is unsaved, and what saving it comes to.
+function paintSavebar() {
+  const dirty = choicesDirty();
+  const view = optionsView;
+  let text = "Saving makes a new plan. Nothing on the server changes until you run setup.";
+  if (dirty) {
+    const parts = ["Unsaved changes."];
+    if (view && view !== state.options) {
+      if (view.errors.length) parts.push("They do not fit yet.");
+      // By the rows' names; a guest of no row (the kept disks' share) by its own.
+      const titled = (kind) => view.items.filter((i) => optionState(i, $(`opt-${i.name}`).checked).kind === kind).map((i) => i.title);
+      const own = new Set(view.items.flatMap((i) => i.guests.map((g) => g.name)));
+      const adds = [...titled("add"), ...(view.adds || []).filter((n) => !own.has(n))];
+      const deletes = [...titled("delete"), ...(view.removes || []).filter((n) => !own.has(n))];
+      if (adds.length) parts.push(`Adds ${andList(adds)}.`);
+      if (deletes.length) parts.push(`Deletes ${andList(deletes)} at the next setup run.`);
+    }
+    text = parts.join(" ");
+  }
+  $("savebar").classList.toggle("dirty", dirty);
+  $("savebar-text").textContent = text;
+  show("choices-discard", dirty);
 }
 
 function onChoicesChanged() {
   const dirty = choicesDirty();
   if (!dirty && $("choices-result").classList.contains("info")) say("choices-result", "", "");
-  $("savebar").classList.toggle("dirty", dirty);
-  $("savebar-text").textContent = dirty ? "Unsaved changes" : "Saving makes a new plan. Nothing on the server changes until you run setup.";
-  show("choices-discard", dirty);
+  previewChoices();
+  paintSavebar();
   $("plan-stale").hidden = !dirty || !state || !(state.plan.text || state.plan.errors.length);
   paintStates();
 }
@@ -1004,7 +1180,7 @@ function guideItems(st) {
       st.plan.errors.length ? ["attention", "The plan does not fit yet."] : st.plan.text ? ["done", "The plan fits."] : ["todo", "Once the choices are saved."]],
   ];
   const removals = st.removals || [];
-  if (removals.length) items.push(["setup/build", "Keep or delete guests", ["attention", `Setup stopped before deleting ${andList(removals)}.`]]);
+  if (removals.length && st.removals_stopped) items.push(["setup/build", "Keep or delete guests", ["attention", `Setup stopped before deleting ${andList(removals)}.`]]);
   items.push(["setup/build", "Run setup",
     SETUP_RUNS.has(running) ? ["running", "Running now."]
       : !apply ? ["todo", "Builds everything in the plan, in about 20 minutes."]
@@ -1132,11 +1308,38 @@ function renderReady() {
   if (!(state.chat && state.chat.signed_in)) ok(false, "No agent yet: setup runs, but nobody looks into a failure for you.", "#agent/settings");
   if (!state.tailscale_client && !(state.lan.via_vpn || state.lan.state === "closed")) ok(false, "No Tailscale client: setup runs, but the server stays off Tailscale.", "#access/tailscale");
   if (state.config_changed) ok(false, "Your choices changed since the last setup run; run it so the server follows.");
-  $("ready-list").replaceChildren(...items);
   const removals = state.removals || [];
+  if (removals.length && !state.removals_stopped) ok(false, `This run deletes ${andList(removals)}; it asks you first.`);
+  $("ready-list").replaceChildren(...items);
   show("removals", removals.length > 0);
-  $("removals-names").textContent = andList(removals);
+  $("removals-title").textContent = state.removals_stopped ? `Setup stopped before deleting ${andList(removals)}` : `The next setup run deletes ${andList(removals)}`;
+  $("removals-notes").replaceChildren(...removalPoints().map((t) => li(t)));
   $("removals-disks").textContent = removals.length > 1 ? "their disks" : "its disk";
+  for (const id of ["removals-it", "removals-it2"]) $(id).textContent = removals.length > 1 ? "them" : "it";
+}
+
+// What deleting the waiting guests loses, one line per choice they belong to.
+function removalPoints() {
+  const groups = new Map();
+  for (const name of state.removals || []) {
+    const note = (state.removal_notes || {})[name] || "";
+    groups.set(note, [...(groups.get(note) || []), name]);
+  }
+  return [...groups].map(([note, names]) => `${andList(names)}: ${note}`);
+}
+
+// Setup cannot go on without deleting what the choices no longer plan, so
+// every way to start it asks here first. True when the owner said delete.
+async function confirmRemovals(button) {
+  const names = andList(state.removals || []);
+  const many = state.removals.length > 1;
+  const ok = await confirmDialog({
+    title: `Delete ${names}?`,
+    text: `Everything on ${many ? "their disks" : "its disk"} is erased, for good. Then setup runs. To keep ${many ? "them" : "it"}, cancel, turn ${many ? "them" : "it"} on again under Setup, What to run, and save.`,
+    points: removalPoints(), yes: "Delete and run setup", word: "delete",
+  });
+  button.focus();
+  return ok;
 }
 
 // Overview: what needs the owner, health, services and recent runs.
@@ -1165,7 +1368,7 @@ function attentionItems() {
     add("bad", e && e.stage_text ? `Setup failed at "${e.stage_text}"` : "The last setup run failed", e ? e.message : "",
       [link("Open the run", `#activity/${apply.id}`), signed ? ask("Ask the agent", `The last setup run failed${e && e.stage_text ? ` at "${e.stage_text}"` : ""}. Find out why and propose the fix.`) : null].filter(Boolean));
   }
-  if ((state.removals || []).length) add("bad", `Setup stopped before deleting ${andList(state.removals)}`, "Keep them or confirm the deletion.", [link("Decide", "#setup/build")]);
+  if ((state.removals || []).length && state.removals_stopped) add("bad", `Setup stopped before deleting ${andList(state.removals)}`, "Keep them or confirm the deletion.", [link("Decide", "#setup/build")]);
   const s = lastStatus;
   if (s && s.monitoring === "ok") {
     for (const a of s.alerts) add(a.severity === "page" ? "bad" : "warn", a.summary || a.name, a.name, [link("Alerts", "#alerts")]);
@@ -1885,11 +2088,12 @@ async function copyDetails(node) {
 }
 
 async function startJob(action, button, feedback) {
-  if (action === "remove-guests") {
-    const names = andList(state.removals || []);
-    const ok = await confirmDialog({title: `Delete ${names}?`, text: "Everything on their disks is erased, for good. Then setup runs.", yes: "Delete and run setup", word: "delete"});
-    button.focus();
-    if (!ok) return;
+  if (action === "remove-guests" || (action === "apply" && (state.removals || []).length)) {
+    if (!(await confirmRemovals(button))) {
+      if (action === "apply") say(feedback, "info", "Nothing was started.");
+      return;
+    }
+    action = "remove-guests";
   }
   if (action === "upgrade") {
     const ok = await confirmDialog({title: "Update NullBill now?", text: "It fetches the newest version, and this page restarts: it is away for about a minute. Running guests are not touched.", yes: "Update", danger: false});
@@ -1897,7 +2101,8 @@ async function startJob(action, button, feedback) {
     if (!ok) return;
   }
   await press(button, feedback, STARTING[action] || "Starting…", async () => {
-    const view = await api("/api/jobs", {action});
+    // Deleting names what the owner was shown; the server refuses if that changed since.
+    const view = await api("/api/jobs", action === "remove-guests" ? {action, guests: state.removals} : {action});
     follow(view, true, feedback);
     refresh().catch(() => {});
     const onBuild = currentView === "setup" && currentStep === "build" && SETUP_RUNS.has(action);

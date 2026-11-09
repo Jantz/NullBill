@@ -299,6 +299,84 @@ def test_choices_saved_after_the_last_good_setup_run_are_waiting(site):
     assert client.call("/api/state")[1]["config_changed"] is True
 
 
+def test_what_to_run_says_what_each_choice_takes_and_previews_the_form_unsaved(site):
+    app, client = site
+    assert client.call("/api/choices/preview", {"workloads": ["agents"]})[0] == 401
+    sign_in(app, client)
+    # Before any choice is saved, the page's defaults are ticked.
+    options = client.call("/api/state")[1]["options"]
+    assert [i["name"] for i in options["items"]] == [*web.WORKLOADS, "backups", "console"]
+    assert [i["name"] for i in options["items"] if i["chosen"]] == ["agents", "linux-ci", "backups"]
+    assert options["memory"] is None and options["adds"] is None  # no probe, no setup run yet
+    wait(client, client.call("/api/jobs", {"action": "probe"})[1]["id"])
+    saved = {"workloads": ["agents", "linux-ci"], "backups": False, "owner_login": "owner-a@example.internal"}
+    client.call("/api/choices", saved)
+    options = client.call("/api/state")[1]["options"]
+    by_name = {i["name"]: i for i in options["items"]}
+    assert options["errors"] == [] and options["memory"]["free_mib"] > 0
+    # A container counts at half its limit, a VM in full; a pool also keeps its image on disk.
+    assert by_name["agents"]["memory_mib"] == 512 and by_name["agents"]["disk_gib"] == 32
+    assert by_name["linux-ci"]["memory_mib"] == 128 + 2048 and by_name["linux-ci"]["disk_gib"] == 4 + 2 * 32
+    assert "at a time" in by_name["linux-ci"]["note"]
+    assert by_name["console"]["guests"] == [] and by_name["console"]["memory_mib"] == 512
+    # The small class has no NVIDIA card, and Windows CI is not finished.
+    assert "no NVIDIA" in by_name["inference"]["blocked"] and "Not finished" in by_name["windows-ci"]["blocked"]
+    assert by_name["windows-dev"]["blocked"] is None
+    # The form as ticked, without saving it and without a login typed yet.
+    before = (app.home / "config.yaml").read_text()
+    status, view = client.call("/api/choices/preview", {"workloads": ["agents", "linux-ci", "media", "windows-dev"], "backups": True})
+    assert status == 200 and (app.home / "config.yaml").read_text() == before
+    assert [i["name"] for i in view["items"] if i["chosen"]] == ["agents", "linux-ci", "media", "windows-dev", "backups"]
+    memory = view["memory"]
+    assert memory["free_mib"] < 0 and len(view["errors"]) == 1 and view["advice"]
+    assert f"planned guests need {memory['base_mib'] + memory['chosen_mib']} MiB" in view["errors"][0]
+    assert memory["host_mib"] - memory["reserve_mib"] - memory["base_mib"] - memory["chosen_mib"] == memory["free_mib"]
+
+
+def test_a_choice_turned_off_after_setup_built_it_waits_for_the_owner_before_it_is_deleted(site):
+    app, client = site
+    sign_in(app, client)
+    wait(client, client.call("/api/jobs", {"action": "probe"})[1]["id"])
+    saved = {"workloads": ["agents", "linux-ci"], "backups": False, "owner_login": "owner-a@example.internal"}
+    client.call("/api/choices", saved)
+    state = client.call("/api/state")[1]
+    assert state["removals"] == [] and state["options"]["removes"] is None  # nothing is built yet
+    job = client.call("/api/jobs", {"action": "apply"})[1]
+    assert wait(client, job["id"])["state"] == "done"
+    config = app.home / "config.yaml"
+    started = app.jobs[job["id"]].started
+    os.utime(config, (started - 60, started - 60))
+    # A server built before apply kept guests.json follows its saved choices.
+    by_name = {i["name"]: i for i in client.call("/api/state")[1]["options"]["items"]}
+    assert by_name["linux-ci"]["on_server"] == ["runner-dispatcher", "linux-runner"] and by_name["media"]["on_server"] == []
+    assert not (app.home / "guests.json").exists()
+    # Ticked off on the page, not saved: the preview says what would go and what would come.
+    view = client.call("/api/choices/preview", {**saved, "workloads": ["agents", "media"]})[1]
+    assert view["removes"] == ["linux-runner", "runner-dispatcher"] and view["adds"] == ["jellyfin"]
+    assert client.call("/api/state")[1]["removals"] == []
+    # Saved: what the server has is written down before the choices change.
+    client.call("/api/choices", {**saved, "workloads": ["agents"]})
+    assert "linux-runner" in json.loads((app.home / "guests.json").read_text())["guests"]
+    state = client.call("/api/state")[1]
+    assert state["removals"] == ["linux-runner", "runner-dispatcher"] and state["removals_stopped"] is False
+    assert all("nothing of yours is on them" in note for note in state["removal_notes"].values())
+    # Delete and run setup names exactly those to apply, and only if the owner was shown them all.
+    for seen in ({}, {"guests": ["linux-runner"]}):
+        status, data = client.call("/api/jobs", {"action": "remove-guests", **seen})
+        assert status == 400 and "is now linux-runner, runner-dispatcher; look at it again" in data["error"]
+    assert not (app.home / "removals.json").exists()
+    status, job = client.call("/api/jobs", {"action": "remove-guests", "guests": state["removals"]})
+    assert status == 200 and job["args"] == ["apply", "--remove-guests"]
+    wait(client, job["id"])
+    assert json.loads((app.home / "removals.json").read_text()) == {
+        "guests": ["linux-runner", "runner-dispatcher"],
+        "gone": ["linux-runner", "runner-dispatcher"],
+    }
+    # Turned on again and saved: nothing waits any more.
+    client.call("/api/choices", saved)
+    assert client.call("/api/state")[1]["removals"] == []
+
+
 def test_activity_lists_runs_newest_first_and_built_waits_for_a_good_setup_run(site):
     app, client = site
     sign_in(app, client)
@@ -872,6 +950,9 @@ def test_what_windows_left_unfinished_is_discarded_only_on_the_owners_typed_word
     status, data = client.call("/api/choices", {**OWNER, "disks": {OLD: keep | {"discard": True, "discard_confirm": "0002"}}})
     assert (status, data["error"]) == (400, f"{OLD}: type D_0002, the end of its name, to discard what Windows left unfinished on it")
     assert pins(app) == {OLD: {"use": "legacy"}}
+    # The unsaved form is planned before the word is typed, and writes nothing.
+    status, data = client.call("/api/choices/preview", {**OWNER, "disks": {OLD: keep | {"discard": True}}})
+    assert status == 200 and data["errors"] == [] and pins(app) == {OLD: {"use": "legacy"}}
     status, data = client.call("/api/choices", {**OWNER, "disks": {OLD: keep | {"discard": True, "discard_confirm": " D_0002 "}}})
     assert status == 200 and data["plan"]["errors"] == []
     assert pins(app) == {OLD: {"use": "legacy", "mode": "rw", "discard_journal": ["jb95e30db0b42"]}}

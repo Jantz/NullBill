@@ -1,12 +1,12 @@
 # A Windows desktop on the server
 
-The workload **A Windows desktop VM** makes one Windows 11 VM, `windows-dev`
+The workload **Windows desktop** makes one Windows 11 VM, `windows-dev`
 (VMID 2022, address `10.42.5.22` in NullBill's windows zone), with 2 cores,
 4 GiB of memory and a 96 GiB disk. You reach it with Remote Desktop over
 Tailscale. NullBill makes the VM and its firewall; you install Windows in
 it yourself, once.
 
-On a 16 GiB server it fits next to the AI agents, without Linux CI runners
+On a 16 GiB server it fits next to the workspace, without Linux CI runners
 and without backups (the **Plan** card on the setup page's **Setup** page
 says so if it does not).
 
@@ -31,9 +31,9 @@ Proxmox web UI.
 
 **You need:** the ISO uploaded, the setup page.
 
-1. On the **Setup** page, in **What to run**, tick **A Windows desktop
-   VM**, untick what does not fit (Linux CI runners, Nightly backups on
-   16 GiB), press **Save and plan**, and check the **Plan** card shows no
+1. On the **Setup** page, in **What to run**, tick **Windows desktop**,
+   untick what the meter above the rows says does not fit (Linux CI
+   runners, Nightly backups on 16 GiB), press **Save and plan**, and check the **Plan** card shows no
    errors.
 2. Press **Run setup** at the top of the page. The tofu stage prints
    `tofu: Windows guests install from local:iso/...` and makes the VM.

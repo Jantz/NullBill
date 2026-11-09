@@ -891,6 +891,7 @@ class Tools:
     def t_status(self) -> str:
         st = self.app.state(True)
         plan = st["plan"]
+        options = st["options"]
         jobs = [
             {
                 "id": j.id,
@@ -904,6 +905,12 @@ class Tools:
         out = {
             "hardware": st["hardware"],
             "choices": st["choices"],
+            # Each choice as the Setup page shows it: what the plan counts for
+            # it, and which of its guests the last setup run left on the server.
+            "what_to_run": [
+                {k: i[k] for k in ("name", "title", "chosen", "memory_mib", "disk_gib", "on_server", "blocked")} for i in options["items"]
+            ],
+            "memory_free_mib": (options["memory"] or {}).get("free_mib"),
             "plan_fits": bool(plan.get("text")) and not plan.get("errors"),
             "plan_errors": plan.get("errors"),
             # The plan's `installed` means made by install.sh (the nullbill

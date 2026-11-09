@@ -512,6 +512,41 @@ main { grid-area: main; container: main / inline-size; overflow-y: auto; padding
 .option-desc { color: var(--text-3); font-size: 12px; }
 .option-why { color: var(--warn); font-size: 12px; }
 .option.danger-option:has(input:checked) { background: var(--bad-bg); }
+
+/* What to run: a row per choice, with what it takes and what a tick comes to. */
+.pick { margin-bottom: 24px; }
+.pick .group { margin-bottom: 16px; }
+.budget { position: sticky; top: 0; z-index: 4; display: grid; gap: 8px; padding: 10px 0 12px; margin-bottom: 8px; background: var(--bg); border-bottom: 1px solid var(--line); }
+.m-base, .k-base::before { background: var(--control); opacity: 0.75; }
+.m-chosen, .k-chosen::before { background: var(--accent); }
+.memory.over .m-chosen, .k-over::before { background: var(--bad-dot); }
+.k-over { color: var(--bad); }
+.opts { border: 1px solid var(--line); border-radius: var(--radius-lg); }
+.opts-head, .opt { display: grid; grid-template-columns: minmax(0, 1fr) 68px 68px 124px; column-gap: 16px; align-items: start; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+.opts-head { padding-block: 7px; background: var(--bg-sub); border-radius: var(--radius-lg) var(--radius-lg) 0 0; color: var(--text-3); font-size: 12px; font-weight: 500; }
+.opt:last-child { border-bottom: 0; }
+.opt[data-state="delete"] { background: var(--bad-bg); }
+.opt-main { display: flex; gap: 12px; align-items: flex-start; cursor: pointer; min-width: 0; }
+.opt-main:has(input:disabled) { cursor: not-allowed; }
+.opt-main:has(input:disabled) .opt-title { color: var(--text-3); }
+.opt-text { display: grid; min-width: 0; }
+.opt-title { font-weight: 500; }
+.opt-desc { color: var(--text-3); font-size: 12px; }
+.opt-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 13px; color: var(--text-2); }
+.opt-state { font-size: 13px; }
+.opt-state .status { white-space: normal; align-items: baseline; }
+.opt-note, .opt-change, .opt-details { grid-column: 1 / -1; margin: 6px 0 0 28px; font-size: 12px; }
+.opt-note { color: var(--text-2); }
+.opt-note.why { color: var(--warn); }
+.opt-change { padding: 8px 10px; border: 1px solid var(--warn-line); border-radius: var(--radius); background: var(--warn-bg); color: var(--text); max-width: 80ch; }
+.opt[data-state="delete"] .opt-change { border-color: var(--bad-line); background: var(--bg); border-left: 3px solid var(--bad-dot); }
+.opt-details > summary { cursor: pointer; width: fit-content; color: var(--text-2); font-weight: 500; }
+.opt-details > summary:hover { color: var(--text); }
+.opt-facts { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 8px 16px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); max-width: 88ch; }
+.opt-facts dt { color: var(--text-3); font-weight: 500; }
+.opt-facts dd { margin: 0; display: grid; gap: 4px; color: var(--text-2); }
+.opt-facts ul { list-style: disc; padding-left: 16px; }
+.points { list-style: disc; padding-left: 18px; display: grid; gap: 6px; margin: 0 0 12px; color: var(--text-2); font-size: 13px; }
 .fields { display: grid; gap: 12px; }
 .disks { display: grid; gap: 12px; }
 .disk { border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 0; margin: 0; min-width: 0; }
@@ -532,7 +567,7 @@ main { grid-area: main; container: main / inline-size; overflow-y: auto; padding
   margin: 8px -32px -48px; padding: 12px 32px; background: var(--bg); border-top: 1px solid var(--line);
 }
 .savebar.dirty { background: var(--bg-sub); }
-.savebar-text { color: var(--text-3); font-size: 12px; margin-right: auto; }
+.savebar-text { flex: 1 1 240px; min-width: 0; color: var(--text-3); font-size: 12px; margin-right: auto; }
 .savebar.dirty .savebar-text { color: var(--text); font-weight: 500; }
 .memory-block { margin: 4px 0 16px; display: grid; gap: 8px; }
 .memory-head { display: flex; align-items: baseline; gap: 10px; }
@@ -884,6 +919,20 @@ dialog::backdrop { background: var(--scrim); }
 /* Columns go by the room the page has, which the agent panel takes from. */
 @container main (max-width: 760px) {
   .hide-narrow { display: none; }
+}
+@container main (max-width: 640px) {
+  .budget { position: static; }
+  .budget .memory-head { flex-wrap: wrap; gap: 2px 10px; }
+  .opts-head { display: none; }
+  .opts > .opt:first-of-type { border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+  .opt { grid-template-columns: auto auto minmax(0, 1fr); column-gap: 12px; }
+  .opt-main { grid-column: 1 / -1; }
+  .opt-num, .opt-state { margin: 6px 0 0 28px; text-align: left; font-size: 12px; }
+  .opt-num + .opt-num { margin-left: 0; }
+  .opt-state { margin-left: 0; justify-self: end; }
+  .opt-num::before { content: attr(data-label) " " / ""; color: var(--text-3); }
+  .opt-facts { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .opt-facts dd { margin-bottom: 8px; }
 }
 @container main (max-width: 560px) {
   .table .hide-phone { display: none; }

@@ -275,13 +275,17 @@ made one.
 5. **Setup** page, **Hardware** tab: press **Read the hardware**. It only
    reads.
 6. **Setup** page, **What to run** tab:
-   - Any of **AI agents**, **Linux CI runners**, **Local AI models on the
-     GPU** and **A Windows desktop VM**: on 16 GB they fit together, with
+   - Each row is something the server can run, with the memory and disk
+     it takes; **What it makes, needs and deletes** under a row says what
+     you supply and what turning it off would delete. The meter above the
+     rows follows every tick and says whether your choices fit, before
+     you save. Any of **Workspace**, **Linux CI runners**, **Local AI
+     models** and **Windows desktop**: on 16 GB they fit together, with
      one CI runner at a time. Containers count at half their memory limit
      (they take memory only as they use it); VMs count in full. The Windows
      desktop needs its ISO uploaded first
-     ([windows-desktop.md](windows-desktop.md)). Leave **Windows CI
-     runners** off: they are not built yet.
+     ([windows-desktop.md](windows-desktop.md)). **Windows CI runners**
+     cannot be ticked: they are not built yet.
    - **Graphics card**: if it shows, type the card's memory in GB (12 for
      an RTX 4070). Proxmox cannot read it before a driver is installed.
    - Tick **Nightly backups** only with a backup disk from part 2.

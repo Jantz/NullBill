@@ -53,6 +53,19 @@ def _planned_services(model: dict, errors: _Errors, facts: dict | None = None) -
     }
 
 
+def planned_services(model: dict, facts: dict | None = None) -> dict[str, dict]:
+    """The services a config plans, without saying what is wrong with it."""
+    return _planned_services(model, _Errors(), facts)
+
+
+def counted_mib(kind: str, memory_mib: int, share_pct: int, count: int = 1) -> int:
+    """What a guest takes from the host's memory: all of a VM's (each clone
+    of a pool), the container share of a container's limit."""
+    if kind == "lxc":
+        return memory_mib * share_pct // 100
+    return memory_mib * count
+
+
 def _check_refs(model: dict, errors: _Errors) -> None:
     kinds = {"zone": model["zones"], "service": model["services"], "role": model["roles"]}
 
@@ -234,18 +247,14 @@ def _size(model: dict, planned: dict, facts: dict, errors: _Errors) -> tuple[dic
         if size["cores"] > threads:
             errors.append(f"{name}: needs {size['cores']} cores, the host has {threads} threads")
 
-    reserve_mib, reserve_why = _reserve(model, facts)
+    reserve_mib, reserve_why = reserve(model, facts)
     available = facts["memory_mib"] - reserve_mib
     pools = [n for n in planned if planned[n]["kind"] == "vm-pool"]
     counts = {n: pinned_counts.get(n, 1) for n in pools}
     container_pct = model["host"].get("container_share_pct", 100)
 
     def counted(name: str, size: dict) -> int:
-        """What a guest takes from the host's memory: all of a VM's, the
-        container share of a container's limit."""
-        if planned[name]["kind"] == "lxc":
-            return size["memory_mib"] * container_pct // 100
-        return size["memory_mib"] * counts.get(name, 1)
+        return counted_mib(planned[name]["kind"], size["memory_mib"], container_pct, counts.get(name, 1))
 
     floor_total = sum(counted(n, s) for n, s in sizes.items())
     if floor_total > available:
@@ -311,7 +320,7 @@ def _size(model: dict, planned: dict, facts: dict, errors: _Errors) -> tuple[dic
     return sizes, pool_counts, {"memory": memory, "disk": disk_section}
 
 
-def _reserve(model: dict, facts: dict) -> tuple[int, str]:
+def reserve(model: dict, facts: dict) -> tuple[int, str]:
     """Memory left to PVE: less on small hosts, plus ZFS's ARC where ZFS is in use."""
     host = model["host"]
     small = host.get("reserve_small")

@@ -109,13 +109,15 @@ no longer works.
 
 ## Remove a workload
 
-On the **Setup** page, untick it under **What to run** and press **Save and
-plan**, then **Run setup**. Setup stops before it deletes a guest and names
-what it would delete: deleting a guest erases its disk, such as the Windows
-desktop VM with Windows and your files in it. **Build** on the Setup page
-then shows **Delete and run setup**. Press it to delete them. To keep them, tick the workload again, press **Save and plan**, and
-run setup. Setup never deletes a guest you did not confirm, even one it
-would have to make again after a change.
+On the **Setup** page, untick it under **What to run**. Its row turns red
+and says what deleting it loses, such as the Windows desktop with Windows
+and your files in it; nothing is deleted yet. Press **Save and plan**, then
+**Run setup**: the page names the guests the run deletes and asks you to
+type `delete` before it starts (**Build** on the Setup page shows the same
+under **Delete and run setup**). To keep them, cancel, tick the workload
+again and press **Save and plan**. Setup never deletes a guest you did not
+confirm: if a run would delete one the page did not name, such as one it
+would have to make again after a change, it stops before deleting and asks.
 
 ## Turn it off and on
 

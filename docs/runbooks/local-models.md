@@ -1,6 +1,6 @@
 # Local AI models
 
-The workload **Local AI models on the GPU** runs one open model on your
+The workload **Local AI models** runs one open model on your
 NVIDIA graphics card and puts the model gateway in front of it: an
 OpenAI-compatible API that your coding agents and your own programs use
 with one key. Why it is built this way: [ADR 0008](../adr/0008-local-models.md).
@@ -18,8 +18,7 @@ with one key. Why it is built this way: [ADR 0008](../adr/0008-local-models.md).
 
 1. In the BIOS, turn **Secure Boot** off if it is on. The card's driver is
    built on the server, and Secure Boot refuses a driver it did not sign.
-2. On the **Setup** page, in **What to run**, tick **Local AI models on
-   the GPU**, give the card's memory in GB if it asks (12 for an RTX 4070),
+2. On the **Setup** page, in **What to run**, tick **Local AI models**, give the card's memory in GB if it asks (12 for an RTX 4070),
    press **Save and plan**, and check that the **Plan** card shows no
    problems.
 3. Press **Run setup** at the top of the page. The stage **Set up the

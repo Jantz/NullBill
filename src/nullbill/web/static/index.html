@@ -293,13 +293,24 @@
       <section class="step" id="step-choices" aria-labelledby="h-step-choices" hidden>
         <form id="choices-form" novalidate>
           <div class="block-head"><h2 id="h-step-choices" tabindex="-1">What to run</h2><span class="meta" id="choices-state"></span></div>
-          <fieldset class="group"><legend>Workloads</legend><div class="options" id="workload-tiles"></div></fieldset>
-          <fieldset class="group"><legend>Extras</legend>
-            <div class="options">
-              <label class="option"><input type="checkbox" id="backups"><span class="option-text"><span class="option-title">Nightly backups</span><span class="option-desc">Needs a second, empty disk to survive a disk failure.</span></span></label>
-              <label class="option"><input type="checkbox" id="console"><span class="option-text"><span class="option-title">On-site screen</span><span class="option-desc">This page on a monitor plugged into the server. About 512 MB of memory.</span></span></label>
+          <p class="help">Turn on what you want the server to run. Nothing changes on the server until you save and run setup; turning something off deletes it only then, after setup asks you once more.</p>
+          <div class="pick" id="pick">
+            <div class="budget" id="budget">
+              <div class="memory-head"><span class="label">Memory with these choices</span><span class="meta" id="budget-total"></span><span class="push" id="budget-fit" role="status"></span></div>
+              <div id="budget-bar" class="memory" aria-hidden="true"><span class="m-reserve"></span><span class="m-base"></span><span class="m-chosen"></span><span class="m-free"></span></div>
+              <ul class="legend" id="budget-legend"></ul>
             </div>
-          </fieldset>
+            <p class="note" id="budget-hint" hidden><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><span><a href="#setup/hardware">Read the hardware</a> first to see what fits in this server.</span></p>
+            <div id="choices-problems" class="problem" tabindex="-1" hidden>
+              <h3>These choices do not fit</h3>
+              <ul id="choices-errors"></ul>
+              <h4>What to do</h4>
+              <ul id="choices-advice"></ul>
+            </div>
+            <fieldset class="group"><legend>Workloads</legend><div class="opts" id="workload-rows"></div></fieldset>
+            <fieldset class="group"><legend>Extras</legend><div class="opts" id="extra-rows"></div></fieldset>
+            <details class="disclosure small" id="budget-base"><summary>What always runs, and how memory is counted</summary><p id="budget-base-text"></p></details>
+          </div>
           <fieldset class="group" id="gpus" hidden><legend>Graphics card</legend>
             <p class="help">Proxmox cannot read the card's memory before a driver is installed; give it as on the box.</p>
             <div id="gpu-list" class="fields"></div>
@@ -353,8 +364,9 @@
         <p class="help">Setup runs one stage after another and checks everything at the end. The first run takes about 20 minutes, more with local AI models.</p>
         <ul id="ready-list" class="ready"></ul>
         <div id="removals" class="problem" hidden>
-          <h3>Setup stopped before deleting <span id="removals-names"></span></h3>
-          <p>Deleting erases everything on <span id="removals-disks">its disk</span>, for good. To keep it, tick it again under What to run, save, and run setup.</p>
+          <h3 id="removals-title"></h3>
+          <ul id="removals-notes"></ul>
+          <p>Deleting erases everything on <span id="removals-disks">its disk</span>, for good. To keep <span id="removals-it">it</span>, <a href="#setup/choices">turn <span id="removals-it2">it</span> on again under What to run</a> and save.</p>
           <div class="row"><button type="button" class="btn danger" data-action="remove-guests"><span>Delete and run setup</span></button><p class="feedback" role="status"></p></div>
         </div>
         <div class="row step-foot" id="build-start">
@@ -629,6 +641,7 @@
   <form method="dialog" class="form">
     <h2 id="confirm-title"></h2>
     <p id="confirm-text" class="help"></p>
+    <ul id="confirm-points" class="points" hidden></ul>
     <label class="field" id="confirm-word-field" hidden><span class="label" id="confirm-word-label"></span><input id="confirm-word" autocomplete="off" spellcheck="false"></label>
     <div class="row end"><button type="button" class="btn" id="confirm-no">Cancel</button><button type="submit" class="btn danger" id="confirm-yes"></button></div>
   </form>
