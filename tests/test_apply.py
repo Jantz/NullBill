@@ -67,6 +67,10 @@ class FakeReach:
         self.dispatcher_stopped = False
         # Kept disks on the host (nb-legacy-disk): name -> (uuid, mode, fstype, state).
         self.legacy = {}
+        # What probe.NTFS_CHECK prints for a kept NTFS partition, and the
+        # journals nb-legacy-disk was told it may discard.
+        self.ntfs = CLEAN_NTFS
+        self.journals = []
         # OpenTofu makes the files guest (VMID 2023) on its first apply.
         self.files_ct = {"exists": False, "status": "running", "mps": {}, "reboots": 0}
         # nb-legacy-copy: its records, the runs started, polls left per unit, and whether the next copy fails.
@@ -181,6 +185,8 @@ class FakeReach:
         if command.startswith("rm -f "):
             self.files.pop(command.split()[2], None)
             return 0, "", ""
+        if apply.NTFS_CHECK in command:
+            return 0, self.ntfs, ""
         if command.startswith(apply.LEGACY) or command.startswith(("findmnt ", "pct status 2023", "pct shutdown 2023", "pct start 2023")):
             return self.kept(command)
         if command.startswith(("pct reboot 2023", "pct set 2023 ")) or command == "pct config 2023":
@@ -344,12 +350,13 @@ class FakeReach:
         if command.startswith(f"{apply.LEGACY} list"):
             return 0, "".join(f"{n} {' '.join(v)}\n" for n, v in sorted(self.legacy.items())), ""
         if argv[:2] == [apply.LEGACY, "mount"]:
-            _, _, disk, n, uuid, fstype, mode, name, uid, gid = argv
+            _, _, disk, n, uuid, fstype, mode, name, uid, gid, *journal = argv
             assert (uid, gid) == ("101000", "101000")
             want = (uuid, mode, fstype, "mounted")
             known = self.legacy.get(name) == want
             self.legacy[name] = want
-            return 0, "kept\n" if known else "mounted\n", ""
+            self.journals += journal if not known else []
+            return 0, "kept\n" if known else "discarded\nmounted\n" if journal else "mounted\n", ""
         if argv[:2] == [apply.LEGACY, "unmount"]:
             self.legacy.pop(argv[2], None)
             return 0, "removed\n", ""
@@ -1841,14 +1848,27 @@ def legacy_config(**pin):
     return {**fixture_config("large"), "disks": {OLD: {"use": "legacy", **pin}}}
 
 
-def replan(c, config):
-    """The same host, planned again from a changed config.yaml."""
+# probe.NTFS_CHECK's output, as the real tools print it (tools/host-check).
+CLEAN_NTFS = "== /dev/sda2\nprobe=0\n\tVolume Flags: 0x0000\njournal=j7d2c7ac4888b\n"
+OPEN_JOURNAL = (
+    "== /dev/sda2\nThe disk contains an unclean file system (0, 0).\nMetadata kept in Windows cache, refused to mount.\n"
+    "probe=14\n\tVolume Flags: 0x0000\njournal=jb95e30db0b42\n"
+)
+
+
+def replan(c, config, ntfs=None):
+    """The same host, planned again from a changed config.yaml; ntfs is what
+    the probe read of the old disk's NTFS partition, if it read anything."""
     from conftest import write_raw
 
     from nullbill.probe import parse
 
     c.model = build_model(config)
-    c.plan = build_plan(c.model, parse(write_raw(c.home / "raw", "large")))
+    raw = write_raw(c.home / "raw", "large")
+    if ntfs:
+        (raw / "ntfs.out").write_text(ntfs)
+        (raw / "ntfs.rc").write_text("0\n")
+    c.plan = build_plan(c.model, parse(raw))
     c.files = render_all(c.plan, c.model)
 
 
@@ -1921,6 +1941,70 @@ def test_switching_to_read_write_stops_the_guest_before_the_host_remounts(ctx, m
     assert c.reach.files_ct["status"] == "running"
 
 
+def test_read_write_is_checked_before_the_share_stops(ctx, monkeypatch):
+    """Windows did not shut the disk down fully: the run stops with the disk
+    still mounted read-only and its guest running, not after the unmount."""
+    monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
+    c = ctx("large", config=legacy_config())
+    apply.stage_tofu(c)
+    replan(c, legacy_config(mode="rw"))
+    c.reach.ntfs = OPEN_JOURNAL
+    c.reach.calls.clear()
+    with pytest.raises(
+        ApplyError,
+        match=r"partition 2 stays read-only: Windows did not shut it down fully.*discard_journal: \[jb95e30db0b42\].*Nothing was changed",
+    ):
+        apply.stage_tofu(c)
+    changing = ("pct shutdown", "pct set", f"{apply.LEGACY} mount", f"{apply.LEGACY} unmount", "tofu")
+    assert not [x for x in host_calls(c) if (x if isinstance(x, str) else " ".join(x)).startswith(changing)]
+    assert c.reach.files_ct["status"] == "running" and c.reach.legacy["data"][1] == "ro"
+
+
+def test_the_journal_the_owner_named_is_the_one_the_host_may_discard(ctx, monkeypatch):
+    monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
+    c = ctx("large", config=legacy_config())
+    apply.stage_tofu(c)
+    named = legacy_config(mode="rw", discard_journal=["jb95e30db0b42"])
+    replan(c, named, ntfs=OPEN_JOURNAL)
+    # Windows has used the disk since the owner confirmed: another journal.
+    c.reach.ntfs = OPEN_JOURNAL.replace("jb95e30db0b42", "j1f63daad72c7")
+    with pytest.raises(ApplyError, match="The journal you confirmed is not the one on the disk now"):
+        apply.stage_tofu(c)
+    assert c.reach.journals == [] and c.reach.files_ct["status"] == "running" and c.reach.legacy["data"][1] == "ro"
+    c.reach.ntfs = OPEN_JOURNAL
+    apply.stage_tofu(c)
+    assert c.reach.journals == ["jb95e30db0b42"] and c.reach.legacy["data"][1] == "rw"
+    assert [line for line in c.log if "read-write at /mnt/nb-legacy/data, after discarding the journal Windows left" in line]
+    assert c.reach.files_ct["status"] == "running"
+    # The next run, the probe still as old as before: mounted already, nothing is checked or discarded again.
+    c.reach.calls.clear()
+    apply.stage_tofu(c)
+    assert c.reach.journals == ["jb95e30db0b42"]
+    assert not [x for x in host_calls(c) if isinstance(x, str) and apply.NTFS_CHECK in x]
+
+
+def test_a_mount_refused_after_the_share_stopped_starts_it_again(ctx, monkeypatch):
+    """The early check could not tell (no ntfs-3g answer), the host script
+    refuses at the mount: the files guest, stopped for it, runs again."""
+    monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
+    c = ctx("large", config=legacy_config())
+    apply.stage_tofu(c)
+    replan(c, legacy_config(mode="rw"))
+    c.reach.ntfs = ""
+    real = c.reach.kept
+
+    def refuse(command):
+        if command.startswith(f"{apply.LEGACY} mount") and " rw " in command:
+            return 1, "", "nb-legacy-disk: /dev/disk/by-id/x cannot be read-write: Windows did not shut it down fully\n"
+        return real(command)
+
+    c.reach.kept = refuse
+    with pytest.raises(ApplyError, match="Windows did not shut it down fully"):
+        apply.stage_tofu(c)
+    assert c.reach.files_ct["status"] == "running"
+    assert [line for line in c.log if "started guest 2023 again after the refused mount" in line]
+
+
 def test_dropping_a_kept_disk_detaches_it_then_unmounts_it_and_wipes_nothing(ctx, monkeypatch):
     monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
     c = ctx("large", config=legacy_config())
@@ -1955,11 +2039,11 @@ def test_a_refused_mount_stops_apply_before_tofu(ctx, monkeypatch):
 
     def refuse(command):
         if command.startswith(f"{apply.LEGACY} mount"):
-            return 1, "", "nb-legacy-disk: /dev/disk/by-id/x cannot be read-write: Windows is hibernated on it\n"
+            return 1, "", "nb-legacy-disk: /dev/disk/by-id/x cannot be read-write: it holds a hibernated Windows\n"
         return real(command)
 
     c.reach.kept = refuse
-    with pytest.raises(ApplyError, match="Windows is hibernated on it"):
+    with pytest.raises(ApplyError, match="it holds a hibernated Windows"):
         apply.stage_tofu(c)
     assert not [call for call in c.reach.calls if call[0] == "local" and call[1][0] == "tofu"]
 

@@ -16,4 +16,4 @@ if ! grep -qs '^dm_thin_pool ' /proc/modules; then
 fi
 # Privileged for loop devices, which stand in for the backup disk and the
 # kept disks, and for /dev/fuse, which ntfs-3g mounts through.
-docker run --rm --privileged -v "$PWD/ansible:/ansible:ro" nullbill-host-check
+docker run --rm --privileged -v "$PWD/ansible:/ansible:ro" -v "$PWD/src:/src:ro" nullbill-host-check

@@ -1,6 +1,7 @@
 """Disks kept from a previous OS: probe, plan rules (docs/adr/0007-legacy-disks.md)."""
 
 import copy
+import re
 
 import pytest
 from conftest import fixture_config
@@ -9,7 +10,7 @@ from nullbill import legacy
 from nullbill.errors import NullBillError
 from nullbill.model import build_model
 from nullbill.plan import build_plan
-from nullbill.probe import _disks
+from nullbill.probe import NO_JOURNAL, _disks, ntfs_state
 from nullbill.render import strip_notes
 from nullbill.verify import run_verify
 
@@ -20,8 +21,10 @@ EFI = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
 RECOVERY = "de94bba4-06d1-4d40-a16a-bfd50179d6ac"
 
 
-def part(n, fstype, parttype=DATA, label=None, uuid="UUID", mounts=(), used_gib=None):
+def part(n, fstype, parttype=DATA, label=None, uuid="UUID", mounts=(), used_gib=None, rw_state=None, journal=None):
     return {
+        "rw_state": rw_state,
+        "journal": journal,
         "n": n,
         "size_mib": 1024,
         "fstype": fstype,
@@ -95,6 +98,52 @@ def test_smart_failure_and_unreadable_disks():
     assert disk["smart"]["health"] == "unknown"
     (disk,) = _disks(lsblk("[null]"), by_id, None)
     assert disk["smart"] == {"health": "unknown"}
+
+
+# What probe.NTFS_CHECK prints, as the real ntfs-3g tools print it for each
+# state (tools/host-check makes the states on images and reads them so).
+FLAGS = "\tVolume Flags: 0x0000\n"
+NTFS_OUT = {
+    "clean": f"probe=0\n{FLAGS}journal=j7d2c7ac4888b\n",
+    # Fast Startup, hibernation with Windows on another disk, a pulled cable: journal 2.0.
+    "unclean": (
+        "The disk contains an unclean file system (0, 0).\nMetadata kept in Windows cache, refused to mount.\n"
+        f"probe=14\n{FLAGS}journal=jb95e30db0b42\n"
+    ),
+    "hibernated": f"Windows is hibernated, refused to mount.\nprobe=14\n{FLAGS}journal=j7d2c7ac4888b\n",
+    "chkdsk": "probe=0\n\tVolume Flags: 0x0001 DIRTY\njournal=j7d2c7ac4888b\n",
+    "damaged": "probe=13\njournal=je3b0c44298fc\n",
+}
+
+
+@pytest.mark.parametrize("state", NTFS_OUT)
+def test_probe_tells_how_windows_left_an_ntfs_partition(state):
+    found, journal = ntfs_state(NTFS_OUT[state])
+    assert found == state
+    assert journal == (None if state == "damaged" else "jb95e30db0b42" if state == "unclean" else "j7d2c7ac4888b")
+
+
+def test_probe_tells_an_older_unclean_journal_and_what_it_could_not_read():
+    # Windows 7 and older: journal 1.1, which ntfs-3g.probe calls unclean (15).
+    old = f"The disk contains an unclean file system (0, 0).\nprobe=15\n{FLAGS}journal=j1f63daad72c7\n"
+    assert ntfs_state(old) == ("unclean", "j1f63daad72c7")
+    # Marked for chkdsk and the journal open: chkdsk, which only Windows mends.
+    assert ntfs_state(NTFS_OUT["unclean"].replace("0x0000", "0x0001 DIRTY"))[0] == "chkdsk"
+    # In use by another program, no flags read, no tools: nothing is claimed.
+    assert ntfs_state(f"probe=16\n{FLAGS}journal=j7d2c7ac4888b\n")[0] is None
+    assert ntfs_state("probe=0\njournal=j7d2c7ac4888b\n")[0] is None
+    assert ntfs_state("") == (None, None)
+    # The hash of nothing is no fingerprint: ntfscat could not read the journal.
+    assert ntfs_state(f"probe=14\n{FLAGS}journal={NO_JOURNAL}\n") == ("unclean", None)
+
+
+def test_probe_puts_the_state_on_the_partition():
+    by_id = "ata-SYNTHETIC_HDD_0009 ../../sdb\n"
+    (disk,) = _disks(lsblk("[null]"), by_id, ntfs_text="== /dev/sdb1\n" + NTFS_OUT["unclean"])
+    assert (disk["partitions"][0]["rw_state"], disk["partitions"][0]["journal"]) == ("unclean", "jb95e30db0b42")
+    # No ntfs-3g on the host yet: not read.
+    (disk,) = _disks(lsblk("[null]"), by_id)
+    assert (disk["partitions"][0]["rw_state"], disk["partitions"][0]["journal"]) == (None, None)
 
 
 # Plan
@@ -174,6 +223,55 @@ def test_read_write_is_for_ntfs_only(facts):
     assert kept(plan(f, {OLD: {"use": "legacy", "mode": "rw", "partitions": [2]}}))[0]["mode"] == "rw"
     (message,) = errors(f, {OLD: {"use": "legacy", "mode": "rw"}})
     assert message.startswith(f"disks.{OLD}.mode: rw is for NTFS only; partition 1 holds exFAT")
+
+
+def test_read_write_waits_for_a_disk_windows_shut_down_fully(facts):
+    """Each state the probe tells stops mode: rw with what to do; a state
+    nobody read stops nothing here (nb-legacy-disk refuses at the mount)."""
+    pin = {OLD: {"use": "legacy", "mode": "rw"}}
+    for state in ("clean", None):
+        f = with_parts(facts, part(2, "ntfs", label="Data", rw_state=state, journal="j7d2c7ac4888b"))
+        assert kept(plan(f, pin))[0]["mode"] == "rw" and "discard_journal" not in kept(plan(f, pin))[0]
+    said = {
+        "unclean": "stays read-only: Windows did not shut it down fully .* shutdown /s /t 0 .* discard_journal: .jb95e30db0b42.",
+        "hibernated": "partition 2 stays read-only: it holds a hibernated Windows .* Start that Windows .* then probe again",
+        "chkdsk": "partition 2 stays read-only: Windows marked it for a disk check. .* chkdsk /f .* then probe again",
+        "damaged": "partition 2 stays read-only: its NTFS is inconsistent or the disk is failing",
+    }
+    for state, text in said.items():
+        f = with_parts(facts, part(2, "ntfs", label="Data", rw_state=state, journal="jb95e30db0b42"))
+        (message,) = errors(f, pin)
+        assert re.search(text, message), message
+        # Read-only, every one of them is kept as before.
+        assert kept(plan(f, {OLD: {"use": "legacy"}}))[0]["mode"] == "ro"
+
+
+def test_a_named_journal_may_be_discarded_and_only_that_one(facts):
+    f = with_parts(facts, part(2, "ntfs", label="Data", rw_state="unclean", journal="jb95e30db0b42"))
+    named = {"use": "legacy", "mode": "rw", "discard_journal": ["jb95e30db0b42"]}
+    p = plan(f, {OLD: named})
+    assert kept(p)[0]["discard_journal"] == "jb95e30db0b42"
+    assert "apply first discards the journal Windows left unfinished" in p["disks"][OLD].why
+    # Another journal than the one on the disk: Windows used it since, or a typo.
+    (message,) = errors(f, {OLD: named | {"discard_journal": ["j1f63daad72c7"]}})
+    assert "The journal you confirmed is not the one on the disk now" in message
+    # Naming a journal does not get past the states only Windows mends.
+    for state in ("hibernated", "chkdsk", "damaged"):
+        blocked = with_parts(facts, part(2, "ntfs", label="Data", rw_state=state, journal="jb95e30db0b42"))
+        assert "stays read-only" in errors(blocked, {OLD: named})[0]
+    # Once clean, the pin is spent: nothing is discarded.
+    clean = with_parts(facts, part(2, "ntfs", label="Data", rw_state="clean", journal="j7d2c7ac4888b"))
+    assert "discard_journal" not in kept(plan(clean, {OLD: named}))[0]
+    # A journal is discarded for a read-write mount only, and only fingerprints are taken.
+    assert "only with mode: rw" in errors(f, {OLD: {"use": "legacy", "discard_journal": ["jb95e30db0b42"]}})[0]
+    assert "discard_journal" in errors(f, {OLD: named | {"discard_journal": [True]}})[0]
+    assert "only for use: legacy" in errors(facts("large"), {OLD: {"use": "ignore", "discard_journal": ["jb95e30db0b42"]}})[0]
+
+
+def test_a_journal_nobody_could_read_cannot_be_named(facts):
+    f = with_parts(facts, part(2, "ntfs", label="Data", rw_state="unclean"))
+    (message,) = errors(f, {OLD: {"use": "legacy", "mode": "rw"}})
+    assert "discard_journal, once a probe has read its journal" in message
 
 
 def test_share_false_mounts_without_a_files_guest(facts):

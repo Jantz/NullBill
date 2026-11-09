@@ -24,6 +24,7 @@ esac
 SH
   chmod +x /tmp/legacy/systemctl
   export NB_DISK_DIR=$by_id NB_UUID_DIR=$by_uuid NB_UNIT_DIR=$units NB_LEGACY_DIR=$base NB_SYSTEMCTL=/tmp/legacy/systemctl NB_TEXTFILE_DIR=/tmp/legacy/textfile
+  export NB_DISCARDED=/tmp/legacy/discarded-journals
   image() { # name size mkfs...
     truncate -s "$2" "/tmp/legacy/$1.img"
     local loop
@@ -35,9 +36,19 @@ SH
   }
   sum() { sha256sum "/tmp/legacy/$1.img" | cut -d' ' -f1; }
   legacy() { /usr/local/sbin/nb-legacy-disk "$@"; }
-  keep() { # name uuid fstype mode
-    legacy mount "ata-SYNTHETIC_$1" 2 "$2" "$3" "$4" old-hdd 101000 101000
+  keep() { # name uuid fstype mode [journal]
+    legacy mount "ata-SYNTHETIC_$1" 2 "$2" "$3" "$4" old-hdd 101000 101000 ${5:+"$5"}
   }
+  # A partition as the probe reads it (probe.py, the code the page and apply
+  # use): "STATE JOURNAL".
+  probed() {
+    d=$1 PYTHONPATH=/src python3 -c '
+import subprocess
+from nullbill.probe import NTFS_CHECK, ntfs_state
+print(*ntfs_state(subprocess.run(["sh", "-c", NTFS_CHECK], capture_output=True, text=True).stdout))'
+  }
+  # ntfs-3g writes back after umount returns; wait until it has exited.
+  settled() { while grep -qsa 'legacy/[sm]' /proc/[0-9]*/cmdline; do sleep 0.2; done; }
   local dir=$base/old-hdd unit=$units/'tmp-legacy-mnt-old\x2dhdd.mount'
 
   local ntfs uuid before
@@ -92,7 +103,8 @@ SH
   legacy unmount old-hdd >/dev/null
   before=$(sum NTFS)
   if keep NTFS "$uuid" ntfs rw 2>/tmp/legacy/err; then fail "mounted a hibernated NTFS read-write"; fi
-  grep -q "Windows is hibernated on it" /tmp/legacy/err || fail "hibernation message: $(cat /tmp/legacy/err)"
+  grep -q "it holds a hibernated Windows (hiberfil.sys)" /tmp/legacy/err || fail "hibernation message: $(cat /tmp/legacy/err)"
+  [ "$(probed "$ntfs" | cut -d' ' -f1)" = hibernated ] || fail "the probe reads a hibernated NTFS as $(probed "$ntfs")"
   test -z "$(findmnt -rno TARGET --mountpoint "$dir")" || fail "a refused read-write left a mount"
   [ "$(keep NTFS "$uuid" ntfs ro)" = mounted ] || fail "a hibernated NTFS could not be kept read-only"
   legacy unmount old-hdd >/dev/null
@@ -115,7 +127,7 @@ SH
   # shellcheck disable=SC2016 # the fake's own $1
   printf '#!/bin/sh\n[ "$1" = --readwrite ] && exit 15\nexit 0\n' >/tmp/legacy/fake/ntfs-3g.probe
   if PATH=/tmp/legacy/fake:$PATH keep NTFS "$uuid" ntfs rw 2>/tmp/legacy/err; then fail "mounted an unclean NTFS read-write"; fi
-  grep -q "Windows did not unmount it cleanly" /tmp/legacy/err || fail "unclean message: $(cat /tmp/legacy/err)"
+  grep -q "Windows did not shut it down fully" /tmp/legacy/err || fail "unclean message: $(cat /tmp/legacy/err)"
   echo "ok   read-write is refused when ntfs-3g.probe reports an unclean volume (exit 15)"
 
   # A volume Windows marked for chkdsk: its dirty flag, which ntfs-3g.probe passes.
@@ -146,8 +158,11 @@ PY
     fail "mounted an NTFS marked for chkdsk read-write"
   fi
   grep -q "Windows marked it for a disk check" /tmp/legacy/err || fail "chkdsk message: $(cat /tmp/legacy/err)"
+  [ "$(probed "$dirty" | cut -d' ' -f1)" = chkdsk ] || fail "the probe reads an NTFS marked for chkdsk as $(probed "$dirty")"
   [ "$(sum DIRTY)" = "$before" ] || fail "checking a dirty disk changed it"
   echo "ok   read-write is refused on an NTFS volume marked for chkdsk, which ntfs-3g.probe alone passes"
+
+  legacy_journal_checks "$ntfs" "$uuid" "$dirty"
 
   # A cloned disk carries the same UUID: the partition named is the one mounted.
   # The volume serial sits at byte 0x48 of the boot sector, little-endian.
@@ -201,6 +216,143 @@ PY
   echo "ok   exFAT and FAT are refused read-write"
 
   legacy_disk_cleanup
+}
+
+# A journal Windows left open, as its restart pages say: version 2.0 after
+# Fast Startup, hibernation with Windows on another disk or a pulled cable,
+# 1.1 from Windows 7 and older. ntfs-3g writes no journal, so the pages are
+# written here as Windows lays them out (ntfs-3g's layout.h): two copies of
+# a restart page with one client, NTFS, in use and the volume not clean.
+open_journal() { # device version lsn
+  python3 - "$@" <<'PY'
+import struct, sys
+dev, (major, minor), lsn = sys.argv[1], map(int, sys.argv[2].split(".")), int(sys.argv[3], 16)
+with open(dev, "r+b") as f:
+    boot = f.read(512)
+    cluster = struct.unpack_from("<H", boot, 11)[0] * boot[13]
+    c = struct.unpack_from("<b", boot, 64)[0]
+    size = c * cluster if c > 0 else 2 ** -c
+    # $LogFile is MFT record 2; its unnamed data attribute (0x80) says where.
+    f.seek(struct.unpack_from("<q", boot, 48)[0] * cluster + 2 * size)
+    rec = f.read(size)
+    a = struct.unpack_from("<H", rec, 20)[0]
+    while struct.unpack_from("<I", rec, a)[0] != 0x80:
+        a += struct.unpack_from("<I", rec, a + 4)[0]
+    data_size = struct.unpack_from("<q", rec, a + 0x30)[0]
+    run = a + struct.unpack_from("<H", rec, a + 0x20)[0]
+    nlen, noff = rec[run] & 15, rec[run] >> 4
+    start = int.from_bytes(rec[run + 1 + nlen : run + 1 + nlen + noff], "little", signed=True) * cluster
+    page = bytearray(4096)
+    # RESTART_PAGE_HEADER, RESTART_AREA at 48, LOG_CLIENT_RECORD at 96.
+    struct.pack_into("<4sHHqIIHhh", page, 0, b"RSTR", 30, 9, 0, 4096, 4096, 48, minor, major)
+    struct.pack_into("<qHHHHIHHqIHHII", page, 48, lsn, 1, 0xFFFF, 0, 0, 67 - data_size.bit_length(), 208, 48, data_size, 0, 0x30, 0x40, 1, 0)
+    name = "NTFS".encode("utf-16-le")
+    struct.pack_into("<qqHHH6xI", page, 96, lsn, lsn, 0xFFFF, 0xFFFF, 0, len(name))
+    page[128 : 128 + len(name)] = name
+    # Multi-sector fixups: each sector's last two bytes move into the array.
+    struct.pack_into("<H", page, 30, 1)
+    for i in range(8):
+        end = (i + 1) * 512 - 2
+        page[32 + 2 * i : 34 + 2 * i] = page[end : end + 2]
+        struct.pack_into("<H", page, end, 1)
+    f.seek(start)
+    f.write(page * 2)
+PY
+  sync
+}
+
+# Making a kept NTFS disk read-write when Windows left its journal open:
+# refused, unless the owner pinned that very journal to be discarded.
+legacy_journal_checks() {
+  local ntfs=$1 uuid=$2 dirty=$3 dir=/tmp/legacy/mnt/old-hdd fast fuuid before state journal later tree
+  fast=$(image FAST 64M mkntfs -q -F -f -L Fast)
+  fuuid=$(blkid -p -o value -s UUID "$fast")
+  mount -t ntfs-3g "$fast" /tmp/legacy/seed
+  mkdir "/tmp/legacy/seed/Fotos 2019"
+  head -c 300000 /dev/urandom >"/tmp/legacy/seed/Fotos 2019/IMG_1.jpg"
+  echo hello >/tmp/legacy/seed/hello.txt
+  umount /tmp/legacy/seed
+  settled
+  # Every file's contents, and every name, size and date.
+  listing() { (cd "$dir" && find . -type f -exec sha256sum {} + | sort && find . -printf '%p %s %T@\n' | sort) | sha256sum; }
+  [ "$(probed "$fast" | cut -d' ' -f1)" = clean ] || fail "the probe reads a clean NTFS as $(probed "$fast")"
+
+  open_journal "$fast" 2.0 100000
+  before=$(sum FAST)
+  read -r state journal <<<"$(probed "$fast")"
+  [ "$state" = unclean ] || fail "the probe reads a journal Windows left open as $state"
+  [[ $journal =~ ^j[0-9a-f]{12}$ ]] || fail "journal fingerprint: $journal"
+  [ "$(keep FAST "$fuuid" ntfs ro)" = mounted ] || fail "an NTFS with an open journal could not be kept read-only"
+  tree=$(listing)
+  [ "$(probed "$fast")" = "unclean $journal" ] || fail "the probe reads a mounted partition differently: $(probed "$fast")"
+  if keep FAST "$fuuid" ntfs rw 2>/tmp/legacy/err; then fail "mounted an NTFS read-write whose journal Windows left open"; fi
+  grep -q "Windows did not shut it down fully" /tmp/legacy/err || fail "open journal message: $(cat /tmp/legacy/err)"
+  grep -q "what Windows left unfinished may be discarded" /tmp/legacy/err || fail "the refusal does not name the way out"
+  if keep FAST "$fuuid" ntfs rw j000000000000 2>/tmp/legacy/err; then fail "discarded a journal the owner did not name"; fi
+  grep -q "is not the one you said may be discarded (j000000000000)" /tmp/legacy/err || fail "other journal message: $(cat /tmp/legacy/err)"
+  findmnt -rno OPTIONS --mountpoint "$dir" | grep -q '^ro,' || fail "the read-only mount was not put back after a refused discard"
+  if keep FAST "$fuuid" ntfs ro "$journal" 2>/tmp/legacy/err; then fail "took a journal to discard for a read-only mount"; fi
+  legacy unmount old-hdd >/dev/null
+  settled
+  [ "$(sum FAST)" = "$before" ] || fail "reading, a read-only mount or a refused discard changed the disk"
+  test ! -e "$NB_DISCARDED" || fail "a refused discard was recorded"
+  echo "ok   a journal Windows left open (Fast Startup) is told by the probe, mounted or not, and read-write is refused without a byte changed"
+
+  [ "$(keep FAST "$fuuid" ntfs rw "$journal")" = $'discarded\nmounted' ] || fail "the named journal was not discarded and the disk mounted"
+  findmnt -rno OPTIONS --mountpoint "$dir" | grep -q '^rw,' || fail "not read-write after the journal was discarded"
+  [ "$(listing)" = "$tree" ] || fail "discarding the journal changed a file, its size or its date"
+  grep -Eqx "[0-9TZ:-]+ ata-SYNTHETIC_FAST-part2 $journal" "$NB_DISCARDED" || fail "record: $(cat "$NB_DISCARDED")"
+  [ "$(keep FAST "$fuuid" ntfs rw "$journal")" = kept ] || fail "a second run did not keep the read-write mount"
+  echo more >"$dir/new.txt" || fail "could not write after the journal was discarded"
+  legacy unmount old-hdd >/dev/null
+  settled
+  [ "$(probed "$fast" | cut -d' ' -f1)" = clean ] || fail "after the discard the probe reads $(probed "$fast")"
+  [ "$(wc -l <"$NB_DISCARDED")" = 1 ] || fail "the discard was recorded more than once"
+  echo "ok   with that journal named, it is discarded once, the files are as they were, and the disk mounts read-write"
+
+  # Windows used the disk again: another journal, which the old pin does not name.
+  open_journal "$fast" 2.0 200000
+  before=$(sum FAST)
+  read -r state later <<<"$(probed "$fast")"
+  if [ "$state" != unclean ] || [ "$later" = "$journal" ]; then fail "a later journal reads as $state $later (the first was $journal)"; fi
+  if keep FAST "$fuuid" ntfs rw "$journal" 2>/tmp/legacy/err; then fail "an old confirmation discarded a later journal"; fi
+  grep -q "Windows has used the disk since" /tmp/legacy/err || fail "later journal message: $(cat /tmp/legacy/err)"
+  [ "$(sum FAST)" = "$before" ] || fail "a refused discard changed the disk"
+  # Windows 7 and older leave version 1.1, which ntfs-3g.probe calls unclean (15).
+  open_journal "$fast" 1.1 300000
+  read -r state later <<<"$(probed "$fast")"
+  [ "$state" = unclean ] || fail "an open 1.1 journal reads as $state"
+  [ "$(keep FAST "$fuuid" ntfs rw "$later")" = $'discarded\nmounted' ] || fail "an open 1.1 journal was not discarded when named"
+  legacy unmount old-hdd >/dev/null
+  settled
+  echo "ok   a confirmation names one journal: a later one is refused until it is named itself"
+
+  # Never discarded, named or not: a hibernated Windows on the volume itself
+  # ($ntfs holds hiberfil.sys by now), or a volume marked for chkdsk.
+  cp /tmp/legacy/NTFS.img /tmp/legacy/NTFS.bak
+  cp /tmp/legacy/DIRTY.img /tmp/legacy/DIRTY.bak
+  open_journal "$ntfs" 2.0 400000
+  before=$(sum NTFS)
+  read -r state later <<<"$(probed "$ntfs")"
+  [ "$state" = hibernated ] || fail "a hibernated Windows with an open journal reads as $state"
+  if keep NTFS "$uuid" ntfs rw "$later" 2>/tmp/legacy/err; then fail "discarded the journal of a hibernated Windows"; fi
+  grep -q "it holds a hibernated Windows" /tmp/legacy/err || fail "hibernated message: $(cat /tmp/legacy/err)"
+  [ "$(sum NTFS)" = "$before" ] || fail "a hibernated disk was changed"
+  open_journal "$dirty" 2.0 500000
+  before=$(sum DIRTY)
+  read -r state later <<<"$(probed "$dirty")"
+  [ "$state" = chkdsk ] || fail "a volume marked for chkdsk with an open journal reads as $state"
+  if legacy mount ata-SYNTHETIC_DIRTY 2 "$(blkid -p -o value -s UUID "$dirty")" ntfs rw dirty 101000 101000 "$later" 2>/tmp/legacy/err; then
+    fail "discarded the journal of a volume marked for chkdsk"
+  fi
+  grep -q "Windows marked it for a disk check" /tmp/legacy/err || fail "chkdsk message: $(cat /tmp/legacy/err)"
+  [ "$(sum DIRTY)" = "$before" ] || fail "a disk marked for chkdsk was changed"
+  test "$(wc -l <"$NB_DISCARDED")" = 2 || fail "a refused discard was recorded"
+  echo "ok   the journal of a hibernated Windows or of a volume marked for chkdsk is never discarded"
+  # Later checks use these images as they were.
+  dd if=/tmp/legacy/NTFS.bak of="$ntfs" bs=1M conv=fsync status=none
+  dd if=/tmp/legacy/DIRTY.bak of="$dirty" bs=1M conv=fsync status=none
+  rm /tmp/legacy/NTFS.bak /tmp/legacy/DIRTY.bak
 }
 
 # nb-legacy-copy: the kept NTFS disk copied into a volume. pvesm and pvesh

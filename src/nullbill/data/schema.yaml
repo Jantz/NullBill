@@ -131,6 +131,11 @@ $defs:
       wipe: {type: boolean}
       # legacy only. ro (default) or rw; rw only on NTFS that checks clean.
       mode: {enum: [ro, rw]}
+      # legacy, mode rw only. Journals Windows left open that apply may
+      # discard before the mount, each by the fingerprint the probe read
+      # (partitions[].journal): what that Windows session had not finished
+      # writing is lost. A journal not named here is never discarded.
+      discard_journal: {type: array, minItems: 1, uniqueItems: true, items: {type: string, pattern: "^j[0-9a-f]{12}$"}}
       # legacy only. Partition numbers to keep; default every partition
       # with NTFS, exFAT or FAT.
       partitions: {type: array, minItems: 1, uniqueItems: true, items: {type: integer, minimum: 1}}

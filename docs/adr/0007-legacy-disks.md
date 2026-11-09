@@ -35,6 +35,37 @@ What was checked before deciding (2026-11-07):
 - Debian 13 has util-linux 2.41.5, whose `mount` supports
   `X-mount.idmap=`.
 
+Checked on 2026-11-09, for making a kept disk read-write when Windows did not
+shut it down fully (`ntfs-3g` 2022.10.3-5+deb13u3, loop images;
+`tools/host-check/legacy-disk.sh` repeats each of these):
+
+- `ntfs-3g.probe --readwrite` exits 14 in two cases, which its message
+  tells apart: "Windows is hibernated" for a `hiberfil.sys` on the volume
+  itself, and "Metadata kept in Windows cache" when the journal's restart
+  page is version 2.0 (`libntfs-3g/volume.c`, `ntfs_volume_check_logfile`).
+  Windows 8 and later keep the journal at 2.0 while the volume is in use, so
+  that is what Fast Startup, hibernation with Windows on another disk, a
+  pulled cable or a power cut leave. Exit 15 is a version 1.1 journal still
+  in use (Windows 7 and older).
+- `ntfs-3g.probe --readwrite`, `ntfsinfo -f -m` (the volume's flags) and
+  `ntfscat -f -i 2` (the journal) also work while `ntfs-3g` has the
+  partition mounted read-only, and leave the image byte for byte unchanged.
+- `ntfsfix -d` on a volume with such a journal rewrites `$LogFile` (emptied)
+  and `$Volume`'s record in `$MFT` and `$MFTMirr` (flags), nothing else:
+  every file's contents, name, size and date read the same before and
+  after. Without `-d` it leaves the dirty flag set, which asks Windows for
+  chkdsk and which the read-write check refuses.
+- `ntfsrecover` (same package) replays a journal instead of emptying it. It
+  refuses a 2.0 journal without `--kill-fast-restart`, which its man page
+  calls dangerous, and it could not be tried here: `ntfs-3g` writes no
+  journal, so no test image holds one Windows wrote. Not used.
+- `ntfs3` replays journals in the kernel. Not used: neither CI's nor the
+  sandbox's kernel has it, so nothing here could test it.
+
+The journals in these checks are restart pages the check writes itself,
+laid out as `ntfs-3g`'s `layout.h` gives them. No volume Windows itself left
+unclean has been through this yet; the first one is the owner's.
+
 ## Decision
 
 **Disk use `legacy`.** `disks.<id>: {use: legacy}` in `config.yaml` (or on
@@ -50,7 +81,33 @@ read-write mount the host script requires `ntfs-3g.probe --readwrite` to
 pass and `ntfsinfo -m` to accept the volume, and after mounting it checks
 that the mount really is read-write. exFAT and FAT carry no hibernation
 mark that Linux can read, so they are read-only. Nothing in NullBill runs
-`fsck`, `ntfsfix`, `wipefs` or `mkfs` on a legacy disk.
+`fsck`, `wipefs` or `mkfs` on a legacy disk, and `ntfsfix` only as below.
+
+**How Windows left it is read before anything changes** (2026-11-09). The
+probe reads each NTFS partition's state with the three read-only commands
+above: `clean`, `unclean` (journal left open), `hibernated` (`hiberfil.sys`),
+`chkdsk` (dirty flag) or `damaged`, and a fingerprint of the journal (SHA-256
+of its two restart pages, which hold that Windows session's log positions).
+The page shows the state beside the choice, plan refuses `mode: rw` on
+anything but `clean`, and apply reads the state again before it stops the
+files or Jellyfin guest, so a refusal leaves everything running. Before
+this, the refusal came after the guests had stopped and left them stopped.
+
+**Discarding a journal takes a pin that names it.** The lossless way out of
+`unclean` is Windows: any Windows PC replays the journal when it mounts the
+volume, and a full shutdown closes it. Where that Windows is gone,
+`disks.<id>.discard_journal: [<fingerprint>]` lets `nb-legacy-disk` run
+`ntfsfix -d` once, before the read-write mount. What is lost is whatever
+that Windows session had logged or cached and not yet written in place; the
+files as a read-only mount shows them are not changed. The pin names one
+journal, so it is spent once used: if Windows uses the disk again, the
+journal differs and is refused until the owner confirms that one. On the
+page the confirmation takes the end of the disk's name, typed, like an
+erase. `hibernated`, `chkdsk` and `damaged` are never cleared here: a
+hibernated Windows would write its old view of the disk over later changes,
+and a dirty flag means Windows itself found the volume inconsistent, which
+only chkdsk mends. Each discard is recorded on the host in
+`/var/lib/nullbill/discarded-journals`.
 
 **ntfs-3g as the NTFS driver.** `ntfs-3g.probe` is needed on the host in any
 case, because `ntfs3` cannot tell a hibernated volume. Using `ntfs-3g` for

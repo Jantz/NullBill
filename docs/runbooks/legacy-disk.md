@@ -28,7 +28,9 @@ half asleep. NullBill then keeps it read-only and refuses to let you change
 files on it, so that neither side overwrites the other's changes. If you only
 want to read the files, this does not matter.
 
-If the old PC no longer starts, keep the disk read-only.
+If the old PC no longer starts, or the disk is in the server already, see
+[Change files on it](#change-files-on-it) below: the page tells how Windows
+left the disk and what can be done.
 
 ## Steps
 
@@ -37,8 +39,8 @@ If the old PC no longer starts, keep the disk read-only.
    **What to run** card lists the disk under **Other disks** with its
    partitions, labels, sizes and health.
 3. Choose **Keep its files and share them to me**. Tick **Let me change
-   files on it** only if you need to, and only for an NTFS disk Windows shut
-   down fully. Press **Save and plan** and check the **Plan** card: the disk
+   files on it** only if you need to (see [Change files on
+   it](#change-files-on-it)). Press **Save and plan** and check the **Plan** card: the disk
    shows as `use: legacy` with each partition it keeps, and a `files` guest
    appears.
 4. **Run setup**. The tofu stage mounts the disk under `/mnt/nb-legacy` on
@@ -67,6 +69,53 @@ device at home needs Tailscale too:
 Only SMB 3 with encryption gets in; very old clients (Windows 7, old NAS
 apps) cannot connect. No guest or anonymous access; wrong passwords show up
 in the failed-login alert like a wrong SSH key does.
+
+## Change files on it
+
+The share is read-only until you tick **Let me change files on it** on the
+**Setup** page, under **What to run**, and run setup. Only NTFS can be
+changed, and only once Windows has shut the disk down fully. NullBill
+checks that each time it reads the hardware, without writing to the disk,
+and the disk's card says what it found:
+
+- **Checked: Windows shut this disk down fully.** Tick the box, press
+  **Save and plan**, run setup. Setup stops the share and Jellyfin for a
+  moment, mounts the disk read-write and starts them again. No file is
+  touched.
+- **Not checked yet.** The server reads this only once it keeps an NTFS
+  disk. Run setup once with the disk kept read-only, press **Read the
+  hardware**, and look again. If you tick the box anyway, setup checks
+  before it changes anything and stops there if the disk is not fit; the
+  share stays up, read-only.
+- **Windows did not shut this disk down fully.** This is what a normal
+  **Shut down** with Fast Startup leaves (the Windows default), and also
+  hibernation or pulling the disk while Windows runs. The disk may hold
+  changes Windows has not finished writing. Two ways out:
+
+  1. **Lose nothing.** Connect the disk to any Windows PC (a USB dock will
+     do), wait until it shows in File Explorer, then shut that PC down with
+     `shutdown /s /t 0`. Put the disk back, press **Read the hardware**; the
+     card then says it was shut down fully.
+  2. **That Windows is gone, or the disk cannot be moved.** Tick **Discard
+     what Windows left unfinished** and type the end of the disk's name.
+     Setup then empties the journal Windows left on the disk (`ntfsfix -d`)
+     and mounts it read-write. Every file you can open today stays as it
+     is. What is lost are changes Windows had not finished writing; after a
+     normal Shut down there are usually none, after a crash or a pulled
+     cable there may be some. Do not use this while a hibernated Windows
+     that had this disk open will start again with it: it would write its
+     old view over your changes. The confirmation counts for the disk as it
+     is now. If Windows uses the disk again, you are asked again.
+- **A partition holds a hibernated Windows**, or **Windows marked this disk
+  for a disk check**. NullBill does not clear these. Start that Windows and
+  shut it down fully, or run `chkdsk /f` on the disk from a Windows PC, then
+  read the hardware again.
+
+Until one of these is done the disk stays as it is, read-only, and setup
+does not fail because of it unless the box is ticked.
+
+Jellyfin always sees the disk read-only. Files you add over the share show
+up in Jellyfin after its next library scan.
 
 ## If the disk goes missing
 
@@ -126,6 +175,8 @@ disks:
   ata-EXAMPLE_DISK:
     use: legacy
     mode: ro            # rw: NTFS only, after a full Windows shutdown
+    # discard_journal: [jb95e30db0b42]  # with rw: the journal Windows left
+    #                     # open, by the fingerprint plan's error names
     partitions: [2]     # which ones; default: every NTFS, exFAT or FAT one
     share: true         # false: mount on Proxmox only, no files guest
     name: photos        # share name; default: the partition's label
@@ -147,6 +198,7 @@ A copy is a volume of the files guest. To put it somewhere else, use
 **Resources**); setup leaves it where you put it.
 
 On the host, `nb-legacy-disk list` shows what is kept and whether it is
-mounted, and `nb-legacy-copy list` the verified copies
+mounted, `/var/lib/nullbill/discarded-journals` each journal setup discarded
+(time, partition, fingerprint), and `nb-legacy-copy list` the verified copies
 (name, volume, GiB, files, bytes, disk). `journalctl -u 'nb-legacy-copy-*'`
 shows a copy's progress.

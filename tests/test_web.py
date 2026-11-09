@@ -824,6 +824,96 @@ def test_keeping_a_disk_plans_the_share_and_shows_where_it_is(site):
     assert pins(app) is None and client.call("/api/state")[1]["files"] is None
 
 
+def probed_ntfs(app, state, journal="jb95e30db0b42"):
+    """The large class, read again, with how Windows left the old disk's NTFS."""
+    path = app.home / "probe" / "latest" / "facts.json"
+    facts = json.loads(path.read_text())
+    part = next(d for d in facts["disks"] if d["id"] == OLD)["partitions"][1]
+    part["rw_state"], part["journal"] = state, journal
+    path.write_text(json.dumps(facts))
+
+
+def write_of(client):
+    return {d["id"]: d for d in client.call("/api/state")[1]["disks"]}[OLD]["write"]
+
+
+def test_changing_files_waits_for_a_disk_windows_shut_down_fully(site):
+    app, client = site
+    sign_in(app, client)
+    probed(app)
+    keep = {"choice": "keep", "rw": True}
+    # Not read yet (no ntfs-3g on the host before the first setup): allowed; setup checks.
+    assert write_of(client) == {"state": None, "discard": False, "can_discard": False}
+    probed_ntfs(app, "clean")
+    assert write_of(client)["state"] == "clean"
+    assert client.call("/api/choices", {**OWNER, "disks": {OLD: keep}})[0] == 200
+    assert pins(app) == {OLD: {"use": "legacy", "mode": "rw"}}
+    client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "keep"}}})
+    # States only Windows mends: refused beside the control, with what to do.
+    for state, said in (("hibernated", "Start that Windows"), ("chkdsk", "run chkdsk /f"), ("damaged", "Copy what you need off it")):
+        probed_ntfs(app, state)
+        assert write_of(client) == {"state": state, "discard": False, "can_discard": False}
+        status, data = client.call("/api/choices", {**OWNER, "disks": {OLD: keep | {"discard": True, "discard_confirm": "D_0002"}}})
+        assert status == 400 and "its files cannot be changed yet" in data["error"] and said in data["error"]
+        assert pins(app) == {OLD: {"use": "legacy"}}
+
+
+def test_what_windows_left_unfinished_is_discarded_only_on_the_owners_typed_word(site):
+    app, client = site
+    sign_in(app, client)
+    probed(app)
+    probed_ntfs(app, "unclean")
+    client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "keep"}}})
+    assert write_of(client) == {"state": "unclean", "discard": False, "can_discard": True}
+    keep = {"choice": "keep", "rw": True}
+    status, data = client.call("/api/choices", {**OWNER, "disks": {OLD: keep}})
+    assert status == 400 and "Windows did not shut it down fully" in data["error"]
+    assert "or tick Discard what Windows left unfinished" in data["error"]
+    status, data = client.call("/api/choices", {**OWNER, "disks": {OLD: keep | {"discard": True, "discard_confirm": "0002"}}})
+    assert (status, data["error"]) == (400, f"{OLD}: type D_0002, the end of its name, to discard what Windows left unfinished on it")
+    assert pins(app) == {OLD: {"use": "legacy"}}
+    status, data = client.call("/api/choices", {**OWNER, "disks": {OLD: keep | {"discard": True, "discard_confirm": " D_0002 "}}})
+    assert status == 200 and data["plan"]["errors"] == []
+    assert pins(app) == {OLD: {"use": "legacy", "mode": "rw", "discard_journal": ["jb95e30db0b42"]}}
+    assert write_of(client) == {"state": "unclean", "discard": True, "can_discard": True}
+    # Saved as it is again, nothing to type; the pin stays.
+    assert client.call("/api/choices", {**OWNER, "disks": {OLD: keep | {"discard": True}}})[0] == 200
+    assert pins(app)[OLD]["discard_journal"] == ["jb95e30db0b42"]
+    # Windows used the disk since: another journal, which nobody confirmed.
+    probed_ntfs(app, "unclean", "j1f63daad72c7")
+    assert write_of(client)["discard"] is False
+    status, data = client.call("/api/choices", {**OWNER, "disks": {OLD: keep | {"discard": True}}})
+    assert status == 400 and "type D_0002" in data["error"]
+    # Setup made it read-write: the page says so before the hardware is read again,
+    probed_ntfs(app, "unclean")
+    mount = {"disk": OLD, "n": 2, "mode": "rw", "name": "data", "mount": "/mnt/nb-legacy/data"}
+    (app.home / "disks.json").write_text(json.dumps({"mounts": [mount], "unconverted": []}))
+    assert write_of(client) == {"state": "editable", "discard": False, "can_discard": False}
+    # and once it is, the spent confirmation goes with the next change.
+    (app.home / "disks.json").unlink()
+    probed_ntfs(app, "clean", "j7d2c7ac4888b")
+    client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "keep"}}})
+    assert pins(app) == {OLD: {"use": "legacy"}}
+    # A journal nobody could read cannot be named.
+    probed_ntfs(app, "unclean", None)
+    assert write_of(client) == {"state": "unclean", "discard": False, "can_discard": False}
+    status, data = client.call("/api/choices", {**OWNER, "disks": {OLD: keep | {"discard": True, "discard_confirm": "D_0002"}}})
+    assert status == 400 and "its journal could not be read" in data["error"]
+
+
+def test_only_ntfs_can_be_changed(site):
+    app, client = site
+    sign_in(app, client)
+    probed(app)
+    path = app.home / "probe" / "latest" / "facts.json"
+    facts = json.loads(path.read_text())
+    next(d for d in facts["disks"] if d["id"] == OLD)["partitions"][1]["fstype"] = "exfat"
+    path.write_text(json.dumps(facts))
+    assert write_of(client) == {"state": "other", "why": "partition 2 holds exFAT", "discard": False, "can_discard": False}
+    status, data = client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "keep", "rw": True}}})
+    assert (status, data["error"]) == (400, f"{OLD}: its files cannot be changed: partition 2 holds exFAT, and only NTFS can be changed")
+
+
 def test_erasing_a_disk_needs_the_end_of_its_name(site):
     app, client = site
     sign_in(app, client)

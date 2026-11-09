@@ -34,7 +34,7 @@ from nullbill.errors import NullBillError
 from nullbill.flows import mac
 from nullbill.home import REPO_ROOT
 from nullbill.model import node_exporter_guest
-from nullbill.probe import Runner
+from nullbill.probe import NTFS_CHECK, Runner, ntfs_state
 from nullbill.proxy import PROXY, proxy_port
 from nullbill.render import strip_notes
 from nullbill.secretfile import Secrets
@@ -881,6 +881,31 @@ def free_moved(ctx: Context) -> None:
         ctx.say(f"tofu: freed {old}, the old place of a moved copy")
 
 
+def check_writable(ctx: Context, m: dict) -> None:
+    """Before anything stops for a partition that is to become read-write:
+    read, on the host, how Windows left it (probe.NTFS_CHECK), and stop the
+    run here, with the share and Jellyfin still up, when it cannot be."""
+    dev = f"/dev/disk/by-id/{m['disk']}-part{m['n']}"
+    _, out, _ = ctx.reach.host(f"d=$(readlink -f {shlex.quote(dev)}); {NTFS_CHECK}")
+    state, journal = ntfs_state(out)
+    confirmed = [m["discard_journal"]] if "discard_journal" in m else []
+    problem = legacy.rw_problem(f"disks.{m['disk']}", m["n"], state, journal, confirmed)
+    if problem:
+        raise ApplyError("tofu", f"{problem} Nothing was changed.")
+
+
+def resume_guests(ctx: Context) -> None:
+    """After a mount was refused: start the guests this run stopped for it,
+    so a refused change does not leave the share and Jellyfin down."""
+    for stopped, exists, running, vmid in (
+        (ctx.files_stopped, files_mount_points, files_running, files_vmid),
+        (ctx.media_stopped, media_mount_points, media_running, media_vmid),
+    ):
+        if stopped and exists(ctx) is not None and not running(ctx):
+            rc, _, _ = ctx.reach.host(f"pct start {vmid(ctx)}")
+            ctx.say(f"tofu: {'started' if rc == 0 else 'could not start'} guest {vmid(ctx)} again after the refused mount")
+
+
 def legacy_disks(ctx: Context) -> None:
     """Mount each kept partition and unmount those the plan dropped. The
     host script refuses anything unsafe (nb-legacy-disk)."""
@@ -891,6 +916,9 @@ def legacy_disks(ctx: Context) -> None:
         listed[name] = (uuid, mode, fstype, state)
     gone = sorted(set(listed) - set(want))
     changed = [n for n in want if n in listed and listed[n] != (want[n]["uuid"], want[n]["mode"], want[n]["fstype"], "mounted")]
+    for name, m in sorted(want.items()):
+        if m["mode"] == "rw" and m["fstype"] == "ntfs" and (name not in listed or name in changed):
+            check_writable(ctx, m)
     detach_stale(ctx)
     detach_media(ctx)
     if gone or changed:
@@ -902,8 +930,17 @@ def legacy_disks(ctx: Context) -> None:
     host_id = str(legacy.HOST_ID_OFFSET + legacy.SHARE_UID)
     for name, m in sorted(want.items()):
         argv = [LEGACY, "mount", m["disk"], str(m["n"]), m["uuid"], m["fstype"], m["mode"], name, host_id, host_id]
-        if host_out(ctx, "tofu", shlex.join(argv)).strip() == "mounted":
-            ctx.say(f"tofu: mounted partition {m['n']} of {m['disk']} {'read-write' if m['mode'] == 'rw' else 'read-only'} at {m['mount']}")
+        # The one journal the owner let apply discard, if Windows left it.
+        argv += [m["discard_journal"]] if "discard_journal" in m else []
+        try:
+            out = host_out(ctx, "tofu", shlex.join(argv))
+        except ApplyError:
+            resume_guests(ctx)
+            raise
+        if out.strip().endswith("mounted"):
+            how = "read-write" if m["mode"] == "rw" else "read-only"
+            cleared = ", after discarding the journal Windows left" if "discarded" in out else ""
+            ctx.say(f"tofu: mounted partition {m['n']} of {m['disk']} {how} at {m['mount']}{cleared}")
             ctx.legacy_mounted = True
     record_disks(ctx, list(want.values()))
 

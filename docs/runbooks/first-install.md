@@ -89,8 +89,10 @@ now.
 
    A normal shutdown with Fast Startup on (the Windows default) leaves the
    disk half asleep. NullBill then keeps it read-only and does not let you
-   change files on it. If the PC no longer starts, or you only want to read
-   the files, skip this step. Do not start Windows from that disk again.
+   change files on it until that is mended
+   ([legacy-disk.md](legacy-disk.md), Change files on it). If the PC no
+   longer starts, or you only want to read the files, skip this step. Do not
+   start Windows from that disk again.
 4. **Copy what you cannot lose.** NullBill does not back a kept disk up.
    Anything on a disk you mark as the system disk is erased in part 6.
 
@@ -288,8 +290,9 @@ made one.
    - **Other disks**: each disk besides the system disk, with its
      partitions, labels, sizes and health. A blank one is used for backups.
      For a kept disk choose **Keep its files and share them to me**; tick
-     **Let me change files on it** only for an NTFS disk Windows shut down
-     fully (part 2), and only if you need to.
+     **Let me change files on it** only if you need to. Once the server
+     keeps the disk, its card says whether Windows shut it down fully
+     (part 2) and what to do if not.
    - **Your Tailscale login**: exactly as noted in part 1.
    - Press **Save and plan**.
 7. **Setup** page, **Plan** tab: **Fits** and a memory bar show how the

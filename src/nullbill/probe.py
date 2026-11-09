@@ -5,6 +5,7 @@ facts. Splitting them lets the golden tests feed synthetic raw output through
 the same parser the real host uses.
 """
 
+import hashlib
 import json
 import re
 import subprocess
@@ -13,6 +14,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from nullbill.errors import NullBillError
+
+# One NTFS partition, $d, as Windows left it. Each tool only reads, also
+# while the partition is mounted read-only (tools/host-check compares the
+# image before and after): what ntfs-3g would say to a read-write mount,
+# the volume's flags, and a fingerprint of the journal's two restart pages,
+# which name the Windows session that wrote them.
+NTFS_CHECK = (
+    'echo "== $d"; ntfs-3g.probe --readwrite "$d" 2>&1; echo "probe=$?"; '
+    "ntfsinfo -f -m \"$d\" 2>/dev/null | grep -i 'volume flags'; "
+    'echo "journal=j$(ntfscat -f -i 2 "$d" 2>/dev/null | head -c 8192 | sha256sum | cut -c1-12)"'
+)
 
 # name -> (command, required). Every command is read-only.
 COMMANDS: dict[str, tuple[str, bool]] = {
@@ -39,6 +51,17 @@ COMMANDS: dict[str, tuple[str, bool]] = {
     # made storage or the PBS disk is known as such, not as a disk with
     # signatures.
     "pvs": ("pvs --reportformat json -o pv_name,vg_name", False),
+    # Whether Windows left each NTFS partition of a real disk (one with a
+    # by-id name) fit to be changed; none until apply has installed ntfs-3g
+    # for a kept NTFS disk.
+    "ntfs": (
+        "command -v ntfs-3g.probe >/dev/null || exit 127; "
+        'for p in /dev/disk/by-id/*-part*; do d=$(readlink -f "$p"); '
+        'case " $seen " in *" $d "*) continue ;; esac; seen="$seen $d"; '
+        '[ "$(blkid -p -o value -s TYPE "$d" 2>/dev/null)" = ntfs ] || continue; '
+        f"{NTFS_CHECK}; done; true",
+        False,
+    ),
 }
 
 Runner = Callable[[str, str], tuple[int, str, str]]
@@ -146,12 +169,13 @@ def _legacy_mount(path: str) -> bool:
     return path.startswith(LEGACY_ROOT + "/")
 
 
-def _partitions(dev: dict) -> list[dict]:
+def _partitions(dev: dict, ntfs: dict[str, tuple[str | None, str | None]]) -> list[dict]:
     parts = []
     for child in dev.get("children", []):
         if child.get("type") != "part":
             continue
         mounts = [m for m in child.get("mountpoints") or [] if m]
+        state, journal = ntfs.get(child.get("name"), (None, None))
         parts.append(
             {
                 "n": child.get("partn"),
@@ -164,9 +188,55 @@ def _partitions(dev: dict) -> list[dict]:
                 "mounts": mounts,
                 # Bytes in use; known only while mounted.
                 "used_bytes": int(child["fsused"]) if child.get("fsused") is not None else None,
+                # NTFS only: whether Windows left it fit to be changed
+                # (NTFS_STATES; None when not read), and its journal's
+                # fingerprint, which a pin to discard that journal names.
+                "rw_state": state,
+                "journal": journal,
             }
         )
     return sorted(parts, key=lambda p: p["n"] or 0)
+
+
+# What a read-write mount of an NTFS partition would meet. Only "clean"
+# mounts read-write; "unclean" does once the owner discards the journal
+# (legacy.py); the others need Windows.
+NTFS_STATES = ("clean", "unclean", "hibernated", "chkdsk", "damaged")
+NO_JOURNAL = "j" + hashlib.sha256(b"").hexdigest()[:12]
+
+
+def ntfs_state(text: str) -> tuple[str | None, str | None]:
+    """NTFS_CHECK's output for one partition: its state, or None when the
+    tools could not tell, and the journal's fingerprint.
+
+    ntfs-3g.probe exits 14 for a hibernated Windows on the volume itself
+    (hiberfil.sys) and for a journal Windows keeps open (Fast Startup,
+    hibernation with the system on another disk, a pulled cable; the journal
+    is version 2.0 then), and 15 for an older journal left unclean. It passes
+    a volume Windows marked for chkdsk, which the volume's dirty flag tells."""
+    probe = re.search(r"^probe=(\d+)$", text, re.MULTILINE)
+    flags = re.search(r"volume flags:\s*0x([0-9a-f]+)", text, re.IGNORECASE)
+    journal = re.search(r"^journal=(j[0-9a-f]{12})$", text, re.MULTILINE)
+    rc = int(probe.group(1)) if probe else None
+    state = None
+    if rc == 13:
+        state = "damaged"
+    elif flags and int(flags.group(1), 16) & 1:
+        state = "chkdsk"
+    elif rc == 14 and "Windows is hibernated" in text:
+        state = "hibernated"
+    elif rc in (14, 15):
+        state = "unclean"
+    elif rc == 0 and flags:
+        state = "clean"
+    # The hash of nothing names no journal: ntfscat could not read it.
+    return state, journal.group(1) if journal and journal.group(1) != NO_JOURNAL else None
+
+
+def _ntfs(text: str | None) -> dict[str, tuple[str | None, str | None]]:
+    """kernel name (sda2) -> state and journal fingerprint."""
+    parts = re.split(r"^== (/dev/\S+)$", text or "", flags=re.MULTILINE)
+    return {Path(device).name: ntfs_state(body) for device, body in zip(parts[1::2], parts[2::2], strict=True)}
 
 
 def _copies(text: str | None) -> list[dict]:
@@ -213,8 +283,11 @@ def _volume_groups(text: str | None) -> dict[str, str]:
     return out
 
 
-def _disks(lsblk_text: str, by_id_text: str, smart_text: str | None = None, pvs_text: str | None = None) -> list[dict]:
+def _disks(
+    lsblk_text: str, by_id_text: str, smart_text: str | None = None, pvs_text: str | None = None, ntfs_text: str | None = None
+) -> list[dict]:
     ids = _disk_ids(by_id_text)
+    ntfs = _ntfs(ntfs_text)
     smart = _smart(smart_text, ids)
     groups = _volume_groups(pvs_text)
     disks = []
@@ -235,7 +308,7 @@ def _disks(lsblk_text: str, by_id_text: str, smart_text: str | None = None, pvs_
                 "rotational": bool(dev.get("rota")),
                 "system": mounted or holds_pve,
                 "signatures": signatures,
-                "partitions": _partitions(dev),
+                "partitions": _partitions(dev, ntfs),
                 "vgs": sorted({groups[n["name"]] for n in nodes if n.get("name") in groups}),
                 "smart": smart.get(ids.get(dev["name"], dev["name"]), {"health": "unknown"}),
             }
@@ -321,7 +394,7 @@ def parse(raw: Path) -> dict:
         "pve_version": version.group(1) if version else None,
         "cpu": _cpu(texts["lscpu"]),
         "memory_mib": _memory_mib(texts["meminfo"]),
-        "disks": _disks(texts["lsblk"], texts["disk-by-id"], texts["smart"], texts["pvs"]),
+        "disks": _disks(texts["lsblk"], texts["disk-by-id"], texts["smart"], texts["pvs"], texts["ntfs"]),
         "storage": _storage(texts["storage"]),
         "gpus": _gpus(texts["lspci"], texts["iommu"], texts["nvidia-smi"]),
         "copies": _copies(texts["copies"]),

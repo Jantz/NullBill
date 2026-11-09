@@ -84,6 +84,12 @@ ADVICE = [
         "and press Save and plan, or free space in Proxmox and read the hardware again.",
     ),
     (r"could not read VRAM", "Under Setup, What to run, give the graphics card's memory in GB, as on its box, then press Save and plan."),
+    (
+        r"stays read-only: |cannot be read-write|not the one you said may be discarded",
+        "The disk is as it was, still read-only, and nothing on it was changed. Press Read the hardware under Setup, then look "
+        "at the disk under What to run: it says how Windows left it and what to do. Or untick Let me change files on it "
+        "there. Then press Save and plan and run setup again.",
+    ),
     (r"no host-shared GPU budgets VRAM", "Untick Local AI models under Setup, What to run, then press Save and plan."),
     (
         r"nouveau driver holds the graphics card",

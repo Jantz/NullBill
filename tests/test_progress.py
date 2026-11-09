@@ -140,3 +140,13 @@ def test_advice_by_cause_then_by_stage():
 def test_a_proxy_refusal_says_the_site_is_not_allowed():
     text = "Request failed: <urlopen error Tunnel connection failed: 403 Forbidden>"
     assert advice(text, "ca").startswith("NullBill's internet proxy refused a site")
+
+
+def test_a_refused_read_write_disk_points_at_its_card():
+    """From plan, from apply's early check and from the host script alike."""
+    for message in (
+        "disks.ata-SYNTHETIC_HDD_0002.mode: partition 2 stays read-only: Windows did not shut it down fully",
+        "nb-legacy-disk on the host: nb-legacy-disk: /dev/disk/by-id/x cannot be read-write: it holds a hibernated Windows",
+        "nb-legacy-disk: the journal on it now (j1f63daad72c7) is not the one you said may be discarded (jb95e30db0b42)",
+    ):
+        assert "look at the disk under What to run" in advice(message, "tofu")

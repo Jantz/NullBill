@@ -38,7 +38,42 @@ SHARE_UID = 1000
 SHARE_USER = "nbshare"
 HOST_ID_OFFSET = 100000
 # Keys of a disk pin that only mean something for a legacy disk.
-LEGACY_KEYS = ("mode", "partitions", "share", "name")
+LEGACY_KEYS = ("mode", "partitions", "share", "name", "discard_journal")
+RUNBOOK = "docs/runbooks/legacy-disk.md"
+# Why an NTFS partition cannot be mounted read-write, by its probed state
+# (probe.NTFS_STATES), and what the owner does about it. Only "unclean" has
+# a way without Windows: discarding the journal Windows left (ADR 0007).
+RW_WHY = {
+    "unclean": "Windows did not shut it down fully (Fast Startup, hibernation, or it was unplugged while in use)",
+    "hibernated": "it holds a hibernated Windows (hiberfil.sys)",
+    "chkdsk": "Windows marked it for a disk check",
+    "damaged": "its NTFS is inconsistent or the disk is failing",
+}
+RW_FIX = {
+    "unclean": (
+        "Connect the disk to a Windows PC, shut that PC down with shutdown /s /t 0 and put it back; or, when "
+        "that Windows is gone for good, discard what it left unfinished"
+    ),
+    "hibernated": "Start that Windows and shut it down with shutdown /s /t 0",
+    "chkdsk": "Connect the disk to a Windows PC and run chkdsk /f on it",
+    "damaged": "Copy what you need off it, then run chkdsk /f on it in Windows",
+}
+
+
+def rw_problem(where: str, n: int, state: str | None, journal: str | None, discard: list[str]) -> str | None:
+    """What stops partition n from being mounted read-write, if anything.
+    discard holds the journal fingerprints the owner pinned: one journal,
+    as one Windows session left it, each. A state nobody could read (None)
+    stops nothing here; nb-legacy-disk refuses what is unsafe at the mount."""
+    if state not in RW_WHY or (state == "unclean" and journal is not None and journal in discard):
+        return None
+    text = f"{where}: partition {n} stays read-only: {RW_WHY[state]}. {RW_FIX[state]}"
+    if state != "unclean":
+        return f"{text}; then probe again ({RUNBOOK})."
+    if discard:
+        return f"{text}. The journal you confirmed is not the one on the disk now; probe again and confirm again ({RUNBOOK})."
+    pin = f"discard_journal: [{journal}]" if journal else "discard_journal, once a probe has read its journal"
+    return f"{text} with {pin} ({RUNBOOK})."
 
 
 def _slug(label: str | None) -> str | None:
@@ -60,6 +95,9 @@ def plan_disk(disk_id: str, disk: dict, pin: dict, errors: list[str]) -> tuple[l
     if pin.get("wipe"):
         errors.append(f"{where}: use: legacy keeps the data; wipe: true makes no sense with it")
     mode = pin.get("mode", "ro")
+    discard = pin.get("discard_journal", [])
+    if discard and mode != "rw":
+        errors.append(f"{where}.discard_journal: only with mode: rw; a read-only disk is not changed at all")
     parts = {p["n"]: p for p in disk["partitions"]}
     if not parts:
         errors.append(f"{where}: no partition table; a filesystem on the whole disk cannot be kept yet")
@@ -97,6 +135,10 @@ def plan_disk(disk_id: str, disk: dict, pin: dict, errors: list[str]) -> tuple[l
                 f"{where}.mode: rw is for NTFS only; partition {n} holds {FILESYSTEMS[part['fstype']]}, "
                 "where a disk Windows left hibernated cannot be told, so it stays read-only"
             )
+        elif mode == "rw":
+            problem = rw_problem(f"{where}.mode", n, part.get("rw_state"), part.get("journal"), discard)
+            if problem:
+                errors.append(problem)
         chosen.append(part)
     if not chosen and not wanted:
         errors.append(f"{where}: no partition with NTFS, exFAT or FAT to keep; found {', '.join(left) or 'none'}")
@@ -117,8 +159,41 @@ def plan_disk(disk_id: str, disk: dict, pin: dict, errors: list[str]) -> tuple[l
         }
         if pin.get("share", True):
             entry["share"] = name
+        if mode == "rw" and part.get("rw_state") == "unclean" and part.get("journal") in discard:
+            # The journal apply clears before the mount, and no other.
+            entry["discard_journal"] = part["journal"]
         mounts.append(entry)
     return mounts, left
+
+
+# For the page: the worst first.
+WRITE_ORDER = ("other", "damaged", "chkdsk", "hibernated", "unclean", None, "clean")
+
+
+def write_state(parts: list[dict], discard: list[str], mounted_rw: set[int]) -> dict:
+    """Whether the partitions a disk keeps can be made read-write, for the
+    page: "editable" once apply mounted them so, else the worst of their
+    probed states ("other": one of them is not NTFS). discard says the pin
+    already names every journal Windows left open; can_discard that each
+    has a fingerprint to name."""
+    other = [p for p in parts if p["fstype"] not in READ_WRITE]
+    if other:
+        held = ", ".join(f"partition {p['n']} holds {FILESYSTEMS[p['fstype']]}" for p in other)
+        return {"state": "other", "why": held, "discard": False, "can_discard": False}
+    if parts and all(p["n"] in mounted_rw for p in parts):
+        return {"state": "editable", "discard": False, "can_discard": False}
+    state = min((p.get("rw_state") for p in parts), key=WRITE_ORDER.index, default=None)
+    journals = [p.get("journal") for p in parts if p.get("rw_state") == "unclean"]
+    return {
+        "state": state,
+        "discard": state == "unclean" and all(j in discard for j in journals),
+        "can_discard": state == "unclean" and all(journals),
+    }
+
+
+def journals(parts: list[dict]) -> list[str]:
+    """The fingerprints of the journals Windows left open on these partitions."""
+    return sorted(p["journal"] for p in parts if p.get("rw_state") == "unclean" and p.get("journal"))
 
 
 def mounts(plan: dict) -> list[dict]:
@@ -276,8 +351,14 @@ def note(mounts_: list[dict], left: list[str]) -> str:
     modes = {m["mode"] for m in mounts_}
     how = "read-write" if modes == {"rw"} else "read-only"
     shared = [m["share"] for m in mounts_ if "share" in m]
-    where = f" and shared to the owner over the VPN as {', '.join(shared)} (docs/runbooks/legacy-disk.md)" if shared else ""
+    where = f" and shared to the owner over the VPN as {', '.join(shared)} ({RUNBOOK})" if shared else ""
     text = f"Kept as it is: mounted {how} under {LEGACY_ROOT}{where}. Not backed up by NullBill; keep a copy elsewhere."
+    cleared = [str(m["n"]) for m in mounts_ if "discard_journal" in m]
+    if cleared:
+        text += (
+            f" Partition {', '.join(cleared)}: apply first discards the journal Windows left unfinished, as discard_journal says; "
+            "the files as they read now stay."
+        )
     if left:
         text += f" Left alone: {', '.join(left)}."
     return text

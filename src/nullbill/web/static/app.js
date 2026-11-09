@@ -624,6 +624,23 @@ function diskChoice(disk, value, keepable) {
   return [CHOICES[value], ""];
 }
 
+// Whether Windows left a kept disk fit to be changed (disk.write, from the
+// last hardware read, or "editable" once setup has made it so): a status
+// line, and for the states only Windows can mend, why the box cannot be ticked.
+const FULL_SHUTDOWN = "shutdown /s /t 0";
+function writeStatus(write) {
+  switch (write.state) {
+    case "editable": return ["good", "Its files can be changed now."];
+    case "clean": return ["good", "Checked: Windows shut this disk down fully. Setup makes it editable; no file is touched for that."];
+    case "unclean": return ["warn", "Windows did not shut this disk down fully. It stays read-only until you choose one of the two ways below."];
+    case "hibernated": return ["warn", `Not possible yet: a partition holds a hibernated Windows. Start that Windows, shut it down with ${FULL_SHUTDOWN}, then read the hardware again.`];
+    case "chkdsk": return ["warn", `Not possible yet: Windows marked this disk for a disk check. Connect it to a Windows PC, run chkdsk /f on it, shut that PC down with ${FULL_SHUTDOWN}, then read the hardware again.`];
+    case "damaged": return ["bad", "Not possible: its NTFS is inconsistent or the disk is failing. Copy what you need off it first; chkdsk /f on a Windows PC may mend it."];
+    case "other": return ["", `Not possible: ${write.why}, and only NTFS can be changed.`];
+    default: return ["", "Not checked yet. Setup checks the disk before it changes anything: if Windows did not shut it down fully, setup stops there and the disk stays shared as it is, read-only."];
+  }
+}
+
 function renderDisks(disks) {
   const list = $("disk-list");
   list.replaceChildren();
@@ -657,9 +674,31 @@ function renderDisks(disks) {
       choices.append(option(input, text, desc, why, ["erase", "copy"].includes(value) ? "danger-option" : ""));
     }
     box.append(choices);
-    const rwInput = make("input", {type: "checkbox", checked: disk.rw});
-    const rw = make("div", {className: "disk-sub disk-rw"}, make("div", {className: "options"},
-      option(rwInput, "Let me change files on it (NTFS only)", "Shut Windows down fully on that disk first, with shutdown /s /t 0, or it stays read-only.")));
+    const write = disk.write;
+    const [writeKind, writeText] = writeStatus(write);
+    const blocked = ["hibernated", "chkdsk", "damaged", "other"].includes(write.state);
+    const rwInput = make("input", {type: "checkbox", checked: disk.rw, disabled: blocked && !disk.rw});
+    rwInput.dataset.role = "rw";
+    const discardInput = make("input", {type: "checkbox", checked: disk.rw && write.discard, disabled: !write.can_discard});
+    discardInput.dataset.role = "discard";
+    // Only for a disk Windows did not shut down fully: the two ways out.
+    const unclean = make("div", {className: "disk-unclean"},
+      make("ol", {className: "ways"},
+        make("li", {}, make("b", {textContent: "Lose nothing. "}), "Connect the disk to a Windows PC and wait until it shows in File Explorer. Shut that PC down with ",
+          make("code", {textContent: FULL_SHUTDOWN}), " (a normal Shut down with Fast Startup leaves it as it is now). Put the disk back and press Read the hardware."),
+        make("li", {}, make("b", {textContent: "That Windows is gone, or the disk cannot be moved. "}), "Tick the box below. Setup then empties the journal Windows left on the disk and makes it editable.")),
+      make("div", {className: "options"},
+        option(discardInput, "Discard what Windows left unfinished",
+          "Every file you can open now stays as it is. Changes Windows had not finished writing are lost; after a normal Shut down there are usually none. Not for a Windows that is only asleep and will start again with this disk: it would write its old view over your changes.",
+          write.can_discard ? "" : "Not possible: its journal could not be read. Read the hardware again.", "danger-option")),
+      make("label", {className: "field narrow disk-discard-confirm"},
+        make("span", {className: "label", textContent: `Type ${disk.confirm}, the end of its name, to discard what Windows left unfinished`}),
+        make("input", {autocomplete: "off", spellcheck: false})));
+    const rw = make("div", {className: "disk-sub disk-rw"},
+      make("div", {className: "options"}, option(rwInput, "Let me change files on it (NTFS only)",
+        "Without this the share is read-only. Windows must have shut this disk down fully for it; NullBill checks, and changes nothing until it is safe.")),
+      make("p", {className: "disk-write"}, make("span", {className: `dot ${writeKind}`, ariaHidden: "true"}), make("span", {textContent: writeText})),
+      unclean);
     const uses = make("div", {className: "options"});
     for (const [value, text, desc] of [["backups", "For the nightly backups", ""],
       ["storage", "As extra storage in Proxmox", "A copy made first moves onto it, checked again."]]) {
@@ -673,6 +712,8 @@ function renderDisks(disks) {
     const sync = () => {
       const chosen = box.querySelector("input[data-role=choice]:checked");
       rw.hidden = !chosen || chosen.value !== "keep";
+      unclean.hidden = write.state !== "unclean" || !rwInput.checked;
+      unclean.querySelector(".disk-discard-confirm").hidden = !discardInput.checked || (disk.rw && write.discard);
       const erasing = Boolean(chosen) && ["erase", "copy"].includes(chosen.value);
       const usedFor = uses.querySelector("input:checked").value;
       usesBox.hidden = !erasing;
@@ -705,9 +746,11 @@ function choicesBody() {
     const chosen = box.querySelector("input[data-role=choice]:checked");
     disks[box.dataset.id] = {
       choice: chosen ? chosen.value : "alone",
-      rw: box.querySelector(".disk-rw input").checked,
+      rw: box.querySelector("input[data-role=rw]").checked,
+      discard: box.querySelector("input[data-role=rw]").checked && box.querySelector("input[data-role=discard]").checked,
       for: box.querySelector(".disk-for input:checked").value,
       confirm: box.querySelector(".disk-confirm input").value,
+      discard_confirm: box.querySelector(".disk-discard-confirm input").value,
     };
   }
   return {
@@ -724,7 +767,7 @@ function choicesBody() {
 // alone changes nothing.
 function choicesKey() {
   const body = choicesBody();
-  for (const d of Object.values(body.disks)) delete d.confirm;
+  for (const d of Object.values(body.disks)) { delete d.confirm; delete d.discard_confirm; }
   return JSON.stringify(body);
 }
 function choicesDirty() { return savedChoices !== null && choicesKey() !== savedChoices; }

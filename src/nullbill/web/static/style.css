@@ -523,6 +523,10 @@ main { grid-area: main; container: main / inline-size; overflow-y: auto; padding
 .disk-sub { padding: 10px 14px; border-top: 1px solid var(--line); display: grid; gap: 8px; }
 .disk-sub .options { border: 1px solid var(--line); border-radius: var(--radius); margin: 0; }
 .disk .problem { margin: 10px 14px 0; }
+.disk-write { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; }
+.disk-write .dot { margin-top: 6px; }
+.disk-unclean { display: grid; gap: 8px; }
+.ways { list-style: decimal; padding-left: 20px; display: grid; gap: 6px; font-size: 13px; color: var(--text-2); }
 .savebar {
   position: sticky; bottom: -48px; z-index: 5; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   margin: 8px -32px -48px; padding: 12px 32px; background: var(--bg); border-top: 1px solid var(--line);

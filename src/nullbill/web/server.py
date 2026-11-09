@@ -38,7 +38,7 @@ from pathlib import Path
 import yaml
 
 from nullbill import browserca, hostroot, lan, legacy, llm, names, owner
-from nullbill.apply import NTFY, REMOVALS, SPKI, STAGES
+from nullbill.apply import DISKS_FILE, NTFY, REMOVALS, SPKI, STAGES
 from nullbill.cli import plan_text, reach_target
 from nullbill.errors import NullBillError
 from nullbill.model import build_model
@@ -537,10 +537,24 @@ class App:
             if not g.get("integrated")
         ]
 
+    def _kept_parts(self, disk: dict, pin: dict) -> list[dict]:
+        """The partitions of a disk that keeping it mounts: those its pin
+        names, else every one a kept disk can hold."""
+        wanted = pin.get("partitions") if pin.get("use") == "legacy" else None
+        return [
+            p
+            for p in disk.get("partitions", [])
+            if p.get("fstype") in legacy.FILESYSTEMS and p.get("parttype") not in legacy.SKIPPED_TYPES and (not wanted or p["n"] in wanted)
+        ]
+
     def disks(self) -> list[dict]:
         facts = self.facts() or {}
         pins = (self.config() or {}).get("disks") or {}
         storage = guest_storage(facts) if facts.get("storage") else None
+        # What the last setup run mounted read-write (apply's disks.json);
+        # the probe may be older than that run.
+        record = self.home / DISKS_FILE
+        mounted = json.loads(record.read_text()).get("mounts", []) if record.exists() else []
         out = []
         for disk in facts.get("disks", []):
             if disk.get("system"):
@@ -572,6 +586,12 @@ class App:
                     "choice": choice,
                     "for": "storage" if pin.get("use") == "storage" else "backups",
                     "rw": pin.get("mode") == "rw",
+                    # Whether Windows left it fit for that (legacy.write_state).
+                    "write": legacy.write_state(
+                        self._kept_parts(disk, pin),
+                        pin.get("discard_journal", []),
+                        {m["n"] for m in mounted if m["disk"] == disk["id"] and m["mode"] == "rw"},
+                    ),
                     "confirm": disk["id"][-6:],
                     # Mounted as a kept disk now: erasing it asks how its files are kept.
                     "kept": bool(kept),
@@ -588,19 +608,24 @@ class App:
             if disk_id not in known:
                 raise NullBillError(f"{disk_id}: no such disk in the last probe; read the hardware again under Setup")
             choice, rw = str(want.get("choice", "alone")), bool(want.get("rw"))
+            discard = rw and bool(want.get("discard"))
             use_for = str(want.get("for", "backups"))
             if use_for not in DISK_USES:
                 raise NullBillError(f"{disk_id}: an erased disk is for backups or storage")
             current = known[disk_id]
             same_for = choice not in ("erase", "copy") or use_for == current["for"]
-            if choice == current["choice"] and (choice != "keep" or rw == current["rw"]) and same_for:
+            write = current["write"]
+            same_mode = rw == current["rw"] and discard == (current["rw"] and write["discard"])
+            if choice == current["choice"] and (choice != "keep" or same_mode) and same_for:
                 continue  # unchanged: keep the pin as it is, with any keys the page does not show
             if choice == "alone":
                 pins.pop(disk_id, None)
             elif choice == "keep":
                 old = pins.get(disk_id) if current["choice"] == "keep" else None
-                pin = {k: v for k, v in (old or {}).items() if k != "mode"} | {"use": "legacy"}
-                pins[disk_id] = pin | ({"mode": "rw"} if rw else {})
+                pin = {k: v for k, v in (old or {}).items() if k not in ("mode", "discard_journal")} | {"use": "legacy"}
+                if rw:
+                    pin |= {"mode": "rw"} | self._discard_pin(disk_id, current, pin, discard, want)
+                pins[disk_id] = pin
             elif choice in ("erase", "copy"):
                 if choice == "copy" and not current["kept"]:
                     raise NullBillError(f"{disk_id}: only a disk kept and mounted on the server can be copied before it is erased")
@@ -620,6 +645,33 @@ class App:
             else:
                 raise NullBillError(f"{disk_id}: choose {DISK_CHOICE_TEXT}")
         return pins
+
+    def _discard_pin(self, disk_id: str, current: dict, pin: dict, discard: bool, want: dict) -> dict:
+        """Changing files on a kept disk, as the last probe found it: refused
+        with what to do while Windows has not left it fit, and, when the
+        owner says what Windows left unfinished may go, the pin that names
+        those journals, for the end of the disk's name typed out."""
+        write = current["write"]
+        state = write["state"]
+        if state == "other":
+            raise NullBillError(f"{disk_id}: its files cannot be changed: {write['why']}, and only NTFS can be changed")
+        if state in legacy.RW_WHY and state != "unclean":
+            raise NullBillError(
+                f"{disk_id}: its files cannot be changed yet: {legacy.RW_WHY[state]}. {legacy.RW_FIX[state]}, then read the hardware again"
+            )
+        if state != "unclean":
+            return {}
+        if not discard:
+            raise NullBillError(
+                f"{disk_id}: its files cannot be changed yet: {legacy.RW_WHY[state]}. Shut it down fully from a Windows PC "
+                "and read the hardware again, or tick Discard what Windows left unfinished"
+            )
+        if not write["can_discard"]:
+            raise NullBillError(f"{disk_id}: its journal could not be read; read the hardware again")
+        if not write["discard"] and str(want.get("discard_confirm", "")).strip() != current["confirm"]:
+            raise NullBillError(f"{disk_id}: type {current['confirm']}, the end of its name, to discard what Windows left unfinished on it")
+        disk = next(d for d in (self.facts() or {}).get("disks", []) if d["id"] == disk_id)
+        return {"discard_journal": legacy.journals(self._kept_parts(disk, pin))}
 
     def files(self) -> dict | None:
         """Where the owner finds the kept disks' shares, once a plan has them."""
