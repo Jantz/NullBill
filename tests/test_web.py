@@ -445,6 +445,12 @@ def test_deleting_guests_runs_only_for_what_setup_stopped_before_deleting(site):
     status, job = client.call("/api/jobs", {"action": "remove-guests"})
     assert status == 200 and job["args"] == ["apply", "--remove-guests"]
     wait(client, job["id"])
+    # Ticked again and saved: the plan has it, so nothing waits on the owner.
+    (app.home / "removals.json").write_text('{"guests": ["jellyfin", "forgejo"], "gone": ["jellyfin"]}\n')
+    (app.home / "plan.yaml").write_text("guests:\n  jellyfin: {kind: lxc}\n  forgejo: {kind: lxc}\n")
+    assert client.call("/api/state")[1]["removals"] == ["forgejo"]  # forgejo must be made again: still asks
+    (app.home / "plan.yaml").write_text("guests:\n  forgejo: {kind: lxc}\n")
+    assert client.call("/api/state")[1]["removals"] == ["jellyfin", "forgejo"]
 
 
 def test_closing_the_lan_needs_the_page_over_tailscale_and_then_shuts_the_lan_out(site, monkeypatch):

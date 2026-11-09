@@ -594,12 +594,18 @@ class App:
         return {"url": f"https://{name}:{llm.GATEWAY_PORT}/v1", "name": name, "ip": guest["ip"], "model": model, "key_set": has_key}
 
     def removals(self) -> list[str]:
-        """Guests the last setup stopped before deleting, until the owner confirms."""
+        """Guests the last setup stopped before deleting, until the owner
+        confirms. One that was gone from the plan and is in the saved plan
+        again is no longer waiting: the next setup run keeps it."""
         path = self.home / REMOVALS
         try:
-            return [str(n) for n in json.loads(path.read_text()).get("guests", [])] if path.is_file() else []
+            waiting = json.loads(path.read_text()) if path.is_file() else {}
+            names, gone = [str(n) for n in waiting.get("guests", [])], set(waiting.get("gone", []))
         except (ValueError, AttributeError):
             return []
+        plan = self.home / "plan.yaml"
+        planned = (yaml.safe_load(plan.read_text()) or {}).get("guests") or {} if plan.is_file() else {}
+        return [n for n in names if not (n in gone and n in planned)]
 
     def save_choices(self, body: dict) -> None:
         workloads = [w for w in body.get("workloads", []) if w in WORKLOADS]

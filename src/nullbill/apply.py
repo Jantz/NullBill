@@ -603,7 +603,8 @@ def check_removals(ctx: Context, stage: str, removing: list[str]) -> None:
         why.append(f"{_and(gone)} {'is' if len(gone) == 1 else 'are'} no longer in the plan (a box under What to run is not ticked)")
     if remade:
         why.append(f"OpenTofu would have to make {_and(remade)} again")
-    path.write_text(json.dumps({"guests": removing}, indent=2) + "\n")
+    # gone: the page stops showing those once a saved plan has them again.
+    path.write_text(json.dumps({"guests": removing, "gone": gone}, indent=2) + "\n")
     raise ApplyError(
         stage,
         f"setup would delete {_and(removing)} with everything on {disks}, "
