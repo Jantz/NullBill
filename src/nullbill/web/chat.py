@@ -822,7 +822,13 @@ class Tools:
             "choices": st["choices"],
             "plan_fits": bool(plan.get("text")) and not plan.get("errors"),
             "plan_errors": plan.get("errors"),
-            "guests": [{k: g[k] for k in ("name", "kind", "zone", "installed")} for g in (plan.get("summary") or {}).get("guests", [])],
+            # The plan's `installed` means made by install.sh (the nullbill
+            # container only); shown as "installed: false" the agent read it
+            # as "not set up" for every other guest.
+            "guests": [
+                {k: g[k] for k in ("name", "kind", "zone")} | ({"made_by_install_sh": True} if g.get("installed") else {})
+                for g in (plan.get("summary") or {}).get("guests", [])
+            ],
             "recent_jobs": jobs,
             "choices_changed_since_last_setup": st["config_changed"],
             "home_network": st["lan"]["state"],

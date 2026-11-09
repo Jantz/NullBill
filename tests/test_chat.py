@@ -10,6 +10,7 @@ import types
 from pathlib import Path
 
 import pytest
+import yaml
 from test_web import FAKE_PROBE, Client, MemoryCodec, Sent, sign_in
 
 from nullbill import agenttools
@@ -399,3 +400,18 @@ def test_the_backup_server_cannot_be_destroyed(agent, tmp_path):
     (app.home / "plan.yaml").write_text("guests:\n  pbs: {kind: vm, vmid: 140, zone: backup}\n")
     view = say(client, 'CALL run_command {"command": "qm destroy 140 --purge"}')
     assert "backup server" in kinds(view, "refused")[-1]["why"]
+
+
+def test_status_does_not_call_planned_guests_not_installed(agent, monkeypatch):
+    # The plan's `installed` is "made by install.sh"; as "installed: false"
+    # the agent told Jan most running guests were not installed.
+    app, _, _ = agent
+    plan = yaml.safe_load((Path(__file__).parent / "golden" / "small.plan.yaml").read_text())
+    state = app.state
+    monkeypatch.setattr(app, "state", lambda *a: state(*a) | {"plan": {"text": "x", "errors": [], "summary": web.plan_summary(plan)}})
+    text, failed = app.tools.call("status", {})
+    assert not failed
+    guests = {g["name"]: g for g in yaml.safe_load(text)["guests"]}
+    assert guests and all("installed" not in g for g in guests.values())
+    assert guests["nullbill"].get("made_by_install_sh") is True
+    assert sum(1 for g in guests.values() if g.get("made_by_install_sh")) == 1
