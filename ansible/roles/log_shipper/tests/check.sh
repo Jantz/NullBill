@@ -19,6 +19,7 @@ import json, sys
 read = lambda f: open(f"/tmp/pki/{f}").read()
 json.dump({
     "monitoring_shipper_ca": read("shipper-ca.crt"),
+    "monitoring_probe_ca": read("ca.crt"),
     "log_shipper_ca": read("ca.crt"), "log_shipper_cert": read("shipper.crt"), "log_shipper_key": read("shipper.key"),
     "log_shipper_host": "workspace",
     # As apply sets it on the PVE host, whose resolver knows no NullBill names.
