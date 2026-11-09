@@ -3,7 +3,7 @@ container's device entries apply sets."""
 
 from conftest import fixture_config, service_answers
 
-from nullbill import llm
+from nullbill import llm, probe
 from nullbill.model import build_model
 from nullbill.plan import build_plan
 from nullbill.render import strip_notes
@@ -61,3 +61,15 @@ def test_the_container_gets_each_card_and_the_shared_nodes_as_group_video():
         0: "/dev/nvidia0,gid=44",
         3: "/dev/nvidiactl",
     }
+
+
+def test_a_model_busy_with_another_answer_is_degraded_not_failed(facts):
+    plan = build_plan(build_model(fixture_config("mid")), facts("mid"))
+    answers = service_answers(plan, "")
+    ask = next(c for label, c, _ in llm.commands(strip_notes(plan)) if label.startswith("the local model answers"))
+    answers[ask] = llm.BUSY + "\n"
+    results = {r.name: r.status for r in llm.check(plan, TARGET, lambda target, command: (0, answers[command], ""))}
+    assert results["the local model answers through the model gateway with its key"] == "DEGRADED"
+    # curl gives up before ssh_run would, and says so in the guest.
+    assert f"--max-time {llm.ANSWER_SECONDS} " in ask and llm.ANSWER_SECONDS < probe.SSH_TIMEOUT_S
+    assert 'if [ "$rc" = 28 ]; then echo busy' in ask
