@@ -4,6 +4,8 @@ import http.client
 import http.server
 import json
 import os
+import re
+import socket
 import ssl
 import stat
 import sys
@@ -102,10 +104,7 @@ def site(tmp_path, monkeypatch):
     app = web.App(home, command=[sys.executable, str(script)], codec=lambda _: codec, send=Sent())
     app.ensure_setup_code()
     cert, key = web.ensure_certificate(home)
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), web.make_handler(app))
-    tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    tls.load_cert_chain(cert, key)
-    server.socket = tls.wrap_socket(server.socket, server_side=True, do_handshake_on_connect=False)
+    server, _ = web.make_server(app, ("127.0.0.1", 0), cert, key)
     threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     monkeypatch.setattr(web.time, "sleep", lambda s: None)
     yield app, Client(server.server_address[1], cert)
@@ -978,3 +977,40 @@ def test_the_app_files_are_served_with_their_types(site):
     assert any(i.get("purpose") == "maskable" for i in manifest["icons"])
     sw = (Path(web.__file__).parent / "static" / "sw.js").read_text()
     assert "/api/" not in sw.split("SHELL = ")[1].split("\n")[0]
+
+
+def test_connections_stay_open_and_close_without_a_reset(site):
+    """Phones on mobile data reach the page through Tailscale's userspace
+    stack, which turns a reset into a lost page: one connection carries
+    several requests, a refused POST leaves nothing behind, and a closing
+    connection reads what the client still sends."""
+    app, client = site
+    conn = http.client.HTTPSConnection("127.0.0.1", client.port, context=client.tls, timeout=10)
+    for _ in range(3):
+        conn.request("GET", "/api/state")
+        response = conn.getresponse()
+        assert response.status == 200 and response.version == 11
+        response.read()
+    conn.request("POST", "/api/login", body=b'{"secret": "x"}', headers={"Content-Type": "application/json"})
+    response = conn.getresponse()
+    assert response.status == 403
+    response.read()
+    conn.request("GET", "/api/state")
+    assert conn.getresponse().status == 200
+    conn.close()
+    raw = socket.create_connection(("127.0.0.1", client.port), timeout=10)
+    tls = client.tls.wrap_socket(raw, server_hostname="nullbill")
+    tls.sendall(b"GET /api/state HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+    # The page has answered and closed its side; the client still sends
+    # (as a browser's TLS alert would) before it reads. time.sleep is
+    # stubbed in this fixture.
+    threading.Event().wait(0.3)
+    tls.sendall(b"x" * 5000)
+    threading.Event().wait(0.3)
+    data = b""
+    while chunk := tls.recv(65536):
+        data += chunk
+    head, _, body = data.partition(b"\r\n\r\n")
+    length = int(re.search(rb"Content-Length: (\d+)", head)[1])
+    assert len(body) == length
+    tls.close()

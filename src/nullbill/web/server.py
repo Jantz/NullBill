@@ -20,6 +20,7 @@ import os
 import re
 import secrets
 import signal
+import socket
 import socketserver
 import ssl
 import subprocess
@@ -1127,10 +1128,59 @@ def offset(query: str, name: str = "offset") -> int:
     return int(value) if value.isdigit() else 0
 
 
+# A connection that sits idle this long is closed; one that has sent its
+# last request gets this long to close its side first.
+IDLE_S = 30
+LINGER_S = 5
+
+
+class PageServer(http.server.ThreadingHTTPServer):
+    """The page's HTTPS server, kind to slow links.
+
+    Phones reach the page through the vpn guest's Tailscale, whose
+    userspace network stack carries each connection to the page as a
+    second connection. A page that closes a socket with bytes still unread
+    makes the kernel answer with a reset, and the stack passes the reset on
+    to the phone, dropping what it had not yet delivered over a slow line:
+    Firefox on mobile data said "The connection was reset". So connections
+    stay open between requests (HTTP/1.1), the listen queue is long enough
+    for a browser's parallel connections, and a closing connection says
+    it is done (FIN) and then reads until the other side has closed too.
+    """
+
+    request_queue_size = 128
+    daemon_threads = True
+
+    def shutdown_request(self, request) -> None:  # noqa: ANN001
+        try:
+            request.shutdown(socket.SHUT_WR)
+            request.settimeout(LINGER_S)
+            deadline = time.monotonic() + LINGER_S
+            while time.monotonic() < deadline and request.recv(4096):
+                pass
+        except OSError:
+            pass
+        self.close_request(request)
+
+
+def make_server(app: App, address: tuple[str, int], cert: Path, key: Path) -> tuple[PageServer, ssl.SSLContext]:
+    server = PageServer(address, make_handler(app))
+    tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    tls.minimum_version = ssl.TLSVersion.TLSv1_2
+    tls.load_cert_chain(cert, key)
+    # The handshake runs in each request's thread, so a stalled client
+    # cannot hold up the accept loop.
+    server.socket = tls.wrap_socket(server.socket, server_side=True, do_handshake_on_connect=False)
+    return server, tls
+
+
 def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
     class Handler(http.server.BaseHTTPRequestHandler):
         server_version = "nullbill"
         sys_version = ""
+        # Keep-alive: every answer carries its Content-Length (send).
+        protocol_version = "HTTP/1.1"
+        timeout = IDLE_S
 
         def log_message(self, fmt: str, *args: object) -> None:
             pass
@@ -1218,17 +1268,24 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
             return self.json(404, {"error": "not found"})
 
         def do_POST(self) -> None:  # noqa: N802
+            # The body is read before any answer: on a kept-alive
+            # connection, unread bytes would be taken for the next request.
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = -1
+            if not 0 <= length <= 64 * 1024:
+                self.close_connection = True
+                return self.json(413, {"error": "request too large"})
+            raw = self.rfile.read(length)
             if self.closed():
                 return
             # A custom header cannot be sent cross-site without a CORS
             # preflight, which this server never grants.
             if self.headers.get("X-NullBill") != "1":
                 return self.json(403, {"error": "missing X-NullBill header"})
-            length = int(self.headers.get("Content-Length") or 0)
-            if length > 64 * 1024:
-                return self.json(413, {"error": "request too large"})
             try:
-                body = json.loads(self.rfile.read(length) or b"{}")
+                body = json.loads(raw or b"{}")
             except ValueError:
                 return self.json(400, {"error": "body is not JSON"})
             if match := re.fullmatch(r"/api/agent/(verify|apply|upgrade)", self.path):
@@ -1425,13 +1482,7 @@ def serve(home: Path, listen: str) -> None:
     app.load_jobs()
     app.ensure_setup_code()
     cert, key = ensure_certificate(home)
-    server = http.server.ThreadingHTTPServer((host or "0.0.0.0", int(port)), make_handler(app))
-    tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    tls.minimum_version = ssl.TLSVersion.TLSv1_2
-    tls.load_cert_chain(cert, key)
-    # The handshake runs in each request's thread, so a stalled client
-    # cannot hold up the accept loop.
-    server.socket = tls.wrap_socket(server.socket, server_side=True, do_handshake_on_connect=False)
+    server, tls = make_server(app, (host or "0.0.0.0", int(port)), cert, key)
     print(f"nullbill web on https://{listen}, certificate SHA-256 {fingerprint(cert)}", flush=True)
 
     def schedule() -> None:

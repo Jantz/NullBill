@@ -1,8 +1,6 @@
 """The page's agent: turns, its tools through the gate, approvals, questions."""
 
-import http.server
 import json
-import ssl
 import sys
 import threading
 import time
@@ -94,10 +92,7 @@ def agent(tmp_path, monkeypatch):
     app.ensure_setup_code()
     tools = web.serve_tools(app)
     cert, key = web.ensure_certificate(home)
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), web.make_handler(app))
-    tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    tls.load_cert_chain(cert, key)
-    server.socket = tls.wrap_socket(server.socket, server_side=True, do_handshake_on_connect=False)
+    server, _ = web.make_server(app, ("127.0.0.1", 0), cert, key)
     threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     client = Client(server.server_address[1], cert)
     sign_in(app, client)
