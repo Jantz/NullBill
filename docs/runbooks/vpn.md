@@ -19,7 +19,10 @@ Reference: <https://tailscale.com/kb/1019/subnets>,
    Personal plan.
 2. **Settings, Trust credentials**: add an **OAuth client** with the scopes
    **Policy file** and **DNS**, both set to write; the console adds the
-   device scopes that Policy file needs. Copy the client ID and the secret (`tskey-client-...`;
+   device scopes that Policy file needs. Add **Users**, write, if the page
+   should also delete a person's Tailscale account when you remove them
+   ([add-person.md](add-person.md)); without it you do that in the console.
+   Copy the client ID and the secret (`tskey-client-...`;
    Tailscale shows it once) and paste both in the **Tailscale** card on the
    page's **Access** page. OAuth clients do not expire. Every setup
    run then trades them for an
@@ -59,7 +62,7 @@ NullBill network only.
 - `vpn: waiting for a Tailscale OAuth client`: do step 2.
 - `vpn: waiting for a Tailscale auth key`: no key is saved; do step 3 and 4.
 - `tailnet: Tailscale refused the policy`: the message names the failing
-  test. A person's role reaches something the policy's tests forbid; fix
+  test. A person reaches something the policy's tests forbid; fix
   `people` or `roles` in the config.
 - `tailnet: ... lacks a scope`: make a new OAuth client with the scopes in
   step 2 and paste it. Tailscale does not let you add a scope to a client
@@ -82,7 +85,7 @@ DNS so each device on the tailnet asks the router for those names and
 nothing else, at the router's address in the access zone (`10.42.6.1`).
 The policy lets every person reach that address on port 53 only, and the
 vpn guest advertises it as a route of its own. Other people you add get
-the names by themselves; their access stays what their role allows.
+the names by themselves; their access stays what you ticked for them.
 Addresses keep working everywhere.
 
 On a device, names need Tailscale's DNS on:

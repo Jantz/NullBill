@@ -183,6 +183,7 @@ intent:
 people:                                  # Tailscale logins; one owner is required
   owner-a: {role: owner, login: owner-a@example.internal}
   dev-b: {role: default, login: dev-b@example.internal}
+  alex: {role: friend, login: alex@example.internal, services: [jellyfin]}  # a friend: only what is listed
 overrides:
   linux-runner: {count: 2}
 disks:

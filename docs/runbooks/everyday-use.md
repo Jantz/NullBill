@@ -31,6 +31,9 @@ works too, and the **Services** page shows both.
 | Jellyfin (media) | `http://jellyfin.nullbill.internal:8096` (`10.42.7.24`) | `nullbill-admin`, **Show password** on the page; see [media.md](media.md) |
 | Windows desktop | Remote Desktop to `windows-dev.nullbill.internal` (`10.42.5.22`) | the account you make when installing ([windows-desktop.md](windows-desktop.md)) |
 
+To let a friend open Forgejo, Jellyfin or the local AI model, and nothing
+else, see [add-person.md](add-person.md).
+
 The other guests have nothing for you to open: the router, the internet
 proxy (10.42.2.10), step-ca (10.42.1.12), PostgreSQL (10.42.2.13), the CI
 dispatcher (10.42.2.18) and the vpn guest. Prometheus and Alertmanager
