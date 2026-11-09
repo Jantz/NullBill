@@ -240,16 +240,18 @@ must hand out addresses by DHCP: the NullBill container takes one.
 
 ## 9. The setup page: first setup run
 
-The page has a sidebar with its pages, such as **Overview**, **Setup**,
-**Services**, **Alerts**, **Agents**, **Remote access** and **Activity**.
-**Run setup**, **Run checks** and **Update NullBill** sit at the top of
-every page.
+The page has a rail with its pages, **Home**, **Agent**, **Services**,
+**Setup**, **Access**, **Alerts** and **Activity** (on a phone, a tab bar
+with **More**). **Run setup**, **Checks** and **Update** sit at the top of
+every page, and the agent sits beside every page (on a phone, its own
+tab). **Ctrl K** finds any page or command; **?** lists the shortcuts.
 
 **You need:** the address, fingerprint and setup code from part 8, your
-Tailscale login from part 1, and a new password of at least 12 characters
-for the page. For the **Alerts**, **Agents** and **Remote access** pages:
-your phone with ntfy, the Healthchecks.io URL and the agent credential if
-you made them.
+Tailscale login from part 1, a new password of at least 12 characters
+for the page, and the agent credential (an Anthropic API key, or a token
+from `claude setup-token` with Claude Pro or Max). For the **Alerts** and
+**Access** pages: your phone with ntfy and the Healthchecks.io URL if you
+made one.
 
 1. Open the page's address. Before you accept the certificate warning, open
    the certificate's details from the warning (or the address bar) and check
@@ -259,9 +261,15 @@ you made them.
 3. **Choose a password**: the page asks for one at this first sign-in. Use
    at least 12 characters and keep it in your password manager. From now
    on you sign in with it.
-4. **Setup** page, **Hardware** card: press **Read the hardware**. It only
+4. **Setup**, step 1 **Agent**: paste the API key or subscription token
+   and press **Sign in**. The agent greets you in its panel and can read
+   the hardware for you; from now on, ask it whenever a step is unclear or
+   fails. It asks before it changes anything (the **Manual** access mode;
+   **Agent** page, **Settings** has **Auto** and **YOLO**). A
+   subscription token lasts a year; paste a new one there before then.
+5. **Setup**, step 2 **Hardware**: press **Read the hardware**. It only
    reads.
-5. **Setup** page, **What to run** card:
+6. **Setup**, step 3 **Choices**:
    - Any of **AI agents**, **Linux CI runners**, **Local AI models on the
      GPU** and **A Windows desktop VM**: on 16 GB they fit together, with
      one CI runner at a time. Containers count at half their memory limit
@@ -281,22 +289,19 @@ you made them.
      fully (part 2), and only if you need to.
    - **Your Tailscale login**: exactly as noted in part 1.
    - Press **Save and plan**.
-6. **Setup** page, **Plan** card: a green box says the plan fits and how
+7. **Setup**, step 4 **Plan**: a green box says the plan fits and how
    the memory is shared out; a red box lists what does not fit and what to
    change. Change your choices in **What to run** and save again until it
-   is green. Open **The full plan** and check: the system disk shows as
+   is green, or press **Ask the agent** in the red box. Open **The full
+   plan** and check: the system disk shows as
    `use: system`, a backup disk as `use: pbs`, a kept disk as
    `use: legacy` with each partition it keeps.
-7. **Alerts** page: in the ntfy app, add a subscription to the topic the
+8. **Alerts** page: in the ntfy app, add a subscription to the topic the
    page shows (server `ntfy.sh`, no account). Keep the topic to yourself:
    anyone who knows it can read your alerts. Paste the Healthchecks.io ping
    URL if you made one, press **Save URL**, then **Send a test alert** and
    check that your phone shows it.
-8. **Agents** page, **Coding agent sign-in** card (only with AI agents):
-   paste the API key or subscription token and press **Save credential**. A
-   subscription token lasts a year; make a new one and paste it here before
-   then.
-9. **Remote access** page, **Tailscale** card, first half: in the
+9. **Access** page, **Tailscale** tab, **OAuth client**: in the
    Tailscale admin console (<https://console.tailscale.com/admin>), signed
    in with the login from part 1, open **Settings, Trust credentials** and
    add an **OAuth client** with the scope **Policy file** set to write; the
@@ -306,7 +311,7 @@ you made them.
    **Save client**. You can skip Tailscale for now: the vpn stage then waits and
    everything else still runs, but the page stays reachable only from
    home.
-10. Press **Run setup** at the top of the page. The bar at the top shows
+10. **Setup**, step 5 **Build**: press **Run setup**. The bar at the top shows
     its progress; the **Activity** page lists every stage, ticks each one
     off as it finishes and shows what the running one does now, and **Full
     log** has every line. The first run downloads images and packages and
@@ -314,7 +319,9 @@ you made them.
     first backup are the longest. Without an auth key yet, the vpn stage
     reports `vpn: waiting for a Tailscale auth key`. That is expected.
 
-    If a stage fails, see [If a stage fails](#if-a-stage-fails).
+    If a stage fails, the agent looks into it by itself and proposes the
+    fix in its panel; approve it there, or see
+    [If a stage fails](#if-a-stage-fails).
 11. **Backups only: copy the backup encryption key** now, while the Proxmox
     web UI still opens from home. Every backup is encrypted with it, and
     without it nobody can read them, you included. In the Proxmox web UI's
@@ -344,8 +351,8 @@ console, and the Tailscale app on the phone or laptop you will use.
    **Pre-approved** and **Tags** and pick `tag:nb-vpn`, then press
    **Generate key**. Copy it; Tailscale shows it once and it expires within
    90 days.
-2. On the setup page's **Remote access** page, **Tailscale** card, paste
-   it under **Auth key** and press **Save auth key**.
+2. On the page's **Access** page, **Tailscale** tab, paste it under
+   **Auth key** and press **Save auth key**.
 3. Press **Run setup** again. This run is shorter. The vpn stage
    logs in once, forgets the key and prints the page's address on the
    tailnet. Note that address: once the home network is closed, it is the
@@ -363,10 +370,10 @@ closes them, so only Tailscale gets in.
 
 **You need:** the page open over Tailscale (part 10, step 5), and the
 host's `mgmt` address: in **The full plan** in the **Setup** page's
-**Plan** card, under `zones`, `mgmt`, `host_ip` (normally `10.42.1.254`).
+**Plan** step, under `zones`, `mgmt`, `host_ip` (normally `10.42.1.254`).
 
-1. On the page opened over Tailscale, open the **Remote access** page and,
-   in its **Home network** card, press **Close to the home network**.
+1. On the page opened over Tailscale, open the **Access** page and,
+   on its **Home network** tab, press **Close to the home network**.
 2. Within 15 minutes, open `https://<mgmt address>:8006` over Tailscale and
    check that Proxmox answers.
 3. Back on the page opened over Tailscale, press **Keep it closed**. The
@@ -377,7 +384,7 @@ host's `mgmt` address: in **The full plan** in the **Setup** page's
 
 If you do not press it in time, the server opens the home network again by
 itself after 15 minutes, or when it restarts first, so a mistake cannot
-lock you out. Until it is closed, **Run checks** reports the open home
+lock you out. Until it is closed, **Checks** reports the open home
 network as DEGRADED. Once closed, the page answers only over Tailscale and
 on the on-site screen; **Reopen to the home network** gives the home
 network its access back. [vpn.md](vpn.md) says what to do if Tailscale is down.
@@ -391,7 +398,7 @@ an authenticator app on your phone (any TOTP app).
    password. Add TOTP and recovery keys as
    [pve-totp.md](pve-totp.md) describes, and do not close your first
    session until signing in with the code works.
-2. Press **Run checks** on the page. Each line is PASS, FAIL, SKIP or
+2. Press **Checks** on the page. Each line is PASS, FAIL, SKIP or
    DEGRADED. SKIP means the check could not run yet, never that it passed.
    Copy any FAIL into the chat.
 
@@ -412,7 +419,7 @@ Tailscale.
 
 **You need:** each phone or computer you use, on Tailscale.
 
-1. On each device, open the page's **Remote access** page, **Trust this
+1. On each device, open the page's **Access** page, **Trust this
    server**: press **Download root certificate** and follow the steps for
    that system. The certificate warnings on the page, Proxmox, Forgejo and
    Grafana stop. [trust-this-server.md](trust-this-server.md) says what the

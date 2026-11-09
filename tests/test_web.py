@@ -88,7 +88,7 @@ class Client:
             self.cookie = response.getheader("Set-Cookie").split(";")[0]
         self.headers = dict(response.getheaders())
         kind = response.getheader("Content-Type") or ""
-        return response.status, json.loads(data) if kind.startswith("application/json") else data.decode()
+        return response.status, json.loads(data) if kind.startswith("application/json") else data.decode(errors="replace")
 
 
 @pytest.fixture
@@ -343,11 +343,13 @@ def test_agent_credential_is_kept_by_kind_and_never_shown(site):
     assert odd[0] == 400 and odd[1]["error"].startswith("the pasted subscription token has HORIZONTAL ELLIPSIS at character 17 of 20")
     assert "abc" not in odd[1]["error"]
     key = "sk-ant-api03-" + "a" * 40
-    assert client.call("/api/agent", {"credential": f" {key}\n"}) == (200, {"ok": True, "agent_credential": "API key"})
+    status, data = client.call("/api/agent", {"credential": f" {key}\n"})
+    assert (status, data["agent_credential"]) == (200, "API key")
     assert app.codec(app.home).load()["anthropic_api_key"] == key
     token = "sk-ant-oat01-" + "b" * 40
     wrapped = f"{token[:30]}\n  {token[30:]} "
-    assert client.call("/api/agent", {"credential": wrapped}) == (200, {"ok": True, "agent_credential": "subscription token"})
+    status, data = client.call("/api/agent", {"credential": wrapped})
+    assert (status, data["agent_credential"]) == (200, "subscription token")
     stored = app.codec(app.home).load()
     assert stored["claude_oauth_token"] == token and "anthropic_api_key" not in stored
     state = json.dumps(client.call("/api/state")[1])
@@ -961,3 +963,18 @@ def test_the_agents_github_token_is_checked_with_github_and_never_shown(site):
     # Removed: every agent_github_ value goes.
     assert client.call("/api/agent-github", {"token": ""}) == (200, {"ok": True, "agent_github": None})
     assert not [k for k in app.codec(app.home).data if k.startswith("agent_github")]
+
+
+def test_the_app_files_are_served_with_their_types(site):
+    _, client = site
+    for path, (_name, kind) in web.STATIC.items():
+        status, _ = client.call(path)
+        assert status == 200, path
+        assert client.headers["Content-Type"].startswith(kind), path
+        assert ("charset" in client.headers["Content-Type"]) == (not kind.endswith("png")), path
+    manifest = json.loads((Path(web.__file__).parent / "static" / "manifest.webmanifest").read_text())
+    for icon in manifest["icons"]:
+        assert icon["src"] in web.STATIC
+    assert any(i.get("purpose") == "maskable" for i in manifest["icons"])
+    sw = (Path(web.__file__).parent / "static" / "sw.js").read_text()
+    assert "/api/" not in sw.split("SHELL = ")[1].split("\n")[0]

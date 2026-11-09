@@ -40,7 +40,7 @@ warning page.
 
 ## Install it
 
-On the page, **Remote access**, **Trust this server**, press **Download root
+On the page, **Access**, **Trust this server**, press **Download root
 certificate** (`/nullbill-root.crt`). The page shows the steps for each
 system; they are:
 

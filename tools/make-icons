@@ -1,0 +1,96 @@
+#!/usr/bin/env python3
+"""Draw the page's app icons: the null sign (a ring and a slash) on a dark
+square, as PNG with the standard library only, and the same as SVG.
+
+    tools/make-icons            write src/nullbill/web/static/icon*.{png,svg}
+
+The PNGs are what Android and iOS install; maskable keeps the sign inside
+the middle 60 % that every launcher shape leaves visible.
+"""
+
+import math
+import struct
+import sys
+import zlib
+from pathlib import Path
+
+STATIC = Path(__file__).resolve().parents[1] / "src" / "nullbill" / "web" / "static"
+BG_TOP, BG_BOTTOM = (0x12, 0x18, 0x26), (0x07, 0x09, 0x0D)
+MINT, VIOLET = (0x39, 0xE6, 0xA3), (0x9B, 0x8C, 0xFF)
+
+
+def mix(a: tuple, b: tuple, t: float) -> tuple:
+    return tuple(x + (y - x) * t for x, y in zip(a, b))
+
+
+def seg_distance(px: float, py: float, ax: float, ay: float, bx: float, by: float) -> float:
+    dx, dy = bx - ax, by - ay
+    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)))
+    return math.hypot(px - ax - t * dx, py - ay - t * dy)
+
+
+def draw(size: int, scale: float, rounded: bool) -> bytes:
+    """RGBA rows. The sign is drawn on a 32-unit grid, as in the page's
+    sprite: ring radius 9.5 around (16, 16), slash from (7, 25) to (25, 7)."""
+    unit = size * scale / 32
+    off = (size - 32 * unit) / 2
+    stroke = 2.6 * unit / 2
+    radius = size * 0.22 if rounded else 0
+    rows = []
+    for y in range(size):
+        row = bytearray([0])
+        for x in range(size):
+            px, py = x + 0.5, y + 0.5
+            alpha = 1.0
+            if rounded:
+                # Distance outside the rounded square, for its edge.
+                qx = max(abs(px - size / 2) - (size / 2 - radius), 0)
+                qy = max(abs(py - size / 2) - (size / 2 - radius), 0)
+                alpha = max(0.0, min(1.0, radius - math.hypot(qx, qy) + 0.5))
+            color = mix(BG_TOP, BG_BOTTOM, py / size)
+            gx, gy = (px - off) / unit, (py - off) / unit
+            ring = abs(math.hypot(gx - 16, gy - 16) - 9.5) * unit
+            slash = seg_distance(gx, gy, 7, 25, 25, 7) * unit
+            cover = max(0.0, min(1.0, stroke - min(ring, slash) + 0.5))
+            if cover:
+                ink = mix(MINT, VIOLET, max(0.0, min(1.0, (gx + (32 - gy)) / 64 * 1.4 - 0.2)))
+                color = mix(color, ink, cover)
+            row += bytes(round(c) for c in color) + bytes([round(255 * alpha)])
+        rows.append(bytes(row))
+    return b"".join(rows)
+
+
+def png(size: int, raw: bytes) -> bytes:
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    header = struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b"")
+
+
+SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+<defs>
+<linearGradient id="b" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#121826"/><stop offset="1" stop-color="#07090d"/></linearGradient>
+<linearGradient id="i" x1="0" y1="1" x2="1" y2="0"><stop offset=".15" stop-color="#39e6a3"/><stop offset=".85" stop-color="#9b8cff"/></linearGradient>
+</defs>
+<rect width="32" height="32" rx="7" fill="url(#b)"/>
+<g transform="translate(16 16) scale(.72) translate(-16 -16)" fill="none" stroke="url(#i)" stroke-width="2.6" stroke-linecap="round">
+<circle cx="16" cy="16" r="9.5"/><path d="M7 25L25 7"/>
+</g>
+</svg>
+"""
+
+
+def main() -> int:
+    for name, size, scale, rounded in [
+        ("icon-192.png", 192, 0.72, True),
+        ("icon-512.png", 512, 0.72, True),
+        ("icon-maskable-512.png", 512, 0.5, False),
+    ]:
+        (STATIC / name).write_bytes(png(size, draw(size, scale, rounded)))
+    (STATIC / "icon.svg").write_text(SVG)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

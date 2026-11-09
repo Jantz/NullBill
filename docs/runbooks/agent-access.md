@@ -35,8 +35,8 @@ References: <https://pve.proxmox.com/pve-docs/chapter-pveum.html>,
 
 ## Let it manage the server
 
-On the page's **Agents** page, in the **Let the agent manage the server**
-card, turn on the switch **Agent has root on Proxmox**. You chose this over
+On the page's **Agent** page, **Settings**, in the **Operator agent**
+card, turn on the switch **Root on Proxmox**. You chose this over
 the confined default (docs/adr/0003-agent-access.md); it lasts until you
 turn the switch off.
 While it is on, the agent also:
@@ -79,7 +79,7 @@ same API as `nb-page` and nothing more: start `nullbill verify` and read
 verify's output. It cannot start setup, read other jobs or use the page as
 you.
 
-1. On the page's **Agents** page, name it in the **Agents on other
+1. On the page's **Agent** page, **Settings**, name it in the **Agents on other
    computers** card and press **Make a token**. The page shows
    `NB_PAGE_URL`, `NB_PAGE_SPKI` and `NB_PAGE_TOKEN` once; give them to
    the agent (its environment, or a file only it reads). The page keeps
@@ -150,7 +150,7 @@ key to the operator (issue #22).
 ## Without the agent
 
 Everything the agent does, you can do yourself with your own access:
-**Run checks** on the page, `pct`/`qm` in the Proxmox Shell, the PVE web
+**Checks** on the page, `pct`/`qm` in the Proxmox Shell, the PVE web
 UI, and `pct enter <vmid>` into a guest. Roll back a snapshot yourself
 (`pct rollback`/`qm rollback`); the agent can take snapshots but cannot
 roll back.

@@ -131,12 +131,11 @@ ADVICE = [
     (
         r"OAuth client lacks a scope",
         "In the Tailscale admin console, give the OAuth client the Policy file (write) and Devices (read) scopes, "
-        "or make a new one, and save it again under Remote access.",
+        "or make a new one, and save it again under Access.",
     ),
     (
         r"Tailscale.*\b(401|403)\b|invalid_client|unauthorized",
-        "Tailscale did not accept the OAuth client. Check the client ID and secret, save them again under Remote access, "
-        "then run setup again.",
+        "Tailscale did not accept the OAuth client. Check the client ID and secret, save them again under Access, then run setup again.",
     ),
     (
         r"Tailscale refused the policy",
@@ -146,7 +145,7 @@ ADVICE = [
     (r"free plan allows", "Remove tagged devices you no longer use in the Tailscale admin console, then run setup again."),
     (
         r"Tailscale did not log in|auth key",
-        "In Tailscale, generate a new one-time auth key tagged tag:nb-vpn, paste it under Remote access, and run setup again.",
+        "In Tailscale, generate a new one-time auth key tagged tag:nb-vpn, paste it under Access, and run setup again.",
     ),
     (r"Tailscale's API did not answer", "The server could not reach Tailscale. Check its internet connection and run setup again."),
     (

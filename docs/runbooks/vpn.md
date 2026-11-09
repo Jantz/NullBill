@@ -18,7 +18,7 @@ Reference: <https://tailscale.com/kb/1019/subnets>,
    **Policy file** set to write; the console adds the device scopes that
    scope needs. Copy the client ID and the secret (`tskey-client-...`;
    Tailscale shows it once) and paste both in the **Tailscale** card on the
-   page's **Remote access** page. OAuth clients do not expire. Every setup
+   page's **Access** page. OAuth clients do not expire. Every setup
    run then trades them for an
    hour-long token and, before it changes anything on the host:
    - counts the tagged devices on the tailnet, and stops past the free
@@ -70,7 +70,7 @@ Proxmox's own web UI and SSH stay open on your home network until you close
 them. Do it once Tailscale works:
 
 1. On a device on Tailscale, open the page at the address the vpn stage
-   printed and, on the **Remote access** page, **Home network** card, press
+   printed and, on the **Access** page, **Home network** tab, press
    **Close to the home network**.
 2. Within 15 minutes, open `https://<mgmt address>:8006` (the PVE host's
    address in the plan's `mgmt` zone, `.254`) over Tailscale to check

@@ -34,7 +34,7 @@ answer only inside the server; Grafana shows their data.
 
 Your browser warns about the page's, Proxmox's, Forgejo's and Grafana's
 certificates until the device trusts NullBill's browser CA: on the page,
-**Remote access**, **Trust this server**, download the root certificate and
+**Access**, **Trust this server**, download the root certificate and
 install it ([trust-this-server.md](trust-this-server.md)). That root is
 limited to your server's addresses and to `nullbill.internal`. Do not add
 step-ca's root to your devices' trusted certificates instead: it is not
@@ -66,19 +66,31 @@ no longer works.
 
 ## Every day
 
-- **The page** is where you manage NullBill. Its **Overview** page shows
+- **The page** is where you manage NullBill. Its **Home** page shows
   firing alerts, guests that stopped answering and guests waiting for a
-  security update's reboot. **Run checks**, at the top of every page, runs
+  security update's reboot. **Checks**, at the top of every page, runs
   every check again; **Run setup** applies a change you made on the
-  **Setup**, **Alerts**, **Agents** or **Remote access** page and replaces
-  certificates that expired while the server was off. **Update NullBill**
-  moves the page and setup to NullBill's newest version; press **Run
-  setup** after it. The bar at the top shows a run's progress, and the
+  **Setup**, **Alerts**, **Agent** or **Access** page and replaces
+  certificates that expired while the server was off. **Update** moves the
+  page and setup to NullBill's newest version; press **Run setup** after
+  it. The page installs as an app on your phone once it trusts the
+  server (**Access**, **Trust this server**).
+- **The agent** sits beside every page (on a phone, the **Agent** tab).
+  Ask it why something broke, to update everything, or what to do next.
+  It reads logs and runs read-only commands by itself; what it would
+  change shows as a card with **Approve** and **Decline**, by the access
+  mode on the **Agent** page, **Settings**: **Manual** asks before every
+  change, **Auto** lets changes run and asks before risky ones (deleting,
+  rebooting; you type a word to approve), **YOLO** asks nothing. Erasing
+  disks, deleting backups, reading secrets, silencing the command log and
+  touching the NullBill container are refused in every mode. Every action
+  is listed under **Agent**, **Log**. After a run fails, it looks into it
+  by itself. The bar at the top shows a run's progress, and the
   **Activity** page shows it in full. You no longer need to run
   `install.sh` again for that.
 - **A run that hangs**: the **Activity** page says when a run has printed
   nothing for half an hour. **Stop this run** under its progress ends it;
-  what it finished stays done. Press **Update NullBill**, in case a fix is
+  what it finished stays done. Press **Update**, in case a fix is
   out, then start it again. A package download it left waiting in a guest
   is ended by the next run.
 - **Alerts** come to the ntfy topic the page's **Alerts** page shows. Each
@@ -148,14 +160,14 @@ pct exec 2019 -- sh -c 'mkdir -p -m 700 /root/.ssh && echo "ssh-ed25519 AAAA... 
 Then `ssh root@10.42.3.19` from your device. `pct enter 2019` in the Shell
 works without a key.
 
-## Coding agent
+## Operator agent
 
-The agent runs in the operator guest. In the Proxmox Shell:
+For long work there is a second agent in the operator guest. In the Proxmox Shell:
 `pct enter 2016`, `su - agent`, `tmux new -s agent`, `claude`. Detach with
 Ctrl-b d and come back with `tmux attach -t agent`; it keeps running while
 the Shell is closed. What it may do, how to read what it did and how to cut
-it off: [agent-access.md](agent-access.md). With the switch **Agent has root on
-Proxmox** on (the **Agents** page, **Let the agent manage the server**), it
+it off: [agent-access.md](agent-access.md). With the switch **Root on Proxmox** on (the
+**Agent** page, **Settings**, **Operator agent**), it
 has root on Proxmox and runs setup and updates itself; ask it to "check the
 server and fix what you find" or "update everything". Agents on your other
 computers get a token under **Agents on other computers** on the same

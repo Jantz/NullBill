@@ -25,6 +25,8 @@ in_ct /opt/nullbill/venv/bin/ansible-playbook --version >/dev/null || fail "ansi
 in_ct tofu version | grep -q v1.13.2 || fail "tofu"
 in_ct sops --version 2>/dev/null | grep -q 3.13.3 || fail "sops"
 in_ct age-keygen --version >/dev/null 2>&1 || fail "age"
+in_ct runuser -u nbagent -- /usr/local/bin/claude --version | grep -q "(Claude Code)" || fail "the page's agent CLI runs as nbagent"
+[ "$(in_ct stat -c %a /var/lib/nullbill-agent)" = 700 ] || fail "the agent's home is private"
 echo "ok   the page answers; the controller has its tools, a private home, and SSH to the host"
 
 # What apply adds when it closes the LAN: the host under its mgmt address.
@@ -49,4 +51,5 @@ topic=$(api /api/state | grep -o '"ntfy_url": "[^"]*"' | cut -d'"' -f4)
 [[ $topic =~ ^https://ntfy\.sh/nullbill-[A-Za-z0-9_-]{24}$ ]] || fail "the page shows an ntfy topic: $topic"
 in_ct grep -q '^ntfy_topic: ENC\[' /var/lib/nullbill/secrets.sops.yaml || fail "the topic is stored encrypted"
 [ "$(in_ct stat -c %a /var/lib/nullbill/secrets.sops.yaml)" = 600 ] || fail "the secrets file is private"
+in_ct runuser -u nbagent -- test ! -r /var/lib/nullbill/secrets.sops.yaml || fail "the agent cannot read the secrets"
 echo "ok   a password makes the alert topic, kept encrypted in the secrets file"

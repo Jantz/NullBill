@@ -137,7 +137,7 @@ def _entries(plan: dict, guests: dict) -> list[dict]:
             {
                 "name": "operator",
                 "title": "Coding agent",
-                "what": "The agent CLI, signed in with the credential saved under Agents.",
+                "what": "The agent CLI, signed in with the credential saved on the Agent page.",
                 "how": f"{shell} pct enter {vmid('operator')}, then su - agent, tmux new -s agent and claude.",
                 "watch": "operator",
             }
@@ -173,7 +173,7 @@ def _entries(plan: dict, guests: dict) -> list[dict]:
                 "password": "model-gateway",
                 "password_note": (
                     "This is the API key. On your devices, browsers and extensions such as Page Assist trust the address once you "
-                    "install the root certificate from Remote access, Trust this server (local-models.md)."
+                    "install the root certificate from Access, Trust this server (local-models.md)."
                 ),
                 "watch": "model-gateway",
             }

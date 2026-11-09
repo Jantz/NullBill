@@ -153,6 +153,12 @@ def cmd_web(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_agent_tools(_args: argparse.Namespace) -> int:
+    from nullbill.agenttools import serve
+
+    return serve()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="nullbill")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -179,6 +185,8 @@ def main(argv: list[str] | None = None) -> int:
     web = sub.add_parser("web", help="serve the setup and status page over HTTPS")
     web.add_argument("--listen", default="0.0.0.0:8443", help="address:port (default 0.0.0.0:8443)")
     web.set_defaults(func=cmd_web)
+    tools = sub.add_parser("agent-tools", help="the page agent's tools as an MCP server on stdio (the page starts it)")
+    tools.set_defaults(func=cmd_agent_tools)
     args = parser.parse_args(argv)
     try:
         refuse_on_pve_host()

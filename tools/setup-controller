@@ -5,7 +5,9 @@
 #
 # Installs: Python packages (venv at /opt/nullbill/venv), the pinned
 # community.proxmox collection, OpenTofu, sops (each checked against a pinned
-# SHA-256), age from Debian, and an SSH key for root on the PVE host.
+# SHA-256), age from Debian, an SSH key for root on the PVE host, and the
+# page's agent: the agent CLI the operator pins (docs/adr/0002-agent-cli.md),
+# run by the page as the unprivileged user nbagent (docs/adr/0010-page-agent.md).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 root=$PWD
@@ -16,11 +18,11 @@ sops_version=3.13.3
 sops_sha256=e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b
 home=${NULLBILL_HOME:-/var/lib/nullbill}
 
-fetch() { # url sha256 dest
+fetch() { # url sha256 dest [sha512sum]
   local tmp
   tmp=$(mktemp)
-  curl -fsSLo "$tmp" "$1"
-  echo "$2  $tmp" | sha256sum -c --quiet || { rm -f "$tmp"; echo "checksum mismatch for $1" >&2; exit 1; }
+  curl -fsSLo "$tmp" --retry 4 "$1"
+  echo "$2  $tmp" | "${4:-sha256sum}" -c --quiet || { rm -f "$tmp"; echo "checksum mismatch for $1" >&2; exit 1; }
   mv "$tmp" "$3"
 }
 
@@ -46,8 +48,33 @@ if ! echo "$sops_sha256  /usr/local/bin/sops" | sha256sum -c --quiet 2>/dev/null
   chmod 0755 /usr/local/bin/sops
 fi
 
+# The page's agent. One pin for it and the operator's: the role's defaults.
+pins=ansible/roles/operator/defaults/main.yml
+claude_version=$(sed -n 's/^operator_claude_code_version: *//p' "$pins")
+claude_sha512=$(sed -n 's/^operator_claude_code_sha512: *//p' "$pins")
+claude_dir=/opt/claude-code/$claude_version
+install_agent_cli() {
+  install -d -m 0755 "$claude_dir" &&
+    fetch "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-$claude_version.tgz" \
+      "$claude_sha512" "$claude_dir/package.tgz" sha512sum &&
+    tar -xzf "$claude_dir/package.tgz" -C "$claude_dir" package/claude &&
+    rm -f "$claude_dir/package.tgz"
+}
+# The page works without its agent: a failed download is a warning, and the
+# next Update NullBill tries again. The page says the agent is not installed.
+if [ ! -x "$claude_dir/package/claude" ] && ! (install_agent_cli); then
+  echo "warning: the agent CLI $claude_version did not install; the page runs without its agent until Update NullBill" >&2
+fi
+if [ -x "$claude_dir/package/claude" ]; then
+  ln -sfn "$claude_dir/package/claude" /usr/local/bin/claude
+fi
+if ! id nbagent >/dev/null 2>&1; then
+  useradd --system --home-dir /var/lib/nullbill-agent --create-home --shell /usr/sbin/nologin nbagent
+fi
+chmod 0700 /var/lib/nullbill-agent
+
 install -d -m 0700 "$home" /root/.ssh
 if [ ! -f /root/.ssh/id_ed25519 ]; then
   ssh-keygen -q -t ed25519 -N '' -C "nullbill@$(hostname)" -f /root/.ssh/id_ed25519
 fi
-echo "controller ready: $(python3 --version), tofu $tofu_version, sops $sops_version, $(age --version 2>&1 | head -1)"
+echo "controller ready: $(python3 --version), tofu $tofu_version, sops $sops_version, $(age --version 2>&1 | head -1), agent CLI $claude_version"

@@ -20,6 +20,7 @@ import os
 import re
 import secrets
 import signal
+import socketserver
 import ssl
 import subprocess
 import sys
@@ -44,7 +45,7 @@ from nullbill.plan import guest_storage
 from nullbill.probe import ssh_run
 from nullbill.secretfile import Codec, Secrets, Sops
 from nullbill.tailnet import render_tailnet
-from nullbill.web import progress
+from nullbill.web import chat, progress
 from nullbill.web.services import PASSWORDS, services, shares
 
 SESSION_S = 12 * 3600
@@ -104,7 +105,26 @@ GITHUB_REPO = "Jantz/NullBill"
 TAILSCALE_KEY = re.compile(r"tskey-auth-[A-Za-z0-9-]{8,200}")
 TAILSCALE_CLIENT_ID = re.compile(r"[A-Za-z0-9]{6,64}")
 TAILSCALE_CLIENT_SECRET = re.compile(r"tskey-client-[A-Za-z0-9-]{8,200}")
-STATIC = {"/": ("index.html", "text/html"), "/app.js": ("app.js", "text/javascript"), "/style.css": ("style.css", "text/css")}
+STATIC = {
+    "/": ("index.html", "text/html"),
+    "/app.js": ("app.js", "text/javascript"),
+    "/style.css": ("style.css", "text/css"),
+    "/theme.js": ("theme.js", "text/javascript"),
+    "/sw.js": ("sw.js", "text/javascript"),
+    "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json"),
+    "/icon.svg": ("icon.svg", "image/svg+xml"),
+    "/icon-192.png": ("icon-192.png", "image/png"),
+    "/icon-512.png": ("icon-512.png", "image/png"),
+    "/icon-maskable-512.png": ("icon-maskable-512.png", "image/png"),
+}
+# The page's agent (web/chat.py): the CLI, the user it runs as, its home,
+# and the socket its tools call the page on.
+AGENT_COMMAND = ["/usr/local/bin/claude"]
+AGENT_USER = "nbagent"
+AGENT_HOME = Path("/var/lib/nullbill-agent")
+TOOLS_SOCKET = Path("/run/nullbill-agent/tools.sock")
+REPO = Path(__file__).resolve().parents[3]
+WATCH_S = 5
 SECURITY_HEADERS = {
     "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'",
     "X-Content-Type-Options": "nosniff",
@@ -249,6 +269,15 @@ class App:
     github: Callable[[str, str], dict] = github_json
     # The page reaches the host over SSH for the agent's switch.
     host_run: Callable[[str, str], tuple[int, str, str]] = ssh_run
+    agent_command: list[str] = field(default_factory=lambda: list(AGENT_COMMAND))
+    agent_user: str | None = AGENT_USER
+    agent_home: Path = AGENT_HOME
+    tools_socket: Path = TOOLS_SOCKET
+    agent_cwd: Path = REPO
+
+    def __post_init__(self) -> None:
+        self.chat = chat.Chat(self)
+        self.tools = chat.Tools(self)
 
     # Files under NULLBILL_HOME.
     @property
@@ -897,7 +926,9 @@ class App:
             job_id = time.strftime("%Y%m%dT%H%M%S", time.localtime(now)) + f"{int(now * 1000) % 1000:03d}-{action}"
             args = fixed[action] if action in fixed else [action] + (["--stage", stage] if stage else [])
             job = Job(job_id, action, args, jobs / f"{job_id}.log", time.time(), by=by)
-            if by != "owner":
+            # The page's own agent announces setup runs and updates; the
+            # owner approved or allowed the rest on the page.
+            if by != "owner" and not (by == "agent" and action in AGENT_ACTIONS | {"probe"}):
                 # Before the job exists: an action the owner is not told of does not run.
                 self.tell(f"The agent started: {progress.JOB_TEXT.get(action, action)}{f' (stage {stage})' if stage else ''}", "robot")
             env = os.environ | {"NULLBILL_HOME": str(self.home), "PYTHONUNBUFFERED": "1", "ANSIBLE_FORCE_COLOR": "0"}
@@ -1067,6 +1098,7 @@ class App:
             "agent_powers": self.agent_powers(),
             "agent_github": self.agent_github(),
             "lan": {"state": lan.state(self.home), "via_vpn": self.via_vpn(client), "minutes": lan.REVERT_AFTER_S // 60},
+            "chat": self.chat.summary(),
             "job": self.job_view(latest) | {"text": ""} if latest else None,
         }
 
@@ -1090,8 +1122,9 @@ def plan_summary(plan: dict) -> dict:
     return {"memory": memory, "guests": guests}
 
 
-def offset(query: str) -> int:
-    return int(dict(p.split("=", 1) for p in query.split("&") if "=" in p).get("offset", "0") or 0)
+def offset(query: str, name: str = "offset") -> int:
+    value = dict(p.split("=", 1) for p in query.split("&") if "=" in p).get(name, "0") or "0"
+    return int(value) if value.isdigit() else 0
 
 
 def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
@@ -1135,7 +1168,7 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
             if path in STATIC:
                 name, kind = STATIC[path]
                 body = resources.files("nullbill.web").joinpath("static", name).read_bytes()
-                return self.send(200, body, f"{kind}; charset=utf-8")
+                return self.send(200, body, kind if kind.startswith("image/") and kind != "image/svg+xml" else f"{kind}; charset=utf-8")
             # Public: a certificate, which a phone downloads to install.
             if path == ROOT_CERT:
                 crt = app.browser_root()
@@ -1152,6 +1185,12 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 return self.json(401, {"error": "sign in first"})
             if path == "/api/status":
                 return self.json(200, app.status())
+            if path == "/api/chat":
+                return self.json(200, app.chat.view(offset(query, "after")))
+            if path == "/api/agent-log":
+                return self.json(200, {"entries": app.chat.audit_log()})
+            if path == "/api/chat/notes":
+                return self.json(200, {"notes": app.chat.notes()})
             match = re.fullmatch(r"/api/jobs/([0-9T]+-[a-z-]+)", path)
             if match and match[1] in app.jobs:
                 return self.json(200, app.job_view(app.jobs[match[1]], offset(query)))
@@ -1197,7 +1236,7 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 if not agent:
                     return
                 if not app.may(agent, match[1]):
-                    refused = "the owner has not let the agent run setup and updates (Agents page, Agent has root on Proxmox)"
+                    refused = "the owner has not let the agent run setup and updates (Agent page, Settings, Root on Proxmox)"
                     return self.json(403, {"error": refused})
                 stage = body.get("stage") if match[1] == "apply" else None
                 if stage is not None and stage not in APPLY_STAGES:
@@ -1227,7 +1266,32 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                     return self.json(200, {"ok": True, "alerts": app.alerts()})
                 if self.path == "/api/agent":
                     app.save_agent_credential(body)
-                    return self.json(200, {"ok": True, "agent_credential": app.agent_credential()})
+                    app.chat.welcome()
+                    return self.json(200, {"ok": True, "agent_credential": app.agent_credential(), "chat": app.chat.summary()})
+                if self.path == "/api/chat":
+                    app.chat.say(str(body.get("text", "")))
+                    return self.json(200, app.chat.view(int(body.get("after") or 0)))
+                if self.path == "/api/chat/stop":
+                    app.chat.stop()
+                    return self.json(200, {"ok": True})
+                if self.path == "/api/chat/new":
+                    app.chat.new_conversation()
+                    return self.json(200, {"ok": True})
+                if self.path == "/api/chat/decide":
+                    approve = body.get("approve")
+                    if not isinstance(approve, bool):
+                        raise NullBillError("send approve: true or false")
+                    proposal = app.chat.decide(str(body.get("id", "")), approve, str(body.get("typed", "")), str(body.get("note", "")))
+                    return self.json(200, {"ok": True, "state": proposal["state"]})
+                if self.path == "/api/chat/answer":
+                    app.chat.answer(str(body.get("id", "")), str(body.get("text", "")))
+                    return self.json(200, {"ok": True})
+                if self.path == "/api/chat/settings":
+                    return self.json(200, {"ok": True, **app.chat.save_settings(body)})
+                if self.path == "/api/chat/notes":
+                    notes = app.chat.save_notes(str(body.get("notes", "")))
+                    app.chat.audit(action="notes", by="owner", chars=len(notes))
+                    return self.json(200, {"ok": True, "notes": notes})
                 if self.path == "/api/agent-github":
                     return self.json(200, {"ok": True, "agent_github": app.save_agent_github(body)})
                 if self.path == "/api/agent-powers":
@@ -1282,6 +1346,79 @@ def fingerprint(cert: Path) -> str:
     return out.stdout.strip().partition("=")[2]
 
 
+class ToolServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    daemon_threads = True
+
+
+def tools_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
+    """The page agent's tools call here (nullbill/agenttools.py), over a
+    socket only the agent's user can reach, with the running turn's token."""
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, fmt: str, *args: object) -> None:
+            pass
+
+        def address_string(self) -> str:
+            return "agent"
+
+        def reply(self, code: int, data: dict) -> None:
+            body = json.dumps(data).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self) -> None:  # noqa: N802
+            # Read the body first: a reply before it is read can reach a
+            # client still sending it as a broken pipe.
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(min(length, 256 * 1024))
+            if self.path != "/call":
+                return self.reply(404, {"error": "not found"})
+            if not chat.valid_token(app.chat, self.headers.get("Authorization")):
+                return self.reply(401, {"error": "this turn's token is not valid any more"})
+            try:
+                body = json.loads(raw or b"{}")
+                name, args = str(body["name"]), body.get("args") or {}
+                if not isinstance(args, dict):
+                    raise ValueError("args is not an object")
+            except (ValueError, KeyError) as exc:
+                return self.reply(400, {"error": f"bad request: {exc}"})
+            text, failed = app.tools.call(name, args)
+            return self.reply(200, {"text": text, "is_error": failed})
+
+    return Handler
+
+
+def serve_tools(app: App) -> ToolServer:
+    """The socket, in a directory only root and the agent's user may enter."""
+    path = app.tools_socket
+    path.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
+    path.unlink(missing_ok=True)
+    server = ToolServer(str(path), tools_handler(app))
+    if app.agent_user:
+        import pwd
+
+        gid = pwd.getpwnam(app.agent_user).pw_gid
+        os.chown(path.parent, 0, gid)
+        os.chown(path, 0, gid)
+        path.chmod(0o660)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def watch(app: App) -> None:
+    """Failed runs for the agent to look into, and turns past their time."""
+    while True:
+        time.sleep(WATCH_S)
+        try:
+            app.chat.notice_jobs()
+            app.chat.watch_turn()
+        except Exception as exc:  # noqa: BLE001 - a watcher that dies would stop for good
+            print(f"nullbill-web: agent watcher: {exc}", file=sys.stderr, flush=True)
+
+
 def serve(home: Path, listen: str) -> None:
     host, _, port = listen.rpartition(":")
     app = App(home)
@@ -1310,4 +1447,9 @@ def serve(home: Path, listen: str) -> None:
             app.scheduled(time.time())
 
     threading.Thread(target=schedule, daemon=True).start()
+    try:
+        serve_tools(app)
+    except (OSError, KeyError) as exc:
+        print(f"nullbill-web: the agent's tools are off: {exc}", file=sys.stderr, flush=True)
+    threading.Thread(target=watch, args=(app,), daemon=True).start()
     server.serve_forever()

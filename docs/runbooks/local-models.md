@@ -30,7 +30,7 @@ with one key. Why it is built this way: [ADR 0008](../adr/0008-local-models.md).
    Proxmox web UI select the node, press **Reboot**, wait until the page
    answers again, and press **Run setup** again. This happens once.
 
-When setup has finished, **Run checks** shows four checks for it: the host
+When setup has finished, **Checks** shows four checks for it: the host
 runs NVIDIA's driver, the model sits in the card's memory, the model
 answers through the gateway, and a wrong key is refused.
 
@@ -53,7 +53,7 @@ Any OpenAI-compatible client works the same way: base URL
 From a device on your tailnet, use the address instead of the name:
 `https://10.42.4.21:4000/v1`. There the gateway answers with a certificate
 from NullBill's browser CA, so once the device trusts that root (the page's
-**Remote access**, **Trust this server**, [trust-this-server.md](trust-this-server.md))
+**Access**, **Trust this server**, [trust-this-server.md](trust-this-server.md))
 browsers and browser extensions such as Page Assist accept it, with no hosts
 line and no exception to renew. The name still gets step-ca's certificate,
 which renews daily, so a browser exception for it lasts a day at most.
