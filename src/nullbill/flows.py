@@ -11,6 +11,11 @@ HOST = "pve-host"
 # The PVE web UI/API and SSH: verify checks the LAN is refused both.
 HOST_PORTS = (8006, 22)
 HOST_SET = "nb-host"
+# tailscaled's UDP port on the vpn guest (ansible/roles/vpn sets it). From
+# this port alone the vpn guest may reach private addresses past the router:
+# a device on the home network then talks to it directly instead of through
+# Tailscale's relays (DERP), which are slow for video.
+TAILSCALE_PORT = 41641
 
 
 @dataclass(frozen=True)

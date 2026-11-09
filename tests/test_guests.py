@@ -24,7 +24,11 @@ def test_router_forwards_only_planned_flows(facts):
     assert nft.count("policy drop;") == 2
     assert "ip saddr { 10.42.2.17 } ip daddr { 10.42.2.13 } tcp dport 5432 accept" in nft
     egress = [line for line in nft.splitlines() if 'oifname "nb-uplink"' in line and "accept" in line]
-    # Only direct zones reach the uplink, and never a private range.
+    # Only direct zones reach the uplink, and never a private range, except
+    # tailscaled's own port on the vpn guest, for direct paths to devices at home.
+    tailscale = f'ip saddr {plan["guests"]["vpn"]["ip"]} oifname "nb-uplink" udp sport 41641 accept'
+    assert [line.strip().split(" #")[0] for line in egress if "iifname" not in line] == [tailscale]
+    egress = [line for line in egress if "iifname" in line]
     assert [re.search(r'iifname "(\S+)"', line)[1] for line in egress] == ["nb-services", "nb-access"]
     assert all("ip daddr != @private" in line for line in egress)
 

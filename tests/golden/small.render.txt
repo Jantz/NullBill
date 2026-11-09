@@ -113,6 +113,8 @@ OUT ACCEPT -dest +nb-svc-jellyfin -p tcp -dport 8096 # to jellyfin
 OUT ACCEPT -dest +nb-svc-workspace -p tcp -dport 22 # to workspace
 OUT ACCEPT -dest 10.42.1.254 -p tcp -dport 8006 # to the PVE host
 OUT ACCEPT -dest 10.42.1.254 -p tcp -dport 22 # to the PVE host
+OUT DROP -dest +nb-zones # NullBill's zones only through flows
+OUT ACCEPT -dest +nb-private -p udp -sport 41641 # Tailscale, direct to devices at home
 OUT DROP -dest +nb-private # no LAN or other private ranges
 OUT ACCEPT # internet via the router
 ===== firewall/2012.fw
@@ -646,6 +648,7 @@ table inet nullbill {
         ip saddr { 10.42.1.2 } ip daddr { 10.42.1.254 } tcp dport 22 accept # service:nullbill to the PVE host
         ip saddr { 10.42.1.16 } ip daddr { 10.42.1.254 } tcp dport 22 accept # service:operator to the PVE host
         ip saddr { 10.42.1.14 } ip daddr { 10.42.1.254 } tcp dport 9100 accept # service:monitoring to the PVE host
+        ip saddr 10.42.6.11 oifname "nb-uplink" udp sport 41641 accept # Tailscale, direct to devices at home
         iifname "nb-services" oifname "nb-uplink" ip daddr != @private accept # direct egress
         iifname "nb-access" oifname "nb-uplink" ip daddr != @private accept # direct egress
     }

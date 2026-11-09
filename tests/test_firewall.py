@@ -51,6 +51,16 @@ def test_forgejo_rules(facts):
     assert forgejo[-2:] == ["OUT DROP -dest +nb-private", "OUT ACCEPT"]
 
 
+def test_vpn_reaches_devices_at_home_only_from_tailscales_port(facts):
+    vpn = rules(rendered(facts, "mid")["firewall/2011.fw"])
+    assert vpn[-4:] == [
+        "OUT DROP -dest +nb-zones",
+        "OUT ACCEPT -dest +nb-private -p udp -sport 41641",
+        "OUT DROP -dest +nb-private",
+        "OUT ACCEPT",
+    ]
+
+
 def test_proxy_zone_has_no_direct_egress(facts):
     workspace = rules(rendered(facts, "mid")["firewall/2019.fw"])
     assert "OUT ACCEPT -dest +nb-svc-egress-proxy -p tcp -dport 3128" in workspace
