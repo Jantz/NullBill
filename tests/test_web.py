@@ -850,7 +850,7 @@ def test_the_owner_gives_the_gpu_memory_the_probe_could_not_read(site):
     assert state["gpus"][0]["vram_mib"] == 12288
     # The model gateway's card: the planned model, where it answers, its key once setup made one.
     name = "model-gateway.nullbill.internal"
-    want = {"url": f"https://{name}:4000/v1", "name": name, "ip": "10.42.4.21", "model": "qwen3.5-9b", "key_set": False}
+    want = {"url": f"https://{name}:4000/v1", "name": name, "ip": "10.42.4.21", "model": "bonsai-2-27b", "key_set": False}
     assert state["gateway"] == want
     gateway = {"name": "model-gateway"}
     assert client.call("/api/password-reveal", gateway) == (400, {"error": "run setup first; it makes the password"})
@@ -858,7 +858,7 @@ def test_the_owner_gives_the_gpu_memory_the_probe_could_not_read(site):
     assert client.call("/api/password-reveal", gateway) == (200, {"password": "sk-gateway-key"})
     item = next(s for s in state["services"]["items"] if s["name"] == "model-gateway")
     assert item["addresses"] == ["From your devices: https://10.42.4.21:4000/v1", f"From the workspace: {want['url']}"]
-    assert (item["password"], item["watch"]) == ("model-gateway", "model-gateway") and "qwen3.5-9b" in item["what"]
+    assert (item["password"], item["watch"]) == ("model-gateway", "model-gateway") and "bonsai-2-27b" in item["what"]
     # Cleared again, the pin goes.
     client.call("/api/choices", {**choices, "gpus": {"0000:01:00.0": ""}})
     assert "gpus" not in yaml.safe_load((app.home / "config.yaml").read_text())

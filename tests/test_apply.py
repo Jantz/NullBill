@@ -1694,6 +1694,10 @@ def test_inference_stage_gives_the_container_the_card_once_and_room_to_build(ctx
     inference, gateway = runs[1][2], runs[2][2]
     assert inference["inference_nvidia_version"] == version and inference["inference_nvidia_sha256"] == sha256
     assert (inference["inference_model_url"], inference["inference_model_sha256"]) == (model["url"], model["sha256"])
+    # The model card's settings, not llama.cpp's defaults for every model.
+    assert inference["inference_sampling"] == model["sampling"] and inference["inference_sampling"]["top_k"] == 20
+    assert inference["inference_reasoning"] == model.get("reasoning", "auto")
+    assert inference["inference_cache_type"] == model.get("cache_type", "f16")
     assert inference["inference_listen"] == c.bare["guests"]["inference"]["ip"]
     assert inference["inference_api_key"] == gateway["model_gateway_backend_key"] == c.secrets.data["inference_key"]
     assert gateway["model_gateway_key"] == c.secrets.data["model_gateway_key"] and gateway["model_gateway_key"].startswith("sk-")

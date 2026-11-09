@@ -155,6 +155,21 @@
     downloads_dest: "{{ inference_model_path }}"
     downloads_checksum: "sha256:{{ inference_model_sha256 }}"
 
+# A model plan no longer picks only takes disk space.
+- name: Models no longer planned
+  ansible.builtin.find:
+    paths: /var/lib/llama/models
+    patterns: "*.gguf"
+  register: inference_models_found
+
+- name: Remove models no longer planned
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ inference_models_found.files | rejectattr('path', 'equalto', inference_model_path) | list }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+
 - name: Settings directory
   ansible.builtin.file:
     path: /etc/llama

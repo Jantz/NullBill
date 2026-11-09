@@ -23,6 +23,8 @@ cat >"$vars" <<EOF
   "inference_model_url": "https://huggingface.co/ggml-org/models-moved/resolve/499bc8821c6b12b4e53c5bffcb21ec206f212d81/tinyllamas/stories260K.gguf",
   "inference_model_sha256": "270cba1bd5109f42d03350f60406024560464db173c0e387d91f0426d3bd256d",
   "inference_context": 256,
+  "inference_sampling": {"temperature": 0.7, "top_p": 0.8, "top_k": 20, "min_p": 0.0, "presence_penalty": 1.5, "repeat_penalty": 1.0},
+  "inference_reasoning_effort": "medium",
   "inference_listen": "127.0.0.1",
   "inference_nvidia_version": "$(sed -n 's/^nvidia_host_version: //p' /ansible/roles/nvidia_host/defaults/main.yml)",
   "inference_nvidia_sha256": "$(sed -n 's/^nvidia_host_sha256: //p' /ansible/roles/nvidia_host/defaults/main.yml)",
@@ -32,7 +34,12 @@ cat >"$vars" <<EOF
 }
 EOF
 
+# A model an earlier plan picked, which the role removes.
+install -d -m 0750 /var/lib/llama/models
+touch /var/lib/llama/models/old-model.gguf
 converge inference.yml -e inference_manage_services=false -e "@$vars"
+test ! -e /var/lib/llama/models/old-model.gguf || fail "a model no longer planned is removed"
+test -s /var/lib/llama/models/stories260K.gguf || fail "the planned model stays"
 
 version=$(sed -n 's/^nvidia_host_version: //p' /ansible/roles/nvidia_host/defaults/main.yml)
 test -e "/usr/lib/x86_64-linux-gnu/libnvidia-glcore.so.$version" || fail "NVIDIA's user space at $version"
@@ -72,3 +79,14 @@ ask() { # key
 python3 -c 'import json,sys; c=json.load(open("/tmp/answer.json"))["choices"][0]["message"]["content"]; sys.exit(not c.strip())' \
   || { cat /tmp/answer.json; fail "the answer has text"; }
 pass "only the gateway's key gets an answer"
+
+# The catalog's sampling is the server's default for a request that sets none.
+curl -fsS -H "Authorization: Bearer $key" http://127.0.0.1:8080/props >/tmp/props.json || fail "props with the key"
+python3 - <<'PY' || { cat /tmp/props.json; fail "the server samples with the catalog's settings"; }
+import json
+p = json.load(open("/tmp/props.json"))["default_generation_settings"]["params"]
+want = {"temperature": 0.7, "top_p": 0.8, "top_k": 20, "min_p": 0.0, "presence_penalty": 1.5, "repeat_penalty": 1.0}
+assert all(abs(p[k] - v) < 1e-6 for k, v in want.items()), {k: p[k] for k in want}
+PY
+grep -q -- '--reasoning auto --reasoning-effort medium' "$unit" || fail "the unit passes reasoning and its effort"
+pass "llama-server samples with the model card's settings"

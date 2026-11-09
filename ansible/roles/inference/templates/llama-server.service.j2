@@ -15,7 +15,12 @@ Environment=XDG_CACHE_HOME=/var/cache/llama
 {% if inference_vulkan_devices %}
 Environment=GGML_VK_VISIBLE_DEVICES={{ inference_vulkan_devices }}
 {% endif %}
-ExecStart={{ inference_server }} --model {{ inference_model_path }} --alias {{ inference_model_name }} --host {{ inference_listen }} --port {{ inference_port }} --ctx-size {{ inference_context }} --parallel 1 --n-gpu-layers all --api-key-file /etc/llama/api-key --no-webui
+{% set flags = {'temperature': '--temp', 'top_p': '--top-p', 'top_k': '--top-k', 'min_p': '--min-p', 'presence_penalty': '--presence-penalty', 'repeat_penalty': '--repeat-penalty'} %}
+{% set sampling = [] %}
+{% for key in inference_sampling | sort %}
+{% set _ = sampling.append(flags[key] ~ ' ' ~ inference_sampling[key]) %}
+{% endfor %}
+ExecStart={{ inference_server }} --model {{ inference_model_path }} --alias {{ inference_model_name }} --host {{ inference_listen }} --port {{ inference_port }} --ctx-size {{ inference_context }} --parallel 1 --n-gpu-layers all {% if inference_cache_type != 'f16' %}--flash-attn on --cache-type-k {{ inference_cache_type }} --cache-type-v {{ inference_cache_type }} {% endif %}--reasoning {{ inference_reasoning }} {% if inference_reasoning_effort %}--reasoning-effort {{ inference_reasoning_effort }} {% endif %}{% if sampling %}{{ sampling | join(' ') }} {% endif %}--api-key-file /etc/llama/api-key --no-webui
 Restart=always
 RestartSec=5
 NoNewPrivileges=true

@@ -68,8 +68,13 @@ would reset it in any case.
 **Models from an allow-list by VRAM.** `catalog.yaml`'s `models` lists GGUF
 files pinned to a Hugging Face commit and by SHA-256, each with the VRAM it
 is given. plan picks the largest that fits the inference budget;
-`inference.model` pins another. For 12 GiB that is Qwen3.5-9B at Q4_K_M
-(Apache-2.0).
+`inference.model` pins another. For 12 GiB that was Qwen3.5-9B at Q4_K_M;
+since 2026-11-09 it is Bonsai 2 27B (Prism ML's ternary Qwen3.8-27B in
+llama.cpp's own Q2_0, Apache-2.0), a 27B model in the room a 9B one took.
+Each entry also carries its model card's sampling, reasoning and cache
+settings, which become llama-server's defaults: run with llama.cpp's
+generic sampling and without the thinking Qwen's card assumes, Qwen3.5-9B
+gave weak answers and repeated itself.
 
 **One engine.** vLLM is not built. Rather than plan an engine apply cannot
 install, the engine table names llama.cpp for any number of cards; it splits

@@ -9,7 +9,7 @@ with one key. Why it is built this way: [ADR 0008](../adr/0008-local-models.md).
 |---|---|
 | Model gateway (LiteLLM) | `https://model-gateway.nullbill.internal:4000/v1` from the workspace, `https://10.42.4.21:4000/v1` from your devices (guest 2021) |
 | Model server (llama.cpp) | guest 2020, `10.42.4.20` port 8080, reached only by the gateway |
-| Model | the page's **Services** page, **Local AI model** card; for a 12 GB card, `qwen3.5-9b` |
+| Model | the page's **Services** page, **Local AI model** card; for a 12 GB card, `bonsai-2-27b` |
 | Key | the same card, **Show key** (or **Copy**) |
 
 ## 1. Turn it on
@@ -25,7 +25,7 @@ with one key. Why it is built this way: [ADR 0008](../adr/0008-local-models.md).
 3. Press **Run setup** at the top of the page. The stage **Set up the
    local AI model and its gateway** takes a while the first time: it
    installs the card's driver on Proxmox, builds llama.cpp (about 15
-   minutes) and downloads the model (about 5 GB).
+   minutes) and downloads the model (about 8 GB).
 4. If setup stops and says the old nouveau driver holds the card: in the
    Proxmox web UI select the node, press **Reboot**, wait until the page
    answers again, and press **Run setup** again. This happens once.
@@ -49,6 +49,15 @@ curl https://model-gateway.nullbill.internal:4000/v1/chat/completions \
 Any OpenAI-compatible client works the same way: base URL
 `https://model-gateway.nullbill.internal:4000/v1`, the key as API key, and
 `local` (or the model's own name) as the model.
+
+The model thinks before it answers, and the server already uses the
+settings its makers advise (temperature, top-k, penalties). In a chat
+program such as Page Assist, leave temperature and the other sampling
+settings at their defaults (unset), and do not cap the answer's length
+low: the thinking counts against it, so a cap of a few hundred tokens ends
+the reply before the answer. Bonsai thinks at medium effort unless a
+request sends `"reasoning_effort"`: `"xhigh"` thinks longer, `"none"` not
+at all.
 
 From a device on your tailnet, use the address instead of the name:
 `https://10.42.4.21:4000/v1`. There the gateway answers with a certificate

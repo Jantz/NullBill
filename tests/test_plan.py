@@ -326,8 +326,10 @@ def test_the_largest_listed_model_that_fits_the_card_is_chosen(facts):
     f["gpus"][0]["vram_mib"] = None
     sizes = {"0000:01:00.0": {"vram_mib": 12282}}
     plan = plan_for(f, {**fixture_config("mid"), "gpus": sizes})
-    assert plan["inference"]["model"].value == "qwen3.5-9b"
-    assert plan["inference"]["model_mib"].value == 5417
+    assert plan["inference"]["model"].value == "bonsai-2-27b"
+    assert plan["inference"]["model_mib"].value == 7272
+    eight = plan_for(f, {**fixture_config("mid"), "gpus": {"0000:01:00.0": {"vram_mib": 8192}}})
+    assert eight["inference"]["model"].value == "qwen3.5-9b"
     pinned = plan_for(f, {**fixture_config("mid"), "gpus": sizes, "inference": {"model": "qwen3.5-4b"}})
     assert pinned["inference"]["model"].value == "qwen3.5-4b"
 
@@ -338,7 +340,7 @@ def test_a_model_pin_must_be_listed_and_fit(facts):
     too_big = errors_of(f, {**fixture_config("mid"), "inference": {"model": "qwen3.6-27b"}})
     assert "inference.model: qwen3.6-27b needs 20480 MiB of VRAM, inference has 8192 MiB" in too_big
     unknown = errors_of(f, {**fixture_config("mid"), "inference": {"model": "gpt-9"}})
-    assert unknown[0].startswith("inference.model: 'gpt-9' is not in models; known: qwen3.5-4b, qwen3.5-9b")
+    assert unknown[0].startswith("inference.model: 'gpt-9' is not in models; known: bonsai-2-27b, qwen3.5-4b, qwen3.5-9b")
     f["gpus"][0]["vram_mib"] = 2048
     assert "inference: no model in models fits the 2048 MiB of VRAM inference has" in errors_of(f, fixture_config("mid"))
 

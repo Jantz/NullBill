@@ -240,6 +240,21 @@ $defs:
       size_mib: {type: integer, minimum: 1}
       vram_mib: {type: integer, minimum: 1}
       context: {type: integer, minimum: 512}
+      # The model card's sampling, llama-server's default for a request
+      # that sets none.
+      sampling:
+        type: object
+        additionalProperties: false
+        properties:
+          temperature: {type: number, minimum: 0}
+          top_p: {type: number, minimum: 0, maximum: 1}
+          top_k: {type: integer, minimum: 0}
+          min_p: {type: number, minimum: 0, maximum: 1}
+          presence_penalty: {type: number, minimum: -2, maximum: 2}
+          repeat_penalty: {type: number, minimum: 0}
+      reasoning: {enum: ["on", "off", auto]}
+      reasoning_effort: {enum: [minimal, low, medium, high, xhigh, max]}
+      cache_type: {enum: [f16, q8_0]}
 
   image:
     type: object
@@ -346,7 +361,7 @@ $defs:
         type: object
         propertyNames: {$ref: "#/$defs/model_name"}
         additionalProperties:
-          allOf: [{$ref: "#/$defs/llm"}, {required: [url, sha256, size_mib, vram_mib, context]}]
+          allOf: [{$ref: "#/$defs/llm"}, {required: [url, sha256, size_mib, vram_mib, context, sampling]}]
       proxy:
         allOf:
           - {$ref: "#/$defs/common/proxy"}

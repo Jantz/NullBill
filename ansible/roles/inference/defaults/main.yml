@@ -24,6 +24,15 @@ inference_model_name: ""
 inference_model_url: ""
 inference_model_sha256: ""
 inference_context: 32768
+# The model card's settings (catalog.yaml's models): sampling as
+# llama-server flags (temperature, top_p, top_k, min_p, presence_penalty,
+# repeat_penalty), reasoning on/off/auto, a reasoning effort for templates
+# that take one, and the cache's type (q8_0 turns on flash attention,
+# which a quantised cache needs).
+inference_sampling: {}
+inference_reasoning: auto
+inference_reasoning_effort: ""
+inference_cache_type: f16
 
 inference_listen: 0.0.0.0
 inference_port: 8080

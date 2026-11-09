@@ -317,6 +317,12 @@ engines:
 # plan picks the one with the largest vram_mib that fits the VRAM given to
 # inference; pin another with inference.model. vram_mib is the file plus
 # room for `context` tokens of cache: a choice, not a measurement.
+# sampling is the model card's own advice, the server's default for a
+# request that sets none: without it llama.cpp samples every model alike
+# (no presence penalty, top_k 40), which made Qwen3.5 repeat itself.
+# reasoning: on, off, or auto (the chat template decides); reasoning_effort
+# goes to templates that take one. cache_type q8_0 halves the context's
+# cache (with flash attention), for context a 12 GB card could not hold.
 models:
   qwen3.5-4b:
     url: https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf
@@ -324,18 +330,44 @@ models:
     size_mib: 2613
     vram_mib: 4096
     context: 32768
+    # Unsloth's template answers without thinking unless asked; Qwen's own
+    # default is to think, with these settings.
+    reasoning: "on"
+    sampling: {temperature: 1.0, top_p: 0.95, top_k: 20, min_p: 0.0, presence_penalty: 1.5, repeat_penalty: 1.0}
   qwen3.5-9b:
     url: https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/3885219b6810b007914f3a7950a8d1b469d598a5/Qwen3.5-9B-Q4_K_M.gguf
     sha256: 03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8
     size_mib: 5417
     vram_mib: 8192
     context: 32768
+    # Unsloth's template answers without thinking unless asked; Qwen's own
+    # default is to think, with these settings.
+    reasoning: "on"
+    sampling: {temperature: 1.0, top_p: 0.95, top_k: 20, min_p: 0.0, presence_penalty: 1.5, repeat_penalty: 1.0}
+  # Qwen3.8-27B in ternary weights (Prism ML), in llama.cpp's own Q2_0
+  # packing, which stock llama.cpp runs from b11556: a 27B model in 7.1 GiB,
+  # close to the full model in Prism ML's benchmarks, which is well ahead
+  # of Qwen3.5-9B in Qwen's. It thinks by default; its card advises medium
+  # effort, since the default thinks far longer and loops on some prompts.
+  # 64k of context in a q8_0 cache fits it in 10 GiB of a card.
+  bonsai-2-27b:
+    url: https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf/resolve/839bd57023c1558945afea70a74fa83c054f35f9/Ternary-Bonsai-2-27B-Q2_0.gguf
+    sha256: 4f99aed01b8a877e153f9aa6569a4440fe17c59701cc0953e36d7f460549e70e
+    size_mib: 7272
+    vram_mib: 10240
+    context: 65536
+    cache_type: q8_0
+    reasoning: auto
+    reasoning_effort: medium
+    sampling: {temperature: 1.0, top_p: 0.95, top_k: 20, min_p: 0.05, presence_penalty: 0.0, repeat_penalty: 1.0}
   qwen3.6-27b:
     url: https://huggingface.co/unsloth/Qwen3.6-27B-GGUF/resolve/82d411acf4a06cfb8d9b073a5211bf410bfc29bf/Qwen3.6-27B-Q4_K_M.gguf
     sha256: 5ed60d0af4650a854b1755bd392f9aef4872643dc25a254bc68043fa638392a0
     size_mib: 16038
     vram_mib: 20480
     context: 32768
+    reasoning: "on"
+    sampling: {temperature: 1.0, top_p: 0.95, top_k: 20, min_p: 0.0, presence_penalty: 0.0, repeat_penalty: 1.0}
 
 # Domains egress-proxy forwards to, for zones with egress: proxy. A leading
 # dot also matches subdomains. Only HTTPS CONNECT and plain HTTP to these
