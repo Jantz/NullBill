@@ -387,6 +387,7 @@ function route(focus) {
   const inMore = ["setup", "access", "alerts"].includes(view);
   $("tab-more").classList.toggle("current", inMore);
   const changed = currentView !== view || currentSub !== sub;
+  const viewChanged = currentView !== view;
   currentView = view;
   currentSub = sub;
   let title = $(`view-${view}`).dataset.title;
@@ -396,18 +397,25 @@ function route(focus) {
     const stepChanged = step !== currentStep;
     showStep(step);
     if (stepChanged || changed) heading = $(`h-step-${step}`);
+    const stepLink = document.querySelector(`#stepper a[data-step="${step}"]`);
+    if (stepLink) title = `${stepLink.textContent.replace(/,.*$/s, "").trim()} · Setup`;
   } else if (view === "agent") {
     showAgentTab(sub);
+    // Arrow keys in its tab list move between tabs: focus stays on the tab.
+    if (!viewChanged) heading = null;
+    title = `${$(`tab-${sub || "settings"}`) ? $(`tab-${sub || "settings"}`).textContent : "Agent"} · Agent`;
   } else if (view === "access") {
     showAccessTab(sub);
+    if (!viewChanged) heading = null;
+    title = `${$(`tab-${sub || "tailscale"}`) ? $(`tab-${sub || "tailscale"}`).textContent : "Access"} · Access`;
   } else if (view === "activity") {
     const detail = Boolean(sub);
     show("activity-list", !detail);
     show("activity-detail", detail);
     if (detail) {
-      openRun(sub);
+      openRun(sub, focus);
       heading = null;
-      title = "Run";
+      title = `${job && job.id === sub ? JOB_NAMES[job.view.action] || "Run" : "Run"} · Activity`;
     }
   }
   placeChat();
@@ -763,10 +771,9 @@ function renderPlan(plan) {
     const m = plan.summary.memory;
     const guests = plan.summary.guests;
     $("plan-ok-text").textContent = m.host_mib
-      ? `${guests.length} guests count for ${gib(m.guests_mib)}; Proxmox keeps ${gib(m.reserve_mib)} and ${gib(m.unallocated_mib)} stays free.` +
-        (m.limits_mib && m.limits_mib !== m.guests_mib
-          ? ` Containers count at part of their limit, since they take memory only as they use it; all limits come to ${gib(m.limits_mib)}.`
-          : "")
+      ? (m.limits_mib && m.limits_mib !== m.guests_mib
+        ? `${guests.length} guests. Containers count at part of their limit, since they take memory only as they use it; all limits come to ${gib(m.limits_mib)}.`
+        : `${guests.length} guests.`)
       : `${guests.length} guests.`;
     const bar = $("memory");
     $("memory-block").hidden = !m.host_mib;
@@ -808,10 +815,16 @@ function renderFiring() {
     : !ok ? (built() ? "Monitoring does not answer. If setup is running or just finished, wait a minute." : "Alerts show here once setup has built monitoring.")
     : "Nothing is firing.";
   $("firing-meta").textContent = ok ? `${s.targets} systems watched` : "";
-  $("firing-rows").replaceChildren(...alerts.map((a) => make("tr", {},
-    make("td", {}, status(a.severity === "page" ? "bad" : "warn", a.severity === "page" ? "Page" : "Ticket")),
-    make("td", {className: "name", textContent: a.name}),
-    make("td", {className: "hide-phone", textContent: a.summary || ""}))));
+  const signed = Boolean(state && state.chat && state.chat.signed_in);
+  $("firing-rows").replaceChildren(...alerts.map((a) => {
+    const ask = signed ? make("button", {type: "button", className: "btn small", textContent: "Ask the agent"}) : null;
+    if (ask) ask.addEventListener("click", () => askAgent(`The alert ${a.name} fires${a.summary ? `: ${a.summary.replace(/[.\s]+$/, "")}` : ""}. What does it mean, and what should I do?`));
+    return make("tr", {},
+      make("td", {className: "hide-phone"}, status(a.severity === "page" ? "bad" : "warn", a.severity === "page" ? "Urgent" : "When you can")),
+      make("td", {}, make("div", {className: "name", textContent: a.summary || a.name}),
+        make("div", {className: "sub"}, make("span", {className: "only-phone-inline", textContent: a.severity === "page" ? "Urgent · " : "When you can · "}), make("code", {textContent: a.name}))),
+      make("td", {className: "actions"}, ask));
+  }));
 }
 
 // The agent's settings.
@@ -990,7 +1003,9 @@ function renderGuide(items) {
   }
   const left = items.length - done;
   const ring = $("guide-btn");
-  ring.hidden = left === 0 || (inline && currentView === "overview");
+  const required = items.filter((i) => !i.later && i.kind !== "done").length;
+  ring.hidden = left === 0 || (inline && currentView === "overview") || (phone.matches && required === 0);
+  $("guide-frac").textContent = `${done}/${items.length}`;
   ring.querySelector(".ring-fill").style.strokeDashoffset = `${50.27 * (1 - done / items.length)}`;
   ring.title = `Setup guide: ${text}`;
   $("guide-count").textContent = `, ${text}`;
@@ -1022,10 +1037,14 @@ function paintStates() {
   const setupLeft = STEPS.slice(0, 3).filter((s) => !stepDone(s)).length;
   setNav("setup", setupLeft ? `${setupLeft}` : "", "", setupLeft ? `${setupLeft} steps left` : "");
   setNav("access", st.lan.state === "closing" ? "!" : "", "warn", "needs you");
-  const failed = !running && st.last_jobs.apply && st.last_jobs.apply.state === "failed";
-  setNav("activity", running ? "1" : failed ? "!" : "", running ? "run" : "bad", running ? "a run is going" : failed ? "the last setup run stopped" : "");
+  const failed = !running && st.last_jobs.apply && st.last_jobs.apply.state === "failed" && !st.last_jobs.apply.stopped;
+  setNav("activity", failed ? "!" : "", "bad", failed ? "the last setup run failed" : "");
+  setCount($("tab-activity-badge"), failed ? "!" : "", "bad", failed ? "the last setup run failed" : "");
   const firing = lastStatus && lastStatus.monitoring === "ok" ? lastStatus.alerts.length : 0;
-  setNav("alerts", firing ? String(firing) : "", "bad", firing ? `${firing} firing` : "");
+  const paging = firing && lastStatus.alerts.some((a) => a.severity === "page");
+  setNav("alerts", firing ? String(firing) : "", paging ? "bad" : "warn", firing ? `${firing} firing` : "");
+  const moreCount = (firing ? 1 : 0) + (st.lan.state === "closing" ? 1 : 0);
+  setCount($("tab-more-badge"), moreCount ? String(moreCount) : "", "warn", moreCount ? "something under More needs you" : "");
   const ts = items.find((i) => i.href === "access/tailscale");
   $("tailscale-state").replaceChildren(ts.kind === "done" ? status("good", "Connected") : st.tailscale_key ? status("warn", "Auth key saved: run setup")
     : st.tailscale_client ? status("", "Client saved; add an auth key") : status("", "Not set up"));
@@ -1034,6 +1053,9 @@ function paintStates() {
   show("tailscale-client-saved", st.tailscale_client);
   show("vpn-saved", st.tailscale_key);
   show("pending-dot", Boolean(st.config_changed || st.tailscale_key));
+  // Run setup is the page's main action only when there is something to build.
+  const urge = !running && Boolean(st.config_changed || st.tailscale_key || (!built() && st.plan.text && !st.plan.errors.length));
+  for (const id of ["run-setup", "run-menu"]) $(id).classList.toggle("primary", urge);
   $("run-setup").title = st.config_changed ? "Run setup: your saved choices are not built yet" : st.tailscale_key ? "Run setup: an auth key waits" : "Run setup";
   renderReady();
   renderOverview(items);
@@ -1054,7 +1076,7 @@ function renderReady() {
   else if (state.plan.text) ok(true, "The plan fits.");
   else ok(false, "Save your choices to make a plan.", "#setup/choices");
   if (!(state.chat && state.chat.signed_in)) ok(false, "No agent yet: setup runs, but nobody looks into a failure for you.", "#agent/settings");
-  if (!state.tailscale_client) ok(false, "No Tailscale client: setup runs, but the server stays off Tailscale.", "#access/tailscale");
+  if (!state.tailscale_client && !(state.lan.via_vpn || state.lan.state === "closed")) ok(false, "No Tailscale client: setup runs, but the server stays off Tailscale.", "#access/tailscale");
   if (state.config_changed) ok(false, "Your choices changed since the last setup run; run it so the server follows.");
   $("ready-list").replaceChildren(...items);
   const removals = state.removals || [];
@@ -1083,11 +1105,11 @@ function attentionItems() {
       card ? card.querySelector(".card-title").textContent : "", [b]);
   }
   const apply = state.last_jobs.apply;
-  if (apply && apply.state === "failed" && !runningAction()) {
+  if (apply && apply.state === "failed" && !apply.stopped && !runningAction()) {
     const view = job && job.id === apply.id ? job.view : null;
     const e = view && view.progress.error;
-    add("bad", e && e.stage_text ? `Setup stopped at "${e.stage_text}"` : "The last setup run stopped", e ? e.message : "",
-      [link("Open the run", `#activity/${apply.id}`), signed ? ask("Ask the agent", `The setup run ${apply.id} stopped. Find out why and propose the fix.`) : null].filter(Boolean));
+    add("bad", e && e.stage_text ? `Setup failed at "${e.stage_text}"` : "The last setup run failed", e ? e.message : "",
+      [link("Open the run", `#activity/${apply.id}`), signed ? ask("Ask the agent", `The last setup run failed${e && e.stage_text ? ` at "${e.stage_text}"` : ""}. Find out why and propose the fix.`) : null].filter(Boolean));
   }
   if ((state.removals || []).length) add("bad", `Setup stopped before deleting ${andList(state.removals)}`, "Keep them or confirm the deletion.", [link("Decide", "#setup/build")]);
   const s = lastStatus;
@@ -1136,7 +1158,7 @@ function renderOverview(items) {
         make("dd", {}, href ? make("a", {href}, inner) : inner), sub ? make("dd", {className: "sub", textContent: sub, title: sub}) : null));
     };
     if (s && s.monitoring === "ok") {
-      cell("Systems", `${s.targets - s.down.length} of ${s.targets} answer`, s.down.length ? "bad" : "good", s.down.length ? `Down: ${s.down.join(", ")}` : "");
+      cell("Systems", `${s.targets - s.down.length} of ${s.targets} up`, s.down.length ? "bad" : "good", s.down.length ? `Down: ${s.down.join(", ")}` : "");
       cell("Alerts", s.alerts.length ? `${s.alerts.length} firing` : "None firing", s.alerts.length ? (s.alerts.some((a) => a.severity === "page") ? "bad" : "warn") : "good", "", "#alerts");
       cell("Security updates", s.security_waiting.length ? `${s.security_waiting.length} waiting` : "Up to date", s.security_waiting.length ? "warn" : "good",
         s.security_waiting.length ? s.security_waiting.join(", ") : "Installed nightly");
@@ -1354,8 +1376,7 @@ function renderServices(st) {
     toggle.setAttribute("aria-controls", detailId);
     const first = s.url || (s.addresses || [])[0] || "";
     const row = make("tr", {className: "link-row"},
-      make("td", {}, make("div", {className: "svc"}, toggle, make("span", {className: "svc-icon", ariaHidden: "true"}, icon(SERVICE_ICONS[s.name] || "services")),
-        make("span", {className: "svc-text"}, make("span", {className: "name", textContent: s.title}), make("span", {className: "sub hide-phone", textContent: s.what, title: s.what})))),
+      make("td", {}, make("div", {className: "svc"}, toggle, make("span", {className: "name", textContent: s.title}))),
       make("td", {className: "state-cell"}),
       make("td", {className: "hide-phone mono", textContent: first.replace(/^[A-Z][^:]{0,40}: /, "")}),
       make("td", {className: "hide-narrow mono nowrap", textContent: (s.user || "").split(",")[0]}),
@@ -1471,13 +1492,13 @@ function runView(r) {
     const v = job.view;
     const steps = (v.progress && v.progress.steps) || [];
     const done = steps.filter((s) => s.status === "done").length;
-    return {...r, state: v.state, seconds: v.seconds, stage: v.state === "running" && steps.length ? `Stage ${Math.min(steps.length, done + 1)} of ${steps.length}` : ""};
+    return {...r, state: v.state, stopped: v.stopped, seconds: v.seconds, stage: v.state === "running" && steps.length ? `Stage ${Math.min(steps.length, done + 1)} of ${steps.length}` : ""};
   }
   return r;
 }
 function runRow(raw) {
   const r = runView(raw);
-  const result = r.state === "running" ? status("run", r.stage || "Running") : r.state === "done" ? status("good", "Finished") : status("bad", "Stopped");
+  const result = r.state === "running" ? status("run", r.stage || "Running") : r.state === "done" ? status("good", "Finished") : r.stopped ? status("", "Stopped by you") : status("bad", "Failed");
   const row = make("tr", {className: `link-row${job && job.id === r.id && currentSub === r.id ? " current" : ""}`},
     make("td", {className: "name"}, make("a", {href: `#activity/${r.id}`, textContent: JOB_NAMES[r.action] || r.action})),
     make("td", {}, result),
@@ -1495,12 +1516,22 @@ function renderRuns() {
 }
 
 // The run page: the one the address names.
-async function openRun(id) {
+function focusRun() {
+  if (!job || !job.node.isConnected) return;
+  document.title = `${JOB_NAMES[job.view.action] || job.view.progress.title} · Activity · NullBill`;
+  job.node.querySelector(".job-title").focus({preventScroll: true});
+}
+async function openRun(id, focus) {
   $("crumb-run").textContent = job && job.id === id ? JOB_NAMES[job.view.action] || job.view.progress.title : "Run";
-  if (job && job.id === id) return;
+  if (job && job.id === id) {
+    if (focus) requestAnimationFrame(focusRun);
+    return;
+  }
   try {
     const view = await api(`/api/jobs/${id}`);
     follow(view, view.state === "running");
+    placeJob();
+    if (focus) focusRun();
   } catch (error) {
     $("job-slot").replaceChildren(make("div", {className: "empty"}, make("h2", {textContent: "This run is not kept any more"}),
       make("p", {textContent: error.message}), make("a", {className: "btn", href: "#activity", textContent: "All activity"})));
@@ -1538,7 +1569,7 @@ function follow(first, watched, feedback) {
     const view = job.view;
     const e = view.progress.error || {};
     const where = e.stage_text ? ` at "${e.stage_text}"` : "";
-    askAgent(`The run ${view.id} (${view.progress.title}) stopped${where}: ${e.message || "see its log"}. Find out why and propose the fix.`);
+    askAgent(`${view.progress.title} failed${where}: ${(e.message || "see its log").replace(/[.\s]+$/, "")}. Find out why and propose the fix (run ${view.id}).`);
   });
   const stopButton = node.querySelector(".job-stop");
   stopButton.addEventListener("click", async () => {
@@ -1548,7 +1579,7 @@ function follow(first, watched, feedback) {
     if (!ok) return;
     press(stopButton, node.querySelector(".job-stop-result"), "Stopping…", async () => {
       await api(`/api/jobs/${first.id}/stop`, {});
-      return "Stopped. What to do next shows here in a moment.";
+      return "Stopping; the run ends in a moment.";
     });
   });
   placeJob();
@@ -1583,13 +1614,13 @@ async function tick(current) {
   } else if (current.watched) {
     current.watched = false;
     const title = view.progress.title;
-    if (view.state === "failed") announce(`${title} stopped. ${view.progress.error ? view.progress.error.message : ""}`, true);
+    if (view.state === "failed") announce(view.stopped ? `${title}: stopped.` : `${title} failed. ${view.progress.error ? view.progress.error.message : ""}`, true);
     else announce(`${title}: finished.`);
     if (current.feedback && wasRunning) {
-      say(current.feedback, view.state === "done" ? "ok" : "error", view.state === "done" ? "Finished." : "Stopped. Activity says why.");
+      say(current.feedback, view.state === "done" ? "ok" : "error", view.state === "done" ? "Finished." : view.stopped ? "Stopped." : "Failed. The run says why.");
     }
     refresh().catch((error) => toast(error.message));
-    if (view.state === "failed" && current.node.isConnected) current.node.querySelector(".job-error-title").focus();
+    if (view.state === "failed" && !view.stopped && current.node.isConnected) current.node.querySelector(".job-error-title").focus();
   }
 }
 
@@ -1608,7 +1639,7 @@ function paintPill(view) {
   const steps = p.steps || [];
   const done = steps.filter((s) => s.status === "done").length;
   const now = steps.find((s) => s.status === "running" || s.status === "failed");
-  pill.dataset.state = view.state;
+  pill.dataset.state = view.stopped ? "stopped" : view.state;
   pill.href = `#activity/${view.id}`;
   const name = JOB_NAMES[view.action] || p.title;
   if (view.state === "running") {
@@ -1620,7 +1651,7 @@ function paintPill(view) {
     $("run-sub").textContent = `${ago(view.started + view.seconds)}, took ${duration(view.seconds)}`;
     fill.style.width = "0";
   } else {
-    $("run-title").textContent = `${name} stopped`;
+    $("run-title").textContent = view.stopped ? `${name} stopped` : `${name} failed`;
     $("run-sub").textContent = p.error && p.error.stage_text ? `at ${p.error.stage_text}` : ago(view.started + view.seconds);
     fill.style.width = "0";
   }
@@ -1635,7 +1666,7 @@ function drawJob(current, view) {
   const steps = p.steps || [];
   const done = steps.filter((s) => s.status === "done").length;
   const now = steps.find((s) => s.status === "running" || s.status === "failed");
-  const [kind, word] = {running: ["run", "Running"], done: ["good", "Finished"], failed: ["bad", "Stopped"]}[view.state];
+  const [kind, word] = view.stopped ? ["", "Stopped by you"] : {running: ["run", "Running"], done: ["good", "Finished"], failed: ["bad", "Failed"]}[view.state];
   node.querySelector(".job-state").replaceChildren(status(kind, word));
   const meta = [];
   if (steps.length) meta.push(`Stage ${Math.min(steps.length, done + (now ? 1 : 0))} of ${steps.length}`);
@@ -1687,7 +1718,7 @@ function drawJob(current, view) {
   node.querySelector(".job-error").hidden = !failed;
   if (failed) {
     const e = p.error;
-    node.querySelector(".job-error-title").textContent = e.stage_text ? `Stopped at "${e.stage_text}"` : "What went wrong";
+    node.querySelector(".job-error-title").textContent = view.stopped ? (e.stage_text ? `Stopped by you at "${e.stage_text}"` : "Stopped by you") : e.stage_text ? `Failed at "${e.stage_text}"` : "What went wrong";
     node.querySelector(".job-message").textContent = e.message;
     node.querySelector(".job-more").replaceChildren(...e.more.map((m) => li(m)));
     const detail = node.querySelector(".job-detail");
@@ -1709,6 +1740,7 @@ function drawJob(current, view) {
     retry.textContent = view.action === "verify" ? "Run the checks again" : view.action === "upgrade" ? "Update again" : "Run setup again";
     node.querySelector(".job-agent").hidden = !(state && state.chat && state.chat.signed_in);
   }
+  if (view.state !== "running") node.querySelector(".job-stop-result").textContent = "";
   const ok = node.querySelector(".job-ok");
   ok.hidden = view.state !== "done";
   const next = node.querySelector(".job-ok-next");
@@ -1725,6 +1757,10 @@ function drawJob(current, view) {
       "rebake-ci": ["The CI images are rebuilt.", ""],
       "remove-guests": ["Setup finished.", "The guests you chose to delete are gone; everything else in the plan is in place."],
     }[view.action] || ["Finished.", ""];
+    const warned = p.verify && p.verify.counts.DEGRADED ? p.verify.problems.filter((x) => x.status === "DEGRADED").map((x) => x.text) : [];
+    if (warned.length && view.action === "verify") text[1] = `No check failed; ${warned.length === 1 ? "one warns" : `${warned.length} warn`}: ${warned.join(", ")}.`;
+    ok.classList.toggle("warn", warned.length > 0);
+    ok.querySelector("use").setAttribute("href", warned.length ? "#i-alert" : "#i-check");
     node.querySelector(".job-ok-title").textContent = text[0];
     node.querySelector(".job-ok-text").textContent = text[1];
     if (view.action === "probe") next.append(make("a", {className: "btn small", href: "#setup/choices", textContent: "Choose what to run"}));
@@ -1782,9 +1818,15 @@ async function startJob(action, button, feedback) {
     button.focus();
     if (!ok) return;
   }
+  if (action === "upgrade") {
+    const ok = await confirmDialog({title: "Update NullBill now?", text: "It fetches the newest version, and this page restarts: it is away for about a minute. Running guests are not touched.", yes: "Update", danger: false});
+    button.focus();
+    if (!ok) return;
+  }
   await press(button, feedback, STARTING[action] || "Starting…", async () => {
     const view = await api("/api/jobs", {action});
     follow(view, true, feedback);
+    refresh().catch(() => {});
     const onBuild = currentView === "setup" && currentStep === "build" && SETUP_RUNS.has(action);
     if (OPENS_RUN.has(action) && !onBuild) go(`activity/${view.id}`);
     else placeJob();
@@ -1922,8 +1964,8 @@ function paintChatBadge() {
   const unread = chat.latest > chat.seen && !chatVisible();
   const text = waiting ? String(waiting) : unread ? "1" : "";
   const label = waiting ? `${waiting} waiting for you` : unread ? "new message" : "";
-  setCount($("tab-agent-badge"), text, waiting ? "warn" : "run", label);
-  setCount($("agent-count"), text, waiting ? "warn" : "run", label);
+  setCount($("tab-agent-badge"), text, waiting ? "warn" : "", label);
+  setCount($("agent-count"), text, waiting ? "warn" : "", label);
   if ("setAppBadge" in navigator) (waiting ? navigator.setAppBadge(waiting) : navigator.clearAppBadge()).catch(() => {});
   setNav("agent", waiting ? String(waiting) : "", "warn", label);
 }
@@ -1948,12 +1990,13 @@ function paintChatShell() {
   if (signed && !hasMessages && !empty) log.prepend(chatEmpty());
   if (hasMessages && empty) empty.remove();
   $("chat").classList.toggle("working", chat.busy);
+  $("chat").classList.toggle("asking", chat.pending.length > 0);
   $("chat-status").textContent = !signed ? "Not signed in"
     : c.installed === false ? "Not installed: press Update NullBill"
     : chat.busy && chat.queued ? `Working, then ${chat.queued} more message${chat.queued === 1 ? "" : "s"}`
     : chat.busy ? "Working"
-    : chat.pending.length ? "Waiting for you"
-    : "Ready";
+    : chat.pending.length ? "Needs your answer"
+    : "";
   show("chat-stop", chat.busy);
 }
 
@@ -1980,7 +2023,7 @@ function addToLog(node) {
   return node;
 }
 
-const TIER_TEXT = {read: "Read", change: "Change", risky: "Risky", blocked: "Blocked"};
+const TIER_TEXT = {read: "Reads only", change: "Makes a change", risky: "Risky", blocked: "Blocked"};
 
 function turnMeta(e) {
   const parts = [`${e.seconds} s`];
@@ -2448,10 +2491,6 @@ function setTheme(theme) {
   applyTheme(theme);
   announce(`Theme: ${theme === "system" ? "matches the system" : theme}.`);
 }
-function toggleTheme() {
-  const dark = themeName() === "dark" || (themeName() === "system" && !lightSystem.matches);
-  setTheme(dark ? "light" : "dark");
-}
 
 async function logout() {
   try { await api("/api/logout", {}); } catch (error) { toast(error.message); }
@@ -2529,7 +2568,7 @@ function onMenuKey(event) {
   const items = [...box.querySelectorAll("[role^=menuitem]")];
   const at = items.indexOf(document.activeElement);
   if (event.key === "Escape") { event.preventDefault(); closeMenu(true); return true; }
-  if (event.key === "Tab") { closeMenu(false); return false; }
+  if (event.key === "Tab") { closeMenu(true); return false; }
   if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
     event.preventDefault();
     const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (at + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
@@ -2679,8 +2718,26 @@ document.addEventListener("DOMContentLoaded", () => {
   $("chat-mode").addEventListener("click", modeMenu);
   $("chat-more").addEventListener("click", chatMenu);
   $("install-app-2").addEventListener("click", install);
-  $("tab-more").addEventListener("click", () => $("more").showModal());
+  const paintThemePick = () => {
+    for (const b of document.querySelectorAll("[data-theme-pick]")) b.setAttribute("aria-checked", b.dataset.themePick === themeName() ? "true" : "false");
+  };
+  $("tab-more").addEventListener("click", () => { paintThemePick(); $("more").showModal(); });
+  $("theme-pick").addEventListener("click", (event) => {
+    const b = event.target.closest("[data-theme-pick]");
+    if (!b) return;
+    setTheme(b.dataset.themePick);
+    paintThemePick();
+  });
+  $("theme-pick").addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+    const all = [...document.querySelectorAll("[data-theme-pick]")];
+    const next = all[(all.indexOf(document.activeElement) + (event.key === "ArrowRight" ? 1 : all.length - 1)) % all.length];
+    event.preventDefault();
+    next.focus();
+    next.click();
+  });
   $("more").addEventListener("click", (event) => {
+    if (event.target.closest("#theme-pick")) return;
     const target = event.target.closest("a, [data-run]");
     if (event.target === $("more")) { $("more").close(); return; }
     if (!target) return;
@@ -2688,7 +2745,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const run = target.dataset.run;
     if (run === "verify" || run === "upgrade") startJob(run, $("run-setup"), $("actions-result"));
     if (run === "install") install();
-    if (run === "theme") toggleTheme();
     if (run === "logout") logout();
   });
   for (const dialog of [$("guide"), $("palette")]) {
@@ -2701,7 +2757,16 @@ document.addEventListener("DOMContentLoaded", () => {
   $("trust-download").addEventListener("click", () => store.set("nb-trusted", "1"));
 
   // Palette.
-  $("palette-q").addEventListener("input", () => { palette.index = 0; paintPalette(); });
+  let paletteSay = 0;
+  $("palette-q").addEventListener("input", () => {
+    palette.index = 0;
+    paintPalette();
+    clearTimeout(paletteSay);
+    paletteSay = setTimeout(() => {
+      const n = $("palette-list").querySelectorAll("[role=option]").length;
+      announce(n ? `${n} result${n === 1 ? "" : "s"}` : "No results");
+    }, 400);
+  });
   $("palette-q").addEventListener("keydown", (event) => {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();

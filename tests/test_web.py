@@ -272,7 +272,7 @@ def test_activity_lists_runs_newest_first_and_built_waits_for_a_good_setup_run(s
     st = client.call("/api/state")[1]
     assert st["built"] is True
     assert [r["id"] for r in st["runs"]] == [good["id"], failed["id"]]
-    assert st["runs"][1]["state"] == "failed" and st["runs"][0]["by"] == "owner"
+    assert st["runs"][1]["state"] == "failed" and st["runs"][1]["stopped"] is False and st["runs"][0]["by"] == "owner"
     assert all(r["seconds"] >= 0 for r in st["runs"])
 
 
@@ -317,6 +317,10 @@ def test_a_hung_run_is_stopped_with_everything_under_it(site, tmp_path, monkeypa
     error = done["progress"]["error"]
     assert error["message"] == "You stopped this run from the page." and error["stage"] == "media"
     assert error["advice"] == progress.STOPPED_ADVICE and error["more"] == [] and error["task"] is None
+    # The page tells a deliberate stop from a failure.
+    st = client.call("/api/state")[1]
+    assert done["stopped"] is True and st["last_jobs"]["apply"]["stopped"] is True
+    assert st["runs"][0]["stopped"] is True
     # Stopped already; and a job that ended cannot be stopped.
     assert client.call(f"/api/jobs/{job['id']}/stop", {}) == (400, {"error": "that job is not running any more"})
     # The next run starts.

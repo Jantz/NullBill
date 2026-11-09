@@ -143,12 +143,12 @@
       <span class="run-text"><span id="run-title">No runs yet</span><span id="run-sub" class="run-sub"></span></span>
     </a>
     <div class="top-actions">
-      <button type="button" class="btn ghost" id="guide-btn" aria-haspopup="dialog" hidden><span class="ring" aria-hidden="true"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="8"/><circle class="ring-fill" cx="10" cy="10" r="8"/></svg></span><span class="hide-phone">Setup guide</span><span class="sr-only" id="guide-count"></span></button>
+      <button type="button" class="btn ghost" id="guide-btn" aria-haspopup="dialog" hidden><span class="ring" aria-hidden="true"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="8"/><circle class="ring-fill" cx="10" cy="10" r="8"/></svg></span><span class="vh-phone">Setup guide</span><span class="guide-frac" id="guide-frac" aria-hidden="true"></span><span class="sr-only" id="guide-count"></span></button>
       <div class="split" role="group" aria-label="Runs">
         <button type="button" class="btn primary" data-action="apply" id="run-setup"><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg><span>Run setup</span><span class="pending" id="pending-dot" hidden><span class="sr-only">(changes waiting)</span></span></button>
         <button type="button" class="btn primary split-more" id="run-menu" aria-haspopup="menu" aria-expanded="false" title="More runs"><svg class="icon" aria-hidden="true"><use href="#i-chevron-down"/></svg><span class="sr-only">More runs</span></button>
       </div>
-      <button type="button" class="btn ghost agent-btn" id="toggle-dock" aria-controls="dock" aria-expanded="true" aria-keyshortcuts="Alt+A"><svg class="icon" aria-hidden="true"><use href="#i-agent"/></svg><span class="hide-phone">Agent</span><span class="count" id="agent-count" hidden></span></button>
+      <button type="button" class="btn ghost agent-btn hide-phone" id="toggle-dock" aria-controls="dock" aria-expanded="true" aria-keyshortcuts="Alt+A"><svg class="icon" aria-hidden="true"><use href="#i-agent"/></svg><span>Agent</span><span class="count" id="agent-count" hidden></span></button>
     </div>
     <p class="feedback top-feedback" id="actions-result" role="status"></p>
     <span class="run-line" aria-hidden="true"><span class="fill" id="run-fill"></span></span>
@@ -196,7 +196,7 @@
         <div class="block-head"><h2 id="h-ov-runs">Recent activity</h2><a class="link push" href="#activity">All activity</a></div>
         <div class="table-wrap"><table class="table">
           <caption class="sr-only">Recent runs</caption>
-          <thead><tr><th scope="col">Run</th><th scope="col">Result</th><th scope="col">Started</th><th scope="col" class="num hide-phone">Took</th></tr></thead>
+          <thead><tr><th scope="col">Run</th><th scope="col">Result</th><th scope="col">Started</th><th scope="col" class="num hide-phone">Took</th><th scope="col" class="hide-phone">By</th></tr></thead>
           <tbody id="ov-runs-rows"></tbody></table></div>
       </section>
     </section>
@@ -245,21 +245,21 @@
         <p id="firing-empty" class="empty-line"></p>
         <div class="table-wrap" id="firing-table" hidden><table class="table">
           <caption class="sr-only">Firing alerts</caption>
-          <thead><tr><th scope="col">Severity</th><th scope="col">Alert</th><th scope="col" class="hide-phone">Summary</th></tr></thead>
+          <thead><tr><th scope="col" class="hide-phone">Severity</th><th scope="col">Alert</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
           <tbody id="firing-rows"></tbody></table></div>
       </section>
       <section class="block" aria-labelledby="h-delivery">
         <div class="block-head"><h2 id="h-delivery">Delivery</h2></div>
         <div class="settings">
           <div class="setting">
-            <div class="setting-text"><h3>Phone, through ntfy</h3><p>Install the free <a href="https://ntfy.sh/" rel="noopener noreferrer" target="_blank">ntfy</a> app and subscribe to this topic. Keep the topic to yourself.</p></div>
+            <div class="setting-text"><h2>Phone, through ntfy</h2><p>Install the free <a href="https://ntfy.sh/" rel="noopener noreferrer" target="_blank">ntfy</a> app and subscribe to this topic. Keep the topic to yourself.</p></div>
             <div class="setting-control">
               <div class="copy-line"><code id="ntfy-topic"></code><button type="button" id="copy-topic" class="icon-btn" title="Copy the topic"><svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg><span class="sr-only">Copy the topic</span></button></div>
               <div class="row"><button type="button" id="test-alerts" class="btn">Send a test alert</button><p class="feedback" id="test-result" role="status"></p></div>
             </div>
           </div>
           <form class="setting" id="alerts-form" novalidate>
-            <div class="setting-text"><h3>When the server goes silent</h3><p>Optional. A free <a href="https://healthchecks.io/" rel="noopener noreferrer" target="_blank">Healthchecks.io</a> check, 10-minute period and grace, tells you when the server stops checking in.</p></div>
+            <div class="setting-text"><h2>When the server goes silent</h2><p>Optional. A free <a href="https://healthchecks.io/" rel="noopener noreferrer" target="_blank">Healthchecks.io</a> check, 10-minute period and grace, tells you when the server stops checking in.</p></div>
             <div class="setting-control">
               <label class="field"><span class="label">Ping URL</span><input id="healthchecks-url" type="url" placeholder="https://hc-ping.com/…" aria-describedby="alerts-result"></label>
               <div class="row"><button type="submit" class="btn">Save URL</button><p class="feedback" id="alerts-result" role="status"></p></div>
@@ -369,9 +369,9 @@
     <section class="view" id="view-access" data-title="Access" aria-labelledby="h-access" hidden>
       <header class="page-head"><div><h1 id="h-access" tabindex="-1">Access</h1><p class="page-sub">How you reach the server from your own devices, and only from them.</p></div></header>
       <div class="tabs" role="tablist" aria-label="Access" id="access-tabs">
-        <button type="button" role="tab" id="tab-tailscale" aria-controls="sec-tailscale" data-tab="tailscale"><span class="tab-mark" aria-hidden="true"></span>Tailscale</button>
-        <button type="button" role="tab" id="tab-lan" aria-controls="sec-lan" data-tab="lan"><span class="tab-mark" aria-hidden="true"></span>Home network</button>
-        <button type="button" role="tab" id="tab-trust" aria-controls="sec-trust" data-tab="trust"><span class="tab-mark" aria-hidden="true"></span>Trust this server</button>
+        <button type="button" role="tab" id="tab-tailscale" aria-controls="sec-tailscale" data-tab="tailscale">Tailscale</button>
+        <button type="button" role="tab" id="tab-lan" aria-controls="sec-lan" data-tab="lan">Home network</button>
+        <button type="button" role="tab" id="tab-trust" aria-controls="sec-trust" data-tab="trust">Trust this server</button>
       </div>
 
       <section class="tabpanel" id="sec-tailscale" role="tabpanel" aria-labelledby="tab-tailscale">
@@ -379,7 +379,7 @@
         <p class="help">Your server joins your free <a href="https://tailscale.com/" rel="noopener noreferrer" target="_blank">Tailscale</a> network, so this page and your services open from your devices anywhere, and from nothing else.</p>
         <div class="settings">
           <form id="tailscale-client-form" class="setting" novalidate>
-            <div class="setting-text"><h3><span class="num-mark" id="ts-dot-client">1</span>OAuth client</h3>
+            <div class="setting-text"><h2><span class="num-mark" id="ts-dot-client">1</span>OAuth client</h2>
               <p>Each setup run uses it to put your access policy in place. In the Tailscale admin console: <b>Settings, Trust credentials</b>, add an OAuth client with <b>Policy file</b> and <b>DNS</b>, both write. DNS makes names such as forgejo.nullbill.internal work on your devices.</p>
               <p id="tailscale-client-saved" class="saved" hidden><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg>Saved. Paste a new one to replace it.</p></div>
             <div class="setting-control">
@@ -389,7 +389,7 @@
             </div>
           </form>
           <form id="vpn-form" class="setting" novalidate>
-            <div class="setting-text"><h3><span class="num-mark" id="ts-dot-key">2</span>Auth key</h3>
+            <div class="setting-text"><h2><span class="num-mark" id="ts-dot-key">2</span>Auth key</h2>
               <p>After one setup run with the client: <b>Settings, Keys, Generate auth key</b>, Pre-approved on, tag <code>tag:nb-vpn</code>. Used once, then forgotten; run setup again.</p>
               <p id="vpn-saved" class="saved" hidden><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg>A key waits for the next setup run.</p></div>
             <div class="setting-control">
@@ -405,18 +405,18 @@
       <section class="tabpanel" id="sec-lan" role="tabpanel" aria-labelledby="tab-lan" hidden>
         <dl class="props compact"><div><dt>Status</dt><dd id="lan-state"></dd></div></dl>
         <p class="help" id="lan-status"></p>
-        <p class="help">Once this page opens over Tailscale, close Proxmox's web UI and SSH to your home network. Then press <b>Keep it closed</b> here, over Tailscale, within <span id="lan-minutes">15</span> minutes, or the server opens it again by itself, so a mistake cannot lock you out.</p>
         <div class="row">
           <button type="button" class="btn primary" data-action="close-lan" id="lan-close"><svg class="icon" aria-hidden="true"><use href="#i-lock"/></svg><span>Close to the home network</span></button>
           <button type="button" class="btn primary" data-action="keep-lan-closed" id="lan-keep"><svg class="icon" aria-hidden="true"><use href="#i-lock"/></svg><span>Keep it closed</span></button>
           <button type="button" class="btn" data-action="open-lan" id="lan-open"><svg class="icon" aria-hidden="true"><use href="#i-unlock"/></svg><span>Reopen to the home network</span></button>
           <p class="feedback" id="lan-result" role="status"></p>
         </div>
+        <details class="disclosure"><summary>How closing works</summary><p class="help">Once this page opens over Tailscale, close Proxmox's web UI and SSH to your home network. Then press <b>Keep it closed</b> here, over Tailscale, within <span id="lan-minutes">15</span> minutes, or the server opens it again by itself, so a mistake cannot lock you out.</p></details>
       </section>
 
       <section class="tabpanel" id="sec-trust" role="tabpanel" aria-labelledby="tab-trust" hidden>
         <dl class="props compact"><div><dt>Status</dt><dd id="trust-state"></dd></div></dl>
-        <p class="help">Browsers warn on this page, Proxmox, Forgejo and Grafana because their certificates come from your server, not from a company browsers know. The connection is encrypted either way. Install the server's root certificate once on each device: the warnings stop, and your phone can install this page as an app. It vouches only for your server's own addresses and names.</p>
+        <p class="help">Install the server's root certificate once on each device: browser warnings on this page, Proxmox, Forgejo and Grafana stop, and your phone can install the page as an app. It vouches only for your server's own addresses.</p>
         <div class="row">
           <a id="trust-download" class="btn primary" href="/nullbill-root.crt" download="nullbill-root.crt" hidden><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Download root certificate</a>
           <button type="button" id="install-app-2" class="btn" hidden><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Install the app</button>
@@ -429,23 +429,23 @@
           <button type="button" role="tab" id="tab-windows" aria-controls="howto-windows" data-tab="windows">Windows</button>
           <button type="button" role="tab" id="tab-apple" aria-controls="howto-apple" data-tab="apple">iPhone and iPad</button>
         </div>
-        <ol class="howto" id="howto-android" role="tabpanel" aria-labelledby="tab-android">
+        <div id="howto-android" role="tabpanel" aria-labelledby="tab-android"><ol class="howto">
           <li>On the phone, press <b>Download root certificate</b>.</li>
           <li>Open <b>Settings</b> and search for <b>CA certificate</b>. On most phones it is under <b>Security and privacy, More security settings, Install from device storage</b>. Tap <b>CA certificate</b>, then <b>Install anyway</b>, and pick <b>nullbill-root.crt</b> from Downloads.</li>
           <li>Open this page in Chrome again and choose <b>Install app</b>.</li>
           <li>Firefox still warns? Open <b>Settings, About Firefox</b> and tap the Firefox logo until it says the debug menu is on. Back in <b>Settings</b>, open <b>Secret Settings</b>, turn on <b>Use third party CA certificates</b>, then close Firefox and open it again.</li>
-        </ol>
-        <ol class="howto" id="howto-windows" role="tabpanel" aria-labelledby="tab-windows" hidden>
+        </ol></div>
+        <div id="howto-windows" role="tabpanel" aria-labelledby="tab-windows" hidden><ol class="howto">
           <li>Press <b>Download root certificate</b> and open the file.</li>
           <li>Press <b>Install Certificate</b>, choose <b>Current User</b>, then <b>Place all certificates in the following store</b>, <b>Browse</b>, <b>Trusted Root Certification Authorities</b>. Press <b>Next</b>, <b>Finish</b>, and <b>Yes</b> to the warning.</li>
           <li>Close the browser and open it again. Edge, Chrome and Firefox all use it.</li>
-        </ol>
-        <ol class="howto" id="howto-apple" role="tabpanel" aria-labelledby="tab-apple" hidden>
+        </ol></div>
+        <div id="howto-apple" role="tabpanel" aria-labelledby="tab-apple" hidden><ol class="howto">
           <li>Open this page in Safari, press <b>Download root certificate</b> and allow the download.</li>
           <li>Open <b>Settings, Profile Downloaded</b> and press <b>Install</b>.</li>
           <li>Open <b>Settings, General, About, Certificate Trust Settings</b> and turn on <b>NullBill browser CA</b>. Add the page to the Home Screen from the share menu.</li>
-        </ol>
-        <p class="foot-note">Proxmox gets this certificate at the first setup run after you close the server to the home network. For the local AI model in a browser extension such as Page Assist, use the gateway's address from Services, not its name. Jellyfin uses plain HTTP inside Tailscale's encryption, so browsers mark it "Not secure" but show no warning page.</p>
+        </ol></div>
+        <details class="disclosure"><summary>Proxmox, Page Assist and Jellyfin</summary><p class="help">Proxmox gets this certificate at the first setup run after you close the server to the home network. For the local AI model in a browser extension such as Page Assist, use the gateway's address from Services, not its name. Jellyfin uses plain HTTP inside Tailscale's encryption, so browsers mark it "Not secure" but show no warning page.</p></details>
       </section>
     </section>
 
@@ -462,7 +462,7 @@
       <div id="agent-settings" role="tabpanel" aria-labelledby="tab-settings">
         <div class="settings">
           <form class="setting" id="agent-form" novalidate>
-            <div class="setting-text"><h3 id="h-signin">Sign-in</h3>
+            <div class="setting-text"><h2 id="h-signin">Sign-in</h2>
               <p>An Anthropic API key, or a Claude subscription token from <code>claude setup-token</code>. Kept encrypted on the server; the agent itself never sees it.</p>
               <p class="status-line" id="signin-state"></p></div>
             <div class="setting-control">
@@ -475,7 +475,7 @@
           </form>
 
           <div class="setting" id="sec-mode">
-            <div class="setting-text"><h3 id="h-mode">Access mode</h3>
+            <div class="setting-text"><h2 id="h-mode">Access mode</h2>
               <p>What the agent may run without asking you.</p>
               <p class="hard-blocks"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg><span>Blocked in every mode: erasing disks, deleting backups, reading secrets, silencing the command log, and touching the NullBill container.</span></p></div>
             <div class="setting-control">
@@ -490,8 +490,8 @@
           </div>
 
           <div class="setting" id="sec-powers">
-            <div class="setting-text"><h3 id="h-powers">Operator agent</h3>
-              <p id="powers-what">A second agent for long work, in the operator container, used from the Proxmox shell or by remote agents. With root on it may run any command on Proxmox, setup and updates; each run is announced on your phone. Off takes its key off Proxmox at once.</p></div>
+            <div class="setting-text"><h2 id="h-powers">Operator agent</h2>
+              <p id="powers-what">A second agent for long work, in the operator container. Root lets it run any command on Proxmox, setup and updates, each announced on your phone. Off removes its key at once.</p></div>
             <div class="setting-control">
               <div class="row"><button type="button" id="agent-powers" class="switch-btn" role="switch" aria-checked="false" aria-describedby="powers-what"><span class="switch" aria-hidden="true"></span><span>Root on Proxmox</span></button>
                 <p class="feedback" id="agent-powers-result" role="status"></p></div>
@@ -500,7 +500,7 @@
           </div>
 
           <form class="setting" id="agent-github-form" novalidate>
-            <div class="setting-text"><h3 id="h-github">Fixes as pull requests</h3>
+            <div class="setting-text"><h2 id="h-github">Fixes as pull requests</h2>
               <p>Optional. A fine-grained GitHub token for NullBill's repository, with Contents and Pull requests read and write, lets the operator agent propose fixes. Run setup after saving.</p>
               <p class="status-line" id="github-state"></p></div>
             <div class="setting-control">
@@ -510,7 +510,7 @@
           </form>
 
           <div class="setting" id="sec-remote">
-            <div class="setting-text"><h3 id="h-remote">Agents on other computers</h3>
+            <div class="setting-text"><h2 id="h-remote">Agents on other computers</h2>
               <p>A token that lets an agent elsewhere run the checks and read their output over Tailscale, and nothing else.</p></div>
             <div class="setting-control">
               <form id="remote-agent-form" class="inline-form" novalidate>
@@ -582,8 +582,8 @@
     <a href="#overview" data-view="overview"><svg class="icon" aria-hidden="true"><use href="#i-overview"/></svg><span>Overview</span></a>
     <a href="#services" data-view="services"><svg class="icon" aria-hidden="true"><use href="#i-services"/></svg><span>Services</span></a>
     <a href="#agent/chat" data-view="agent"><svg class="icon" aria-hidden="true"><use href="#i-agent"/></svg><span>Agent</span><span class="count" id="tab-agent-badge" hidden></span></a>
-    <a href="#activity" data-view="activity"><svg class="icon" aria-hidden="true"><use href="#i-activity"/></svg><span>Activity</span></a>
-    <button type="button" id="tab-more" aria-haspopup="dialog"><svg class="icon" aria-hidden="true"><use href="#i-menu"/></svg><span>More</span></button>
+    <a href="#activity" data-view="activity"><svg class="icon" aria-hidden="true"><use href="#i-activity"/></svg><span>Activity</span><span class="count" id="tab-activity-badge" hidden></span></a>
+    <button type="button" id="tab-more" aria-haspopup="dialog"><svg class="icon" aria-hidden="true"><use href="#i-menu"/></svg><span>More</span><span class="count" id="tab-more-badge" hidden></span></button>
   </nav>
 </div>
 
@@ -648,8 +648,11 @@
       <li class="sep"><button type="button" data-run="verify"><svg class="icon" aria-hidden="true"><use href="#i-checks"/></svg>Run the checks</button></li>
       <li><button type="button" data-run="upgrade"><svg class="icon" aria-hidden="true"><use href="#i-update"/></svg>Update NullBill</button></li>
       <li><button type="button" data-run="install"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Install the app</button></li>
-      <li class="sep"><button type="button" data-run="theme"><svg class="icon" aria-hidden="true"><use href="#i-moon"/></svg>Light or dark</button></li>
-      <li><button type="button" data-run="logout"><svg class="icon" aria-hidden="true"><use href="#i-logout"/></svg>Sign out</button></li>
+      <li class="sep theme-row"><span id="theme-label"><svg class="icon" aria-hidden="true"><use href="#i-moon"/></svg>Theme</span>
+        <span class="segmented" role="radiogroup" aria-labelledby="theme-label" id="theme-pick">
+          <button type="button" role="radio" data-theme-pick="system" aria-checked="false">System</button><button type="button" role="radio" data-theme-pick="light" aria-checked="false">Light</button><button type="button" role="radio" data-theme-pick="dark" aria-checked="false">Dark</button>
+        </span></li>
+      <li class="sep"><button type="button" data-run="logout"><svg class="icon" aria-hidden="true"><use href="#i-logout"/></svg>Sign out</button></li>
     </ul>
     <div class="row end"><button class="btn">Close</button></div>
   </form>

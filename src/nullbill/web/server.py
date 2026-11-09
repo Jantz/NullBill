@@ -1021,6 +1021,7 @@ class App:
             "action": job.action,
             "args": job.args,
             "state": state,
+            "stopped": state == "failed" and bool(times["stopped"]),
             "rc": job.rc,
             "text": data[offset:].decode(errors="replace"),
             "offset": len(data),
@@ -1033,7 +1034,13 @@ class App:
         """Each action's latest job: how it ended, and when."""
         out: dict[str, dict] = {}
         for job in sorted(self.jobs.values(), key=lambda j: j.started):
-            out[job.action] = {"id": job.id, "state": job.state(), "started": job.started}
+            state = job.state()
+            out[job.action] = {
+                "id": job.id,
+                "state": state,
+                "started": job.started,
+                "stopped": state == "failed" and bool(job.meta().get("stopped")),
+            }
         return out
 
     def runs(self, limit: int = 30) -> list[dict]:
@@ -1043,7 +1050,18 @@ class App:
             state = job.state()
             ended = job.rc_file.stat().st_mtime if state != "running" and job.rc_file.exists() else None
             seconds = round((ended or time.time()) - job.started)
-            out.append({"id": job.id, "action": job.action, "state": state, "started": job.started, "seconds": seconds, "by": job.by})
+            stopped = state == "failed" and bool(job.meta().get("stopped"))
+            out.append(
+                {
+                    "id": job.id,
+                    "action": job.action,
+                    "state": state,
+                    "stopped": stopped,
+                    "started": job.started,
+                    "seconds": seconds,
+                    "by": job.by,
+                }
+            )
         return out
 
     def built(self) -> bool:

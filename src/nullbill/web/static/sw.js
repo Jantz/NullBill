@@ -2,8 +2,8 @@
 
 // NullBill's service worker: what makes the page installable as an app.
 // The page's own files come from the network first and from this cache
-// only when the server cannot be reached, so an update shows at once and
-// the app still opens (and says it cannot reach the server) when offline.
+// when the server cannot be reached or is slow, so an update shows at once
+// and the app still opens (and says it cannot reach the server) offline.
 // Nothing under /api/ is ever stored here.
 
 const CACHE = "nullbill-shell-3";
@@ -20,14 +20,27 @@ self.addEventListener("activate", (event) => {
     .then(() => self.clients.claim()));
 });
 
+// On a slow line the cached copy answers after WAIT ms, and the network's
+// answer still refreshes the cache for next time.
+const WAIT = 4000;
+
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== "GET" || url.origin !== self.location.origin || !SHELL.includes(url.pathname)) return;
-  event.respondWith(fetch(event.request).then((response) => {
+  const network = fetch(event.request).then((response) => {
     if (response.ok) {
       const copy = response.clone();
       caches.open(CACHE).then((cache) => cache.put(url.pathname, copy));
     }
     return response;
-  }).catch(() => caches.match(url.pathname).then((cached) => cached || Response.error())));
+  });
+  event.waitUntil(network.catch(() => {}));
+  event.respondWith(new Promise((resolve) => {
+    let done = false;
+    const answer = (response) => { if (!done && response) { done = true; resolve(response); } };
+    const cached = () => caches.match(url.pathname);
+    const timer = setTimeout(() => cached().then(answer), WAIT);
+    network.then((response) => { clearTimeout(timer); answer(response); })
+      .catch(() => { clearTimeout(timer); cached().then((c) => (done ? null : resolve(c || Response.error()))); });
+  }));
 });
