@@ -1,6 +1,7 @@
 """nullbill upgrade against real git repositories: an origin with main and
 a detached checkout like install.sh's."""
 
+import os
 import subprocess
 
 import pytest
@@ -56,6 +57,23 @@ def test_moves_to_mains_newest_commit_then_finishes_outside_the_pages_sandbox(re
     # Again: nothing to do, nothing restarted.
     assert upgrade.upgrade(checkout, tmp_path / "home", say=said.append, finish=finished.append) is None
     assert len(finished) == 1 and "newest commit" in said[-1]
+
+
+def test_files_it_checks_out_stay_readable_under_the_pages_umask(repos, tmp_path):
+    # The page's UMask=0077 made changed files root-only, and nbagent could
+    # not start its tools (python -m nullbill agent-tools).
+    work, checkout = repos
+    (work / "docs").mkdir()
+    (work / "docs" / "new.md").write_text("new\n")
+    git(work, "add", "docs")
+    commit(work, "two\n", "second")
+    old = os.umask(0o077)
+    try:
+        upgrade.upgrade(checkout, tmp_path / "home", say=lambda _: None, finish=lambda _: None)
+    finally:
+        os.umask(old)
+    for path in (checkout / "README", checkout / "docs", checkout / "docs" / "new.md"):
+        assert path.stat().st_mode & 0o004, path
 
 
 def test_refuses_local_changes_and_going_back(repos, tmp_path):

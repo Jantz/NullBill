@@ -26,7 +26,10 @@ FINISH = ["systemd-run", "--quiet", "--wait", "--pipe", "--collect", "--unit", "
 
 
 def _git(root: Path, *args: str) -> str:
-    done = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, check=False)
+    # The page runs with UMask=0077, and a checkout under it left every file
+    # it changed root-only: the page's agent (nbagent) could no longer import
+    # its own tools or read the docs. The checkout is the public repository.
+    done = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, check=False, umask=0o022)
     if done.returncode != 0:
         raise NullBillError(f"git {' '.join(args)}: {done.stderr.strip() or done.stdout.strip()}")
     return done.stdout.strip()
