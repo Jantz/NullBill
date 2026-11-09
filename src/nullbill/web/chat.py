@@ -51,6 +51,10 @@ if TYPE_CHECKING:
 BUILTIN_TOOLS = ["Read", "Grep", "Glob", "WebSearch", "WebFetch"]
 MAX_OUTPUT = 20000
 SHOWN_OUTPUT = 4000
+# Output the panel shows only the end of is kept whole for its Copy button,
+# up to this much, for the newest KEPT_OUTPUTS of them.
+FULL_OUTPUT = 1_000_000
+KEPT_OUTPUTS = 300
 TURN_LIMIT_S = 30 * 60
 PROPOSAL_TTL_S = 4 * 3600
 WAIT_MAX_S = 120
@@ -197,6 +201,86 @@ class Chat:
             with os.fdopen(fd, "a") as f:
                 f.write(json.dumps(event) + "\n")
             return event
+
+    def shown(self, key: str, text: object) -> dict:
+        """An output's fields for an event: its end as the panel shows it
+        and, when that cut it, the key under which `output` returns all of it."""
+        text = str(text or "")
+        if len(text) <= SHOWN_OUTPUT:
+            return {"output": text}
+        key = re.sub(r"[^A-Za-z0-9_-]", "", key)[:80] or secrets.token_hex(6)
+        kept = self.dir / "outputs"
+        kept.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd = os.open(kept / f"{key}.txt", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(text[-FULL_OUTPUT:])
+        for old in sorted(kept.glob("*.txt"), key=lambda p: p.stat().st_mtime)[:-KEPT_OUTPUTS]:
+            old.unlink(missing_ok=True)
+        end = text[-SHOWN_OUTPUT:]
+        # Start the shown end at a line, not in the middle of one.
+        cut = end.find("\n")
+        if 0 <= cut < 400:
+            end = end[cut + 1 :]
+        return {"output": f"[{len(text) - len(end)} characters cut]\n" + end, "full": key}
+
+    def output(self, key: str) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", key or ""):
+            raise NullBillError("no such output")
+        try:
+            return (self.dir / "outputs" / f"{key}.txt").read_text(errors="replace")
+        except OSError:
+            raise NullBillError("that output is no longer kept") from None
+
+    def transcript(self) -> str:
+        """The conversation as plain text, every output whole, for Copy."""
+        labels: dict[str, str] = {}
+        parts: list[str] = []
+
+        def block(text: str) -> str:
+            text = text.rstrip()
+            fence = "````" if "```" in text else "```"
+            return f"{fence}\n{text}\n{fence}" if text else ""
+
+        for e in self.events(0, limit=100000):
+            kind = e.get("kind")
+            if kind == "user":
+                parts.append("You: " + str(e.get("text", "")))
+            elif kind == "assistant":
+                parts.append("Agent: " + str(e.get("text", "")))
+            elif kind in {"system", "error"}:
+                parts.append(str(e.get("text", "")))
+            elif kind == "tool":
+                labels[str(e.get("id"))] = str(e.get("label", ""))
+            elif kind == "tool_done":
+                label = labels.get(str(e.get("id")), "A tool")
+                text = str(e.get("output") or "")
+                if e.get("full"):
+                    try:
+                        text = self.output(str(e["full"]))
+                    except NullBillError:
+                        pass
+                parts.append("\n".join(filter(None, [f"[{label}]" + ("" if e.get("ok", True) else " failed"), block(text)])))
+            elif kind == "proposal":
+                parts.append(f"[Asked to approve: {e.get('title', '')}]" + (f"\n{block(str(e['command']))}" if e.get("command") else ""))
+            elif kind == "proposal_update" and e.get("state") in {"done", "failed", "declined"}:
+                text = str(e.get("output") or "")
+                if e.get("full"):
+                    try:
+                        text = self.output(str(e["full"]))
+                    except NullBillError:
+                        pass
+                parts.append("\n".join(filter(None, [f"[Request {e['state']}]", block(text)])))
+            elif kind == "ask":
+                parts.append(f"[The agent asks: {e.get('question', '')}]")
+            elif kind == "answer":
+                parts.append(f"[Answer: {e.get('text', '')}]")
+            elif kind == "refused":
+                parts.append(f"[Blocked by the page: {e.get('title', '')}]")
+            elif kind == "ran":
+                parts.append(f"[Ran: {e.get('title', '')}]" + (f"\n{block(str(e['command']))}" if e.get("command") else ""))
+            elif kind == "job":
+                parts.append(f"[Started: {e.get('title') or e.get('action', '')}]")
+        return "\n\n".join(p for p in parts if p.strip()) + "\n"
 
     def events(self, after: int = 0, limit: int = 400) -> list[dict]:
         try:
@@ -457,7 +541,7 @@ class Chat:
                             "tool_done",
                             id=block.get("tool_use_id", ""),
                             ok=not block.get("is_error"),
-                            output=clip(str(content or ""), SHOWN_OUTPUT),
+                            **self.shown(f"tool-{block.get('tool_use_id', '')}", content),
                         )
             elif kind == "result":
                 ended = message
@@ -597,7 +681,7 @@ class Chat:
             if stored is not None:
                 stored["state"] = state
                 self._write(self.dir / "proposals.json", self._proposals)
-        self.emit("proposal_update", id=proposal["id"], state=state, output=clip(text, SHOWN_OUTPUT))
+        self.emit("proposal_update", id=proposal["id"], state=state, **self.shown(f"request-{proposal['id']}", text))
         message = f'The owner approved "{proposal["title"]}". ' + (f"They said: {note}\n" if note else "")
         try:
             self.say(message + ("Result:\n" if state == "done" else "It failed:\n") + clip(text), kind="note")

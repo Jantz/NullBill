@@ -233,7 +233,7 @@ function markdown(text) {
       i += 1;
       while (i < lines.length && !/^```/.test(lines[i])) buf.push(lines[i++]);
       i += 1;
-      out.push(make("pre", {tabIndex: 0}, make("code", {textContent: buf.join("\n")})));
+      out.push(outputBox(make("pre", {}, make("code", {textContent: buf.join("\n")}))));
     } else if (/^\s*[-*] /.test(line) || /^\s*\d+[.)] /.test(line)) {
       const ordered = /^\s*\d/.test(line);
       const pattern = ordered ? /^\s*\d+[.)] / : /^\s*[-*] /;
@@ -1050,6 +1050,76 @@ async function secret(name) {
 }
 async function copyText(text) { await navigator.clipboard.writeText(text); }
 
+// Where the clipboard is refused (an insecure origin, an old browser), the
+// text is selected instead so Ctrl+C or the phone's Copy takes it.
+function selectAll(node) {
+  const range = document.createRange();
+  range.selectNodeContents(node);
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+// A block of output that scrolls on its own, with a button that copies all
+// of it: the whole output from the server when the block shows only its end.
+function outputBox(pre, full) {
+  pre.tabIndex = 0;
+  const label = "Copy all of it";
+  const button = make("button", {type: "button", className: "icon-btn out-copy", title: label, ariaLabel: label}, icon("copy"));
+  button.addEventListener("click", async () => {
+    let text = pre.textContent;
+    try {
+      if (full) text = (await api(`/api/chat/output?id=${encodeURIComponent(full)}`)).text;
+      await copyText(text);
+      button.classList.add("done");
+      button.replaceChildren(icon("check"));
+      announce("Copied.");
+      setTimeout(() => { button.classList.remove("done"); button.replaceChildren(icon("copy")); }, 1500);
+    } catch (error) {
+      if (error instanceof ApiError && full) { toast(error.message); return; }
+      selectAll(pre);
+      toast("Copying is blocked here. The text is selected: copy it with Ctrl+C or your phone's Copy.");
+    }
+  });
+  const box = make("div", {className: "out"});
+  if (pre.parentNode) pre.replaceWith(box);
+  box.append(pre, button);
+  return box;
+}
+
+// The server cuts long output to its end and says so on the first line.
+function shownOutput(text, full) {
+  const pre = make("pre", {});
+  const nodes = [];
+  if (full) {
+    const [first, ...rest] = String(text).split("\n");
+    const cut = /^\[(\d+) characters cut\]$/.exec(first);
+    pre.textContent = cut ? rest.join("\n") : text;
+    if (cut) nodes.push(make("p", {className: "out-note", textContent: `Shows the end. Copy takes all of it, ${Number(cut[1]).toLocaleString()} characters more.`}));
+  } else {
+    pre.textContent = text;
+  }
+  return [...nodes, outputBox(pre, full)];
+}
+
+async function copyConversation(button) {
+  try {
+    const {text} = await api("/api/chat/transcript");
+    try {
+      await copyText(text);
+      toast("Copied the conversation, every output whole.");
+    } catch {
+      const area = make("textarea", {value: text, readOnly: true, className: "copy-area"});
+      addToLog(area);
+      area.select();
+      toast("Copying is blocked here. The conversation is selected at the end of the chat: copy it by hand.");
+    }
+  } catch (error) {
+    toast(error.message);
+  }
+  if (button) button.focus();
+}
+
 function copyButton(label, get, feedback) {
   const button = make("button", {type: "button", className: "icon-btn", title: label, ariaLabel: label}, icon("copy"));
   button.addEventListener("click", () => press(button, feedback, "Copying…", async () => {
@@ -1251,6 +1321,8 @@ function follow(first, watched, feedback) {
   stopFollowing();
   if (job && job.feedback && job.feedback !== feedback && !job.feedback.classList.contains("error")) say(job.feedback, "", "");
   const node = $("job-template").content.firstElementChild.cloneNode(true);
+  // A clone keeps no listeners, so the copy buttons go on here.
+  for (const pre of node.querySelectorAll(".job-log pre, .job-detail-text")) outputBox(pre);
   $("job-slot").replaceChildren(node);
   show("job-none", false);
   job = {id: first.id, view: first, node, offset: 0, timer: null, watched, misses: 0, feedback, stage: null};
@@ -1766,7 +1838,7 @@ function renderEvent(e) {
       if (!node) break;
       node.dataset.state = e.ok ? "ok" : "fail";
       node.querySelector(".t-mark").replaceChildren(icon(e.ok ? "check" : "x"));
-      if (e.output) node.append(make("pre", {tabIndex: 0, textContent: e.output}));
+      if (e.output) node.append(...shownOutput(e.output, e.full));
       else node.querySelector("summary").addEventListener("click", (ev) => ev.preventDefault());
       break;
     }
@@ -1775,7 +1847,7 @@ function renderEvent(e) {
       break;
     case "proposal_update": {
       const node = chat.nodes.get(e.id);
-      if (node) settleRequest(node, e.state, e.output);
+      if (node) settleRequest(node, e.state, e.output, e.full);
       break;
     }
     case "ask":
@@ -1864,7 +1936,7 @@ const SETTLED = {
   declined: ["Declined", ""], expired: ["Expired: not answered in 30 minutes", ""],
 };
 
-function settleRequest(card, stateName, output) {
+function settleRequest(card, stateName, output, full) {
   card.dataset.state = stateName;
   if (stateName === "pending") return;
   card.classList.add("settled");
@@ -1878,9 +1950,10 @@ function settleRequest(card, stateName, output) {
   const [text, kind] = SETTLED[stateName] || [stateName, ""];
   line.replaceChildren(make("span", {className: `badge ${kind}`, textContent: text}));
   if (output) {
-    const old = card.querySelector(".result");
-    if (old) old.remove();
-    card.append(make("pre", {className: "result", tabIndex: 0, textContent: output}));
+    for (const old of card.querySelectorAll(".result")) old.remove();
+    const shown = shownOutput(output, full);
+    for (const node of shown) node.classList.add("result");
+    card.append(...shown);
   }
 }
 
@@ -2002,6 +2075,7 @@ function commands() {
     {label: "Read the hardware", kind: "Run", icon: "chip", run: () => { go("setup/hardware"); $("probe-button").click(); }},
     {label: "Open the agent", kind: "Agent", icon: "agent", run: () => openAgent(true)},
     {label: "New conversation with the agent", kind: "Agent", icon: "plus", run: () => $("chat-new").click()},
+    {label: "Copy the conversation", kind: "Agent", icon: "copy", run: () => copyConversation()},
     {label: "Stop the agent", kind: "Agent", icon: "stop", run: () => api("/api/chat/stop", {}).then(pollChat).catch((e) => toast(e.message))},
     {label: "Access mode", kind: "Agent", icon: "shield", run: () => { go("agent/settings"); setTimeout(() => document.querySelector('#modes [aria-pressed="true"]').focus(), 30); }},
     {label: "What the agent did", kind: "Agent", icon: "activity", run: () => go("agent/log")},
@@ -2227,6 +2301,8 @@ document.addEventListener("DOMContentLoaded", () => {
   setDock(!narrow.matches && store.get("nb-dock") !== "closed");
   placeChat();
   $("toast-close").addEventListener("click", () => toast(""));
+  // Logs and the plan: each scrolls on its own and copies whole.
+  for (const pre of document.querySelectorAll("#plan, #tailnet-policy")) outputBox(pre);
   window.addEventListener("hashchange", () => route(true));
   document.addEventListener("keydown", onKey);
   for (const media of [phone, narrow]) {
@@ -2360,6 +2436,7 @@ document.addEventListener("DOMContentLoaded", () => {
     pollChat();
     return "";
   }));
+  $("chat-copy").addEventListener("click", () => copyConversation($("chat-copy")));
   $("chat-new").addEventListener("click", async () => {
     if (chat.busy || chat.pending.length) {
       const ok = await confirmDialog({title: "Start a new conversation?", text: "The agent stops what it is doing, and waiting requests expire.", yes: "Start over", danger: false});

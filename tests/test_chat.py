@@ -14,6 +14,7 @@ import yaml
 from test_web import FAKE_PROBE, Client, MemoryCodec, Sent, sign_in
 
 from nullbill import agenttools
+from nullbill.web import chat as chat_module
 from nullbill.web import server as web
 
 # Stands in for the agent CLI: reads the prompt, starts the MCP server its
@@ -415,3 +416,35 @@ def test_status_does_not_call_planned_guests_not_installed(agent, monkeypatch):
     assert guests and all("installed" not in g for g in guests.values())
     assert guests["nullbill"].get("made_by_install_sh") is True
     assert sum(1 for g in guests.values() if g.get("made_by_install_sh")) == 1
+
+
+def test_long_output_is_shown_by_its_end_and_copied_whole(agent):
+    # Jan copied the panel and got "[1250 characters cut]" and empty blocks.
+    app, client, _ = agent
+    whole = "".join(f"line {i}\n" for i in range(2000))
+    chat = app.chat
+    chat.emit("user", text="Read the log")
+    chat.emit("tool", id="t1", name="read_job", label="Read the log of a run")
+    shown = chat.shown("tool-t1", whole)
+    chat.emit("tool_done", id="t1", ok=True, **shown)
+    chat.emit("tool", id="t2", name="status", label="Looked at the server's state")
+    chat.emit("tool_done", id="t2", ok=True, **chat.shown("tool-t2", "short"))
+    assert shown["output"].startswith("[") and shown["output"].endswith("line 1999\n") and len(shown["output"]) < 4100
+    status, data = client.call(f"/api/chat/output?id={shown['full']}")
+    assert status == 200 and data["text"] == whole
+    assert client.call("/api/chat/output?id=../../secrets")[0] == 404
+    assert client.call("/api/chat/output?id=nothere")[0] == 404
+    status, data = client.call("/api/chat/transcript")
+    text = data["text"]
+    assert status == 200 and "You: Read the log" in text
+    assert "[Read the log of a run]\n```\nline 0\n" in text and "line 1999\n```" in text
+    assert "[Looked at the server's state]\n```\nshort\n```" in text
+    assert "characters cut" not in text
+
+
+def test_kept_outputs_are_pruned(agent, monkeypatch):
+    app, _, _ = agent
+    monkeypatch.setattr(chat_module, "KEPT_OUTPUTS", 3)
+    keys = [app.chat.shown(f"tool-{i}", "x" * 5000)["full"] for i in range(5)]
+    kept = sorted(p.stem for p in (app.chat.dir / "outputs").glob("*.txt"))
+    assert len(kept) == 3 and keys[-1] in kept

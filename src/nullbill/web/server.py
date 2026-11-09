@@ -1241,6 +1241,15 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 return self.json(200, {"entries": app.chat.audit_log()})
             if path == "/api/chat/notes":
                 return self.json(200, {"notes": app.chat.notes()})
+            if path == "/api/chat/output":
+                try:
+                    return self.json(
+                        200, {"text": app.chat.output(dict(p.split("=", 1) for p in query.split("&") if "=" in p).get("id", ""))}
+                    )
+                except NullBillError as exc:
+                    return self.json(404, {"error": exc.messages[0]})
+            if path == "/api/chat/transcript":
+                return self.json(200, {"text": app.chat.transcript()})
             match = re.fullmatch(r"/api/jobs/([0-9T]+-[a-z-]+)", path)
             if match and match[1] in app.jobs:
                 return self.json(200, app.job_view(app.jobs[match[1]], offset(query)))

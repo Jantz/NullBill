@@ -471,7 +471,7 @@ legend { font-size: .78rem; font-weight: 700; color: var(--faint); text-transfor
 .legend li::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 5px; background: var(--panel-3); }
 .legend .k-reserve::before { background: var(--faint); }
 .legend .k-guests::before { background: var(--accent); }
-#plan { max-height: 340px; overflow: auto; padding: 10px; background: var(--bg-2); border-radius: 10px; font-size: .78rem; }
+#plan { max-height: min(55vh, 340px); overflow: auto; padding: 10px 40px 10px 10px; background: var(--bg-2); border-radius: 10px; font-size: .78rem; }
 .ready { display: grid; gap: 6px; }
 .ready li { display: flex; gap: 8px; align-items: center; font-size: .88rem; }
 .ready li.ok .icon { color: var(--good); }
@@ -480,7 +480,7 @@ legend { font-size: .78rem; font-weight: 700; color: var(--faint); text-transfor
 .copy-field code { background: none; flex: 1; padding: 0; }
 .substep { padding: 14px; border: 1px solid var(--line); border-radius: 12px; }
 .substep h3 { display: flex; align-items: center; }
-#tailnet-policy { max-height: 300px; overflow: auto; font-size: .78rem; padding: 10px; background: var(--bg-2); border-radius: 10px; }
+#tailnet-policy { max-height: min(55vh, 300px); overflow: auto; font-size: .78rem; padding: 10px 40px 10px 10px; background: var(--bg-2); border-radius: 10px; }
 
 /* Activity */
 .activity-grid { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) 300px; align-items: start; }
@@ -509,8 +509,8 @@ legend { font-size: .78rem; font-weight: 700; color: var(--faint); text-transfor
 .stages li.running .s-icon::before { content: ""; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--agent); border-top-color: transparent; animation: spin .9s linear infinite; }
 .stages li.waiting .s-icon::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--line-2); }
 .s-time { font-size: .75rem; font-variant-numeric: tabular-nums; }
-.job-log pre { max-height: 420px; overflow: auto; font-size: .75rem; padding: 10px; background: var(--bg-2); border-radius: 10px; color: var(--muted); }
-.job-detail-text { max-height: 200px; overflow: auto; font-size: .76rem; padding: 8px; background: var(--bg-2); border-radius: 8px; }
+.job-log pre { max-height: min(55vh, 420px); overflow: auto; font-size: .75rem; padding: 10px 40px 10px 10px; background: var(--bg-2); border-radius: 10px; color: var(--muted); }
+.job-detail-text { max-height: min(40vh, 200px); overflow: auto; font-size: .76rem; padding: 8px 40px 8px 8px; background: var(--bg-2); border-radius: 8px; }
 .counts { display: flex; gap: 6px; flex-wrap: wrap; }
 .problems { display: grid; gap: 4px; font-size: .85rem; }
 .problems li.fail b { color: var(--bad); }
@@ -556,7 +556,19 @@ legend { font-size: .78rem; font-weight: 700; color: var(--faint); text-transfor
 .tool[data-state="ok"] .t-mark { color: var(--good); }
 .tool[data-state="fail"] .t-mark { color: var(--bad); }
 .tool .t-label { font-family: var(--mono); font-size: .76rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tool pre { margin: 4px 0 2px 24px; max-height: 260px; overflow: auto; font-size: .72rem; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px; color: var(--muted); }
+.tool pre { font-size: .72rem; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px; color: var(--muted); }
+.tool .out, .tool .out-note { margin: 4px 0 2px 24px; }
+/* Output blocks: each scrolls on its own, never higher than part of the
+   screen, so a finger on a phone still reaches the page around it; at its
+   end the page scrolls on (no overscroll containment). */
+.out { position: relative; min-width: 0; }
+.out > pre { max-height: min(40vh, 360px); overflow: auto; padding-right: 40px; -webkit-overflow-scrolling: touch; }
+.out > pre:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.out-copy { position: absolute; top: 4px; right: 4px; width: 30px; height: 30px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px; opacity: .85; }
+.out-copy:hover, .out-copy:focus-visible { opacity: 1; }
+.out-copy.done { color: var(--good); }
+.out-note { font-size: .72rem; color: var(--faint); margin: 4px 0 0; }
+.msg.assistant .out + * { margin-top: 6px; }
 .card { align-self: stretch; max-width: 100%; border-radius: 12px; border: 1px solid var(--line-2); background: var(--panel); padding: 12px; display: grid; gap: 8px; font-size: .86rem; }
 .card-head { display: flex; align-items: center; gap: 8px; }
 .card-head b { flex: 1; }
@@ -572,7 +584,7 @@ legend { font-size: .78rem; font-weight: 700; color: var(--faint); text-transfor
 .card.ask { border-color: color-mix(in srgb, var(--agent) 55%, var(--line)); box-shadow: 0 0 0 3px var(--agent-soft); }
 .card.ask.settled { box-shadow: none; }
 .card .answer-form { display: flex; gap: 6px; }
-.card .result { max-height: 200px; overflow: auto; font-family: var(--mono); font-size: .72rem; background: var(--bg-2); border-radius: 8px; padding: 8px; color: var(--muted); }
+.card .result > pre { font-family: var(--mono); font-size: .72rem; background: var(--bg-2); border-radius: 8px; padding: 8px 40px 8px 8px; color: var(--muted); }
 .typing { display: inline-flex; gap: 4px; align-items: center; color: var(--muted); font-size: .8rem; align-self: flex-start; padding: 4px 6px; }
 .typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--agent); animation: blink 1.2s infinite; }
 .typing i:nth-child(2) { animation-delay: .2s; }
@@ -692,6 +704,9 @@ dialog::backdrop { background: rgba(3, 5, 9, .62); backdrop-filter: blur(3px); }
   .btn, .btn.small, .chip, .seg button, .seg a, .stepper a, .topbar-actions .btn, #open-palette, .icon-only { min-height: 44px; }
   .icon-only, .topbar-actions .btn:not(.label) { min-width: 44px; }
   .tool summary { min-height: 40px; display: flex; align-items: center; }
+  .out-copy { width: 40px; height: 40px; }
+  #chat-log .out > pre { max-height: 30vh; }
+  .out > pre { padding-right: 48px; }
   #chat-mode, .link-btn, a.more-link { min-height: 40px; display: inline-flex; align-items: center; }
 }
 /* Windows high contrast: states drawn with colour need a border. */
