@@ -896,6 +896,10 @@ function duration(s) {
   return `${Math.floor(m / 60)} h ${m % 60} min`;
 }
 
+// Past this much quiet the page calls a run stuck and points at its Stop
+// button, which is there whenever a job runs.
+const STUCK_S = 30 * 60;
+
 function stopFollowing() {
   if (job) clearTimeout(job.timer);
 }
@@ -948,6 +952,27 @@ function follow(first, watched, feedback) {
   if (again === "upgrade") retry.textContent = "Update again";
   retry.addEventListener("click", () => startJob(again, retry, node.querySelector(".job-copy-result")));
   node.querySelector(".job-copy").addEventListener("click", () => copyDetails(node));
+  const stopButton = node.querySelector(".job-stop");
+  const stopResult = node.querySelector(".job-stop-result");
+  const stopConfirm = node.querySelector(".job-stop-confirm");
+  stopButton.addEventListener("click", () => {
+    if (stopButton.classList.contains("busy")) return;
+    stopConfirm.hidden = false;
+    node.querySelector(".job-stop-yes").focus();
+  });
+  node.querySelector(".job-stop-no").addEventListener("click", () => {
+    stopConfirm.hidden = true;
+    stopButton.focus();
+    say(stopResult, "", "");
+  });
+  node.querySelector(".job-stop-yes").addEventListener("click", () => {
+    stopConfirm.hidden = true;
+    stopButton.focus();
+    press(stopButton, stopResult, "Stopping…", async () => {
+      await api(`/api/jobs/${first.id}/stop`, {});
+      return "Stopped. What to do next shows here in a moment.";
+    });
+  });
   tick(job);
 }
 
@@ -1064,13 +1089,18 @@ function drawJob(current, view) {
     if (now) parts.push(now.text);
     if (p.activity) parts.push(p.activity);
     let text = parts.length ? parts.join(": ") : "Starting…";
-    if (p.quiet_s !== null && p.quiet_s >= 20) {
+    if (p.quiet_s !== null && p.quiet_s >= STUCK_S) {
+      text += ` (no new output for ${duration(p.quiet_s)}; this looks stuck: you can stop it below and start it again)`;
+    } else if (p.quiet_s !== null && p.quiet_s >= 20) {
       text += ` (no new output for ${duration(p.quiet_s)}; downloads and image builds can be quiet for several minutes)`;
     }
     nowLine.textContent = text;
   } else {
     nowLine.textContent = "";
   }
+  const stopper = node.querySelector(".job-stopper");
+  stopper.hidden = view.state !== "running";
+  if (stopper.hidden) stopper.querySelector(".job-stop-confirm").hidden = true;
   // The stages, folded away once all are done.
   const fold = node.querySelector(".job-stages");
   fold.hidden = !steps.length;

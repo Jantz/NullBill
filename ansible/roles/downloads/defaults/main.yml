@@ -6,3 +6,9 @@
 downloads_apt_retries: 6
 downloads_retries: 6
 downloads_delay: 20
+# apt-get can wait forever: when a refused download is retried after a
+# redirect it stops asking its download workers and never exits. One still
+# running this long when a role starts was left by an earlier run that was
+# stopped (only one run at a time), and holds apt's lock; it is ended unless
+# dpkg works under it.
+downloads_apt_stuck_minutes: 15

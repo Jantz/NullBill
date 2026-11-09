@@ -18,6 +18,7 @@ import math
 import os
 import re
 import secrets
+import signal
 import ssl
 import subprocess
 import sys
@@ -157,6 +158,29 @@ def check_password(password: str, stored: dict) -> bool:
 # outlives a restart of this server (the unit's KillMode=process) and the
 # restarted server finds it again (App.load_jobs).
 JOB_WRAPPER = '"$@"; echo $? > "$0.tmp" && mv "$0.tmp" "$0"'
+# Stopping a job: each process under its sh gets SIGTERM, and SIGKILL if it
+# is still there this many seconds later. sh itself records how it ended.
+STOP_WAIT_S = 10
+
+
+def descendants(pid: int) -> list[int]:
+    """Every process under pid, by the parent each names in /proc."""
+    children: dict[int, list[int]] = {}
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            ppid = int((entry / "stat").read_text().rsplit(")", 1)[1].split()[1])
+        except (OSError, IndexError, ValueError):
+            continue
+        children.setdefault(ppid, []).append(int(entry.name))
+    out: list[int] = []
+    todo = [pid]
+    while todo:
+        for child in children.get(todo.pop(), []):
+            out.append(child)
+            todo.append(child)
+    return out
 
 
 @dataclass
@@ -178,12 +202,18 @@ class Job:
     def meta_file(self) -> Path:
         return self.log.with_suffix(".json")
 
+    def meta(self) -> dict:
+        try:
+            return json.loads(self.meta_file.read_text())
+        except (OSError, ValueError):
+            return {}
+
     def alive(self) -> bool:
         """For a job an earlier server started: is its sh still running?"""
         try:
-            pid = json.loads(self.meta_file.read_text())["pid"]
+            pid = self.meta()["pid"]
             return str(self.rc_file) in Path(f"/proc/{pid}/cmdline").read_bytes().decode(errors="replace")
-        except (OSError, ValueError, KeyError):
+        except (OSError, KeyError):
             return False
 
     def state(self) -> str:
@@ -878,6 +908,35 @@ class App:
             self.jobs[job_id] = job
             return job
 
+    def stop(self, job_id: str) -> Job:
+        """End a running job: what it finished stays, the rest waits for the
+        next run. The page offers it when a run hangs."""
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if job is None or job.state() != "running":
+                raise NullBillError("that job is not running any more")
+            meta = job.meta()
+            # The pid is this job's sh only while its command line names the job.
+            if "pid" not in meta or not job.alive():
+                raise NullBillError("could not find that job's processes; restart the NullBill guest to end it")
+            _write_private(job.meta_file, json.dumps(meta | {"stopped": time.time()}))
+        procs = descendants(meta["pid"])
+        for pid in procs:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        deadline = time.monotonic() + STOP_WAIT_S
+        while time.monotonic() < deadline and any(Path(f"/proc/{pid}").exists() for pid in procs):
+            time.sleep(0.2)
+        for pid in procs:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        print(f"nullbill-web: stopped job {job.id} ({len(procs)} processes)", file=sys.stderr, flush=True)
+        return job
+
     def load_jobs(self) -> None:
         """Jobs an earlier server started, finished or still running."""
         for meta_file in sorted((self.home / "jobs").glob("*.json")):
@@ -922,6 +981,7 @@ class App:
         now = time.time()
         times = {"started": job.started, "now": now, "ended": ended or (None if state == "running" else now)}
         times["output"] = job.log.stat().st_mtime
+        times["stopped"] = job.meta().get("stopped")
         return {
             "id": job.id,
             "action": job.action,
@@ -1169,6 +1229,8 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                     return self.json(200, {"password": app.password(str(body.get("name", "")))})
                 if self.path == "/api/alerts/test":
                     return self.json(200, {"ok": True, "sent": app.test_alerts()})
+                if match := re.fullmatch(r"/api/jobs/([0-9T]+-[a-z-]+)/stop", self.path):
+                    return self.json(200, app.job_view(app.stop(match[1])))
                 if self.path == "/api/jobs":
                     stage = body.get("stage")
                     job = app.start(str(body.get("action")), str(stage) if stage else None, self.client())

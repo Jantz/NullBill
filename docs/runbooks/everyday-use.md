@@ -76,6 +76,11 @@ no longer works.
   setup** after it. The bar at the top shows a run's progress, and the
   **Activity** page shows it in full. You no longer need to run
   `install.sh` again for that.
+- **A run that hangs**: the **Activity** page says when a run has printed
+  nothing for half an hour. **Stop this run** under its progress ends it;
+  what it finished stays done. Press **Update NullBill**, in case a fix is
+  out, then start it again. A package download it left waiting in a guest
+  is ended by the next run.
 - **Alerts** come to the ntfy topic the page's **Alerts** page shows. Each
   names what fired; Grafana and the page say more.
 - **Proxmox** is for what NullBill does not do: a guest's console, start

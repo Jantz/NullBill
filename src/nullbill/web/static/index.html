@@ -596,6 +596,22 @@
     </div>
     <div class="bar" role="progressbar" aria-labelledby="job-title" aria-valuemin="0" aria-valuemax="100"><span class="fill"></span></div>
     <p class="job-now"></p>
+    <div class="job-stopper" hidden>
+      <div class="row">
+        <button type="button" class="btn secondary job-stop">Stop this run</button>
+        <p class="feedback job-stop-result" role="status"></p>
+      </div>
+      <div class="callout danger job-stop-confirm" hidden>
+        <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
+        <div>
+          <p><b>Stop this run now?</b> What it has finished stays done. The step it is in stops halfway and runs again next time.</p>
+          <div class="row">
+            <button type="button" class="btn danger job-stop-yes">Stop it</button>
+            <button type="button" class="btn secondary job-stop-no">Keep it running</button>
+          </div>
+        </div>
+      </div>
+    </div>
     <div class="callout danger job-error" hidden>
       <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
       <div>

@@ -64,6 +64,12 @@ VERIFY = re.compile(r"^(PASS|FAIL|SKIP|DEGRADED) {1,5}(?<=^.{9})(.+)$")
 ERROR_PREFIX = "nullbill: "
 STOPPED = re.compile(r"apply stopped at ([a-z-]+): (.*)$", re.S)
 
+STOPPED_ADVICE = (
+    "What finished before you stopped it stays done. Start it again with the button below; the step it was "
+    "in the middle of runs again. If it hung on a download, press Update NullBill first, in case a fix for it "
+    "is out."
+)
+
 # Known causes, by what the message says: what to do about each. The first
 # match wins. Anything else gets the stage's own advice.
 ADVICE = [
@@ -289,16 +295,22 @@ def summarize(action: str, text: str, state: str, times: dict) -> dict:
     results = verify_results(lines if action == "verify" else sections.get("verify", []))
     out: dict = {"title": JOB_TEXT.get(action, action)}
     failed_stage = None
+    stopped = state == "failed" and times.get("stopped")
+    if stopped:
+        # What the killed processes said on their way out is not the cause.
+        errors = []
     if state == "failed":
         joined = "\n".join(errors)
         m = STOPPED.search(joined)
         failed_stage, message = (m[1], m[2]) if m else (current, errors[0] if errors else "")
+        if stopped:
+            message = "you stopped this run from the page"
         failures = results["counts"]["FAIL"] if results else 0
         if not message and failures:
             message = f"{failures} check{'s' if failures > 1 else ''} failed"
         stage_lines = sections.get(failed_stage, [])
-        ansible = _ansible_failure(stage_lines)
-        tofu = _tofu_errors(stage_lines) if failed_stage == "tofu" else []
+        ansible = None if stopped else _ansible_failure(stage_lines)
+        tofu = _tofu_errors(stage_lines) if failed_stage == "tofu" and not stopped else []
         found = " ".join([message, (ansible or {}).get("detail", ""), *tofu, *errors])
         out["error"] = {
             "stage": failed_stage if names else None,
@@ -307,7 +319,7 @@ def summarize(action: str, text: str, state: str, times: dict) -> dict:
             "more": [sentence(e) for e in errors if not STOPPED.search(e) and e != message],
             "task": ansible,
             "tofu": tofu,
-            "advice": advice(found, failed_stage if names else None),
+            "advice": STOPPED_ADVICE if stopped else advice(found, failed_stage if names else None),
         }
     if names:
         steps = []

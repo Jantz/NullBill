@@ -17,6 +17,7 @@ import yaml
 from fixturedata import fixture_config, write_raw
 
 from nullbill.probe import parse
+from nullbill.web import progress
 from nullbill.web import server as web
 
 FAKE_PROBE = """
@@ -249,6 +250,48 @@ def test_one_job_at_a_time(site, tmp_path):
     job = client.call("/api/jobs", {"action": "verify"})[1]
     assert client.call("/api/jobs", {"action": "verify"}) == (400, {"error": "another job is still running"})
     app.jobs[job["id"]].process.kill()
+
+
+def test_a_hung_run_is_stopped_with_everything_under_it(site, tmp_path, monkeypatch):
+    app, client = site
+    sign_in(app, client)
+    # As apply runs ansible-playbook and ssh: a child with a grandchild, and
+    # one of them ignores SIGTERM, as a stuck download can.
+    hung = tmp_path / "hung.py"
+    pids = tmp_path / "pids"
+    hung.write_text(
+        "import os, signal, subprocess, sys, time\n"
+        "print('--- stage media, 2026-11-09 00:30:25', flush=True)\n"
+        "deaf = 'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(600)'\n"
+        "child = subprocess.Popen([sys.executable, '-c', deaf])\n"
+        f"open({str(pids)!r}, 'w').write(str(child.pid))\n"
+        "print('nullbill: a message from the way out', flush=True)\n"
+        "time.sleep(600)\n"
+    )
+    app.command = [sys.executable, str(hung)]
+    monkeypatch.setattr(web, "STOP_WAIT_S", 1)
+    job = client.call("/api/jobs", {"action": "apply"})[1]
+    while not pids.exists() or not pids.read_text():
+        time.sleep(0.05)
+    grandchild = int(pids.read_text())
+    status, view = client.call(f"/api/jobs/{job['id']}/stop", {})
+    assert status == 200
+    done = wait(client, job["id"])
+    assert done["state"] == "failed"
+    assert not Path(f"/proc/{grandchild}").exists() or Path(f"/proc/{grandchild}/stat").read_text().split(")")[1].split()[0] == "Z"
+    error = done["progress"]["error"]
+    assert error["message"] == "You stopped this run from the page." and error["stage"] == "media"
+    assert error["advice"] == progress.STOPPED_ADVICE and error["more"] == [] and error["task"] is None
+    # Stopped already; and a job that ended cannot be stopped.
+    assert client.call(f"/api/jobs/{job['id']}/stop", {}) == (400, {"error": "that job is not running any more"})
+    # The next run starts.
+    app.command = [sys.executable, "-c", "print('ran')"]
+    assert wait(client, client.call("/api/jobs", {"action": "verify"})[1]["id"])["state"] == "done"
+
+
+def test_stopping_needs_a_session(site):
+    _, client = site
+    assert client.call("/api/jobs/20260101T000000-apply/stop", {})[0] == 401
 
 
 def test_alerts_topic_is_made_with_the_password_and_tested(site):

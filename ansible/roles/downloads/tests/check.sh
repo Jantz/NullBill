@@ -2,7 +2,8 @@
 # Container check for the downloads role, run by tools/check-roles: a mirror
 # that fails each file's first requests, then serves it. apt and a pinned
 # fetch both get through; without retries, or with a wrong checksum, they
-# fail.
+# fail. An apt-get left waiting by an earlier run is ended, unless dpkg works
+# under it.
 set -euo pipefail
 # shellcheck source=tools/role-check/role-check.sh
 source /usr/local/lib/role-check.sh
@@ -79,7 +80,37 @@ cat >/tmp/plays/fetch.yml <<'YML'
         downloads_checksum: "sha256:{{ blob_sha256 }}"
         downloads_delay: 1
 YML
+cat >/tmp/plays/role.yml <<'YML'
+- name: The role alone
+  hosts: all
+  roles: [downloads]
+YML
 play() { ansible-playbook -i localhost, -c local "$@"; }
+
+# Stand-ins named apt-get and dpkg: one apt-get waits alone, as apt does when
+# it hangs; the other has dpkg at work under it.
+play /tmp/plays/role.yml >/tmp/role.log 2>&1 || { cat /tmp/role.log; fail "the role alone"; }
+mkdir -p /tmp/fake /tmp/fake-sh
+cp /bin/sleep /tmp/fake/apt-get
+cp /bin/sleep /tmp/fake/dpkg
+cp /bin/sh /tmp/fake-sh/apt-get
+/tmp/fake/apt-get 600 &
+stuck=$!
+/tmp/fake-sh/apt-get -c '/tmp/fake/dpkg 600; true' &
+working=$!
+sleep 0.5
+[ "$(cat /proc/$working/comm)" = apt-get ] || fail "the stand-in with dpkg under it is named apt-get"
+play /tmp/plays/role.yml >/tmp/young.log 2>&1 || { cat /tmp/young.log; fail "role with apt-get younger than the limit"; }
+grep -Eq 'localhost +: ok=[0-9]+ +changed=0 ' /tmp/young.log || { cat /tmp/young.log; fail "a young apt-get is left alone"; }
+kill -0 "$stuck" || fail "a young apt-get still runs"
+play /tmp/plays/role.yml -e downloads_apt_stuck_minutes=0 >/tmp/stuck.log 2>&1 || { cat /tmp/stuck.log; fail "role with a stuck apt-get"; }
+grep -Eq 'localhost +: ok=[0-9]+ +changed=1 ' /tmp/stuck.log || { cat /tmp/stuck.log; fail "ending a stuck apt-get is a change"; }
+wait "$stuck" 2>/dev/null || true
+kill -0 "$stuck" 2>/dev/null && fail "the stuck apt-get was ended"
+kill -0 "$working" || fail "apt-get with dpkg under it is left alone"
+for dir in /proc/[0-9]*; do [ "$(cat "$dir/comm" 2>/dev/null)" = dpkg ] && kill "${dir#/proc/}"; done
+wait "$working" 2>/dev/null || true
+pass "an apt-get left waiting is ended, one with dpkg under it is not"
 
 echo "deb [trusted=yes] http://127.0.0.1:8000/ ./" >/etc/apt/sources.list.d/nb-retry.list
 mirror 2
