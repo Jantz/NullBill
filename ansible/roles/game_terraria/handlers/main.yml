@@ -1,0 +1,6 @@
+- name: Restart terraria
+  when: game_terraria_manage_services | bool
+  ansible.builtin.systemd_service:
+    name: terraria
+    state: restarted
+    daemon_reload: true

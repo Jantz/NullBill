@@ -1,0 +1,3 @@
+# The game user, nb-game and the metrics.
+dependencies:
+  - role: game_server

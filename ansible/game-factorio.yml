@@ -1,0 +1,8 @@
+# The Factorio server in its container in the games zone
+# (docs/adr/0012-game-servers.md). apply's games stage runs this with the
+# plan's pinned server and settings, then waits until it answers.
+- name: Factorio server
+  hosts: all
+  become: false
+  roles:
+    - game_factorio

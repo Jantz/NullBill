@@ -1,0 +1,16 @@
+# Factorio's headless server. apply passes everything from the plan: the
+# catalog's games.factorio pins the server, and src/nullbill/games.py works
+# out the settings.
+#
+# game_factorio_version, game_factorio_url, game_factorio_sha256: the server.
+# game_factorio_port: where players connect (UDP).
+# game_factorio_settings: server-settings.json.
+# game_factorio_space_age: the expansion's mods, on or off.
+# game_factorio_proxy: the egress proxy's URL; the server asks Factorio's
+# sign-in service about each player through it, and does not start
+# without an answer.
+# game_factorio_rcon_port: RCON on the loopback address, where nb-game asks
+# how many players are connected.
+#
+# Start and restart the server. Only the container check turns this off.
+game_factorio_manage_services: true

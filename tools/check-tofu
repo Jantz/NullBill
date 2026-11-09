@@ -12,4 +12,4 @@ cp tools/tofu-check/Dockerfile tools/tofu-check/check.sh tools/tofu-check/report
 cat "${EXTRA_CA_FILE:-/dev/null}" > "$out/context/extra-ca.crt"
 docker build -q -t nullbill-tofu-check "$out/context" >/dev/null
 tools/render-fixtures "$out/build" >/dev/null
-docker run --rm -v "$out/build:/build:ro" nullbill-tofu-check small mid large large-gpu-vm large-legacy
+docker run --rm -v "$out/build:/build:ro" nullbill-tofu-check small mid large large-gpu-vm large-legacy large-games

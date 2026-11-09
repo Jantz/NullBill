@@ -31,3 +31,23 @@ def legacy_config() -> dict:
     config = fixture_config("large")
     workloads = [*config["intent"]["workloads"], "media"]
     return {**config, "intent": {**config["intent"], "workloads": workloads}, "disks": {"ata-SYNTHETIC_HDD_0002": {"use": "legacy"}}}
+
+
+def games_config() -> dict:
+    """The large class with every game server, a friend given two of them,
+    and the owner's own choices for each game."""
+    config = fixture_config("large")
+    workloads = [*config["intent"]["workloads"], "minecraft", "terraria", "factorio"]
+    return {
+        **config,
+        "intent": {**config["intent"], "workloads": workloads},
+        "people": {
+            **config["people"],
+            "friend-c": {"role": "friend", "login": "friend-c@example.internal", "services": ["minecraft", "terraria"]},
+        },
+        "games": {
+            "minecraft": {"eula": True, "admins": ["owner_a"], "settings": {"difficulty": "hard", "max-players": 8}},
+            "terraria": {"settings": {"worldname": "Fixture", "autocreate": 1}},
+            "factorio": {"admins": ["owner_a"], "settings": {"max_players": 8}},
+        },
+    }

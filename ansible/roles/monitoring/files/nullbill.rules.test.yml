@@ -208,6 +208,20 @@ tests:
         exp_alerts:
           - exp_labels: {severity: page, instance: "pve:9100", pool: linux-runner}
             exp_annotations: {summary: "the linux-runner CI image is over 14 days old and its re-bake keeps failing; run setup and read the ci stage"}
+  # A server that is starting (a new world takes minutes) is not down yet.
+  - interval: 1m
+    input_series:
+      - series: 'nb_game_up{job="node",instance="minecraft:9100",game="minecraft"}'
+        values: "1x5 0x8 1x5 0x30"
+    alert_rule_test:
+      - eval_time: 13m
+        alertname: GameServerDown
+        exp_alerts: []
+      - eval_time: 32m
+        alertname: GameServerDown
+        exp_alerts:
+          - exp_labels: {severity: page, job: node, instance: "minecraft:9100", game: minecraft}
+            exp_annotations: {summary: "the minecraft server does not answer in its guest; its unit keeps restarting it, so read journalctl -u minecraft there"}
   - interval: 1m
     input_series:
       - series: 'node_memory_MemAvailable_bytes{job="host",instance="pve:9100"}'

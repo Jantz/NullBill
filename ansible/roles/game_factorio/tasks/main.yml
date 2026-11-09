@@ -1,0 +1,151 @@
+- name: Directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: /opt/factorio, owner: root, group: root, mode: "0755"}
+    - {path: "/opt/factorio/{{ game_factorio_version }}", owner: root, group: root, mode: "0755"}
+    - {path: /etc/factorio, owner: root, group: game, mode: "0750"}
+    # Saves, mods and the server's own files.
+    - {path: /var/lib/factorio, owner: game, group: game, mode: "0750"}
+    - {path: /var/lib/factorio/saves, owner: game, group: game, mode: "0750"}
+    - {path: /var/lib/factorio/mods, owner: game, group: game, mode: "0750"}
+
+- name: Server
+  ansible.builtin.include_role:
+    name: downloads
+    tasks_from: fetch
+  vars:
+    downloads_url: "{{ game_factorio_url }}"
+    downloads_dest: "/opt/factorio/factorio-headless-{{ game_factorio_version }}.tar.xz"
+    downloads_checksum: "sha256:{{ game_factorio_sha256 }}"
+
+- name: Server unpacked
+  ansible.builtin.unarchive:
+    src: "/opt/factorio/factorio-headless-{{ game_factorio_version }}.tar.xz"
+    dest: "/opt/factorio/{{ game_factorio_version }}"
+    remote_src: true
+    owner: root
+    group: root
+    extra_opts: [--strip-components=1]
+    creates: "/opt/factorio/{{ game_factorio_version }}/bin/x64/factorio"
+  notify: Restart factorio
+
+- name: Other versions
+  ansible.builtin.find:
+    paths: /opt/factorio
+    file_type: any
+    excludes:
+      - "{{ game_factorio_version }}"
+      - "factorio-headless-{{ game_factorio_version }}.tar.xz"
+      - start
+  register: game_factorio_stale
+
+- name: Other versions removed
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ game_factorio_stale.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Paths and proxy
+  ansible.builtin.template:
+    src: config.ini.j2
+    dest: /etc/factorio/config.ini
+    owner: root
+    group: game
+    mode: "0640"
+  notify: Restart factorio
+
+- name: Settings
+  ansible.builtin.copy:
+    dest: /etc/factorio/server-settings.json
+    owner: root
+    group: game
+    mode: "0640"
+    content: "{{ game_factorio_settings | to_nice_json }}\n"
+  notify: Restart factorio
+
+# Only nb-game, on the loopback address, uses it.
+- name: RCON password
+  ansible.builtin.shell:
+    cmd: umask 027 && python3 -c 'import secrets; print(secrets.token_urlsafe(24))' > /etc/factorio/rcon-password && chgrp game /etc/factorio/rcon-password
+    creates: /etc/factorio/rcon-password
+
+- name: nb-factorio-mods
+  ansible.builtin.copy:
+    src: nb-factorio-mods
+    dest: /usr/local/sbin/nb-factorio-mods
+    mode: "0755"
+
+- name: Mods
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - game
+      - --
+      - /usr/local/sbin/nb-factorio-mods
+      - "/opt/factorio/{{ game_factorio_version }}/data"
+      - /var/lib/factorio/mods/mod-list.json
+      - "{{ 'on' if game_factorio_space_age | bool else 'off' }}"
+  register: game_factorio_mods
+  changed_when: game_factorio_mods.stdout == "changed"
+  notify: Restart factorio
+
+- name: A first map
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - game
+      - --
+      - "/opt/factorio/{{ game_factorio_version }}/bin/x64/factorio"
+      - --config
+      - /etc/factorio/config.ini
+      - --create
+      - /var/lib/factorio/saves/nullbill.zip
+    chdir: /var/lib/factorio
+    creates: /var/lib/factorio/saves/nullbill.zip
+
+- name: Start script
+  ansible.builtin.template:
+    src: start.j2
+    dest: /opt/factorio/start
+    mode: "0755"
+  notify: Restart factorio
+
+- name: What nb-game needs to know
+  ansible.builtin.copy:
+    dest: /etc/nullbill/game.json
+    mode: "0644"
+    content: >-
+      {{ {"name": "factorio", "title": "Factorio", "version": game_factorio_version, "port": game_factorio_port | int,
+      "console": "/run/factorio/console", "admins": "/var/lib/factorio/server-adminlist.json",
+      "players": {"how": "rcon", "port": game_factorio_rcon_port | int, "password_file": "/etc/factorio/rcon-password",
+      "command": "/players online count", "pattern": "players [(]([0-9]+)[)]"}} | to_nice_json }}
+
+- name: Server unit
+  ansible.builtin.template:
+    src: factorio.service.j2
+    dest: /etc/systemd/system/factorio.service
+    mode: "0644"
+  notify: Restart factorio
+
+# A changed server restarts here, once, before the unit is started: a new
+# server is not started and then stopped again in the middle of making its
+# world.
+- name: Changes take effect
+  ansible.builtin.meta: flush_handlers
+
+- name: Server runs
+  when: game_factorio_manage_services | bool
+  ansible.builtin.systemd_service:
+    name: factorio
+    enabled: true
+    state: started
+    daemon_reload: true

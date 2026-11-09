@@ -194,6 +194,8 @@ media:
     name: Intel Corporation Synthetic Integrated Graphics
   # No kept disk to play yet (disks.<id>.use: legacy); Jellyfin starts with an empty library.
   library: []
+# Not planned.
+games: {}
 disks:
   # Holds PVE; never touched.
   ata-SYNTHETIC_SSD_0001:

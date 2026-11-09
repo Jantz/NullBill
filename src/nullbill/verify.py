@@ -4,8 +4,8 @@ plan allows pass and everything else is refused.
 Checks are built from the plan, so a service added by YAML is verified the
 same way as the catalog's. They run over SSH as `pct exec` in one container
 per zone; backups.py adds backup age and a restore test, llm.py the local
-model through the model gateway, media.py Jellyfin. A check that cannot run reports SKIP,
-never PASS.
+model through the model gateway, media.py Jellyfin, games.py each game
+server. A check that cannot run reports SKIP, never PASS.
 
 People are not probed from inside: every person arrives as the vpn guest.
 What holds each of them to their own services is the tailnet policy, so
@@ -22,7 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from nullbill import agent, backups, browserca, ci, forge, hostroot, lan, legacy, llm, media, names
+from nullbill import agent, backups, browserca, ci, forge, games, hostroot, lan, legacy, llm, media, names
 from nullbill.errors import NullBillError
 from nullbill.flows import HOST, HOST_PORTS, resolve_flows
 from nullbill.probe import Runner
@@ -305,6 +305,7 @@ def run_verify(
             *llm.skipped(plan, reason),
             *legacy.skipped(plan, reason),
             *media.skipped(plan, reason),
+            *games.skipped(plan, model, reason),
             *names.skipped(plan, reason),
             *(browserca.skipped(plan, reason) if browser_root is not None else []),
             *(_policy(plan, model, tailnet) if tailnet is not None else []),
@@ -352,6 +353,7 @@ def run_verify(
     add(*llm.check(plan, target, run))
     add(*legacy.check(plan, target, run))
     add(*media.check(plan, target, run))
+    add(*games.check(plan, model, target, run))
     add(*names.check(plan, target, run))
     if browser_root is not None:
         add(*browserca.check(plan, browser_root, target, run, lan_closed=lan_state == lan.CLOSED))

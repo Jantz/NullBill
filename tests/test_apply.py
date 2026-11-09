@@ -8,8 +8,9 @@ from pathlib import Path
 
 import pytest
 from conftest import FakeTailnet, fixture_config
+from fixturedata import games_config
 
-from nullbill import applied, apply, backups, browserca, ci, flows, hostroot, lan, llm, names, owner
+from nullbill import applied, apply, backups, browserca, ci, flows, games, hostroot, lan, llm, names, owner
 from nullbill.apply import ApplyError, Context, connection, run_apply
 from nullbill.artifacts import render_all
 from nullbill.errors import NullBillError
@@ -82,6 +83,10 @@ class FakeReach:
         self.moved = []
         self.freed = []
         self.storage_disks = {}
+        # Game servers, by VMID: their admins and what nb-game typed on each
+        # console. no_such_player: names the games do not know.
+        self.game_servers = {}
+        self.no_such_player = set()
         # VMs as /cluster/resources lists them, for retiring CI clones.
         self.vms = []
         self.isos = []
@@ -435,6 +440,16 @@ class FakeReach:
             return 0, ("changed\n" if first or argv[1] == "encoding" else "same\n") if argv[1] != "wait" else "", ""
         if vmid == "2024" and argv == ["cat", "/etc/nullbill/jellyfin-admin-password"]:
             return 0, "jellyfin-password\n", ""
+        if argv[0] == games.NB_GAME:
+            server = self.game_servers.setdefault(vmid, {"admins": [], "typed": [], "asked": []})
+            server["asked"].append(argv[1])
+            if argv[1] == "admins":
+                return 0, "".join(f"{name}\n" for name in sorted(server["admins"])), ""
+            if argv[1] == "console":
+                server["typed"].append(argv[2])
+                if argv[2].split()[-1] not in self.no_such_player:
+                    server["admins"].append(argv[2].split()[-1].lower())
+            return 0, "", ""
         if argv == ["tailscale", "status", "--json"]:
             return 0, json.dumps({"BackendState": self.tailnet, "Self": {"DNSName": "nullbill.example-tailnet.ts.net."}}), ""
         return 127, "", f"fake guest {vmid}: unexpected {argv}"
@@ -2356,3 +2371,68 @@ def test_agents_stage_gives_the_workspace_the_owners_keys_even_without_an_agent_
 )  # fmt: skip
 def test_the_owners_forgejo_user_is_named_from_the_login(login, user):
     assert owner.forgejo_user(login) == user
+
+
+# Game servers (games.py).
+
+
+def test_games_stage_runs_each_role_waits_and_makes_the_admins(ctx):
+    c = ctx("large", config=games_config())
+    apply.stage_games(c)
+    plays = [call for call in c.reach.calls if call[0] == "playbook"]
+    assert [(p[1], list(p[2])) for p in plays] == [
+        ("game-minecraft.yml", ["minecraft"]),
+        ("game-terraria.yml", ["terraria"]),
+        ("game-factorio.yml", ["factorio"]),
+    ]
+    for play in plays:
+        (name,) = play[2]
+        assert play[3] == games.variables(c.bare, c.model, name)
+        # The downloads go through the proxy, as everything else the guest fetches.
+        assert play[2][name]["downloads_proxy"] == "http://10.42.2.10:3128"
+    servers = c.reach.game_servers
+    assert servers["2025"]["typed"] == ["op owner_a"] and servers["2027"]["typed"] == ["/promote owner_a"]
+    # Terraria has no admins; every server is waited for before anything is typed.
+    assert servers["2026"]["typed"] == [] and servers["2026"]["asked"] == ["wait", "admins"]
+    assert servers["2025"]["asked"][:3] == ["wait", "admins", "console"]
+    calls = host_calls(c)
+    assert index_of(calls, f"pct exec 2025 -- {games.NB_GAME} wait {games.START_WAIT_S}") < index_of(
+        calls, f"pct exec 2025 -- {games.NB_GAME} console"
+    )
+    assert "games: Minecraft 26.3 answers at 10.42.8.25:25565" in c.log
+    assert "games: Terraria 1.4.5.8 answers at 10.42.8.26:7777" in c.log
+    assert "games: Factorio 2.1.24 answers at 10.42.8.27:34197" in c.log
+    # Again: the admins are there, and nothing is typed.
+    apply.stage_games(c)
+    assert servers["2025"]["typed"] == ["op owner_a"] and servers["2027"]["typed"] == ["/promote owner_a"]
+
+
+def test_games_stage_says_which_admin_the_game_does_not_know(ctx, monkeypatch):
+    monkeypatch.setattr(apply, "sleep", lambda s: None)
+    monkeypatch.setattr(games, "ADMIN_WAIT_S", 0.05)
+    c = ctx("large", config=games_config())
+    c.reach.no_such_player = {"owner_a"}
+    apply.stage_games(c)
+    assert "games: Minecraft did not make owner_a an admin; is the name spelled as in the game?" in c.log
+    # The server runs all the same.
+    assert "games: Minecraft 26.3 answers at 10.42.8.25:25565" in c.log
+
+
+def test_games_stage_stops_when_a_server_does_not_answer(ctx):
+    c = ctx("large", config=games_config())
+    answer = c.reach.guest
+
+    def guest(vmid, argv, stdin=None):
+        if argv[:2] == [games.NB_GAME, "wait"]:
+            return 1, "", "nb-game: Minecraft did not answer within 600 s: [Errno 111] Connection refused\n"
+        return answer(vmid, argv, stdin)
+
+    c.reach.guest = guest
+    with pytest.raises(ApplyError, match="minecraft: /usr/local/sbin/nb-game wait failed: nb-game: Minecraft did not answer within 600 s"):
+        apply.stage_games(c)
+
+
+def test_games_stage_does_nothing_without_a_game(ctx):
+    c = ctx("large")
+    apply.stage_games(c)
+    assert c.reach.calls == []

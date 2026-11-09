@@ -1,0 +1,13 @@
+- name: Restart nb-tls-tunnel
+  when: game_minecraft_manage_services | bool
+  ansible.builtin.systemd_service:
+    name: nb-tls-tunnel
+    state: restarted
+    daemon_reload: true
+
+- name: Restart minecraft
+  when: game_minecraft_manage_services | bool
+  ansible.builtin.systemd_service:
+    name: minecraft
+    state: restarted
+    daemon_reload: true

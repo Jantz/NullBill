@@ -1,0 +1,6 @@
+# What every game server's role shares: the user the server runs as,
+# nb-game, and the metrics monitoring reads. A game's own role lists this
+# one as a dependency and writes /etc/nullbill/game.json.
+#
+# Start the metrics timer. Only the container checks turn this off.
+game_server_manage_services: true

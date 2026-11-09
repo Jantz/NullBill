@@ -1,0 +1,20 @@
+{
+  "game_factorio_version": "2.1.24",
+  "game_factorio_url": "https://factorio.com/get-download/2.1.24/headless/linux64",
+  "game_factorio_sha256": "c49b66cff90aceff87b30f2973af0df7f51712cb2ee3153e0169d9bed46a964f",
+  "game_factorio_port": 34197,
+  "game_factorio_settings": {
+    "name": "Factorio on NullBill",
+    "description": "",
+    "auto_pause": true,
+    "max_players": 8,
+    "visibility": {
+      "public": false,
+      "lan": false
+    },
+    "require_user_verification": true
+  },
+  "game_factorio_space_age": false,
+  "game_factorio_proxy": "http://10.42.2.10:3128",
+  "game_factorio_rcon_port": 27015
+}

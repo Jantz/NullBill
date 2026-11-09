@@ -1,0 +1,28 @@
+{
+  "game_minecraft_version": "26.3",
+  "game_minecraft_url": "https://piston-data.mojang.com/v1/objects/33680f5f2ac32864d6d7cf5e56a705fdb3e05f4c/server.jar",
+  "game_minecraft_sha256": "d052f14d7a173734fba553711e5b570162e2f2a313267ee31a21b975a679be64",
+  "game_minecraft_port": 25565,
+  "game_minecraft_settings": {
+    "white-list": false,
+    "motd": "Minecraft on NullBill",
+    "difficulty": "hard",
+    "max-players": 8,
+    "server-port": 25565,
+    "online-mode": true,
+    "enable-rcon": false,
+    "enable-query": false
+  },
+  "game_minecraft_java_version": "25.0.5+8",
+  "game_minecraft_java_url": "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.5%2B8/OpenJDK25U-jre_x64_linux_hotspot_25.0.5_8.tar.gz",
+  "game_minecraft_java_sha256": "6fac98f0c8202efc3135a9e9e42aa61963ec42d1c5cbb40caf231e7b14a24ef6",
+  "game_minecraft_heap_mib": 2048,
+  "game_minecraft_eula": true,
+  "game_minecraft_proxy": "10.42.2.10:3128",
+  "game_minecraft_services": [
+    "discovery.minecraftservices.com",
+    "api.minecraftservices.com",
+    "sessionserver.mojang.com",
+    "api.mojang.com"
+  ]
+}

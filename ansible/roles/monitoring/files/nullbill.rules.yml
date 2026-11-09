@@ -156,3 +156,13 @@ groups:
         labels: {severity: page}
         annotations:
           summary: "the {{ $labels.pool }} CI image is over 14 days old and its re-bake keeps failing; run setup and read the ci stage"
+  # Game servers: nb-game's metrics from inside each game's guest
+  # (ansible/roles/game_server). A guest that is stopped has no such metric.
+  - name: nullbill-games
+    rules:
+      - alert: GameServerDown
+        expr: nb_game_up == 0
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: "the {{ $labels.game }} server does not answer in its guest; its unit keeps restarting it, so read journalctl -u {{ $labels.game }} there"

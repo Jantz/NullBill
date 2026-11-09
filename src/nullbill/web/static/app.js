@@ -648,10 +648,29 @@ function optionRow(item) {
     disk,
     make("span", {className: "opt-state", id: `${id}-state`}),
     make("p", {className: "opt-note", id: `${id}-note`, hidden: true}),
+    item.game ? gameAsks(item) : null,
     make("p", {className: "opt-change", role: "status", hidden: true}),
     make("details", {className: "opt-details"}, make("summary", {textContent: "What it makes, needs and deletes"}), make("dl", {className: "opt-facts"})));
   row.dataset.name = item.name;
   return row;
+}
+
+// What a game asks beside its tick (web/workloads.py's `game`): the
+// owner's agreement to its EULA, and who its admins are.
+function gameAsks(item) {
+  const asks = make("div", {className: "opt-asks", hidden: true});
+  if (item.game.eula) {
+    const agree = make("input", {type: "checkbox", id: `opt-${item.name}-eula`});
+    agree.dataset.role = "eula";
+    asks.append(make("label", {className: "opt-ask check"}, agree, make("span", {}, `${item.game.eula.text} (`,
+      make("a", {href: item.game.eula.url, target: "_blank", rel: "noopener noreferrer", textContent: "read it"}), "). Its server does not start without.")));
+  }
+  if (item.game.admins) {
+    const admins = make("input", {type: "text", id: `opt-${item.name}-admins`, autocomplete: "off", spellcheck: false, placeholder: "none"});
+    admins.dataset.role = "admins";
+    asks.append(make("label", {className: "opt-ask field"}, make("span", {className: "label", textContent: "Admins: player names as shown in the game, separated by commas"}), admins));
+  }
+  return asks;
 }
 
 function optionsHead() {
@@ -665,7 +684,8 @@ function renderOptions(st) {
   const items = st.options ? st.options.items : [];
   const have = [...$("pick").querySelectorAll(".opt")].map((r) => r.dataset.name).join();
   if (have !== items.map((i) => i.name).join()) {
-    $("workload-rows").replaceChildren(optionsHead(), ...items.filter((i) => !i.extra).map(optionRow));
+    $("workload-rows").replaceChildren(optionsHead(), ...items.filter((i) => !i.extra && !i.game).map(optionRow));
+    $("game-rows").replaceChildren(optionsHead(), ...items.filter((i) => i.game).map(optionRow));
     $("extra-rows").replaceChildren(optionsHead(), ...items.filter((i) => i.extra).map(optionRow));
   }
   for (const item of items) {
@@ -673,6 +693,8 @@ function renderOptions(st) {
     input.checked = item.chosen;
     // What cannot work here can still be turned off, never on.
     input.disabled = Boolean(item.blocked) && !item.chosen;
+    if (item.game && item.game.eula) $(`opt-${item.name}-eula`).checked = item.game.eula.agreed;
+    if (item.game && item.game.admins) $(`opt-${item.name}-admins`).value = item.game.admins.join(", ");
   }
   optionsView = st.options;
   paintOptions();
@@ -714,6 +736,8 @@ function paintOptions() {
     row.querySelector(".opt-memory").replaceChildren(make("span", {className: "sr-only", textContent: "Memory "}), gib(item.memory_mib));
     row.querySelector(".opt-disk").replaceChildren(make("span", {className: "sr-only", textContent: "Disk "}), item.disk_gib ? `${item.disk_gib} GiB` : "None");
     row.querySelector(".opt-state").replaceChildren(status(st.dot, st.text));
+    const asks = row.querySelector(".opt-asks");
+    if (asks) asks.hidden = !checked;
     const note = row.querySelector(".opt-note");
     const noteText = item.blocked || (checked ? item.note : "");
     note.hidden = !noteText;
@@ -754,7 +778,8 @@ function paintBudget(view) {
   if (!m) return;
   const over = m.free_mib < 0;
   $("budget-total").textContent = `${gib(m.host_mib)} in the server`;
-  const fit = hasErrors ? status("bad", over ? `Does not fit: ${gib(-m.free_mib)} too much` : "Does not fit") : status("good", `Fits, ${gib(m.free_mib)} free`);
+  // Not every refusal is about memory: Minecraft waits for its EULA, say.
+  const fit = hasErrors ? status("bad", over ? `Does not fit: ${gib(-m.free_mib)} too much` : "Cannot be planned yet") : status("good", `Fits, ${gib(m.free_mib)} free`);
   if ($("budget-fit").textContent !== fit.textContent) $("budget-fit").replaceChildren(fit);
   const bar = $("budget-bar");
   bar.classList.toggle("over", over);
@@ -942,8 +967,15 @@ function choicesBody() {
       discard_confirm: box.querySelector(".disk-discard-confirm input").value,
     };
   }
+  const games = {};
+  for (const row of $("game-rows").querySelectorAll(".opt")) {
+    const eula = row.querySelector("input[data-role=eula]");
+    const admins = row.querySelector("input[data-role=admins]");
+    games[row.dataset.name] = {...(eula ? {eula: eula.checked} : {}), ...(admins ? {admins: admins.value} : {})};
+  }
   return {
-    workloads: [...$("workload-rows").querySelectorAll("input:checked")].map((i) => i.value),
+    workloads: [...$("pick").querySelectorAll(".opt-main input:checked")].filter((i) => !i.closest("#extra-rows")).map((i) => i.value),
+    games,
     backups: Boolean($("opt-backups") && $("opt-backups").checked),
     console: Boolean($("opt-console") && $("opt-console").checked),
     owner_login: $("owner-login").value.trim(),
@@ -978,7 +1010,7 @@ function paintSavebar() {
   if (dirty) {
     const parts = ["Unsaved changes."];
     if (view && view !== state.options) {
-      if (view.errors.length) parts.push("They do not fit yet.");
+      if (view.errors.length) parts.push(view.memory && view.memory.free_mib < 0 ? "They do not fit yet." : "They cannot be planned yet.");
       // By the rows' names; a guest of no row (the kept disks' share) by its own.
       const titled = (kind) => view.items.filter((i) => optionState(i, $(`opt-${i.name}`).checked).kind === kind).map((i) => i.title);
       const own = new Set(view.items.flatMap((i) => i.guests.map((g) => g.name)));

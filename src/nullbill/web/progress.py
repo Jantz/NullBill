@@ -30,6 +30,7 @@ STAGE_TEXT = {
     "inference": "Set up the local AI model and its gateway",
     "files": "Share your kept disks",
     "media": "Set up Jellyfin",
+    "games": "Set up the game servers",
     "ci": "Build the CI runner images",
     "agents": "Set up the coding agent",
     "logs": "Send logs to the log store",
@@ -179,6 +180,16 @@ ADVICE = [
         r"UNREACHABLE|no answer from the host|Connection refused|Connection reset|kex_exchange_identification",
         "A machine did not answer. A guest setup has just made can take a few minutes to start; wait a minute and run "
         "setup again. If it stops here again, check in Proxmox that the guest named above is running.",
+    ),
+    (
+        r"games\.minecraft\.eula",
+        "Minecraft's server runs only once you agree to its EULA (https://aka.ms/MinecraftEULA): "
+        "tick that you agree beside Minecraft under Setup, What to run, or untick Minecraft.",
+    ),
+    (
+        r"nb-game wait failed",
+        "The game server was installed but did not answer in time. Run setup again; if it stops here again, "
+        "the server's own log says why: in Proxmox open the game's container and run journalctl -u followed by the game's name.",
     ),
     (r"is still copying", "A copy is still running on the host. Wait for it to finish, then run setup again."),
     (r"checks failed", "Look at the failing checks below. Fix what they name, then run the checks again."),

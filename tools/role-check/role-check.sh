@@ -38,6 +38,44 @@ stop_journald() {
   while kill -0 "$(cat /run/journald.pid)" 2>/dev/null; do sleep 0.2; done
 }
 
+# A guest in a zone with egress: proxy has no route out and resolves no
+# outside names. Give user $1 the same here: it reaches the loopback
+# address, where a check's stand-in for the proxy listens, and nothing else.
+loopback_only() {
+  apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nftables >/dev/null 2>&1
+  nft -f - <<EOF
+table inet role_check {
+  chain output {
+    type filter hook output priority 0;
+    meta skuid $1 oifname != "lo" reject
+  }
+}
+EOF
+  if runuser -u "$1" -- python3 -c 'import socket; socket.create_connection(("deb.debian.org", 443), 5)' 2>/dev/null; then
+    fail "user $1 still reaches the internet"
+  fi
+}
+
+# After a game role (ansible/roles/game_*): start the server the way its
+# unit does, with the runtime directory and console FIFO systemd would make
+# and nothing in its environment but HOME. Its output goes to /tmp/$1.log.
+start_game() {
+  local name=$1
+  install -d -o game -g game -m 0750 "/run/$name"
+  rm -f "/run/$name/console"
+  runuser -u game -- mkfifo -m 0600 "/run/$name/console"
+  (cd "/var/lib/$name" && runuser -u game -- env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    HOME="/var/lib/$name" "/opt/$name/start" >>"/tmp/$name.log" 2>&1 &)
+}
+
+# The line $2 in a game's output, within $3 seconds (default 60).
+game_says() {
+  local name=$1 line=$2
+  for _ in $(seq "${3:-60}"); do grep -Eq -- "$line" "/tmp/$name.log" && return 0; sleep 1; done
+  tail -30 "/tmp/$name.log"
+  return 1
+}
+
 # Throwaway PKI for checks, written to $1:
 # ca.crt (stands in for step-ca) with loki.crt/loki.key for $2 (default
 # monitoring.nullbill.internal) and <name>.crt/<name>.key for each further

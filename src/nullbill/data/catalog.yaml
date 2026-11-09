@@ -73,6 +73,10 @@ zones:
     index: 7
     description: The media server, alone, with the kept disks read-only.
     egress: proxy
+  games:
+    index: 8
+    description: Game servers, one container each, for the people the owner lets in.
+    egress: proxy
 
 roles:
   owner:
@@ -132,7 +136,7 @@ services:
     workload: core
     floor: {cores: 1, memory_mib: 512, disk_gib: 4}
     ports:
-      - {port: 3128, proto: tcp, from: ["zone:mgmt", "zone:build", "zone:inference", "zone:windows", "zone:media"]}
+      - {port: 3128, proto: tcp, from: ["zone:mgmt", "zone:build", "zone:inference", "zone:windows", "zone:media", "zone:games"]}
   vpn:
     id: 11
     kind: lxc
@@ -255,6 +259,64 @@ services:
       note: I make your account and send you its sign-in. Jellyfin's apps for phones and TVs take the same address.
     ports:
       - {port: 8096, proto: tcp, from: ["role:owner", "shared"]}
+  # Game servers (the games table below, docs/adr/0012-game-servers.md).
+  # Each has one port for its players and no other. Memory is the server's
+  # with a small world and a few players, a choice, not a measurement:
+  # raise it with overrides.<name>.memory_mib when the world grows.
+  minecraft:
+    id: 25
+    kind: lxc
+    zone: games
+    workload: minecraft
+    description: Minecraft Java Edition server. Not agent-managed.
+    # The server file, and Mojang's services: the server asks them whether
+    # each player who joins is signed in to the account they claim.
+    proxy_allow:
+      - piston-data.mojang.com
+      - discovery.minecraftservices.com
+      - api.minecraftservices.com
+      - sessionserver.mojang.com
+      - api.mojang.com
+    # Java's heap is memory_mib less 1024 for the JVM itself and the system.
+    floor: {cores: 2, memory_mib: 3072, disk_gib: 16}
+    share:
+      title: Minecraft
+      what: A Minecraft world to play in together
+      open: "{host}:{port}"
+      note: "You need Minecraft: Java Edition {version}. Choose Multiplayer, Add Server, and type this as the server address."
+    ports:
+      - {port: 25565, proto: tcp, from: ["role:owner", "shared"]}
+  terraria:
+    id: 26
+    kind: lxc
+    zone: games
+    workload: terraria
+    description: Terraria dedicated server. Not agent-managed.
+    proxy_allow: [terraria.org]
+    floor: {cores: 1, memory_mib: 1536, disk_gib: 4}
+    share:
+      title: Terraria
+      what: A Terraria world to play in together
+      note: You need Terraria {version} on a computer. Choose Multiplayer, Join via IP, type this address, then the port.
+    ports:
+      - {port: 7777, proto: tcp, from: ["role:owner", "shared"]}
+  factorio:
+    id: 27
+    kind: lxc
+    zone: games
+    workload: factorio
+    description: Factorio headless server. Not agent-managed.
+    # The server file (factorio.com sends on to dl.factorio.com), and
+    # Factorio's sign-in service, which the server asks about each player.
+    proxy_allow: [factorio.com, dl.factorio.com, auth.factorio.com]
+    floor: {cores: 1, memory_mib: 1536, disk_gib: 8}
+    share:
+      title: Factorio
+      what: A Factorio factory to build together
+      open: "{host}:{port}"
+      note: You need Factorio {version}, signed in to your factorio.com account. Choose Multiplayer, Connect to address, and type this.
+    ports:
+      - {port: 34197, proto: udp, from: ["role:owner", "shared"]}
   linux-runner:
     id: 30
     kind: vm-pool
@@ -400,6 +462,58 @@ models:
     context: 32768
     reasoning: "on"
     sampling: {temperature: 1.0, top_p: 0.95, top_k: 20, min_p: 0.0, presence_penalty: 0.0, repeat_penalty: 1.0}
+
+# Game servers. Each entry is the service of the same name above, alone in
+# its container in the games zone, and has a role in ansible/roles
+# (game_<name>). The server is the vendor's own download, pinned by SHA-256.
+# Players' games must be the same version as the server: when a game
+# updates, this pin moves, or pin the new file in config.yaml under
+# games.<name> (version, url, sha256). settings are the server's own
+# options by its own names, on top of what NullBill sets; admins are player
+# names. tools/game-pins prints what the vendors offer now.
+games:
+  minecraft:
+    title: Minecraft
+    # The release Mojang's list names as latest:
+    # https://piston-meta.mojang.com/mc/game/version_manifest_v2.json, whose
+    # 26.3.json gives this file with SHA-1
+    # 33680f5f2ac32864d6d7cf5e56a705fdb3e05f4c.
+    version: "26.3"
+    url: https://piston-data.mojang.com/v1/objects/33680f5f2ac32864d6d7cf5e56a705fdb3e05f4c/server.jar
+    sha256: d052f14d7a173734fba553711e5b570162e2f2a313267ee31a21b975a679be64
+    # 26.3 needs Java 25 (javaVersion in 26.3.json); Debian 12 has 17.
+    # Eclipse Temurin's JRE, with its checksum, from
+    # https://api.adoptium.net/v3/assets/latest/25/hotspot?architecture=x64&image_type=jre&os=linux&vendor=eclipse
+    java:
+      version: 25.0.5+8
+      url: https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.5%2B8/OpenJDK25U-jre_x64_linux_hotspot_25.0.5_8.tar.gz
+      sha256: 6fac98f0c8202efc3135a9e9e42aa61963ec42d1c5cbb40caf231e7b14a24ef6
+    # The server starts only once its owner agrees to Minecraft's EULA
+    # (https://aka.ms/MinecraftEULA): eula: true in config.yaml says so.
+    eula: false
+    admins: []
+    settings: {}
+  terraria:
+    title: Terraria
+    # The file https://terraria.org/api/get/dedicated-servers-names lists
+    # first. Re-Logic publishes no checksum; this is the download's.
+    version: 1.4.5.8
+    url: https://terraria.org/api/download/pc-dedicated-server/terraria-server-1458.zip
+    sha256: f513a4ac9789d34af766291ae217c9cd7d9472e13782a0e2b17512f70d7a8334
+    settings: {}
+  factorio:
+    title: Factorio
+    # The stable headless release in https://factorio.com/api/latest-releases,
+    # with its checksum from https://factorio.com/download/sha256sums/.
+    version: 2.1.24
+    url: https://factorio.com/get-download/2.1.24/headless/linux64
+    sha256: c49b66cff90aceff87b30f2973af0df7f51712cb2ee3153e0169d9bed46a964f
+    # false: the base game, which everyone who owns Factorio can join.
+    # true: the Space Age expansion, which every player must own. Decided
+    # when the map is made.
+    space_age: false
+    admins: []
+    settings: {}
 
 # Domains egress-proxy forwards to, for zones with egress: proxy. A leading
 # dot also matches subdomains. Only HTTPS CONNECT and plain HTTP to these

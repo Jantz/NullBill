@@ -7,7 +7,7 @@ of them, so the owner sees every problem in one run.
 import ipaddress
 from typing import Any
 
-from nullbill import backups, ci, legacy, media
+from nullbill import backups, ci, games, legacy, media
 from nullbill.errors import NullBillError
 from nullbill.flows import SHARED
 from nullbill.proxy import allows
@@ -584,6 +584,7 @@ def build_plan(model: dict, facts: dict) -> dict:
     console = _console(model, facts, gpu_section, errors)
     shares = [m["share"] for m in legacy.shares(strip_notes({"disks": disk_section}))]
     media_section = media.plan_section(model, facts, planned, shares, errors)
+    games_section = games.plan_section(model, planned, sizes, errors)
     errors.raise_if_any()
 
     zones = _zones(model, planned)
@@ -633,6 +634,7 @@ def build_plan(model: dict, facts: dict) -> dict:
         if engine and llm
         else Note({}, "Not planned."),
         "media": media_section,
+        "games": games_section,
         "disks": disk_section,
         **_copies(facts),
         "backups": _backups(planned, pbs),

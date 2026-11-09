@@ -1,0 +1,18 @@
+{
+  "game_terraria_version": "1.4.5.8",
+  "game_terraria_url": "https://terraria.org/api/download/pc-dedicated-server/terraria-server-1458.zip",
+  "game_terraria_sha256": "f513a4ac9789d34af766291ae217c9cd7d9472e13782a0e2b17512f70d7a8334",
+  "game_terraria_port": 7777,
+  "game_terraria_settings": {
+    "worldname": "Fixture",
+    "autocreate": 1,
+    "difficulty": 0,
+    "maxplayers": 8,
+    "secure": 1,
+    "world": "/var/lib/terraria/worlds/world.wld",
+    "worldpath": "/var/lib/terraria/worlds",
+    "banlist": "/var/lib/terraria/banlist.txt",
+    "port": 7777,
+    "upnp": 0
+  }
+}

@@ -19,7 +19,7 @@ def built(facts, config: dict | None = None) -> tuple[dict, dict]:
 def test_only_services_with_a_shared_port_can_be_ticked(facts):
     model, plan = built(facts)
     listed = {s["name"]: s for s in people.shareable(model, plan)}
-    assert list(listed) == ["forgejo", "jellyfin", "model-gateway"]
+    assert list(listed) == ["forgejo", "jellyfin", "minecraft", "terraria", "factorio", "model-gateway"]
     assert listed["forgejo"] == {
         "name": "forgejo",
         "title": "Forgejo",
@@ -29,7 +29,13 @@ def test_only_services_with_a_shared_port_can_be_ticked(facts):
     }
     # Not planned: still listed, so a tick survives a workload switched off.
     model, plan = built(facts, {"intent": {"workloads": ["agents"]}})
-    assert {s["name"]: s["planned"] for s in people.shareable(model, plan)} == {"forgejo": True, "jellyfin": False, "model-gateway": False}
+    games = {"minecraft": False, "terraria": False, "factorio": False}
+    assert {s["name"]: s["planned"] for s in people.shareable(model, plan)} == {
+        "forgejo": True,
+        "jellyfin": False,
+        **games,
+        "model-gateway": False,
+    }
     # A service the owner marks in config.yaml is listed by its own name.
     ssh = {"services": {"workspace": {"ports": [{"port": 22, "proto": "tcp", "from": ["role:owner", "shared"]}]}}}
     model, plan = built(facts, ssh)
@@ -108,20 +114,20 @@ def test_the_root_certificate_is_sent_along_for_what_opens_over_https(facts):
 
 
 def test_instructions_cover_a_roles_own_reach_and_services_without_a_share_text(facts):
-    game = {"id": 40, "kind": "lxc", "zone": "media", "workload": "core", "floor": {"cores": 1, "memory_mib": 512, "disk_gib": 4}}
-    game["ports"] = [
+    voice = {"id": 40, "kind": "lxc", "zone": "media", "workload": "core", "floor": {"cores": 1, "memory_mib": 512, "disk_gib": 4}}
+    voice["ports"] = [
         {"port": 34197, "proto": "udp", "from": ["role:owner", "shared"]},
         {"port": 27015, "proto": "tcp", "from": ["role:owner"]},
     ]
-    model, plan = built(facts, {"services": {"factorio": game}, "people": {"dev-b": {"services": ["factorio"]}}})
+    model, plan = built(facts, {"services": {"voice": voice}, "people": {"dev-b": {"services": ["voice"]}}})
     text = people.instructions(model, plan, "dev-b", names=True)
     # What the default role reaches by itself, then what was ticked; the
     # admin port, which does not list shared, is not offered.
-    assert text.index("- Forgejo") < text.index("- workspace\n  workspace.nullbill.internal, port 22\n") < text.index("- factorio")
-    assert "- factorio\n  factorio.nullbill.internal, port 34197 (UDP)\n  If the name does not open: 10.42.7.40, port 34197 (UDP)\n" in text
+    assert text.index("- Forgejo") < text.index("- workspace\n  workspace.nullbill.internal, port 22\n") < text.index("- voice")
+    assert "- voice\n  voice.nullbill.internal, port 34197 (UDP)\n  If the name does not open: 10.42.7.40, port 34197 (UDP)\n" in text
     assert "27015" not in text
     assert people.reach(model, plan, "dev-b", shared=False) == {"forgejo": ["tcp/443", "tcp/22"], "workspace": ["tcp/22"]}
-    assert people.reach(model, plan, "dev-b", shared=True) == {"factorio": ["udp/34197"]}
+    assert people.reach(model, plan, "dev-b", shared=True) == {"voice": ["udp/34197"]}
 
 
 def test_nothing_ticked_or_nothing_planned_says_so(facts):

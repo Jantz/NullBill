@@ -2,7 +2,7 @@
 memory adds up the way plan counts it."""
 
 import pytest
-from fixturedata import CLASSES, fixture_config
+from fixturedata import CLASSES, fixture_config, games_config
 
 from nullbill.errors import NullBillError
 from nullbill.model import build_model
@@ -54,3 +54,36 @@ def test_a_plan_that_does_not_fit_still_says_what_each_choice_takes(facts):
     # Guests on the server that these choices no longer plan, and those they add.
     assert view["removes"] == ["inference"] and "jellyfin" in view["adds"] and "router" not in view["adds"]
     assert "Jellyfin" in workloads.loss("jellyfin", model) and "everything on its disk" in workloads.loss("router", model)
+
+
+def test_a_game_asks_for_its_agreement_and_its_admins_beside_its_tick(facts):
+    model = build_model(games_config())
+    view = workloads.options(model, facts("large"), existing=None)
+    by_name = {i["name"]: i for i in view["items"]}
+    assert view["errors"] == []
+    assert [i["name"] for i in view["items"] if i["game"] is not None] == ["minecraft", "terraria", "factorio"]
+    minecraft = by_name["minecraft"]
+    assert minecraft["chosen"] and minecraft["game"] == {
+        "eula": {"agreed": True, "url": "https://aka.ms/MinecraftEULA", "text": "I agree to the Minecraft EULA"},
+        "admins": ["owner_a"],
+    }
+    # A container counts at half its limit: 3072 MiB for Minecraft.
+    assert minecraft["memory_mib"] == 1536 and minecraft["guests"][0]["name"] == "minecraft"
+    assert minecraft["note"] == (
+        "Players need Minecraft: Java Edition 26.3, the same version as the server. "
+        "Java gets 2.0 GiB of the container's memory for the world."
+    )
+    assert by_name["terraria"]["game"] == {} and by_name["terraria"]["note"].startswith("Players need Terraria (PC) 1.4.5.8")
+    assert by_name["factorio"]["game"] == {"admins": ["owner_a"]}
+    assert by_name["factorio"]["note"].endswith("The base game: nobody needs the Space Age expansion.")
+    assert by_name["media"]["game"] is None
+    assert "world" in workloads.loss("minecraft", model)
+
+
+def test_minecraft_ticked_without_the_agreement_does_not_plan(facts):
+    config = games_config()
+    del config["games"]["minecraft"]["eula"]
+    view = workloads.options(build_model(config), facts("large"), existing=None)
+    assert any(e.startswith("games.minecraft.eula: set it to true once you agree") for e in view["errors"])
+    minecraft = next(i for i in view["items"] if i["name"] == "minecraft")
+    assert minecraft["chosen"] and minecraft["game"]["eula"]["agreed"] is False

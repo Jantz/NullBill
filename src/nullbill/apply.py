@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from nullbill import applied, backups, browserca, ci, hostroot, lan, legacy, llm, media, names, owner, tailscale
+from nullbill import applied, backups, browserca, ci, games, hostroot, lan, legacy, llm, media, names, owner, tailscale
 from nullbill.artifacts import write_build
 from nullbill.errors import NullBillError
 from nullbill.flows import mac
@@ -1851,6 +1851,28 @@ def dispatcher_vars(ctx: Context) -> dict:
     }
 
 
+def stage_games(ctx: Context) -> None:
+    """Each planned game server in its guest: the role, a wait until the
+    server answers (it makes its world at the first start), then the admins
+    config.yaml names that the server does not have yet, typed on its
+    console as the owner would."""
+    for name in games.planned(ctx.bare, ctx.model):
+        game = ctx.model["games"][name]
+        run_playbook(ctx, "games", games.playbook(name), name, games.variables(ctx.bare, ctx.model, name))
+        guest_out(ctx, "games", name, [games.NB_GAME, "wait", str(games.START_WAIT_S)])
+        missing = games.missing_admins(ctx.model, name, guest_out(ctx, "games", name, [games.NB_GAME, "admins"]))
+        for admin in missing:
+            guest_out(ctx, "games", name, [games.NB_GAME, "console", games.admin_command(name, admin)])
+        deadline = time.monotonic() + games.ADMIN_WAIT_S
+        while missing and time.monotonic() < deadline:
+            sleep(1)
+            missing = games.missing_admins(ctx.model, name, guest_out(ctx, "games", name, [games.NB_GAME, "admins"]))
+        if missing:
+            # A name the game does not know. The server runs; verify names it too.
+            ctx.say(f"games: {game['title']} did not make {', '.join(missing)} an admin; is the name spelled as in the game?")
+        ctx.say(f"games: {game['title']} {game['version']} answers at {games.address(ctx.bare, name, ctx.model)}")
+
+
 def stage_ci(ctx: Context) -> None:
     """Each Linux pool's golden image, then the dispatcher that clones it per job."""
     if not planned(ctx, "runner-dispatcher") or not linux_pools(ctx):
@@ -2267,6 +2289,7 @@ STAGES: list[Stage] = [
     ("inference", stage_inference),
     ("files", stage_files),
     ("media", stage_media),
+    ("games", stage_games),
     ("ci", stage_ci),
     ("agents", stage_agents),
     ("logs", stage_logs),

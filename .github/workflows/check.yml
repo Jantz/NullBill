@@ -46,6 +46,9 @@ jobs:
           - name: roles (log_shipper, runner_dispatcher, pbs, forgejo, tls_cert)
             parts: roles
             roles: log_shipper runner_dispatcher pbs forgejo tls_cert
+          - name: roles (game_minecraft, game_terraria, game_factorio)
+            parts: roles
+            roles: game_minecraft game_terraria game_factorio
           - name: roles (the rest)
             parts: roles
             roles: updates console postgres jellyfin vpn router files step_ca egress_proxy agent_ssh

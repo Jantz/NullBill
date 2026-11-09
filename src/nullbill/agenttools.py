@@ -30,6 +30,7 @@ STAGES = [
     "inference",
     "files",
     "media",
+    "games",
     "ci",
     "agents",
     "logs",
@@ -192,7 +193,19 @@ TOOLS = [
             "properties": {
                 "workloads": {
                     "type": "array",
-                    "items": {"enum": ["agents", "linux-ci", "inference", "media", "windows-ci", "windows-dev"]},
+                    "items": {
+                        "enum": [
+                            "agents",
+                            "linux-ci",
+                            "inference",
+                            "media",
+                            "minecraft",
+                            "terraria",
+                            "factorio",
+                            "windows-ci",
+                            "windows-dev",
+                        ]
+                    },
                 },
                 "backups": {"type": "boolean"},
                 "console": {"type": "boolean"},

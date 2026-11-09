@@ -1,0 +1,19 @@
+# Minecraft Java Edition's server. apply passes everything from the plan:
+# the catalog's games.minecraft pins the server and its Java, and
+# src/nullbill/games.py works out the heap and the settings.
+#
+# game_minecraft_version, game_minecraft_url, game_minecraft_sha256: the server.
+# game_minecraft_java_version, game_minecraft_java_url, game_minecraft_java_sha256: its JRE.
+# game_minecraft_heap_mib: Java's heap.
+# game_minecraft_port: where players connect.
+# game_minecraft_settings: server.properties keys to set; the server keeps
+# the rest of that file.
+# game_minecraft_proxy: the egress proxy, host:port.
+# game_minecraft_services: Mojang's names, which the server reaches through
+# nb-tls-tunnel.
+#
+# true once the owner agreed to https://aka.ms/MinecraftEULA
+# (games.minecraft.eula); the role refuses to run without it.
+game_minecraft_eula: false
+# Start and restart the server. Only the container check turns this off.
+game_minecraft_manage_services: true

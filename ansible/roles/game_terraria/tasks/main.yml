@@ -1,0 +1,114 @@
+- name: Directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: /opt/terraria, owner: root, group: root, mode: "0755"}
+    - {path: "/opt/terraria/{{ game_terraria_version }}", owner: root, group: root, mode: "0755"}
+    - {path: /etc/terraria, owner: root, group: game, mode: "0750"}
+    # Worlds, and what the server keeps in its home.
+    - {path: /var/lib/terraria, owner: game, group: game, mode: "0750"}
+    - {path: /var/lib/terraria/worlds, owner: game, group: game, mode: "0750"}
+
+- name: Server
+  ansible.builtin.include_role:
+    name: downloads
+    tasks_from: fetch
+  vars:
+    downloads_url: "{{ game_terraria_url }}"
+    downloads_dest: "/opt/terraria/terraria-server-{{ game_terraria_version }}.zip"
+    downloads_checksum: "sha256:{{ game_terraria_sha256 }}"
+
+# The archive holds one folder named by the version's digits, with the
+# server for each system inside.
+- name: Server unpacked
+  ansible.builtin.unarchive:
+    src: "/opt/terraria/terraria-server-{{ game_terraria_version }}.zip"
+    dest: "/opt/terraria/{{ game_terraria_version }}"
+    remote_src: true
+    owner: root
+    group: root
+    exclude: ["*/Windows/*", "*/Mac/*"]
+    creates: "{{ game_terraria_dir }}/TerrariaServer.bin.x86_64"
+  notify: Restart terraria
+
+# The archive's files are writable by everyone and none can be run.
+- name: Server files read-only
+  ansible.builtin.file:
+    path: "/opt/terraria/{{ game_terraria_version }}"
+    state: directory
+    recurse: true
+    owner: root
+    group: root
+    mode: u=rwX,go=rX
+
+- name: Server may be run
+  ansible.builtin.file:
+    path: "{{ game_terraria_dir }}/TerrariaServer.bin.x86_64"
+    mode: "0755"
+
+- name: Other versions
+  ansible.builtin.find:
+    paths: /opt/terraria
+    file_type: any
+    excludes:
+      - "{{ game_terraria_version }}"
+      - "terraria-server-{{ game_terraria_version }}.zip"
+      - start
+  register: game_terraria_stale
+
+- name: Other versions removed
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ game_terraria_stale.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Settings
+  ansible.builtin.template:
+    src: serverconfig.txt.j2
+    dest: /etc/terraria/serverconfig.txt
+    owner: root
+    group: game
+    mode: "0640"
+  notify: Restart terraria
+
+- name: Start script
+  ansible.builtin.template:
+    src: start.j2
+    dest: /opt/terraria/start
+    mode: "0755"
+  notify: Restart terraria
+
+- name: What nb-game needs to know
+  ansible.builtin.copy:
+    dest: /etc/nullbill/game.json
+    mode: "0644"
+    content: >-
+      {{ {"name": "terraria", "title": "Terraria", "version": game_terraria_version, "port": game_terraria_port | int,
+      "console": "/run/terraria/console", "players": {"how": "connections"}, "stop": "exit"} | to_nice_json }}
+
+- name: Server unit
+  ansible.builtin.template:
+    src: terraria.service.j2
+    dest: /etc/systemd/system/terraria.service
+    mode: "0644"
+  notify: Restart terraria
+
+# A changed server restarts here, once, before the unit is started: a new
+# server is not started and then stopped again in the middle of making its
+# world.
+- name: Changes take effect
+  ansible.builtin.meta: flush_handlers
+
+- name: Server runs
+  when: game_terraria_manage_services | bool
+  ansible.builtin.systemd_service:
+    name: terraria
+    enabled: true
+    state: started
+    daemon_reload: true

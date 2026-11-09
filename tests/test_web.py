@@ -242,6 +242,75 @@ def test_choices_write_config_and_probe_gives_a_plan(site):
     assert "host" not in yaml.safe_load((app.home / "config.yaml").read_text())
 
 
+def test_a_games_agreement_and_admins_are_saved_with_the_choices(site):
+    app, client = site
+    sign_in(app, client)
+    saved = lambda: yaml.safe_load((app.home / "config.yaml").read_text())  # noqa: E731
+    choices = {"workloads": ["agents", "minecraft", "factorio"], "owner_login": "owner-a@example.internal"}
+    # Ticked without the agreement: saved, and the plan says what is missing and where to give it.
+    form = {"minecraft": {"eula": False, "admins": ""}, "terraria": {}, "factorio": {"admins": ""}}
+    assert client.call("/api/choices", {**choices, "games": form})[0] == 200
+    assert "games" not in saved() and saved()["intent"] == {"workloads": ["agents", "minecraft", "factorio"]}
+    wait(client, client.call("/api/jobs", {"action": "probe"})[1]["id"])
+    plan = client.call("/api/state")[1]["plan"]
+    assert any(e.startswith("games.minecraft.eula") for e in plan["errors"])
+    assert plan["advice"] == [
+        "Minecraft's server runs only once you agree to its EULA (https://aka.ms/MinecraftEULA): "
+        "tick that you agree beside Minecraft under Setup, What to run, or untick Minecraft."
+    ]
+    preview = client.call("/api/choices/preview", {**choices, "games": form})[1]
+    assert preview["advice"] == plan["advice"]
+    # Agreed, with admins typed as people type them.
+    form = {"minecraft": {"eula": True, "admins": " owner_a,  Friend_B owner_a "}, "factorio": {"admins": "owner-a"}}
+    status, data = client.call("/api/choices", {**choices, "games": form})
+    assert status == 200 and data["plan"]["errors"] == []
+    assert saved()["games"] == {"minecraft": {"eula": True, "admins": ["owner_a", "Friend_B"]}, "factorio": {"admins": ["owner-a"]}}
+    options = {i["name"]: i for i in client.call("/api/state")[1]["options"]["items"]}
+    assert options["minecraft"]["game"]["eula"]["agreed"] is True and options["minecraft"]["game"]["admins"] == ["owner_a", "Friend_B"]
+    # Choices saved without the games' form (the agent's) leave the agreement and the admins alone.
+    assert client.call("/api/choices", choices)[0] == 200
+    assert saved()["games"]["minecraft"] == {"eula": True, "admins": ["owner_a", "Friend_B"]}
+    # Not a player name: nothing is saved.
+    bad = {"minecraft": {"eula": True, "admins": "owner a; rm"}}
+    status, data = client.call("/api/choices", {**choices, "games": bad})
+    assert status == 400 and "admins are player names" in data["error"]
+    status, data = client.call("/api/choices", {**choices, "games": {"minecraft": {"eula": True, "admins": "ab"}}})
+    assert status == 400 and "games.minecraft.admins" in data["error"]
+    assert saved()["games"]["minecraft"]["admins"] == ["owner_a", "Friend_B"]
+    # Settings the owner wrote into config.yaml stay through a save from the page.
+    config = saved()
+    config["games"]["minecraft"]["settings"] = {"difficulty": "hard"}
+    (app.home / "config.yaml").write_text(yaml.safe_dump(config))
+    client.call("/api/choices", {**choices, "games": {"minecraft": {"eula": False, "admins": ""}, "factorio": {"admins": ""}}})
+    assert saved()["games"] == {"minecraft": {"settings": {"difficulty": "hard"}}}
+
+
+def test_services_show_each_game_with_its_address_and_how_to_join(site):
+    app, client = site
+    sign_in(app, client)
+    golden = Path(__file__).parent / "golden" / "large-games.plan.yaml"
+    (app.home / "plan.yaml").write_text(golden.read_text())
+    items = {s["name"]: s for s in client.call("/api/state")[1]["services"]["items"]}
+    assert [n for n in items if n in ("minecraft", "terraria", "factorio")] == ["minecraft", "terraria", "factorio"]
+    minecraft = items["minecraft"]
+    assert minecraft["title"] == "Minecraft" and minecraft["watch"] == "minecraft"
+    assert minecraft["addresses"] == ["In the game: 10.42.8.25:25565"]
+    assert "Players need Minecraft: Java Edition 26.3." in minecraft["what"]
+    steps = minecraft["steps"]
+    assert "Multiplayer, Add Server" in steps[0]["text"]
+    assert (steps[1]["href"], steps[1]["link"]) == ("#access/people", "Access, People")
+    assert steps[2]["done"] is True and steps[2]["href"] == "#setup/choices"
+    assert steps[-1]["code"] == "pct exec 2025 -- nb-game console say hello"
+    assert not any(st.get("href") == "#setup/choices" for st in items["terraria"]["steps"])
+    assert items["factorio"]["addresses"] == ["In the game: 10.42.8.27:34197"]
+    assert any("nobody needs the Space Age expansion" in st["text"] for st in items["factorio"]["steps"])
+    from nullbill import names
+
+    names.record(app.home, "nullbill.internal", "10.42.6.1")
+    items = {s["name"]: s for s in client.call("/api/state")[1]["services"]["items"]}
+    assert items["terraria"]["addresses"] == ["In the game: terraria.nullbill.internal:7777", "By address: 10.42.8.26:7777"]
+
+
 ED25519 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOwnerKeyForTestsOnlyNotARealKey00000000"
 RSA = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCownerkeyfortestsonlynotarealkey0000000000"
 

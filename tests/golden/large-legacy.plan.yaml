@@ -276,6 +276,8 @@ media:
   # Kept disks, read-only. Add each folder as a library in Jellyfin.
   library:
     - /media/data
+# Not planned.
+games: {}
 disks:
   # Kept as it is: mounted read-only under /mnt/nb-legacy and shared to the owner over the VPN as data (docs/runbooks/legacy-disk.md). Not backed up by NullBill; keep a copy elsewhere. Left alone: partition 1 (Microsoft reserved).
   ata-SYNTHETIC_HDD_0002:

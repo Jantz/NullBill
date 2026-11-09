@@ -8,7 +8,7 @@ fallback. Passwords are the secrets apply keeps, revealed on request only.
 so the page can say whether it answers.
 """
 
-from nullbill import legacy, media
+from nullbill import games, legacy, media
 
 
 def shares(plan: dict) -> list[str]:
@@ -318,6 +318,53 @@ def _entries(plan: dict, guests: dict, by_name: bool, forgejo_user: str | None, 
                     step("Any other OpenAI-compatible program works the same way, with local as the model."),
                 ],
                 "watch": "model-gateway",
+            }
+        )
+    for name, game in (plan.get("games") or {}).items():
+        if not ip(name):
+            continue
+        number = game["port"].partition("/")[2]
+        where = f"{at(name)}:{number}"
+        client = f"{games.CLIENT[name]} {game['version']}"
+        steps = [
+            step(f"In the game choose {games.JOIN[name]} and type the address. Your game must be {client}, the server's version."),
+            step(
+                f"Tick {game['title']} for each friend who may join, and send them what the page writes.",
+                href="#access/people",
+                link="Access, People",
+            ),
+        ]
+        if name in games.ADMIN_COMMAND:
+            steps.append(
+                step(
+                    f"To be an admin in the game, add your player name beside {game['title']}, then press Run setup.",
+                    bool(game.get("admins")),
+                    href="#setup/choices",
+                    link="Setup, What to run",
+                )
+            )
+        if "space_age" in game:
+            steps.append(
+                step(
+                    "Every player needs the Space Age expansion."
+                    if game["space_age"]
+                    else "It runs the base game, so nobody needs the Space Age expansion (games.factorio.space_age in config.yaml)."
+                )
+            )
+        steps.append(
+            step(
+                f"The server takes its own commands on its console. {shell}",
+                code=f"pct exec {vmid(name)} -- nb-game console {games.SAY[name]}",
+            )
+        )
+        out.append(
+            {
+                "name": name,
+                "title": game["title"],
+                "what": f"A {game['title']} server for you and the people you let in. Players need {client}.",
+                "addresses": [f"In the game: {where}", *([f"By address: {ip(name)}:{number}"] if by_name else [])],
+                "steps": steps,
+                "watch": name,
             }
         )
     return out

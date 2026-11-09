@@ -1,0 +1,10 @@
+# Terraria's dedicated server, which brings its own Mono. apply passes
+# everything from the plan: the catalog's games.terraria pins the server,
+# and src/nullbill/games.py works out the settings.
+#
+# game_terraria_version, game_terraria_url, game_terraria_sha256: the server.
+# game_terraria_port: where players connect.
+# game_terraria_settings: the server's config file, key by key.
+#
+# Start and restart the server. Only the container check turns this off.
+game_terraria_manage_services: true

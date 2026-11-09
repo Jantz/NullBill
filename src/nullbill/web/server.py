@@ -858,6 +858,38 @@ class App:
             _write_private(self.home / GUESTS, json.dumps({"guests": sorted(existing)}, indent=2) + "\n")
         _write_private(self.home / "config.yaml", yaml.safe_dump(config, sort_keys=False))
 
+    @staticmethod
+    def _games_config(config: dict, form: object) -> None:
+        """What the page asks beside each game's tick, put into config.yaml's
+        games: the owner's agreement to an EULA and the admins' names.
+        Nothing changes without the form's `games` (the agent's choices have
+        none: an agreement is the owner's to give)."""
+        if not isinstance(form, dict):
+            return
+        catalog = build_model({})["games"]
+        chosen = config.get("games") or {}
+        for name, asked in form.items():
+            if name not in catalog or not isinstance(asked, dict):
+                continue
+            game = dict(chosen.get(name) or {})
+            if "eula" in catalog[name] and "eula" in asked:
+                game["eula"] = bool(asked["eula"])
+            if "admins" in catalog[name] and "admins" in asked:
+                admins = list(dict.fromkeys(a for a in re.split(r"[\s,]+", str(asked["admins"])) if a))
+                if any(not re.fullmatch(r"[A-Za-z0-9_.-]{1,60}", a) for a in admins):
+                    raise NullBillError(f"{catalog[name]['title']} admins are player names, as shown in the game, separated by commas")
+                game["admins"] = admins
+            # What equals the catalog is not written down.
+            game = {key: value for key, value in game.items() if value != catalog[name].get(key)}
+            if game:
+                chosen[name] = game
+            else:
+                chosen.pop(name, None)
+        if chosen:
+            config["games"] = chosen
+        else:
+            config.pop("games", None)
+
     def _choices_config(self, body: dict, saving: bool = True) -> dict:
         """config.yaml with the page's form put into it. Saving checks what
         only a save needs: the owner's login and each erase confirmation."""
@@ -876,6 +908,7 @@ class App:
         people = {n: p for n, p in config.get("people", {}).items() if p.get("role") != "owner"}
         keys = owner.keys(config)
         config["people"] = {"owner": {"role": "owner", "login": login} | ({"ssh_keys": keys} if keys else {}), **people}
+        self._games_config(config, body.get("games"))
         services = config.setdefault("services", {})
         if body.get("backups", True):
             services.get("pbs", {}).pop("enabled", None)

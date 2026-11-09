@@ -104,8 +104,9 @@ $defs:
       listener: {type: string, minLength: 1}
       # How a service with `shared` ports reads to the owner who gives it to
       # a person and to that person (people.py). In `open`, {host} becomes
-      # the service's name, or its address while names are off, and {ip}
-      # always its address. Without `open`, each shared port is listed.
+      # the service's name, or its address while names are off, {ip}
+      # always its address, {port} its first shared port and {version} a
+      # game server's version. Without `open`, each shared port is listed.
       share:
         type: object
         additionalProperties: false
@@ -222,6 +223,14 @@ $defs:
           max_gpus: {type: integer, minimum: 1}
           engine: {enum: [llama.cpp]}
     models: {type: object, propertyNames: {$ref: "#/$defs/model_name"}, additionalProperties: {$ref: "#/$defs/llm"}}
+    # One entry per game NullBill has a role for (ansible/roles/game_<name>).
+    games:
+      type: object
+      additionalProperties: false
+      properties:
+        minecraft: {$ref: "#/$defs/game_minecraft"}
+        terraria: {$ref: "#/$defs/game_terraria"}
+        factorio: {$ref: "#/$defs/game_factorio"}
     tailnet:
       type: object
       additionalProperties: false
@@ -283,6 +292,68 @@ $defs:
       reasoning_effort: {enum: [minimal, low, medium, high, xhigh, max]}
       cache_type: {enum: [f16, q8_0]}
 
+  # A game server's pinned download (catalog.yaml's games).
+  game_pin:
+    version: {type: string, pattern: "^[0-9][0-9A-Za-z.+_-]{0,30}$"}
+    url: {type: string, pattern: "^https://"}
+    sha256: {type: string, pattern: "^[0-9a-f]{64}$"}
+
+  # The server's own options, by its own names; NullBill's stay NullBill's
+  # (games.py's MANAGED).
+  game_settings:
+    type: object
+    propertyNames: {type: string, pattern: "^[A-Za-z][A-Za-z0-9._-]{0,60}$"}
+    # One line each: a second line in Terraria's file would be another key.
+    additionalProperties: {type: [string, integer, number, boolean], pattern: "^[^\\r\\n]*$"}
+
+  game_minecraft:
+    type: object
+    additionalProperties: false
+    properties:
+      title: {type: string, minLength: 1}
+      version: {$ref: "#/$defs/game_pin/version"}
+      url: {$ref: "#/$defs/game_pin/url"}
+      sha256: {$ref: "#/$defs/game_pin/sha256"}
+      java:
+        type: object
+        additionalProperties: false
+        properties:
+          version: {$ref: "#/$defs/game_pin/version"}
+          url: {$ref: "#/$defs/game_pin/url"}
+          sha256: {$ref: "#/$defs/game_pin/sha256"}
+      # true: the owner agrees to https://aka.ms/MinecraftEULA.
+      eula: {type: boolean}
+      # Players who are operators, by their Minecraft names.
+      admins: {type: array, uniqueItems: true, items: {type: string, pattern: "^[A-Za-z0-9_]{3,16}$"}}
+      # server.properties keys.
+      settings: {$ref: "#/$defs/game_settings"}
+
+  game_terraria:
+    type: object
+    additionalProperties: false
+    properties:
+      title: {type: string, minLength: 1}
+      version: {$ref: "#/$defs/game_pin/version"}
+      url: {$ref: "#/$defs/game_pin/url"}
+      sha256: {$ref: "#/$defs/game_pin/sha256"}
+      # The server's config file keys (serverconfig.txt).
+      settings: {$ref: "#/$defs/game_settings"}
+
+  game_factorio:
+    type: object
+    additionalProperties: false
+    properties:
+      title: {type: string, minLength: 1}
+      version: {$ref: "#/$defs/game_pin/version"}
+      url: {$ref: "#/$defs/game_pin/url"}
+      sha256: {$ref: "#/$defs/game_pin/sha256"}
+      # The Space Age expansion's mods, for a map made from then on.
+      space_age: {type: boolean}
+      # Players who are admins, by their factorio.com names.
+      admins: {type: array, uniqueItems: true, items: {type: string, pattern: "^[A-Za-z0-9_.-]{1,60}$"}}
+      # server-settings.json keys.
+      settings: {$ref: "#/$defs/game_settings"}
+
   image:
     type: object
     additionalProperties: false
@@ -326,6 +397,7 @@ $defs:
       images: {$ref: "#/$defs/common/images"}
       verify: {$ref: "#/$defs/common/verify"}
       models: {$ref: "#/$defs/common/models"}
+      games: {$ref: "#/$defs/common/games"}
       gpus:
         # Keyed by PCI address as the probe reports it.
         type: object
@@ -357,7 +429,7 @@ $defs:
 
   model:
     type: object
-    required: [network, host, zones, roles, services, people, engines, models, proxy, tailnet, images, verify, updates]
+    required: [network, host, zones, roles, services, people, engines, models, games, proxy, tailnet, images, verify, updates]
     properties:
       network: {$ref: "#/$defs/common/network", required: [base, domain, vmid_base]}
       host:
@@ -389,6 +461,16 @@ $defs:
         propertyNames: {$ref: "#/$defs/model_name"}
         additionalProperties:
           allOf: [{$ref: "#/$defs/llm"}, {required: [url, sha256, size_mib, vram_mib, context, sampling]}]
+      games:
+        allOf:
+          - {$ref: "#/$defs/common/games"}
+          - properties:
+              minecraft:
+                required: [title, version, url, sha256, settings, java, eula, admins]
+                properties:
+                  java: {required: [version, url, sha256]}
+              terraria: {required: [title, version, url, sha256, settings]}
+              factorio: {required: [title, version, url, sha256, settings, space_age, admins]}
       proxy:
         allOf:
           - {$ref: "#/$defs/common/proxy"}

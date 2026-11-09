@@ -250,6 +250,8 @@ inference:
     - 0000:65:00.0
 # Not planned.
 media: {}
+# Not planned.
+games: {}
 disks:
   # Carries signatures; only an explicit pin with wipe: true changes that.
   ata-SYNTHETIC_HDD_0002:

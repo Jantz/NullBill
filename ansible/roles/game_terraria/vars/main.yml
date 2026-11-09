@@ -1,0 +1,2 @@
+# Where the archive puts the Linux server: 1.4.5.8 unpacks as 1458/Linux.
+game_terraria_dir: "/opt/terraria/{{ game_terraria_version }}/{{ game_terraria_version | replace('.', '') }}/Linux"

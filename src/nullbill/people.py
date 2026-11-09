@@ -156,8 +156,12 @@ def opens(model: dict, plan: dict, service: str, ports: list[str], names: bool) 
     ip = plan["guests"][service]["ip"]
     name = f"{service}.{plan['domain']}"
 
+    # A game server's players need its version of the game (games.py).
+    version = model["games"].get(service, {}).get("version", "")
+
     def fill(text: str, host: str) -> str:
-        return text.replace("{host}", host).replace("{ip}", ip)
+        text = text.replace("{host}", host).replace("{ip}", ip)
+        return text.replace("{port}", ports[0].partition("/")[2]).replace("{version}", version)
 
     listed = [f"port {p.partition('/')[2]}{' (UDP)' if p.startswith('udp/') else ''}" for p in ports]
     where = share.get("open", "{host}, " + " and ".join(listed))

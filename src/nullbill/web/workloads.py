@@ -10,12 +10,13 @@ floors and the owner's overrides where it does not, so a choice that does
 not fit still shows what it would take.
 """
 
+from nullbill import games
 from nullbill import plan as planning
 from nullbill.errors import NullBillError
 from nullbill.render import strip_notes
 
 # In the page's order.
-WORKLOADS = ["agents", "linux-ci", "inference", "media", "windows-ci", "windows-dev"]
+WORKLOADS = ["agents", "linux-ci", "inference", "media", "windows-ci", "windows-dev", "minecraft", "terraria", "factorio"]
 BACKUPS, CONSOLE = "backups", "console"
 PBS = "pbs"
 # apply makes these guests but nothing in them yet (README, Not done yet).
@@ -100,6 +101,46 @@ TEXT = {
         ),
         "off": ("Deletes the VM and its disk: Windows, your programs and every file in it. Copy out what you want to keep first."),
     },
+    "minecraft": {
+        "title": "Minecraft",
+        "what": "A Minecraft: Java Edition world for you and the people you let in.",
+        "needs": [
+            "Your agreement to Minecraft's EULA, ticked beside this choice.",
+            "A Minecraft: Java Edition account for each player, as for any server.",
+        ],
+        "on": (
+            "Setup installs Mojang's own server in a container of its own and makes a new world. "
+            "The address is on the Services page; under Access, People, tick Minecraft for each friend who may join. "
+            "Its memory is for a small world and a few players (docs/runbooks/games.md says how to give it more)."
+        ),
+        "off": (
+            "Deletes the server with its world, every player's inventory and its settings. "
+            "docs/runbooks/games.md says how to copy the world out first."
+        ),
+    },
+    "terraria": {
+        "title": "Terraria",
+        "what": "A Terraria world for you and the people you let in.",
+        "needs": ["Terraria on a computer for each player, as for any server."],
+        "on": (
+            "Setup installs Re-Logic's own server in a container of its own and makes a new world. "
+            "The address is on the Services page; under Access, People, tick Terraria for each friend who may join."
+        ),
+        "off": (
+            "Deletes the server with its world. Characters stay with their players. "
+            "docs/runbooks/games.md says how to copy the world out first."
+        ),
+    },
+    "factorio": {
+        "title": "Factorio",
+        "what": "A Factorio factory for you and the people you let in.",
+        "needs": ["Factorio and a factorio.com account for each player, as for any server."],
+        "on": (
+            "Setup installs Wube's own server in a container of its own and makes a new map of the base game. "
+            "The address is on the Services page; under Access, People, tick Factorio for each friend who may join."
+        ),
+        "off": "Deletes the server with its map and every save. docs/runbooks/games.md says how to copy the saves out first.",
+    },
     BACKUPS: {
         "title": "Nightly backups",
         "what": "Every guest is backed up each night, encrypted, to a backup server on a disk of its own.",
@@ -166,6 +207,18 @@ def _note(name: str, plan: dict | None) -> str | None:
         on_gpu = isinstance(plan["media"]["transcode"], dict)
         how = "Transcodes on the processor's graphics." if on_gpu else "Transcodes on the processor: no integrated Intel graphics found."
         return how if plan["media"]["library"] else f"No kept disk yet, so its library starts empty. {how}"
+    if name in plan["games"]:
+        game = plan["games"][name]
+        note = f"Players need {games.CLIENT[name]} {game['version']}, the same version as the server."
+        if "heap_mib" in game:
+            note += f" Java gets {game['heap_mib'] / 1024:.1f} GiB of the container's memory for the world."
+        if "space_age" in game:
+            note += (
+                " Every player needs the Space Age expansion."
+                if game["space_age"]
+                else " The base game: nobody needs the Space Age expansion."
+            )
+        return note
     if name == BACKUPS and PBS in guests:
         if plan["backups"]["status"] == "ok":
             return f"Backs up to {plan['backups']['target'].removeprefix('pbs datastore on ')}."
@@ -173,6 +226,20 @@ def _note(name: str, plan: dict | None) -> str | None:
     if name == CONSOLE and plan["host"]["console"].get("enabled"):
         return f"Shown by the {plan['host']['console']['screen']}."
     return None
+
+
+def _game(model: dict, name: str) -> dict | None:
+    """What the page asks about a game beside its tick: the agreement its
+    server needs, and who its admins are. None for every other choice."""
+    game = model["games"].get(name)
+    if game is None:
+        return None
+    out: dict = {}
+    if "eula" in game:
+        out["eula"] = {"agreed": game["eula"], "url": games.EULA, "text": f"I agree to the {game['title']} EULA"}
+    if "admins" in game:
+        out["admins"] = game["admins"]
+    return out
 
 
 def options(model: dict, facts: dict | None, existing: set[str] | None) -> dict:
@@ -212,6 +279,7 @@ def options(model: dict, facts: dict | None, existing: set[str] | None) -> dict:
             {
                 "name": name,
                 "extra": name in (BACKUPS, CONSOLE),
+                "game": _game(model, name),
                 **TEXT[name],
                 "chosen": chosen,
                 "guests": [_size(model, n, plan["guests"].get(n) if plan else None) for n in members],

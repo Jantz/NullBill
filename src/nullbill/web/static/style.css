@@ -554,7 +554,11 @@ input:not([type=checkbox]):not([type=radio])[readonly] { background: var(--bg-su
 .opt-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 13px; color: var(--text-2); }
 .opt-state { font-size: 13px; }
 .opt-state .status { white-space: normal; align-items: baseline; }
-.opt-note, .opt-change, .opt-details { grid-column: 1 / -1; margin: 6px 0 0 28px; font-size: 12px; }
+.opt-note, .opt-change, .opt-details, .opt-asks { grid-column: 1 / -1; margin: 6px 0 0 28px; font-size: 12px; }
+.opt-asks { display: grid; gap: 8px; max-width: 80ch; }
+.opt-asks[hidden] { display: none; }
+.opt-ask.check { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; color: var(--text-2); }
+.opt-ask.field input { max-width: 44ch; }
 .opt-note { color: var(--text-2); }
 .opt-note.why { color: var(--warn); }
 .opt-change { padding: 8px 10px; border: 1px solid var(--warn-line); border-radius: var(--radius); background: var(--warn-bg); color: var(--text); max-width: 80ch; }
