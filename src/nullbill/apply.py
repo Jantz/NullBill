@@ -120,6 +120,7 @@ class Context:
     pinned: set[str] = field(default_factory=set)  # VMs whose host key this run checked through PVE
     held: bool = False  # this run had nb-power start a guest that runs on demand (ensure_on)
     shut_down: set[str] = field(default_factory=set)  # guests this run shut down itself, to start again
+    ran: set[tuple[str | None, str]] = field(default_factory=set)  # (machine, playbook) this run did run, not left out
 
     @property
     def bare(self) -> dict:
@@ -324,6 +325,8 @@ def run_playbooks(
     full = always or ctx.full or (ctx.home / FULL_NEXT).exists()
     key = ctx.secrets.ensure("applied_key", lambda: secrets.token_hex(32))
     digests = {h: applied.digest(key, playbook, hosts[h], variables, (facts or {}).get(names[h], "")) for h in hosts}
+    # The same inputs one by one, for the controller's own record (applied.RECORD).
+    prints = {h: applied.prints(key, hosts[h], variables, (facts or {}).get(names[h], "")) for h in hosts}
     for name, extra in (fresh or {}).items():
         hosts[name or "pve"] |= extra
     # A pool's golden image is baked from a fresh VM each time, then sealed.
@@ -332,6 +335,7 @@ def run_playbooks(
     same = set() if full else {h for h in sorted(marked - forced) if applied_mark(ctx, names[h], playbook) == digests[h]}
     for h in sorted(same):
         ctx.say(f"{stage}: {playbook} on {names[h] or 'PVE host'} is unchanged since its last run")
+        applied.ran(ctx.home, names[h], playbook, stage, digests[h], prints[h], None)
     run = {h: v for h, v in hosts.items() if h not in same}
     if not run:
         return
@@ -339,12 +343,17 @@ def run_playbooks(
     for h in sorted(run.keys() & marked):
         # Gone while it runs: one that stops part way runs whole next time.
         set_mark(ctx, names[h], playbook, None)
+        applied.note(ctx.home, names[h], playbook, digest=None)
     ctx.say(f"{stage}: {playbook} on {label}")
+    began = time.monotonic()
     rc = ctx.reach.playbook(playbook, run, variables)
     if rc != 0:
         raise ApplyError(stage, f"{playbook} failed on {label} (exit {rc})")
+    took = time.monotonic() - began
     for h in sorted(run.keys() & marked):
         set_mark(ctx, names[h], playbook, digests[h])
+        applied.ran(ctx.home, names[h], playbook, stage, digests[h], prints[h], took)
+    ctx.ran |= {(names[h], playbook) for h in run}
 
 
 # Left by a run whose checks failed: the next runs every playbook in full,
@@ -399,20 +408,28 @@ def stage_render(ctx: Context) -> None:
     ctx.say(f"render: {len(ctx.files)} files in {ctx.home / 'build'}")
 
 
+def host_inputs(ctx: Context) -> dict:
+    return {
+        "host_baseline_api_name": f"pve.{ctx.bare['domain']}",
+        "host_baseline_api_address": ctx.bare["zones"]["mgmt"]["host_ip"],
+        "host_baseline_ntfs": any(m["fstype"] == "ntfs" for m in legacy.mounts(ctx.bare)),
+        # What runs on demand, for the host's nb-power.
+        "host_baseline_power": power.render_policy(ctx.plan),
+    }
+
+
+def host_browser_cert(ctx: Context) -> bool:
+    """The browser CA's certificate names the mgmt address only, so apply
+    and the owner reach Proxmox there: only once the LAN is closed."""
+    return lan.state(ctx.home) == lan.CLOSED and not ctx.open_lan
+
+
 def stage_host(ctx: Context) -> None:
     address = ctx.bare["zones"]["mgmt"]["host_ip"]
-    api = {
-        "host_baseline_api_name": f"pve.{ctx.bare['domain']}",
-        "host_baseline_api_address": address,
-        "host_baseline_ntfs": any(m["fstype"] == "ntfs" for m in legacy.mounts(ctx.bare)),
-    }
-    # The browser CA's certificate names the mgmt address only, so apply
-    # and the owner reach Proxmox there: only once the LAN is closed.
-    if lan.state(ctx.home) == lan.CLOSED and not ctx.open_lan:
+    api = host_inputs(ctx)
+    if host_browser_cert(ctx):
         cert, key = browser_cert(ctx, "host", "pve", address)
         api |= {"host_baseline_api_cert": cert, "host_baseline_api_key": key}
-    # What runs on demand, for the host's nb-power.
-    api["host_baseline_power"] = power.render_policy(ctx.plan)
     run_playbook(ctx, "host", "host-baseline.yml", None, api)
     # Before the firewall: a close in this run ends the LAN path apply came by.
     run_playbook(ctx, "host", "console.yml", None, console_vars(ctx))
@@ -530,11 +547,17 @@ def pve_ca(ctx: Context, stage: str) -> str:
     return host_out(ctx, stage, "cat /etc/pve/pve-root-ca.pem") + browser_root(ctx).read_text()
 
 
-def console_vars(ctx: Context) -> dict:
-    """The on-site screen: on or off, and the page it shows with its key pinned."""
+def console_inputs(ctx: Context) -> dict:
+    """The on-site screen: on or off, and the page it shows."""
     if not ctx.model["host"]["console"]["enabled"]:
         return {"console_enabled": False}
-    return {"console_enabled": True, "console_url": page_url(ctx), "console_page_spki": page_spki(ctx, "host")}
+    return {"console_enabled": True, "console_url": page_url(ctx)}
+
+
+def console_vars(ctx: Context) -> dict:
+    """console_inputs, and the page's key for the screen to pin."""
+    found = console_inputs(ctx)
+    return found | {"console_page_spki": page_spki(ctx, "host")} if found["console_enabled"] else found
 
 
 TOKEN_ID = "root@pam!nullbill"
@@ -1336,18 +1359,20 @@ def tofu_output(ctx: Context, stage: str, name: str) -> str:
     return out
 
 
+def rendered(ctx: Context, machine: str) -> dict[str, str]:
+    """A machine's rendered files, by the path each has there."""
+    prefix = f"{machine}/"
+    return {"/" + rel.removeprefix(prefix): text for rel, text in ctx.files.items() if rel.startswith(prefix)}
+
+
 def stage_router(ctx: Context) -> None:
     """The router VM OpenTofu made: its rendered files, then its services."""
-    prefix = "router/"
-    files = {"/" + rel.removeprefix(prefix): text for rel, text in ctx.files.items() if rel.startswith(prefix)}
-    run_playbook(ctx, "router", "router.yml", "router", {"router_files": files})
+    run_playbook(ctx, "router", "router.yml", "router", {"router_files": rendered(ctx, "router")})
 
 
 def stage_proxy(ctx: Context) -> None:
     """Squid on the egress proxy, which every proxied zone's apt needs next."""
-    prefix = f"{PROXY}/"
-    files = {"/" + rel.removeprefix(prefix): text for rel, text in ctx.files.items() if rel.startswith(prefix)}
-    run_playbook(ctx, "proxy", "egress-proxy.yml", PROXY, {"egress_proxy_files": files})
+    run_playbook(ctx, "proxy", "egress-proxy.yml", PROXY, {"egress_proxy_files": rendered(ctx, PROXY)})
 
 
 def update_guests(ctx: Context) -> dict[str | None, dict]:
@@ -1458,11 +1483,7 @@ def stage_ca(ctx: Context) -> None:
     domain = ctx.bare["domain"]
     run_playbook(ctx, "ca", "step-ca.yml", "step-ca", {"step_ca_domain": domain})
     root = ca_root(ctx, "ca")
-    targets: dict[str | None, dict] = {
-        name: {"tls_cert_name": f"{name}.{domain}", "tls_cert_group": group, "tls_cert_reload": reload}
-        for name, (group, reload) in TLS.items()
-        if name in ctx.bare["guests"]
-    }
+    targets = cert_targets(ctx)
     # A guest without a certificate good for another hour (they last 24 h,
     # so one runs out while the server is off) gets a one-time token for a
     # new one, and the role runs there whatever its inputs; all at once.
@@ -1470,6 +1491,16 @@ def stage_ca(ctx: Context) -> None:
     tokens: dict[str | None, dict] = {name: {"tls_cert_token": ca_token(ctx, "ca", name)} for name in sorted(lapsed)}
     variables = {"tls_cert_ca_url": f"https://step-ca.{domain}", "tls_cert_ca_root": root}
     run_playbooks(ctx, "ca", "tls-cert.yml", targets, variables, force=lapsed, fresh=tokens)
+
+
+def cert_targets(ctx: Context) -> dict[str | None, dict]:
+    """Each planned TLS service with what its certificate is named and who reads it."""
+    domain = ctx.bare["domain"]
+    return {
+        name: {"tls_cert_name": f"{name}.{domain}", "tls_cert_group": group, "tls_cert_reload": reload}
+        for name, (group, reload) in TLS.items()
+        if name in ctx.bare["guests"]
+    }
 
 
 def cert_valid(ctx: Context, name: str) -> bool:
@@ -1498,20 +1529,23 @@ def postgres_clients(ctx: Context) -> list[str]:
     return [s.removeprefix("service:") for s in sources if s.startswith("service:") and planned(ctx, s.removeprefix("service:"))]
 
 
-def stage_postgres(ctx: Context) -> None:
-    if not planned(ctx, "postgres"):
-        return
+def postgres_inputs(ctx: Context) -> dict:
     guests = ctx.bare["guests"]
     databases = [
         {"name": db_name(c), "client": guests[c]["ip"], "password": ctx.secrets.ensure(f"postgres_{db_name(c)}")}
         for c in postgres_clients(ctx)
     ]
-    variables = {
+    return {
         "postgres_listen": [guests["postgres"]["ip"]],
         "postgres_tls_name": fqdn(ctx, "postgres"),
         "postgres_databases": databases,
     }
-    run_playbook(ctx, "postgres", "postgres.yml", "postgres", variables)
+
+
+def stage_postgres(ctx: Context) -> None:
+    if not planned(ctx, "postgres"):
+        return
+    run_playbook(ctx, "postgres", "postgres.yml", "postgres", postgres_inputs(ctx))
 
 
 SHIPPER_CA = "shipper-ca"
@@ -1564,19 +1598,25 @@ def tls_targets(ctx: Context) -> list[str]:
     return [f"{fqdn(ctx, n)}:{p}" for n, p in ports.items() if planned(ctx, n)]
 
 
-def monitoring_vars(ctx: Context) -> dict:
+def monitoring_inputs(ctx: Context) -> dict:
     guests = ctx.bare["guests"]
     topic = ctx.secrets.data.get("ntfy_topic")
     return {
         "monitoring_node_targets": [f"{fqdn(ctx, n)}:9100" for n, g in guests.items() if node_exporter_guest(g)],
         "monitoring_host_target": f"pve.{ctx.bare['domain']}:9100",
         "monitoring_tls_targets": tls_targets(ctx),
-        "monitoring_probe_ca": both_roots(ctx, "monitoring"),
         "monitoring_tls_name": fqdn(ctx, "monitoring"),
-        "monitoring_shipper_ca": shipper_ca(ctx, "monitoring"),
         "monitoring_ntfy_url": NTFY + topic if topic else "",
         "monitoring_healthchecks_url": ctx.secrets.data.get("healthchecks_url", ""),
         "monitoring_https_proxy": proxy_url(ctx, "monitoring"),
+    }
+
+
+def monitoring_vars(ctx: Context) -> dict:
+    """monitoring_inputs, and the roots it trusts as the server holds them."""
+    return monitoring_inputs(ctx) | {
+        "monitoring_probe_ca": both_roots(ctx, "monitoring"),
+        "monitoring_shipper_ca": shipper_ca(ctx, "monitoring"),
     }
 
 
@@ -1593,15 +1633,19 @@ def stage_monitoring(ctx: Context) -> None:
     ctx.secrets.set("grafana_admin_password", password)
 
 
-def stage_forgejo(ctx: Context) -> None:
-    if not planned(ctx, "forgejo"):
-        return
-    variables = {
+def forgejo_inputs(ctx: Context) -> dict:
+    return {
         "forgejo_domain": fqdn(ctx, "forgejo"),
         "forgejo_db_host": fqdn(ctx, "postgres"),
         "forgejo_db_password": ctx.secrets.ensure("postgres_forgejo"),
         "forgejo_admin_email": f"admin@{ctx.bare['domain']}",
     }
+
+
+def stage_forgejo(ctx: Context) -> None:
+    if not planned(ctx, "forgejo"):
+        return
+    variables = forgejo_inputs(ctx)
     cert, key = browser_cert(ctx, "forgejo", "forgejo", ctx.bare["guests"]["forgejo"]["ip"])
     variables |= {"forgejo_browser_cert": cert, "forgejo_browser_key": key, "forgejo_browser_root": browser_root(ctx).read_text()}
     run_playbook(ctx, "forgejo", "forgejo.yml", "forgejo", variables)
@@ -1671,14 +1715,46 @@ def trust_ca(ctx: Context, stage: str, names: list[str]) -> None:
         guest_out(ctx, stage, name, ["sh", "-c", install], stdin=root)
 
 
+def inference_inputs(ctx: Context) -> dict:
+    name, model = llm.model(ctx.bare, ctx.model)
+    version, sha256 = llm.nvidia_pin()
+    return {
+        "inference_nvidia_version": version,
+        "inference_nvidia_sha256": sha256,
+        "inference_model_name": name,
+        "inference_model_url": model["url"],
+        "inference_model_sha256": model["sha256"],
+        "inference_context": model["context"],
+        "inference_sampling": model.get("sampling", {}),
+        "inference_reasoning": model.get("reasoning", "auto"),
+        "inference_reasoning_effort": model.get("reasoning_effort", ""),
+        "inference_cache_type": model.get("cache_type", "f16"),
+        "inference_listen": ctx.bare["guests"][llm.INFERENCE]["ip"],
+        "inference_port": llm.INFERENCE_PORT,
+        "inference_api_key": ctx.secrets.ensure("inference_key", lambda: secrets.token_urlsafe(32)),
+    }
+
+
+def gateway_inputs(ctx: Context) -> dict:
+    name, _ = llm.model(ctx.bare, ctx.model)
+    return {
+        "model_gateway_domain": fqdn(ctx, llm.GATEWAY),
+        "model_gateway_port": llm.GATEWAY_PORT,
+        "model_gateway_key": ctx.secrets.ensure("model_gateway_key", lambda: "sk-" + secrets.token_urlsafe(32)),
+        "model_gateway_model": name,
+        "model_gateway_backend": f"http://{fqdn(ctx, llm.INFERENCE)}:{llm.INFERENCE_PORT}/v1",
+        "model_gateway_backend_key": ctx.secrets.ensure("inference_key", lambda: secrets.token_urlsafe(32)),
+    }
+
+
 def stage_inference(ctx: Context) -> None:
     """NVIDIA's driver on the host, the card in the inference container,
     llama.cpp serving the planned model there, and LiteLLM in front."""
     if not llm.enabled(ctx.bare):
         return
     section = ctx.bare["inference"]
-    name, model = llm.model(ctx.bare, ctx.model)
-    version, sha256 = llm.nvidia_pin()
+    name, _ = llm.model(ctx.bare, ctx.model)
+    version, _ = llm.nvidia_pin()
     guest = ctx.bare["guests"][llm.INFERENCE]
     vmid = guest["vmid"]
     loaded = host_out(ctx, "inference", "cat /sys/module/nvidia/version 2>/dev/null || true").strip()
@@ -1693,22 +1769,7 @@ def stage_inference(ctx: Context) -> None:
     give_gpu(ctx, vmid, section["gpus"])
     if "status: running" not in host_out(ctx, "inference", f"pct status {vmid}"):
         start(ctx, "inference", llm.INFERENCE)
-    backend_key = ctx.secrets.ensure("inference_key", lambda: secrets.token_urlsafe(32))
-    variables = {
-        "inference_nvidia_version": version,
-        "inference_nvidia_sha256": sha256,
-        "inference_model_name": name,
-        "inference_model_url": model["url"],
-        "inference_model_sha256": model["sha256"],
-        "inference_context": model["context"],
-        "inference_sampling": model.get("sampling", {}),
-        "inference_reasoning": model.get("reasoning", "auto"),
-        "inference_reasoning_effort": model.get("reasoning_effort", ""),
-        "inference_cache_type": model.get("cache_type", "f16"),
-        "inference_listen": guest["ip"],
-        "inference_port": llm.INFERENCE_PORT,
-        "inference_api_key": backend_key,
-    }
+    variables = inference_inputs(ctx)
     ctx.say(f"inference: {name}; the first run builds llama.cpp and downloads the model, which takes a while")
     lift = guest["memory_mib"] < BUILD_MEMORY_MIB
     if lift:
@@ -1718,14 +1779,7 @@ def stage_inference(ctx: Context) -> None:
     finally:
         if lift:
             host_out(ctx, "inference", f"pct set {vmid} --memory {guest['memory_mib']}")
-    gateway = {
-        "model_gateway_domain": fqdn(ctx, llm.GATEWAY),
-        "model_gateway_port": llm.GATEWAY_PORT,
-        "model_gateway_key": ctx.secrets.ensure("model_gateway_key", lambda: "sk-" + secrets.token_urlsafe(32)),
-        "model_gateway_model": name,
-        "model_gateway_backend": f"http://{fqdn(ctx, llm.INFERENCE)}:{llm.INFERENCE_PORT}/v1",
-        "model_gateway_backend_key": backend_key,
-    }
+    gateway = gateway_inputs(ctx)
     cert, key = browser_cert(ctx, "inference", llm.GATEWAY, ctx.bare["guests"][llm.GATEWAY]["ip"])
     gateway |= {"model_gateway_browser_cert": cert, "model_gateway_browser_key": key}
     run_playbook(ctx, "inference", "model-gateway.yml", llm.GATEWAY, gateway)
@@ -1734,16 +1788,19 @@ def stage_inference(ctx: Context) -> None:
     ctx.say(f"inference: the model gateway serves {name} (also as local) at {url}; the page shows its key")
 
 
-def stage_files(ctx: Context) -> None:
-    """Samba on the files guest, one share per kept disk, for the owner only."""
-    if not planned(ctx, FILES):
-        return
+def files_inputs(ctx: Context) -> dict:
     shares = [{"name": m["share"], "read_only": m["mode"] == "ro"} for m in legacy.shares(ctx.bare)]
     # A copy of a converted disk is the owner's own ext4 volume: read-write.
     shares += [{"name": c["name"], "read_only": False} for c in legacy.copies(ctx.bare)]
     password = ctx.secrets.ensure("files_share_password", lambda: secrets.token_urlsafe(24))
-    variables = {"files_shares": shares, "files_user": legacy.SHARE_USER, "files_password": password}
-    run_playbook(ctx, "files", "files.yml", FILES, variables)
+    return {"files_shares": shares, "files_user": legacy.SHARE_USER, "files_password": password}
+
+
+def stage_files(ctx: Context) -> None:
+    """Samba on the files guest, one share per kept disk, for the owner only."""
+    if not planned(ctx, FILES):
+        return
+    run_playbook(ctx, "files", "files.yml", FILES, files_inputs(ctx))
     address = ctx.bare["guests"][FILES]["ip"]
     where = f"\\\\{address}\\<share>"
     ctx.say(f"files: from your devices on the tailnet, open {where} as user {legacy.SHARE_USER}; the page shows the password")
@@ -1781,6 +1838,10 @@ def give_render_node(ctx: Context, vmid: int) -> str | None:
 NB_JELLYFIN = "/usr/local/sbin/nb-jellyfin"
 
 
+def jellyfin_inputs(ctx: Context) -> dict:
+    return {"jellyfin_proxy": proxy_url(ctx, media.JELLYFIN)}
+
+
 def stage_media(ctx: Context) -> None:
     """Jellyfin in its guest: the integrated graphics when it transcodes there,
     the role, then nb-jellyfin finishes its first-run setup at once (until
@@ -1791,7 +1852,7 @@ def stage_media(ctx: Context) -> None:
         return
     guest = ctx.bare["guests"][media.JELLYFIN]
     node = give_render_node(ctx, guest["vmid"])
-    run_playbook(ctx, "media", "jellyfin.yml", media.JELLYFIN, {"jellyfin_proxy": proxy_url(ctx, media.JELLYFIN)})
+    run_playbook(ctx, "media", "jellyfin.yml", media.JELLYFIN, jellyfin_inputs(ctx))
     guest_out(ctx, "media", media.JELLYFIN, [NB_JELLYFIN, "wait"])
     if guest_out(ctx, "media", media.JELLYFIN, [NB_JELLYFIN, "setup", media.ADMIN_USER]).strip() == "changed":
         ctx.say(f"media: finished Jellyfin's first-run setup; its admin is {media.ADMIN_USER}")
@@ -1914,6 +1975,22 @@ def retire(ctx: Context, name: str, guest: dict) -> None:
 BAKING_DIR = "/root/nullbill"
 
 
+def image_settings(ctx: Context, name: str) -> dict:
+    """What a pool's golden image is baked with that the plan alone says; the
+    two roots it trusts are read when it bakes."""
+    return {
+        "ci_runner_dispatcher_url": f"https://{fqdn(ctx, 'runner-dispatcher')}:8443",
+        "ci_runner_proxy_url": proxy_url(ctx, name),
+        "ci_runner_no_proxy": f".{ctx.bare['domain']},localhost,127.0.0.1",
+    }
+
+
+def image_print(ctx: Context, name: str) -> str:
+    """image_settings as the controller's record keeps them (applied.IMAGE),
+    for the page's preview of when an image is baked again."""
+    return hashlib.sha256(json.dumps(image_settings(ctx, name), sort_keys=True).encode()).hexdigest()[:32]
+
+
 def bake(ctx: Context, name: str, guest: dict) -> bool:
     """Boot the pool's template VM, make it a one-job runner, seal it and
     convert it to a template. A template is kept until it is
@@ -1922,9 +1999,7 @@ def bake(ctx: Context, name: str, guest: dict) -> bool:
     runner = {
         "ci_runner_ca_root": ca_root(ctx, "ci"),
         "ci_runner_browser_root": browser_root(ctx).read_text(),
-        "ci_runner_dispatcher_url": f"https://{fqdn(ctx, 'runner-dispatcher')}:8443",
-        "ci_runner_proxy_url": proxy_url(ctx, name),
-        "ci_runner_no_proxy": f".{ctx.bare['domain']},localhost,127.0.0.1",
+        **image_settings(ctx, name),
     }
     # What the image was baked with; clones of an image baked before a
     # change (a new root, say) would fail their jobs until the weekly bake.
@@ -1936,6 +2011,7 @@ def bake(ctx: Context, name: str, guest: dict) -> bool:
         same = host_out(ctx, "ci", f"cat {inputs_file} 2>/dev/null || true").strip() == inputs
         if baked is not None and time.time() - baked < ci.REBAKE_AFTER_S and same:
             ctx.say(f"ci: {name}'s golden image is baked")
+            applied.note(ctx.home, name, applied.IMAGE, stage="ci", baked=baked, settings=image_print(ctx, name))
             return False
         if same:
             ctx.say(f"ci: {name}'s golden image is over {ci.REBAKE_AFTER_S // 86400} days old; baking it again")
@@ -1951,6 +2027,7 @@ def bake(ctx: Context, name: str, guest: dict) -> bool:
     host_out(ctx, "ci", f"mkdir -p -m 0700 {BAKING_DIR}")
     host_files(ctx, "ci", BAKING_DIR, {f"{name}.baking": "started\n"})
     ctx.say(f"ci: baking {name}'s golden image (VM {vmid})")
+    started = time.monotonic()
     host_out(ctx, "ci", f"qm status {vmid} | grep -q running || qm start {vmid}")
     address = guest["template_ip"]
     wait = f"until (exec 3<>/dev/tcp/{address}/22) 2>/dev/null; do sleep 5; done"
@@ -1964,6 +2041,8 @@ def bake(ctx: Context, name: str, guest: dict) -> bool:
     host_files(ctx, "ci", ci.TEXTFILE_DIR, {ci.baked_file(name): ci.baked_metric(name, time.time())})
     host_files(ctx, "ci", BAKING_DIR, {f"{name}.inputs": inputs + "\n"})
     host_out(ctx, "ci", f"rm -f {marker}")
+    took = round(time.monotonic() - started, 1)
+    applied.note(ctx.home, name, applied.IMAGE, stage="ci", baked=time.time(), settings=image_print(ctx, name), took_s=took)
     ctx.say(f"ci: {name}'s golden image is a template")
     return True
 
@@ -1987,7 +2066,7 @@ def both_roots(ctx: Context, stage: str) -> str:
     return ca_root(ctx, stage).strip() + "\n" + browser_root(ctx).read_text()
 
 
-def dispatcher_vars(ctx: Context) -> dict:
+def dispatcher_inputs(ctx: Context) -> dict:
     pools = []
     for name, guest in linux_pools(ctx).items():
         first, last = (int(v) for v in guest["clone_vmids"].split("-"))
@@ -2005,13 +2084,28 @@ def dispatcher_vars(ctx: Context) -> dict:
     return {
         "runner_dispatcher_tls_name": fqdn(ctx, "runner-dispatcher"),
         "runner_dispatcher_forgejo_url": f"https://{fqdn(ctx, 'forgejo')}",
+        "runner_dispatcher_pve_url": f"https://pve.{ctx.bare['domain']}:8006",
+        "runner_dispatcher_pools": pools,
+    }
+
+
+# What the dispatcher is also given, as the server holds it when the run gets there.
+DISPATCHER_READ = (
+    "runner_dispatcher_forgejo_ca",
+    "runner_dispatcher_forgejo_token",
+    "runner_dispatcher_node",
+    "runner_dispatcher_pve_token",
+    "runner_dispatcher_pve_ca",
+)
+
+
+def dispatcher_vars(ctx: Context) -> dict:
+    return dispatcher_inputs(ctx) | {
         "runner_dispatcher_forgejo_ca": both_roots(ctx, "ci"),
         "runner_dispatcher_forgejo_token": forgejo_token(ctx),
-        "runner_dispatcher_pve_url": f"https://pve.{ctx.bare['domain']}:8006",
         "runner_dispatcher_node": host_out(ctx, "ci", "hostname").strip(),
         "runner_dispatcher_pve_token": tofu_output(ctx, "ci", "dispatcher_token").strip(),
         "runner_dispatcher_pve_ca": pve_ca(ctx, "ci"),
-        "runner_dispatcher_pools": pools,
     }
 
 
@@ -2022,8 +2116,14 @@ def stage_games(ctx: Context) -> None:
     console as the owner would."""
     for name in games.planned(ctx.bare, ctx.model):
         game = ctx.model["games"][name]
-        run_playbook(ctx, "games", games.playbook(ctx.model, name), name, games.variables(ctx.bare, ctx.model, name))
+        playbook = games.playbook(ctx.model, name)
+        run_playbook(ctx, "games", playbook, name, games.variables(ctx.bare, ctx.model, name))
+        began = time.monotonic()
         guest_out(ctx, "games", name, [games.NB_GAME, "wait", str(games.START_WAIT_S)])
+        if (name, playbook) in ctx.ran:
+            # How long players waited after the role had run: the page's
+            # preview says so before the next run that sets the game up.
+            applied.note(ctx.home, name, playbook, answered_s=round(time.monotonic() - began, 1))
         # Only a game with admins in config.yaml is asked for its list:
         # Terraria keeps none, and nb-game fails there.
         missing = []
@@ -2139,27 +2239,53 @@ def workspace_keys(ctx: Context) -> None:
         ctx.say(f"agents: the workspace takes {len(keys)} SSH key(s) of yours for root")
 
 
+def agent_credential(ctx: Context) -> dict:
+    """The agent CLI's credential as the operator role takes it, or {} while none is saved."""
+    stored = {var: ctx.secrets.data.get(name, "") for name, var in AGENT_CREDENTIALS.items()}
+    return stored if any(stored.values()) else {}
+
+
+def operator_inputs(ctx: Context) -> dict:
+    return {
+        **agent_credential(ctx),
+        "operator_proxy_url": proxy_url(ctx, "operator"),
+        "operator_ca_url": f"https://{fqdn(ctx, 'step-ca')}",
+        "operator_guests": agent_map(ctx),
+        "operator_domain": ctx.bare["domain"],
+        "operator_host_ip": ctx.bare["zones"]["mgmt"]["host_ip"],
+        "operator_page_url": page_url(ctx),
+        "operator_page_token": ctx.secrets.ensure("agent_page_token", lambda: secrets.token_urlsafe(32)),
+    } | agent_repo(ctx)
+
+
+# What the operator is also given, as the server holds it when the run gets there.
+OPERATOR_READ = (
+    "operator_pve_token",
+    "operator_pve_ca",
+    "operator_ca_root",
+    "operator_step_password",
+    "operator_host_key",
+    "operator_page_spki",
+)
+
+
 def stage_agents(ctx: Context) -> None:
     """The owner's keys on the workspace, the operator with the agent CLI and
     its tokens, and agent SSH on each agent-managed guest."""
     workspace_keys(ctx)
     if not planned(ctx, "operator"):
         return
-    stored = {var: ctx.secrets.data.get(name, "") for name, var in AGENT_CREDENTIALS.items()}
-    if not any(stored.values()):
+    if not agent_credential(ctx):
         ctx.say("agents: no API key or subscription token for the agent CLI yet; paste one on the page and run setup again")
         return
-    variables = {
-        **stored,
-        "operator_proxy_url": proxy_url(ctx, "operator"),
-        "operator_ca_url": f"https://{fqdn(ctx, 'step-ca')}",
+    variables = operator_inputs(ctx) | {
         "operator_pve_token": tofu_output(ctx, "agents", "agent_token").strip(),
         "operator_pve_ca": pve_ca(ctx, "agents"),
         "operator_ca_root": ca_root(ctx, "agents"),
         "operator_step_password": guest_out(ctx, "agents", "step-ca", ["cat", f"{STEP}/secrets/agent-password"]).strip(),
+        "operator_host_key": agent_host_key_line(ctx),
     }
-    variables |= agent_page(ctx) | {"operator_guests": agent_map(ctx), "operator_domain": ctx.bare["domain"]}
-    variables |= agent_host(ctx) | agent_repo(ctx)
+    variables |= agent_page(ctx)
     run_playbook(ctx, "agents", "operator.yml", "operator", variables)
     keep_agent_key(ctx)
     key = ssh_user_ca(ctx, "agents")
@@ -2167,10 +2293,10 @@ def stage_agents(ctx: Context) -> None:
         run_playbook(ctx, "agents", "agent-ssh.yml", name, {"agent_ssh_user_ca_key": key})
 
 
-def agent_host(ctx: Context) -> dict:
-    """`ssh pve` on the operator: the host's mgmt address and its own key."""
+def agent_host_key_line(ctx: Context) -> str:
+    """The host's own key, for `ssh pve` on the operator to pin."""
     key = host_out(ctx, "agents", "cat /etc/ssh/ssh_host_ed25519_key.pub").split()
-    return {"operator_host_ip": ctx.bare["zones"]["mgmt"]["host_ip"], "operator_host_key": " ".join(key[:2])}
+    return " ".join(key[:2])
 
 
 def agent_repo(ctx: Context) -> dict:
@@ -2236,7 +2362,7 @@ def agent_page(ctx: Context) -> dict:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
             f.write(digest)
-    return {"operator_page_url": page_url(ctx), "operator_page_token": token, "operator_page_spki": page_spki(ctx, "agents")}
+    return {"operator_page_spki": page_spki(ctx, "agents")}
 
 
 def agent_map(ctx: Context) -> list[dict]:
@@ -2269,6 +2395,16 @@ def shippers(ctx: Context) -> list[str]:
 HOST_SHIPPER = "pve"
 
 
+def shipper_inputs(ctx: Context, name: str | None) -> dict:
+    """Where a shipper guest, or the host (None), pushes and under which name.
+    The host asks the owner's LAN for names, so it is given the gate's address."""
+    gate = fqdn(ctx, "monitoring")
+    found: dict = {"log_shipper_url": f"https://{gate}:3100/loki/api/v1/push", "log_shipper_host": name or HOST_SHIPPER}
+    if name is None:
+        found["log_shipper_resolve"] = {gate: ctx.bare["guests"]["monitoring"]["ip"]}
+    return found
+
+
 def stage_logs(ctx: Context) -> None:
     """Agent commands and SSH logins to Loki, from each shipper guest and
     from the PVE host. The host asks the owner's LAN for names, so it is
@@ -2276,19 +2412,10 @@ def stage_logs(ctx: Context) -> None:
     if not planned(ctx, "monitoring"):
         return
     root = ca_root(ctx, "logs")
-    gate = fqdn(ctx, "monitoring")
     for name in [*shippers(ctx), None]:
         label = name or HOST_SHIPPER
         cert, key = shipper_cert(ctx, "logs", label)
-        variables = {
-            "log_shipper_url": f"https://{gate}:3100/loki/api/v1/push",
-            "log_shipper_host": label,
-            "log_shipper_ca": root,
-            "log_shipper_cert": cert,
-            "log_shipper_key": key,
-        }
-        if name is None:
-            variables["log_shipper_resolve"] = {gate: ctx.bare["guests"]["monitoring"]["ip"]}
+        variables = shipper_inputs(ctx, name) | {"log_shipper_ca": root, "log_shipper_cert": cert, "log_shipper_key": key}
         run_playbook(ctx, "logs", "log-shipper.yml", name, variables)
 
 
@@ -2322,13 +2449,16 @@ def encryption_key(ctx: Context) -> str:
     return ctx.secrets.ensure("pbs_encryption_key", new)
 
 
+def pbs_inputs(ctx: Context) -> dict:
+    return {"pbs_disk": backups.DISK_PATH, "pbs_proxy_url": proxy_url(ctx, "pbs")}
+
+
 def stage_backups(ctx: Context) -> None:
     """PBS with its datastore volume, then the host's PBS storage and
     nightly job, which OpenTofu adds once it has PBS's fingerprint and token."""
     if not backups.enabled(ctx.plan):
         return
-    variables = {"pbs_disk": backups.DISK_PATH, "pbs_proxy_url": proxy_url(ctx, "pbs")}
-    run_playbook(ctx, "backups", "pbs.yml", "pbs", variables)
+    run_playbook(ctx, "backups", "pbs.yml", "pbs", pbs_inputs(ctx))
     token = json.loads(vm_out(ctx, "backups", "pbs", "sudo cat /root/nullbill/pbs-token.json"))["value"]
     info = vm_out(ctx, "backups", "pbs", "sudo proxmox-backup-manager cert info")
     fingerprint = next((line.split(": ", 1)[1].strip() for line in info.splitlines() if line.startswith("Fingerprint (sha256):")), "")
@@ -2435,6 +2565,15 @@ def direct_path(ctx: Context) -> None:
         ctx.say(f"vpn: {direct.line(found)}")
 
 
+def vpn_inputs(ctx: Context) -> dict:
+    return {
+        "vpn_routes": routes(ctx.plan, ctx.model),
+        "vpn_tag": TAG,
+        "vpn_auth_key": ctx.secrets.data.get("tailscale_auth_key", ""),
+        "vpn_port": TAILSCALE_PORT,
+    }
+
+
 def stage_vpn(ctx: Context) -> None:
     """Tailscale on the vpn guest as the tagged subnet router. It logs in once
     with the owner's one-time auth key; until then it waits, logged out. It
@@ -2445,12 +2584,7 @@ def stage_vpn(ctx: Context) -> None:
     if not push_policy(ctx, "vpn"):
         ctx.say("vpn: waiting for a Tailscale OAuth client; paste one on the page and run setup again")
         return
-    variables = {
-        "vpn_routes": routes(ctx.plan, ctx.model),
-        "vpn_tag": TAG,
-        "vpn_auth_key": ctx.secrets.data.get("tailscale_auth_key", ""),
-        "vpn_port": TAILSCALE_PORT,
-    }
+    variables = vpn_inputs(ctx)
     run_playbook(ctx, "vpn", "vpn.yml", "vpn", variables)
     status = json.loads(guest_out(ctx, "vpn", "vpn", ["tailscale", "status", "--json"]))
     if status.get("BackendState") == "Running":
@@ -2489,6 +2623,185 @@ def stage_verify(ctx: Context) -> None:
         ctx.say("verify: the next setup runs every step in full, not only what changed")
         raise ApplyError("verify", f"{len(failed)} checks failed")
     flag.unlink(missing_ok=True)
+
+
+@dataclass(frozen=True)
+class Step:
+    """One playbook on one machine as a setup run of this plan runs it: the
+    inputs that follow from the plan, the choices and the saved secrets, and
+    the names of those only the run itself reads (a certificate it signs, a
+    token a guest holds)."""
+
+    stage: str
+    playbook: str
+    machine: str | None  # None: the PVE host
+    inputs: dict
+    read: tuple[str, ...] = ()
+
+
+def step(ctx: Context, stage: str, playbook: str, machine: str | None, inputs: dict, read: tuple[str, ...] = ()) -> Step:
+    reached = {k: v for k, v in connection(ctx, machine).items() if not k.startswith("ansible_")}
+    return Step(stage, playbook, machine, reached | inputs, read)
+
+
+def foresee_host(ctx: Context) -> list[Step]:
+    console = console_inputs(ctx)
+    return [
+        step(ctx, "host", "host-baseline.yml", None, host_inputs(ctx), BROWSER_CERT["host_baseline"] if host_browser_cert(ctx) else ()),
+        step(ctx, "host", "console.yml", None, console, ("console_page_spki",) if console["console_enabled"] else ()),
+    ]
+
+
+# The browser CA's certificate and key as a role takes them: signed by the
+# run, and signed again when under 90 days remain.
+BROWSER_CERT = {
+    "host_baseline": ("host_baseline_api_cert", "host_baseline_api_key"),
+    "monitoring": ("monitoring_browser_cert", "monitoring_browser_key"),
+    "forgejo": ("forgejo_browser_cert", "forgejo_browser_key", "forgejo_browser_root"),
+    "model_gateway": ("model_gateway_browser_cert", "model_gateway_browser_key"),
+}
+
+
+def foresee_router(ctx: Context) -> list[Step]:
+    return [step(ctx, "router", "router.yml", "router", {"router_files": rendered(ctx, "router")})]
+
+
+def foresee_proxy(ctx: Context) -> list[Step]:
+    return [step(ctx, "proxy", "egress-proxy.yml", PROXY, {"egress_proxy_files": rendered(ctx, PROXY)})]
+
+
+def foresee_updates(ctx: Context) -> list[Step]:
+    return [step(ctx, "updates", "updates.yml", name, extra) for name, extra in update_guests(ctx).items()]
+
+
+def foresee_ca(ctx: Context) -> list[Step]:
+    domain = ctx.bare["domain"]
+    url = {"tls_cert_ca_url": f"https://step-ca.{domain}"}
+    certs = [step(ctx, "ca", "tls-cert.yml", name, extra | url, ("tls_cert_ca_root",)) for name, extra in cert_targets(ctx).items()]
+    return [step(ctx, "ca", "step-ca.yml", "step-ca", {"step_ca_domain": domain}), *certs]
+
+
+def foresee_postgres(ctx: Context) -> list[Step]:
+    return [step(ctx, "postgres", "postgres.yml", "postgres", postgres_inputs(ctx))] if planned(ctx, "postgres") else []
+
+
+def foresee_monitoring(ctx: Context) -> list[Step]:
+    if not planned(ctx, "monitoring"):
+        return []
+    read = ("monitoring_probe_ca", "monitoring_shipper_ca", *BROWSER_CERT["monitoring"])
+    return [step(ctx, "monitoring", "monitoring.yml", "monitoring", monitoring_inputs(ctx), read)]
+
+
+def foresee_forgejo(ctx: Context) -> list[Step]:
+    if not planned(ctx, "forgejo"):
+        return []
+    return [step(ctx, "forgejo", "forgejo.yml", "forgejo", forgejo_inputs(ctx), BROWSER_CERT["forgejo"])]
+
+
+def foresee_inference(ctx: Context) -> list[Step]:
+    if not llm.enabled(ctx.bare):
+        return []
+    return [
+        # The driver is built for the kernel the host runs, which the run reads.
+        step(ctx, "inference", "nvidia-host.yml", None, {}, (applied.FACTS,)),
+        step(ctx, "inference", "inference.yml", llm.INFERENCE, inference_inputs(ctx)),
+        step(ctx, "inference", "model-gateway.yml", llm.GATEWAY, gateway_inputs(ctx), BROWSER_CERT["model_gateway"]),
+    ]
+
+
+def foresee_files(ctx: Context) -> list[Step]:
+    return [step(ctx, "files", "files.yml", FILES, files_inputs(ctx))] if planned(ctx, FILES) else []
+
+
+def foresee_media(ctx: Context) -> list[Step]:
+    return [step(ctx, "media", "jellyfin.yml", media.JELLYFIN, jellyfin_inputs(ctx))] if media.enabled(ctx.bare) else []
+
+
+def foresee_games(ctx: Context) -> list[Step]:
+    return [
+        step(ctx, "games", games.playbook(ctx.model, name), name, games.variables(ctx.bare, ctx.model, name))
+        for name in games.planned(ctx.bare, ctx.model)
+    ]
+
+
+def foresee_ci(ctx: Context) -> list[Step]:
+    """The dispatcher only: a pool's golden image keeps no mark. When it is
+    baked again (a week old, or baked with other settings) the preview reads
+    from the record's applied.IMAGE entry."""
+    if not planned(ctx, "runner-dispatcher") or not linux_pools(ctx):
+        return []
+    return [step(ctx, "ci", "runner-dispatcher.yml", "runner-dispatcher", dispatcher_inputs(ctx), DISPATCHER_READ)]
+
+
+def foresee_agents(ctx: Context) -> list[Step]:
+    if not planned(ctx, "operator") or not agent_credential(ctx):
+        return []
+    key = ("agent_ssh_user_ca_key",)
+    return [
+        step(ctx, "agents", "operator.yml", "operator", operator_inputs(ctx), OPERATOR_READ),
+        *(step(ctx, "agents", "agent-ssh.yml", name, {}, key) for name in agent_guests(ctx)),
+    ]
+
+
+def foresee_logs(ctx: Context) -> list[Step]:
+    if not planned(ctx, "monitoring"):
+        return []
+    read = ("log_shipper_ca", "log_shipper_cert", "log_shipper_key")
+    return [step(ctx, "logs", "log-shipper.yml", name, shipper_inputs(ctx, name), read) for name in [*shippers(ctx), None]]
+
+
+def foresee_backups(ctx: Context) -> list[Step]:
+    return [step(ctx, "backups", "pbs.yml", "pbs", pbs_inputs(ctx))] if backups.enabled(ctx.plan) else []
+
+
+def foresee_vpn(ctx: Context) -> list[Step]:
+    """Tailscale is set up only once an OAuth client has pushed the policy."""
+    if not planned(ctx, "vpn") or tailnet_api(ctx) is None:
+        return []
+    return [step(ctx, "vpn", "vpn.yml", "vpn", vpn_inputs(ctx))]
+
+
+def foresee_custom(ctx: Context) -> list[Step]:
+    steps = []
+    for name in custom.planned(ctx.bare, ctx.model):
+        text = custom.read_script(ctx.home, name)
+        if text is not None:
+            variables = custom.variables(ctx.bare, ctx.model, name, text, proxy_url(ctx, name))
+            steps.append(step(ctx, "custom", custom.PLAYBOOK, name, variables))
+    return steps
+
+
+# Per stage, the playbook runs it makes, worked out from the plan, the
+# choices, the saved secrets and files in NULLBILL_HOME alone: the page's
+# preview (preview.py) calls these with a Reach that refuses, so none may ask
+# the server anything or write a file. A stage's own code takes its inputs
+# from the same builders, and tests/test_preview.py holds each stage to what
+# its entry here says. None: the stage runs no playbook on a machine that
+# keeps a mark.
+FORESEEN: dict[str, Callable[[Context], list[Step]] | None] = {
+    "render": None,
+    "tailnet": None,
+    "host": foresee_host,
+    "tofu": None,
+    "router": foresee_router,
+    "proxy": foresee_proxy,
+    "updates": foresee_updates,
+    "ca": foresee_ca,
+    "postgres": foresee_postgres,
+    "monitoring": foresee_monitoring,
+    "forgejo": foresee_forgejo,
+    "inference": foresee_inference,
+    "files": foresee_files,
+    "media": foresee_media,
+    "games": foresee_games,
+    "ci": foresee_ci,
+    "agents": foresee_agents,
+    "logs": foresee_logs,
+    "backups": foresee_backups,
+    "vpn": foresee_vpn,
+    "custom": foresee_custom,
+    "verify": None,
+}
 
 
 Stage = tuple[str, Callable[[Context], None]]

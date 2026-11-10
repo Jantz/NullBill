@@ -1198,6 +1198,37 @@ def friendly_error(text: str) -> tuple[str, str]:
     return "The agent's program stopped with an error.", raw[-1500:]
 
 
+BY_NAME = {"alone": "leaves_alone", "unknown": "not_known", "create": "creates"}
+
+
+def foreseen(found: dict | None) -> dict | str:
+    """The page's preview of a setup run for the agent: per machine the run
+    sets up again or changes, why, what that may restart and how long its
+    setup took last time; the rest by name, to keep status short."""
+    if not found:
+        return "not known: the page could not work it out"
+    out: dict = {}
+    if found.get("known") is False:
+        out["note"] = "no setup run has written down yet what each machine was set up with; the next one does"
+    if found.get("full"):
+        out["note"] = "the last run's checks failed, so this run goes through every step again"
+    if found.get("code"):
+        out["note"] = "the update also changes how NullBill works out settings; the review after updating says exactly"
+    for m in found["machines"]:
+        if m["what"] in BY_NAME:
+            out.setdefault(BY_NAME[m["what"]], []).append(m["name"])
+            continue
+        row: dict = {"does": {"again": "set up again"}.get(m["what"], m["what"]), "why": m["why"]}
+        if m["restart_note"]:
+            row["restarts"] = m["restart_note"]
+        if m["last"]:
+            row["its_setup_took_s_last_time"] = m["last"]["took_s"]
+            if m["last"].get("answered_s"):
+                row["answered_again_after_s"] = m["last"]["answered_s"]
+        out[m["name"]] = row
+    return out
+
+
 class Tools:
     """The server side of the agent's tools."""
 
@@ -1268,12 +1299,16 @@ class Tools:
             # Why the page asks for a setup run (Setup, Review and run), and
             # NullBill's own version (the Updates page).
             "setup_run_due_because": [r["text"] for r in st["review"]["reasons"]],
+            # The page's preview (nullbill/preview.py): worked out without
+            # asking the server, so it is safe to quote before a run.
+            "a_setup_run_now_would": foreseen(st["review"].get("machines")),
             "nullbill": version
             and {
                 "version": version["current"]["id"],
                 "updates_available": [c["subject"] for c in version["available"]],
                 "updates_waiting_for_a_setup_run": [c["subject"] for c in version["server"]["changes"]],
-            },
+            }
+            | ({"the_update_and_its_setup_run_would": foreseen(version["effect"])} if version.get("effect") else {}),
             "home_network": st["lan"]["state"],
             "tailscale": {"oauth_client": st["tailscale_client"], "auth_key_waiting": st["tailscale_key"]},
             # Access, Tailscale, Path: measured now, not remembered from a setup run.
@@ -1508,6 +1543,8 @@ class Tools:
             "updates_available": [c["subject"] for c in version["available"]],
             "updates_waiting_for_a_setup_run": [c["subject"] for c in version["server"]["changes"]],
         }
+        if version.get("effect"):
+            out["the_update_and_its_setup_run_would"] = foreseen(version["effect"])
         return yaml.safe_dump(out, sort_keys=False, width=200)
 
     def t_test_alert(self) -> str:

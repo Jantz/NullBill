@@ -786,6 +786,19 @@ select:disabled { color: var(--text-3); background: var(--bg-sub); cursor: not-a
 .table.review .sub { max-width: 64ch; white-space: normal; }
 .table.review td:nth-child(2) { width: 1%; }
 .table.review tr.review-delete > td:first-child { box-shadow: inset 3px 0 0 var(--bad-dot); }
+.table.review td { vertical-align: top; }
+.table.review .review-lines { margin-top: 3px; max-width: 68ch; white-space: normal; display: grid; gap: 2px; }
+.table.review td:nth-child(2) { white-space: nowrap; }
+.table.review td:nth-child(2) .sub { margin-left: 14px; }
+.review-names { margin-top: 14px; }
+.review-names > h4 { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--text); }
+.review-names > ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 6px; }
+.review-names > ul > li { padding: 2px 8px; border: 1px solid var(--line); border-radius: 6px; font-size: 12.5px; color: var(--text-2); background: var(--bg-sub); }
+.review-names > .help { margin: 8px 0 0; }
+#update-effect { margin-top: 18px; }
+#update-effect > .help { margin: 4px 0 0; }
+#update-effect > .table-wrap { margin-top: 8px; }
+#update-effect > .note { margin: 12px 0 0; }
 #review-diff-slot > pre { max-height: 420px; overflow: auto; }
 #step-build > .problem { max-width: 920px; margin-top: 20px; }
 #start-note { text-align: right; }

@@ -180,6 +180,13 @@ answered items move to the decisions list at the bottom.
 
 ## Decisions
 
+- The review before a setup run, and the Updates page for a waiting
+  update, say for each machine whether the run leaves it alone, sets it up
+  again and what may restart, creates or deletes it, and how long its
+  setup took last time; worked out on the controller, the server is asked
+  nothing (owner asked what an update does to his Minecraft server,
+  2026-11-10, then left the choice of what to build to Claude; design by
+  Claude, docs/adr/0017-setup-preview.md).
 - Many services, and ones NullBill has no support for: built-in services
   stay; anything else is a service of the owner's own, a guest NullBill
   makes plus a setup script, which the page's agent may add once the owner

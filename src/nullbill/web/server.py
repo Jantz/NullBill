@@ -41,8 +41,26 @@ from pathlib import Path
 
 import yaml
 
-from nullbill import browserca, custom, direct, games, hostroot, lan, legacy, llm, names, owner, people, power, tailscale, version
-from nullbill.apply import DISKS_FILE, GUESTS, NTFY, REMOVALS, SPKI, STAGES
+from nullbill import (
+    applied,
+    browserca,
+    custom,
+    direct,
+    games,
+    hostroot,
+    lan,
+    legacy,
+    llm,
+    names,
+    owner,
+    people,
+    power,
+    preview,
+    tailscale,
+    version,
+)
+from nullbill.apply import DISKS_FILE, FULL_NEXT, GUESTS, NTFY, REMOVALS, SPKI, STAGES, Context, split_target
+from nullbill.artifacts import render_all
 from nullbill.cli import plan_text, reach_target
 from nullbill.errors import NullBillError, Refused
 from nullbill.model import POWER_DEFAULTS, build_model
@@ -182,6 +200,8 @@ STAMPED = (
     "removals.json",
     "disks.json",
     "secrets.sops.yaml",
+    "applied.json",
+    "apply-full-next",
     "browser-ca/ca.crt",
     "web/owner.json",
     "web/update-check.json",
@@ -388,6 +408,8 @@ class App:
     # The checkout this NullBill runs from (nullbill/version.py).
     repo: Path = REPO
     version_seen: tuple[tuple, dict] | None = None
+    foreseen: tuple[tuple, dict | None] | None = None
+    update_seen: tuple[tuple, dict | None] | None = None
     checking: bool = False
 
     def __post_init__(self) -> None:
@@ -2223,7 +2245,10 @@ class App:
                 "last": last,
             }
             self.version_seen = (key, view)
-        return self.version_seen[1] | {"checked": check.get("checked"), "check_error": check.get("error")}
+        view = self.version_seen[1] | {"checked": check.get("checked"), "check_error": check.get("error")}
+        # What installing the waiting update, and the setup run after it, does to each machine.
+        view["effect"] = self.update_effect(head, check["commit"]) if view["available"] and self.built() else None
+        return view
 
     # What a setup run started now would do (web/review.py).
     def built_plan(self) -> str | None:
@@ -2273,6 +2298,9 @@ class App:
             "ready": bool(text),
             "reasons": reasons,
             "guests": [],
+            # What the run does to the host and each guest (nullbill/preview.py);
+            # None where that could not be worked out.
+            "machines": None,
             "disks": [],
             "sections": [],
             "difference": None,
@@ -2289,10 +2317,77 @@ class App:
         if existing is None and built is not None and was is None:
             existing, out["known"] = set(now.get("guests") or {}), False
         out["guests"] = reviewing.guests(now, was, existing, self.removal_notes(removals))
+        out["machines"] = self.foresee(out["id"], out["guests"])
         out["disks"] = reviewing.disks(now, was, self.facts() or {})
         out["sections"] = reviewing.sections(now, was)
         out["difference"] = reviewing.difference(was_text, text)
         return out
+
+    def quiet(self) -> Context | None:
+        """The saved choices as apply would take them up, in a context that
+        can only be read from (nullbill/preview.py). None before there is a
+        plan. Nothing in it reaches the server."""
+        config, facts = self.config(), self.facts()
+        if config is None or facts is None:
+            return None
+        model = build_model(config)
+        plan = build_plan(model, facts)
+        lan_host = split_target(((config.get("target") or {}).get("ssh")) or "")[1] or None
+        data = Secrets(self.codec(self.home)).data
+        return preview.context(plan, model, self.home, data, render_all(plan, model), lan_host)
+
+    def _seen(self, *names: str) -> list:
+        out = []
+        for name in names:
+            try:
+                out.append((self.home / name).stat().st_mtime_ns)
+            except OSError:
+                out.append(None)
+        return out
+
+    def foresee(self, review: str, guests: list[dict]) -> dict | None:
+        """What a setup run started now does to the host and each guest:
+        left alone, set up again and what that can restart, created or
+        deleted. Worked out from the controller's own record of the last
+        runs; the server is asked nothing. None where it cannot be said."""
+        # The hour too: a CI image comes due for its weekly bake by the clock.
+        key = (review, int(time.time() // 3600), *self._seen(applied.RECORD, "secrets.sops.yaml", FULL_NEXT, "lan.json", "plan.yaml"))
+        if self.foreseen is None or self.foreseen[0] != key:
+            found = None
+            try:
+                ctx = self.quiet()
+                if ctx is not None:
+                    built = self.last_setup()
+                    commit = self.built_with(built)[0] if built is not None else None
+                    base = preview.Baseline(
+                        ctx.secrets.data.get("applied_key"), applied.record(self.home), (self.home / FULL_NEXT).exists(), self.repo, commit
+                    )
+                    found = preview.machines(ctx, base, guests)
+            except (NullBillError, KeyError, OSError, ValueError, TypeError):
+                # The review stands without it: guests and disks, as before.
+                found = None
+            self.foreseen = (key, found)
+        return self.foreseen[1]
+
+    def update_effect(self, head: str, newest: str) -> dict | None:
+        """What the waiting update changes for the host and each guest, read
+        from the files the two commits hold. None where git cannot say."""
+        key = (head, newest, *self._seen(applied.RECORD, "plan.yaml", "config.yaml"))
+        if self.update_seen is None or self.update_seen[0] != key:
+            found = None
+            try:
+                ctx = self.quiet()
+                record = applied.record(self.home)
+                ran = [(s.machine, s.playbook) for s in preview.steps(ctx)[0]] if ctx is not None else []
+                if not ran:
+                    # No plan yet: the machines the last runs wrote down.
+                    ran = [(None if m == applied.HOST else m, pb) for m, pb in (entry.split("/", 1) for entry in record)]
+                    ran = [(m, pb) for m, pb in ran if pb != applied.IMAGE]
+                found = preview.update(self.repo, head, newest, ran, record)
+            except (NullBillError, KeyError, OSError, ValueError, TypeError):
+                found = None
+            self.update_seen = (key, found)
+        return self.update_seen[1]
 
     def hardware(self) -> dict | None:
         """The last probe, in a line or two."""

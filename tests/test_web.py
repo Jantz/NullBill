@@ -19,7 +19,7 @@ import yaml
 from fixturedata import fixture_config, write_raw
 from gitrepos import commit, git, make
 
-from nullbill import browserca, direct
+from nullbill import applied, apply, browserca, direct, preview
 from nullbill.errors import NullBillError, Refused
 from nullbill.model import build_model
 from nullbill.probe import parse
@@ -2242,6 +2242,110 @@ def test_a_server_built_before_the_page_kept_plans_is_not_called_new(site):
     os.utime(config, (time.time() + 5, time.time() + 5))
     review = client.call("/api/state")[1]["review"]
     assert {g["change"] for g in review["guests"]} == {"keep"} and review["known"] is False
+
+
+KEY = "k" * 32
+
+
+def written_down(app):
+    """What a setup run with the saved choices writes down of each playbook
+    it ran (applied.json), as apply's run_playbooks and bake do."""
+    codec = app.codec(app.home)
+    codec.save(codec.load() | {"applied_key": KEY})
+    ctx = app.quiet()
+    for s in preview.steps(ctx)[0]:
+        inputs = applied.prints(KEY, {}, s.inputs | dict.fromkeys(s.read, "as the run read it"))
+        applied.ran(app.home, s.machine, s.playbook, s.stage, "digest", inputs, 12.0)
+    for pool in apply.linux_pools(ctx):
+        applied.note(app.home, pool, applied.IMAGE, stage="ci", baked=time.time(), settings=apply.image_print(ctx, pool), took_s=300.0)
+
+
+def test_the_review_says_for_each_machine_what_the_run_does_to_it(site):
+    app, client = site
+    sign_in(app, client)
+    assert client.call("/api/state")[1]["review"]["machines"] is None  # no plan yet
+    wait(client, client.call("/api/jobs", {"action": "probe"})[1]["id"])
+    saved = {"workloads": ["agents", "linux-ci"], "backups": False, "owner_login": "owner-a@example.internal"}
+    client.call("/api/choices", saved)
+    review = client.call("/api/state")[1]["review"]
+    wait(client, setup(client)[1]["id"])
+    (app.home / "guests.json").write_text(json.dumps({"guests": [g["name"] for g in review["guests"]]}))
+    # A server built before runs wrote anything down: nothing is called left alone.
+    found = client.call("/api/state")[1]["review"]["machines"]
+    assert found["known"] is False and found["counts"]["alone"] == 0 and found["counts"]["unknown"] == len(found["machines"])
+    stamp = client.call("/api/status")[1]["stamp"]
+    written_down(app)
+    kept = app.codec(app.home).load()
+    assert client.call("/api/status")[1]["stamp"] != stamp  # an open page reads the review anew
+    found = client.call("/api/state")[1]["review"]["machines"]
+    names = [m["name"] for m in found["machines"]]
+    assert found["known"] is True and names[0] == preview.HOST and set(names[1:]) == {g["name"] for g in review["guests"]}
+    assert found["counts"]["alone"] == len(names)
+    # Other choices: what the run creates, and which neighbours it sets up again for that.
+    config = app.home / "config.yaml"
+    client.call("/api/choices", {**saved, "workloads": ["agents", "linux-ci", "media"]})
+    os.utime(config, (time.time() + 5, time.time() + 5))
+    found = client.call("/api/state")[1]["review"]["machines"]
+    by_name = {m["name"]: m for m in found["machines"]}
+    assert by_name["jellyfin"]["what"] == "create" and by_name["forgejo"]["what"] == "alone"
+    router = by_name["router"]
+    assert router["what"] == "again" and router["last"]["took_s"] == 12.0
+    assert {"what": "the whole machine", "how": "reboot"} in router["restarts"] and "may restart" in router["restart_note"]
+    # The page worked that out by itself: no job ran for it, and nothing was saved.
+    assert app.codec(app.home).load() == kept and not (app.home / browserca.DIR).exists()
+    # The last run's checks failed: the next one goes through every step.
+    (app.home / apply.FULL_NEXT).write_text("")
+    found = client.call("/api/state")[1]["review"]["machines"]
+    assert found["full"] is True and {m["name"]: m for m in found["machines"]}["forgejo"]["why"] == [preview.ALL_AGAIN]
+
+
+PLAYBOOK = "- hosts: all\n  roles:\n    - forgejo\n"
+ROLE = {
+    "tasks/main.yml": """
+- name: Settings
+  ansible.builtin.template:
+    src: app.ini.j2
+    dest: /etc/forgejo/app.ini
+  notify: Restart forgejo
+- name: Tool
+  ansible.builtin.copy:
+    src: nb-forgejo
+    dest: /usr/local/sbin/nb-forgejo
+""",
+    "handlers/main.yml": "- name: Restart forgejo\n  ansible.builtin.systemd:\n    name: forgejo\n    state: restarted\n",
+    "templates/app.ini.j2": "[server]\n",
+    "files/nb-forgejo": "#!/bin/sh\n",
+}
+
+
+def test_a_waiting_update_says_what_it_does_to_each_machine(installed):
+    app, client, work = installed
+    sign_in(app, client)
+    commit(work, PLAYBOOK, "Forgejo's playbook", "ansible/forgejo.yml")
+    for path, text in ROLE.items():
+        commit(work, text, f"Forgejo: {path}", f"ansible/roles/forgejo/{path}")
+    wait(client, client.call("/api/jobs", {"action": "upgrade"})[1]["id"])
+    restarted(app)
+    newest = commit(work, "[server]\nDOMAIN = forgejo\n", "Forgejo: its name", "ansible/roles/forgejo/templates/app.ini.j2")
+    # Before the server is built an update has nothing to restart.
+    assert client.call("/api/updates/check", {})[1]["version"]["effect"] is None
+    wait(client, client.call("/api/jobs", {"action": "probe"})[1]["id"])
+    client.call("/api/choices", {"workloads": ["agents"], "backups": False, "owner_login": "owner-a@example.internal"})
+    wait(client, setup(client)[1]["id"])
+    written_down(app)
+    effect = client.call("/api/state")[1]["version"]["effect"]
+    assert effect["code"] is False and effect["counts"]["again"] == 1
+    forgejo = effect["machines"][0]
+    assert forgejo["name"] == "forgejo" and forgejo["what"] == "again"
+    assert forgejo["why"] == ["The update sets it up differently: 1 file of forgejo changed."]
+    assert forgejo["restarts"] == [{"what": "forgejo", "how": "restart"}] and forgejo["last"]["took_s"] == 12.0
+    assert {m["what"] for m in effect["machines"][1:]} == {"alone"} and preview.HOST in {m["name"] for m in effect["machines"]}
+    assert git(app.repo, "rev-parse", "HEAD") != newest  # nothing of the update ran or was checked out
+    # A tool that no task restarts for, and a change to how NullBill plans: said as such.
+    commit(work, "#!/bin/sh\ntrue\n", "Forgejo: its tool", "ansible/roles/forgejo/files/nb-forgejo")
+    commit(work, "A = 1\n", "Plan: a new rule", "src/nullbill/plan.py")
+    effect = client.call("/api/updates/check", {})[1]["version"]["effect"]
+    assert effect["code"] is True and effect["machines"][0]["restarts"] == [{"what": "forgejo", "how": "restart"}]
 
 
 def test_updates_are_found_and_the_ones_that_change_setup_wait_for_a_run(installed):

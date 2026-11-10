@@ -44,7 +44,9 @@ TOOLS = [
     {
         "name": "status",
         "description": "The server at a glance: hardware, the owner's choices, whether the plan fits, the guests, recent "
-        "runs, home network and Tailscale state, monitoring alerts and the owner's access mode. Start here.",
+        "runs, home network and Tailscale state, monitoring alerts and the owner's access mode. Also what a setup run "
+        "started now, or a waiting update, would do to each machine: left alone, set up again and what may restart, "
+        "created or deleted; quote that when asked what a run or an update does to a service. Start here.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {

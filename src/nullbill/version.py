@@ -22,7 +22,13 @@ from nullbill.errors import NullBillError
 from nullbill.upgrade import BRANCH
 
 SETUP_PATHS = ["ansible", "src/nullbill"]
-NOT_SETUP = ["src/nullbill/web", "src/nullbill/agenttools.py", "src/nullbill/upgrade.py", "src/nullbill/version.py"]
+NOT_SETUP = [
+    "src/nullbill/web",
+    "src/nullbill/agenttools.py",
+    "src/nullbill/preview.py",
+    "src/nullbill/upgrade.py",
+    "src/nullbill/version.py",
+]
 FETCH_TIMEOUT_S = 60
 
 

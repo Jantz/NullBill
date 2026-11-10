@@ -2295,7 +2295,44 @@ function changeItem(c, tag, waiting) {
 
 // Setup, Review: why a run is due and what it does to the server, before
 // the owner starts it.
-const CHANGE_WORDS = {create: ["good", "Create"], delete: ["bad", "Delete"], change: ["warn", "Change"]};
+// What a run does to a machine, as the table says it (nullbill/preview.py).
+const WHAT_WORDS = {create: ["good", "Create"], delete: ["bad", "Delete"], change: ["warn", "Change"], again: ["info", "Set up again"]};
+// A machine's row: why the run touches it, what that can restart and how
+// long its setup took the last time, each on a line of its own.
+function machineLines(m, shared) {
+  const lines = m.why.map((text) => sentence(text));
+  if (m.restart_note) lines.push(m.restart_note);
+  if (m.last) {
+    const when = m.last.at ? ` the last time it ran, ${ago(m.last.at)}` : " the last time it ran";
+    const answered = m.last.answered_s ? ` It answered again ${duration(Math.round(m.last.answered_s))} later.` : "";
+    lines.push(`Its setup took ${duration(Math.round(m.last.took_s))}${when}.${answered}`);
+  }
+  if (m.on_demand && m.what !== "delete") lines.push("It runs on demand: if it is off, the run starts it and stops it again when it is done.");
+  // Guests of one choice lose the same things: said once, then referred to.
+  const text = lines.join("\n");
+  if (m.what === "delete" && shared.has(text)) return [`The same as for ${shared.get(text)}, above.`];
+  if (m.what === "delete") shared.set(text, m.name);
+  return lines;
+}
+function machineRow(m, guest, shared) {
+  const g = guest || {};
+  const restarts = m.restarts.some((x) => x.how !== "reload");
+  const [kind, word] = m.what === "again" ? [restarts ? "warn" : "info", "Set up again"] : WHAT_WORDS[m.what];
+  const lines = machineLines(m, shared);
+  return make("tr", {className: `review-${m.what}`},
+    make("td", {className: "name"}, make("span", {textContent: m.name}),
+      lines.length ? make("ul", {className: "plain review-lines"}, ...lines.map((text) => make("li", {textContent: text}))) : null),
+    make("td", {}, status(kind, word), m.what === "again" && restarts ? make("span", {className: "sub", textContent: "may restart"}) : null),
+    make("td", {className: "muted hide-phone", textContent: m.host ? "host" : [g.kind, g.zone].filter(Boolean).join(" · ")}),
+    make("td", {className: "num muted hide-phone", textContent: g.cores ? `${g.cores}${g.count ? ` × ${g.count}` : ""}` : ""}),
+    make("td", {className: "num muted hide-phone", textContent: g.memory_mib ? gib(g.memory_mib) : ""}));
+}
+// The review's guests as rows, for a server whose machines could not be
+// foreseen: what OpenTofu creates, deletes and changes, and nothing more.
+function guestsAsMachines(guests) {
+  return guests.map((g) => ({name: g.name, host: false, what: g.change === "keep" ? "unknown" : g.change, why: g.change === "change" ? [andList(g.detail)] : g.detail,
+    restarts: [], restart_note: "", last: null, on_demand: false}));
+}
 function renderReview() {
   const r = state.review;
   const due = setupDue();
@@ -2313,37 +2350,26 @@ function renderReview() {
   const guests = r.guests || [];
   show("review-what", r.ready);
   if (!r.ready) return;
-  const by = (change) => guests.filter((g) => g.change === change);
-  const [created, deleted, changed, kept] = [by("create"), by("delete"), by("change"), by("keep")];
+  const seen = r.machines;
+  const machines = seen ? seen.machines : guestsAsMachines(guests);
+  const by = (what) => machines.filter((m) => m.what === what);
+  const [created, deleted, changed, again, alone, unknown] = ["create", "delete", "change", "again", "alone", "unknown"].map(by);
   const erased = (r.disks || []).filter((d) => d.erases);
   const parts = [];
   if (created.length) parts.push(`creates ${count(created.length, "guest")}`);
   if (deleted.length) parts.push(`deletes ${count(deleted.length, "guest")}`);
   if (changed.length) parts.push(`changes ${count(changed.length, "guest")}`);
   if (erased.length) parts.push(`erases ${count(erased.length, "disk")}`);
-  const stay = kept.length ? `${count(kept.length, "guest")} stay${kept.length === 1 ? "s" : ""} as ${kept.length === 1 ? "it is" : "they are"}` : "";
-  $("review-summary").textContent = parts.length ? sentence(`This run ${andList(parts)}${stay ? `; ${stay}` : ""}`)
-    : stay ? sentence(`This run creates and deletes nothing; ${stay}`) : "";
+  if (again.length) parts.push(`sets ${again.length === 1 ? again[0].name : count(again.length, "machine")} up again`);
+  if (alone.length) parts.push(`leaves ${count(alone.length, "machine")} alone`);
+  $("review-summary").textContent = parts.length ? sentence(`This run ${andList(parts)}`) : "";
   show("review-unknown", r.known === false);
-  const size = (g) => [
-    make("td", {className: "muted hide-phone", textContent: [g.kind, g.zone].filter(Boolean).join(" · ")}),
-    make("td", {className: "num muted hide-phone", textContent: g.cores ? `${g.cores}${g.count ? ` × ${g.count}` : ""}` : ""}),
-    make("td", {className: "num muted hide-phone", textContent: g.memory_mib ? gib(g.memory_mib) : ""})];
-  // Guests of one choice lose the same things: said once, then referred to.
-  const said = new Map();
-  const loss = (g) => {
-    const text = g.detail.join(" ");
-    if (said.has(text)) return `The same as for ${said.get(text)}, above.`;
-    said.set(text, g.name);
-    return text;
-  };
-  const rows = [...deleted, ...created, ...changed].map((g) => {
-    const [kind, word] = CHANGE_WORDS[g.change];
-    return make("tr", {className: `review-${g.change}`},
-      make("td", {className: "name"}, make("span", {textContent: g.name}),
-        g.detail.length ? make("span", {className: "sub", textContent: g.change === "change" ? sentence(andList(g.detail)) : loss(g)}) : null),
-      make("td", {}, status(kind, word)), ...size(g));
-  });
+  // Before the first run that wrote down what each machine was set up with.
+  show("review-unseen", built() && (!seen || !seen.known));
+  show("review-full", Boolean(seen && seen.full));
+  const guestOf = new Map(guests.map((g) => [g.name, g]));
+  const shared = new Map();
+  const rows = [...deleted, ...created, ...changed, ...again].map((m) => machineRow(m, guestOf.get(m.name), shared));
   for (const d of r.disks || []) {
     rows.push(make("tr", {className: d.erases ? "review-delete" : ""},
       make("td", {className: "name"}, make("span", {textContent: `Disk ${d.id}`}), make("span", {className: "sub", textContent: d.text})),
@@ -2352,9 +2378,16 @@ function renderReview() {
   }
   show("review-table", rows.length > 0);
   $("review-rows").replaceChildren(...rows);
-  show("review-kept", kept.length > 0 && rows.length > 0);
-  $("review-kept-summary").textContent = `The ${count(kept.length, "guest")} that stay${kept.length === 1 ? "s" : ""} as ${kept.length === 1 ? "it is" : "they are"}`;
-  $("review-kept-names").textContent = kept.map((g) => g.name).join(", ");
+  // The machines the run does nothing to, by name: the answer to "what
+  // happens to this one" is here as often as in the table.
+  const names = (list) => list.map((m) => make("li", {textContent: m.name}));
+  show("review-alone", alone.length > 0);
+  $("review-alone-title").textContent = `Left alone (${alone.length})`;
+  $("review-alone-names").replaceChildren(...names(alone));
+  show("review-notknown", unknown.length > 0 && built());
+  $("review-notknown-title").textContent = `Not known (${unknown.length})`;
+  $("review-notknown-names").replaceChildren(...names(unknown));
+  show("review-foot", Boolean(seen && seen.known));
   const sections = r.sections || [];
   show("review-sections", sections.length > 0);
   $("review-sections").textContent = sections.length ? sentence(`The plan also differs in ${andList(sections)}`) : "";
@@ -2396,6 +2429,7 @@ function renderUpdates() {
   show("update-available", n > 0);
   $("update-available-title").textContent = n ? `What the update brings (${needSetup(v.available)})` : "";
   $("update-available-list").replaceChildren(...v.available.map((c) => changeItem(c, true)));
+  renderUpdateEffect(n > 0 ? v.effect : null);
   // The server.
   const b = v.server.built;
   $("server-built").replaceChildren(...(b ? [make("code", {textContent: b.id.slice(0, 7)}), make("span", {className: "meta", textContent: ` ${day(b.time)} · ${b.subject}`})]
@@ -2417,6 +2451,31 @@ function renderUpdates() {
     $("update-last-list").replaceChildren(...all.map((c) => changeItem(c, built(), pending)));
   }
   renderSystemUpdates();
+}
+// What the waiting update does to each machine: read from the files it
+// changes (nullbill/preview.py), before anything of it is installed.
+function renderUpdateEffect(e) {
+  show("update-effect", Boolean(e));
+  if (!e) return;
+  const again = e.machines.filter((m) => m.what === "again");
+  const alone = e.machines.filter((m) => m.what !== "again");
+  const first = "Updating restarts this page and nothing else.";
+  $("update-effect-text").textContent = again.length
+    ? `${first} The setup run after it sets ${again.length === 1 ? "one machine" : count(again.length, "machine")} up again:`
+    : `${first} By the files it changes, the setup run after it sets no machine up again.`;
+  show("update-effect-table", again.length > 0);
+  $("update-effect-rows").replaceChildren(...again.map((m) => {
+    const restarts = m.restarts.some((x) => x.how !== "reload");
+    const lines = machineLines(m, new Map());
+    return make("tr", {},
+      make("td", {className: "name"}, make("span", {textContent: m.name}),
+        make("ul", {className: "plain review-lines"}, ...lines.map((text) => make("li", {textContent: text})))),
+      make("td", {}, status(restarts ? "warn" : "info", "Set up again"), restarts ? make("span", {className: "sub", textContent: "may restart"}) : null));
+  }));
+  show("update-effect-alone", alone.length > 0);
+  $("update-effect-alone-title").textContent = `Left alone (${alone.length})`;
+  $("update-effect-alone-names").replaceChildren(...alone.map((m) => make("li", {textContent: m.name})));
+  show("update-effect-code", Boolean(e.code));
 }
 function needSetup(changes) {
   const k = changes.filter((c) => c.setup).length;

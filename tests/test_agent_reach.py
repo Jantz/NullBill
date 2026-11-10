@@ -572,3 +572,39 @@ def test_several_problems_reach_the_agent_and_the_owner_one_a_line(agent):
     assert app.tools.fits() == "the plan fits"
     app.plan = lambda: {"errors": ["memory: 4 GiB short", "disk: 10 GiB short"]}
     assert app.tools.fits() == "the plan does not fit:\n- memory: 4 GiB short\n- disk: 10 GiB short"
+
+
+def test_status_says_what_a_setup_run_would_do_to_each_machine(agent):
+    """The answer to "what happens to my Minecraft server when I run this":
+    the page's own preview, which asks the server nothing."""
+    app, client, host = chosen(agent, "auto")
+    view = call(client, "status")
+    # The agent reads all of it; the page shows only the end of a long answer.
+    done = kinds(view, "tool_done")[-1]
+    text = app.chat.output(done["full"]) if done.get("full") else done["output"]
+    assert len(text) < chat_module.MAX_OUTPUT
+    would = yaml.safe_load(text)["a_setup_run_now_would"]
+    # Nothing built yet: every machine is created, and none is called left alone.
+    assert "forgejo" in would["creates"] and "leaves_alone" not in would
+    assert "no setup run has written down yet" in would["note"]
+
+
+def test_the_preview_reads_for_the_agent_as_it_does_on_the_page():
+    row = {"name": "minecraft", "what": "again", "why": ["What it is set up with changed: settings (difficulty)."]}
+    row |= {"restart_note": "Minecraft may restart.", "last": {"took_s": 41.0, "answered_s": 34.0, "at": 1}}
+    rest = [{"name": "factorio", "what": "alone"}, {"name": "pbs", "what": "unknown"}, {"name": "jellyfin", "what": "create"}]
+    found = {"known": True, "full": False, "machines": [row, *rest]}
+    assert chat_module.foreseen(found) == {
+        "minecraft": {
+            "does": "set up again",
+            "why": row["why"],
+            "restarts": "Minecraft may restart.",
+            "its_setup_took_s_last_time": 41.0,
+            "answered_again_after_s": 34.0,
+        },
+        "leaves_alone": ["factorio"],
+        "not_known": ["pbs"],
+        "creates": ["jellyfin"],
+    }
+    assert chat_module.foreseen(None) == "not known: the page could not work it out"
+    assert "also changes how NullBill works out settings" in chat_module.foreseen({"code": True, "machines": []})["note"]
