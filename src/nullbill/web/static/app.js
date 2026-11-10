@@ -3705,6 +3705,7 @@ document.addEventListener("DOMContentLoaded", () => {
   wirePeople();
   wireTabs("platform-tabs", showPlatform);
   showPlatform(guessPlatform());
+  for (const code of document.querySelectorAll(".page-origin")) code.textContent = location.origin;
   $("trust-download").addEventListener("click", () => store.set("nb-trusted", "1"));
 
   // Palette.

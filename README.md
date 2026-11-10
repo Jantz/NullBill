@@ -149,9 +149,9 @@ It runs these stages in order and stops at the first one that fails.
 - **Use the coding agent**: [docs/runbooks/agent-access.md](docs/runbooks/agent-access.md)
   shows how to start it, read what it did, and cut it off.
 - **More step-by-step guides** are in [`docs/runbooks/`](docs/runbooks/):
-  adding a person, CI runners, restoring a guest, keeping a disk from your
-  old PC, running something only on demand, and keeping the keys you must
-  not lose.
+  the page as an app on Android, adding a person, CI runners, restoring a
+  guest, keeping a disk from your old PC, running something only on
+  demand, and keeping the keys you must not lose.
 
 ## Not done yet
 

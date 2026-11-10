@@ -80,7 +80,8 @@ no longer works.
   beside it has **Run the checks**, which runs every check again, and
   **Update NullBill**, which moves the page and setup to NullBill's newest
   version (press **Run setup** after it). The page installs as an app on your phone once it trusts the
-  server (**Access**, **Trust this server**).
+  server (**Access**, **Trust this server**;
+  [android-app.md](android-app.md) for Android).
 - **The agent** sits beside every page (on a phone, the **Agent** tab).
   Ask it why something broke, to update everything, or what to do next.
   It reads logs and runs read-only commands by itself; what it would

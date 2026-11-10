@@ -444,6 +444,8 @@ Tailscale.
    that system. The certificate warnings on the page, Proxmox, Forgejo and
    Grafana stop. [trust-this-server.md](trust-this-server.md) says what the
    certificate vouches for.
+2. On an Android phone, install the page as an app:
+   [android-app.md](android-app.md) has each step, Tailscale included.
 
 The page's **Services** page lists what runs, opens each service and shows
 the passwords setup made for it. [everyday-use.md](everyday-use.md) says

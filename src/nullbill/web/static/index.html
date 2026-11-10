@@ -538,11 +538,12 @@
           <button type="button" role="tab" id="tab-apple" aria-controls="howto-apple" data-tab="apple">iPhone and iPad</button>
         </div>
         <div id="howto-android" role="tabpanel" aria-labelledby="tab-android"><ol class="howto">
-          <li>On the phone, press <b>Download root certificate</b>.</li>
-          <li>Open <b>Settings</b> and search for <b>CA certificate</b>. On most phones it is under <b>Security and privacy, More security settings, Install from device storage</b>. Tap <b>CA certificate</b>, then <b>Install anyway</b>, and pick <b>nullbill-root.crt</b> from Downloads.</li>
-          <li>Open this page in Chrome again and choose <b>Install app</b>.</li>
-          <li>Firefox still warns? Open <b>Settings, About Firefox</b> and tap the Firefox logo until it says the debug menu is on. Back in <b>Settings</b>, open <b>Secret Settings</b>, turn on <b>Use third party CA certificates</b>, then close Firefox and open it again.</li>
-        </ol></div>
+          <li>Install <b>Tailscale</b> from Google Play, sign in with the server's Tailscale login and turn it on. For the app to reach the server whenever you open it, turn on <b>Always-on VPN</b> for Tailscale under <b>Settings, Network and internet, VPN</b>.</li>
+          <li>In Chrome on the phone, open <code class="page-origin">this page</code> and press <b>Download root certificate</b>.</li>
+          <li>Open <b>Settings</b> and search for <b>CA certificate</b> (Pixel: <b>Security and privacy, More security and privacy, Encryption and credentials, Install a certificate</b>; Samsung: <b>Security and privacy, More security settings, Install from device storage</b>). Tap <b>CA certificate</b>, then <b>Install anyway</b>, confirm with your screen lock, and pick <b>nullbill-root.crt</b> from Downloads.</li>
+          <li>Close Chrome, open this page again and press <b>Install the app</b> here, or tap the menu, <b>Install app</b>. If Chrome offers only <b>Create shortcut</b>, it does not trust the certificate yet: repeat step 3.</li>
+          <li>Firefox instead? It ignores the certificate until you open <b>Settings, About Firefox</b> and tap the Firefox logo until it says the debug menu is on. Back in <b>Settings</b>, open <b>Secret Settings</b>, turn on <b>Use third party CA certificates</b>, close Firefox and open it again. Then the menu, <b>Add app to Home screen</b>.</li>
+        </ol><p class="help">The app opens the page full screen and follows each update by itself; alerts still arrive in ntfy. If it says it cannot reach the server, Tailscale is off on the phone. The NullBill repository's <code>docs/runbooks/android-app.md</code> has these steps with what to do when one fails.</p></div>
         <div id="howto-windows" role="tabpanel" aria-labelledby="tab-windows" hidden><ol class="howto">
           <li>Press <b>Download root certificate</b> and open the file.</li>
           <li>Press <b>Install Certificate</b>, choose <b>Current User</b>, then <b>Place all certificates in the following store</b>, <b>Browse</b>, <b>Trusted Root Certification Authorities</b>. Press <b>Next</b>, <b>Finish</b>, and <b>Yes</b> to the warning.</li>

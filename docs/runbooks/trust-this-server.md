@@ -52,7 +52,8 @@ system; they are:
   certificate**, **Install anyway**, pick `nullbill-root.crt`. Chrome trusts
   it at once. If Firefox still warns: Settings, About Firefox, tap the logo
   until the debug menu is on; Settings, Secret Settings, turn on **Use third
-  party CA certificates**; restart Firefox.
+  party CA certificates**; restart Firefox. [android-app.md](android-app.md)
+  then installs the page as an app.
 - **Windows**: open the file, **Install Certificate**, **Current User**,
   **Place all certificates in the following store**, **Trusted Root
   Certification Authorities**, **Finish**, **Yes**. Restart the browser;
