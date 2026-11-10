@@ -12,6 +12,8 @@ its API on 127.0.0.1, as apply's media stage runs them.
   nb-jellyfin library NAME PATH    add a library NAME of PATH, once: never when a
                                    library holds PATH already, or after the
                                    owner removed the one made here (ADDED_DIR)
+  nb-jellyfin busy                 a line per reason Jellyfin is in use, for
+                                   nb-busy: nothing means it may be stopped
 
 setup, encoding and library print "changed" or "same". Until the first-run setup is
 done, anyone who reaches Jellyfin could make themselves its admin, so apply
@@ -190,6 +192,38 @@ def library(name: str, path: str) -> None:
     print("changed")
 
 
+# A device counts as using Jellyfin this long after it last asked for
+# anything; an app left open on a paused or finished title stops counting.
+ACTIVE_S = 300
+# nb-jellyfin's own sign-in, when it makes the API key.
+OWN_DEVICE = "nullbill-apply"
+
+
+def busy() -> None:
+    """Something playing, a device that asked for something lately, or a
+    task such as a library scan under way. Anything that stops Jellyfin from
+    answering is printed as a reason too, so it is not stopped unasked."""
+    key = read_secret(API_KEY_FILE)
+    if not key:
+        return  # not set up yet: nobody can be using it
+    try:
+        sessions = call("GET", f"/Sessions?activeWithinSeconds={ACTIVE_S}", token=key)
+        tasks = call("GET", "/ScheduledTasks?isHidden=false", token=key)
+    except (Refused, urllib.error.URLError, ConnectionError, ValueError) as err:
+        print(f"cannot ask Jellyfin who is using it ({err})")
+        return
+    sessions = [s for s in sessions if s.get("DeviceId") != OWN_DEVICE]
+    playing = sum(1 for s in sessions if s.get("NowPlayingItem"))
+    browsing = len(sessions) - playing
+    if playing:
+        print(f"playing on {playing} device{'' if playing == 1 else 's'}")
+    if browsing:
+        print(f"open on {browsing} device{'' if browsing == 1 else 's'}")
+    for task in tasks:
+        if task.get("State") == "Running":
+            print(f"at work: {task.get('Name', 'a task')}")
+
+
 def main(argv: list[str]) -> None:
     if argv[:1] == ["wait"] and len(argv) == 1:
         wait()
@@ -199,8 +233,10 @@ def main(argv: list[str]) -> None:
         encoding(argv[1], argv[2] if len(argv) == 3 else None)
     elif argv[:1] == ["library"] and len(argv) == 3:
         library(argv[1], argv[2])
+    elif argv == ["busy"]:
+        busy()
     else:
-        die("usage: nb-jellyfin wait | setup USER | encoding none | encoding qsv DEVICE | library NAME PATH")
+        die("usage: nb-jellyfin wait | setup USER | encoding none | encoding qsv DEVICE | library NAME PATH | busy")
 
 
 if __name__ == "__main__":

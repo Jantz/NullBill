@@ -5,7 +5,9 @@ Checks are built from the plan, so a service added by YAML is verified the
 same way as the catalog's. They run over SSH as `pct exec` in one container
 per zone; backups.py adds backup age and a restore test, llm.py the local
 model through the model gateway, media.py Jellyfin, games.py each game
-server. A check that cannot run reports SKIP, never PASS.
+server. A check that cannot run reports SKIP, never PASS: so does every
+check of a guest that runs on demand and is off (power.py), which verify
+never starts.
 
 People are not probed from inside: every person arrives as the vpn guest.
 What holds each of them to their own services is the tailnet policy, so
@@ -22,7 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from nullbill import agent, backups, browserca, ci, forge, games, hostroot, lan, legacy, llm, media, names
+from nullbill import agent, backups, browserca, ci, forge, games, hostroot, lan, legacy, llm, media, names, power
 from nullbill.errors import NullBillError
 from nullbill.flows import HOST, HOST_PORTS, resolve_flows
 from nullbill.probe import Runner
@@ -55,6 +57,8 @@ class Probe:
     # catalog's listener: what puts the program behind the port in place,
     # when NullBill does not; nothing answering is then DEGRADED, not FAIL.
     listener: str = ""
+    # Why it is not run: one end runs on demand and is off.
+    skip: str = ""
 
 
 def _tcp(ip: str, port: int) -> str:
@@ -66,13 +70,16 @@ def _connect_via(proxy: str, port: int, target: str) -> str:
     return f"timeout {TIMEOUT_S} bash -c 'exec 3<>/dev/tcp/{proxy}/{port}; printf \"{request}\" >&3; head -1 <&3' 2>/dev/null; echo rc=$?"
 
 
-def representatives(plan: dict) -> dict[str, str | None]:
-    """The container each zone's checks run from: its lowest-VMID LXC. Not
-    the nullbill container, which keeps a LAN leg until --close-lan."""
+def representatives(plan: dict, off: dict[str, str] | None = None) -> dict[str, str | None]:
+    """The container each zone's checks run from: its lowest-VMID LXC that
+    runs (off: those on demand that do not). Not the nullbill container,
+    which keeps a LAN leg until --close-lan."""
     reps: dict[str, str | None] = {}
     for zone in plan["zones"]:
         lxcs = sorted(
-            (g["vmid"], n) for n, g in plan["guests"].items() if g["zone"] == zone and g["kind"] == "lxc" and not g.get("installed")
+            (g["vmid"], n)
+            for n, g in plan["guests"].items()
+            if g["zone"] == zone and g["kind"] == "lxc" and not g.get("installed") and n not in (off or {})
         )
         reps[zone] = lxcs[0][1] if lxcs else None
     return reps
@@ -92,21 +99,26 @@ def _targets(plan: dict, model: dict, zone: str) -> list[tuple[str, str, int, st
     return out
 
 
-def probes(plan_with_notes: dict, model: dict, public_ip: str) -> tuple[list[Probe], list[Result]]:
-    """Every probe to run, and SKIPs for zones nothing can probe from."""
+def probes(plan_with_notes: dict, model: dict, public_ip: str, off: dict[str, str] | None = None) -> tuple[list[Probe], list[Result]]:
+    """Every probe to run, and SKIPs for zones nothing can probe from. off:
+    the guests on demand that are off, each with its workload's title; a
+    probe from or to one is marked to be skipped."""
     plan = strip_notes(plan_with_notes)
+    off = off or {}
     flows = resolve_flows(plan, model)
     out: list[Probe] = []
     skipped: list[Result] = []
     proxy = plan["guests"].get("egress-proxy")
     proxy_port = next((p["port"] for p in model["services"]["egress-proxy"].get("ports", [])), None)
     public_name = model["verify"]["public_name"]
-    reps = representatives(plan)
+    reps = representatives(plan, off)
     for zone, rep in reps.items():
         if rep is None:
-            skipped.append(Result("SKIP", f"zone {zone}", "no container to probe from"))
+            asleep = sorted({title for n, title in off.items() if plan["guests"][n]["zone"] == zone and plan["guests"][n]["kind"] == "lxc"})
+            reason = f"no container to probe from while {asleep[0]} is off" if asleep else "no container to probe from"
+            skipped.append(Result("SKIP", f"zone {zone}", reason))
             continue
-        out += _port_probes(plan, model, flows, zone, rep)
+        out += _port_probes(plan, model, flows, zone, rep, off)
         vmid = plan["guests"][rep]["vmid"]
         egress = plan["zones"][zone]["egress"]
         direct = egress == "direct"
@@ -128,11 +140,11 @@ def probes(plan_with_notes: dict, model: dict, public_ip: str) -> tuple[list[Pro
     for holder in ("operator", "runner-dispatcher"):
         guest = plan["guests"].get(holder)
         if guest and guest["kind"] == "lxc" and holder not in reps.values():
-            out += _port_probes(plan, model, flows, guest["zone"], holder)
+            out += _port_probes(plan, model, flows, guest["zone"], holder, off)
     return out, skipped
 
 
-def _port_probes(plan: dict, model: dict, flows: list, zone: str, rep: str) -> list[Probe]:
+def _port_probes(plan: dict, model: dict, flows: list, zone: str, rep: str, off: dict[str, str]) -> list[Probe]:
     out = []
     vmid = plan["guests"][rep]["vmid"]
     for dest, proto, port, ip in _targets(plan, model, zone):
@@ -143,9 +155,12 @@ def _port_probes(plan: dict, model: dict, flows: list, zone: str, rep: str) -> l
         label = "the PVE host" if dest == HOST else dest
         verb = "reaches" if allowed else "is refused"
         listener = model["services"].get(dest, {}).get("listener", "") if allowed else ""
-        out.append(
-            Probe(f"{rep} ({zone}) {verb} {label} tcp/{port}", vmid, _tcp(ip, port), "open" if allowed else "closed", listener=listener)
-        )
+        # Nothing answers for a guest that is off, which proves nothing
+        # about the firewall either way.
+        asleep = next((off[n] for n in (rep, dest) if n in off), "")
+        skip = power.off_reason(asleep) if asleep else ""
+        name = f"{rep} ({zone}) {verb} {label} tcp/{port}"
+        out.append(Probe(name, vmid, _tcp(ip, port), "open" if allowed else "closed", listener=listener, skip=skip))
     return out
 
 
@@ -307,6 +322,7 @@ def run_verify(
             *media.skipped(plan, reason),
             *games.skipped(plan, model, reason),
             *names.skipped(plan, reason),
+            *power.skipped(plan, reason),
             *(browserca.skipped(plan, reason) if browser_root is not None else []),
             *(_policy(plan, model, tailnet) if tailnet is not None else []),
         )
@@ -316,7 +332,19 @@ def run_verify(
         public_ip = resolve(name)
     except OSError as exc:
         raise NullBillError(f"verify: cannot resolve {name} on this controller: {exc}") from exc
-    planned, skipped = probes(plan, model, public_ip)
+    # What runs on demand and is off now: nothing reaches into it, and
+    # verify never starts it.
+    found = power.status(target, run) if bare.get("power") else None
+    off = power.off_guests(found)
+    awake = power.guard(bare, run, off)
+
+    def unless_off(check: Callable[[Runner], list[Result]], skipped_for: Callable[[dict, str], list[Result]]) -> list[Result]:
+        try:
+            return check(awake)
+        except power.Off as asleep:
+            return skipped_for(plan, power.off_reason(asleep.title))
+
+    planned, skipped = probes(plan, model, public_ip, off)
     rc, out, err = run(target, "pve-firewall status")
     if rc != 0 or "running" not in out:
         add(Result("FAIL", "pve-firewall is running", (out or err).strip()[:120]))
@@ -326,7 +354,8 @@ def run_verify(
     # In the plan's order, each probe from its container's batch.
     by_vmid: dict[int, list[Probe]] = {}
     for probe in planned:
-        by_vmid.setdefault(probe.vmid, []).append(probe)
+        if not probe.skip:
+            by_vmid.setdefault(probe.vmid, []).append(probe)
 
     def attempt(vmid: int) -> list[Result]:
         group = by_vmid[vmid]
@@ -337,6 +366,9 @@ def run_verify(
         done = {vmid: pool.submit(attempt, vmid) for vmid in by_vmid}
         told = dict.fromkeys(by_vmid, 0)
         for probe in planned:
+            if probe.skip:
+                add(Result("SKIP", probe.name, probe.skip))
+                continue
             add(done[probe.vmid].result()[told[probe.vmid]])
             told[probe.vmid] += 1
     add(*skipped)
@@ -347,14 +379,16 @@ def run_verify(
     add(*backups.check(plan, target, run, now))
     if "operator" in bare["guests"]:
         add(_agent_root(target, run))
-    add(*agent.check(plan, target, run))
-    add(*forge.check(plan, target, run))
-    add(*ci.check(plan, target, run))
-    add(*llm.check(plan, target, run))
-    add(*legacy.check(plan, target, run))
-    add(*media.check(plan, target, run))
-    add(*games.check(plan, model, target, run))
+    add(*agent.check(plan, target, run, off=off))
+    add(*unless_off(lambda r: forge.check(plan, target, r), forge.skipped))
+    add(*unless_off(lambda r: ci.check(plan, target, r), ci.skipped))
+    add(*unless_off(lambda r: llm.check(plan, target, r), llm.skipped))
+    # These two reach more than one workload and skip check by check.
+    add(*legacy.check(plan, target, awake))
+    add(*unless_off(lambda r: media.check(plan, target, r), media.skipped))
+    add(*games.check(plan, model, target, awake))
     add(*names.check(plan, target, run))
+    add(*power.check(plan, target, run, found))
     if browser_root is not None:
         add(*browserca.check(plan, browser_root, target, run, lan_closed=lan_state == lan.CLOSED))
     if tailnet is not None:

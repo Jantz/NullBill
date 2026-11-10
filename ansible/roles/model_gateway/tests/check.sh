@@ -89,6 +89,19 @@ ask() { # key model
     -H "Authorization: Bearer $1" -H 'Content-Type: application/json' \
     -d "{\"model\": \"$2\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}"
 }
+# nb-busy's question (the updates role installs nb-busy on a guest). Nobody
+# has asked the gateway anything yet: /health/liveliness above was this
+# check's own, so start from an empty log as a guest starts.
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends iproute2 procps >/dev/null
+install -m 0755 /ansible/roles/updates/files/nb-busy /usr/local/sbin/nb-busy
+busy=/etc/nullbill/busy.d/model-gateway
+: >/var/log/nginx/access.log
+[ -z "$($busy)" ] || { $busy; fail "an unused gateway reports nothing"; }
+# Monitoring's certificate probe: a TLS handshake and nothing more.
+openssl s_client -connect "$guest:4000" -servername "$name" </dev/null >/dev/null 2>&1 || fail "TLS handshake"
+sleep 1
+[ -z "$($busy)" ] || { $busy; cat /var/log/nginx/access.log; fail "a certificate probe is not use"; }
+
 code=$(ask sk-wrong-key qwen3.5-9b)
 [ "${code:0:1}" != 2 ] || fail "a wrong key got an answer"
 code=$(curl -sS --cacert /tmp/pki/ca.crt -o /dev/null -w '%{http_code}' "$url/v1/models")
@@ -105,3 +118,20 @@ curl -fsS --cacert /tmp/pki/ca.crt -H "Authorization: Bearer $key" "$url/v1/mode
 python3 -c 'import json; ids={m["id"] for m in json.load(open("/tmp/models.json"))["data"]}; assert ids == {"qwen3.5-9b", "local"}, ids' \
   || fail "models listed as qwen3.5-9b and local"
 pass "with the key, qwen3.5-9b and local both reach the model with the inference key"
+
+# After the requests above the gateway is in use for two minutes, and for
+# as long as a client stays connected.
+$busy | grep -Eqx "answered a request [0-9]+ s ago" || { $busy; fail "a request answered just now counts as use"; }
+touch -d "3 minutes ago" /var/log/nginx/access.log
+[ -z "$($busy)" ] || { $busy; fail "idle again two minutes after the last request"; }
+python3 - "$guest" <<'PY' &
+import socket, ssl, sys, time
+context = ssl.create_default_context(cafile="/tmp/browser/browser-ca.crt")
+with socket.create_connection((sys.argv[1], 4000)) as raw, context.wrap_socket(raw, server_hostname=sys.argv[1]):
+    open("/tmp/held", "w").close()
+    time.sleep(20)
+PY
+for _ in $(seq 50); do [ -e /tmp/held ] && break; sleep 0.1; done
+[ "$($busy)" = "1 client connected" ] || { $busy; fail "a client that stays connected counts as use"; }
+[ "$(nb-busy)" = "1 client connected" ] || { nb-busy; fail "nb-busy passes the gateway's answer on"; }
+pass "nb-busy: unused and probed by monitoring it says nothing; a request or a connected client is use"

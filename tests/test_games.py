@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from fixturedata import games_config
 
-from nullbill import games, people
+from nullbill import games, people, power
 from nullbill.cli import plan_text
 from nullbill.errors import NullBillError
 from nullbill.model import build_model
@@ -280,3 +280,33 @@ def test_verify_passes_fails_and_skips(facts):
     skipped = games.skipped(plan_with_notes, model, "the host is not reachable")
     assert [r.name for r in skipped] == list(answers)
     assert {r.status for r in skipped} == {"SKIP"}
+
+
+def test_a_game_runs_on_demand_and_stops_once_nobody_plays(facts):
+    """The catalog's rule for a game: off by itself after 30 minutes without
+    a player (nb-game busy says who plays), the other games as before."""
+    plan, model = planned(facts, {**games_config(), "power": {"minecraft": {"run": "on-demand"}}})
+    assert plan["power"]["groups"] == {
+        "minecraft": {
+            "title": "Minecraft",
+            "guests": ["minecraft"],
+            "memory_mib": plan["guests"]["minecraft"]["memory_mib"] // 2,
+            "stop": "auto",
+            "idle_minutes": 30,
+        }
+    }
+    assert plan["guests"]["minecraft"]["run"] == "on-demand"
+    assert "run" not in plan["guests"]["terraria"] and "run" not in plan["guests"]["factorio"]
+    assert {name: model["power"][name]["stop"] for name in GAMES} == dict.fromkeys(GAMES, "auto")
+
+
+def test_verify_skips_a_game_that_is_off_and_checks_the_others(facts):
+    plan_with_notes = build_plan(build_model({**games_config(), "power": {"minecraft": {"run": "on-demand"}}}), facts("large"))
+    plan, model = strip_notes(plan_with_notes), build_model(games_config())
+    answers = {command: want for _, command, want in games.commands(plan, model)}
+    awake = power.guard(plan, lambda target, command: (0, answers[command] + "\n", ""), {"minecraft": "Minecraft"})
+    results = games.check(plan_with_notes, model, "root@host", awake)
+    assert [r.name for r in results] == [label for label, _, _ in games.commands(plan, model)]
+    why = "Minecraft is off (it runs on demand); start it on the page, under Services, to check it"
+    assert {(r.status, r.detail) for r in results if r.name.startswith("minecraft")} == {("SKIP", why)}
+    assert {r.status for r in results if not r.name.startswith("minecraft")} == {"PASS"}

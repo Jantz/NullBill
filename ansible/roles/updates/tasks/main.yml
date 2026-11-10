@@ -130,6 +130,36 @@
       [Service]
       ExecStartPost=/usr/local/sbin/nb-update-metrics
 
+# Whether the guest is in use, for a guest that runs on demand: the host's
+# nb-power asks nb-busy every minute (docs/adr/0013-on-demand.md). A
+# service's role adds a program to busy.d that knows what use of it is.
+- name: nb-busy and where services add to it
+  when: updates_report_use | bool
+  block:
+    # ps and ss, which a minimal image may lack.
+    - name: What nb-busy asks with
+      ansible.builtin.apt:
+        name: [procps, iproute2]
+        install_recommends: false
+
+    - name: nb-busy
+      ansible.builtin.copy:
+        src: nb-busy
+        dest: /usr/local/sbin/nb-busy
+        mode: "0755"
+
+    - name: Directory for each service's own answer
+      ansible.builtin.file:
+        path: /etc/nullbill/busy.d
+        state: directory
+        mode: "0755"
+
+    - name: The service's ports, where a connection counts as use
+      ansible.builtin.copy:
+        dest: /etc/nullbill/busy-ports
+        content: "{{ updates_busy_ports | map('string') | join('\n') }}\n"
+        mode: "0644"
+
 - name: Services
   when: updates_manage_services | bool
   ansible.builtin.systemd_service:

@@ -67,6 +67,8 @@ def tier(command: str) -> str:
         "proxmox-backup-client snapshot list --repository root@pam@192.0.2.9:store",
         "mount -t ext4",
         "ip netns exec blue ip addr",
+        "nb-power status",
+        "/usr/local/sbin/nb-power status --json",
     ],
 )
 def test_read(command):
@@ -77,6 +79,10 @@ def test_read(command):
     "command",
     [
         "systemctl restart pveproxy",
+        "nb-power start media",
+        "nb-power stop inference --by agent",
+        "nb-power keep media on",
+        "nb-power tick",
         "apt-get install -y htop",
         "pct exec 105 -- systemctl restart forgejo",
         "echo hi > /tmp/x",

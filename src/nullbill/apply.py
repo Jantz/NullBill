@@ -28,12 +28,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from nullbill import applied, backups, browserca, ci, games, hostroot, lan, legacy, llm, media, names, owner, tailscale
+from nullbill import applied, backups, browserca, ci, games, hostroot, lan, legacy, llm, media, names, owner, power, tailscale
 from nullbill.artifacts import write_build
 from nullbill.errors import NullBillError
 from nullbill.flows import mac
 from nullbill.home import REPO_ROOT
-from nullbill.model import node_exporter_guest
+from nullbill.model import NODE_EXPORTER, node_exporter_guest
 from nullbill.probe import NTFS_CHECK, Runner, ntfs_state
 from nullbill.proxy import PROXY, proxy_port
 from nullbill.render import strip_notes
@@ -101,6 +101,8 @@ class Context:
     full: bool = False  # run every playbook, even where its inputs are unchanged (applied.py)
     remove_guests: bool = False  # the owner confirmed deleting the guests REMOVALS names
     pinned: set[str] = field(default_factory=set)  # VMs whose host key this run checked through PVE
+    held: bool = False  # this run had nb-power start a guest that runs on demand (ensure_on)
+    shut_down: set[str] = field(default_factory=set)  # guests this run shut down itself, to start again
 
     @property
     def bare(self) -> dict:
@@ -208,6 +210,61 @@ def _download_proxy(ctx: Context, name: str) -> dict:
     return {"downloads_proxy": proxy} if proxy else {}
 
 
+def ensure_on(ctx: Context, stage: str, guests: list[str]) -> None:
+    """Before apply reaches guests that run on demand (power.py): the host's
+    nb-power starts those that are off, together, if the host has the
+    memory, stopping first what this run started before and nobody uses.
+    It holds them until the run ends (end_hold). Guests that always run are
+    passed over."""
+    demand = power.on_demand(ctx.bare)
+    wanted = [g for g in guests if g in demand and ctx.bare["guests"][g]["kind"] != "vm-pool"]
+    if not wanted:
+        return
+    rc, out, err = ctx.reach.host(shlex.join([power.COMMAND, "ensure", *wanted]), timeout=900)
+    if rc == 127:
+        raise ApplyError(stage, f"{wanted[0]} runs on demand and the host has no nb-power yet; run setup in full once")
+    # Also when it failed part way: what it did start is stopped again.
+    ctx.held = True
+    if rc != 0:
+        raise ApplyError(stage, (err.strip().removeprefix("nb-power: ") or out.strip() or f"nb-power ensure: exit {rc}")[:500])
+    for line in out.splitlines():
+        what, _, name = line.partition(" ")
+        if what == "started":
+            ctx.say(f"{stage}: started {name}, which runs on demand, to set it up")
+        elif what == "stopped":
+            ctx.say(f"{stage}: stopped {name} again to make room; this run is done with it")
+
+
+def end_hold(ctx: Context) -> None:
+    """When the run ends, however it ends: nb-power stops again what was
+    off before it and nobody took up meanwhile."""
+    if not ctx.held:
+        return
+    ctx.held = False
+    rc, out, err = ctx.reach.host(f"{power.COMMAND} setup end", timeout=900)
+    if rc != 0:
+        why = (err.strip() or out.strip() or f"exit {rc}")[:200]
+        ctx.say(f"on demand: could not stop again what setup started ({why}); the host does so within {power.HOLD_S // 3600} h")
+        return
+    for line in out.splitlines():
+        ctx.say(f"on demand: {line}")
+
+
+def batches(ctx: Context, guests: list[str | None]) -> list[list[str | None]]:
+    """A playbook for several machines runs on them at once, which needs
+    them all up. Where the plan says not everything on demand fits at once,
+    it runs on the machines that always run first, then on each on-demand
+    workload's by itself."""
+    found = ctx.bare.get("power") or {}
+    if found.get("together", True):
+        return [guests]
+    demand = power.on_demand(ctx.bare)
+    parts: dict[str | None, list[str | None]] = {}
+    for name in guests:
+        parts.setdefault(demand.get(name) if name else None, []).append(name)
+    return [parts[key] for key in sorted(parts, key=lambda k: (k is not None, k or ""))]
+
+
 def run_playbook(
     ctx: Context, stage: str, playbook: str, name: str | None, variables: dict | None = None, facts: str = "", always: bool = False
 ) -> None:
@@ -234,6 +291,14 @@ def run_playbooks(
     good run had the same inputs is left out, unless it is in force.
     fresh: host vars made anew for each run (a one-time token), passed on
     but not part of the inputs."""
+    parts = batches(ctx, list(targets))
+    if len(parts) > 1:
+        for part in parts:
+            some = {name: targets[name] for name in part}
+            new = {name: extra for name, extra in (fresh or {}).items() if name in some}
+            run_playbooks(ctx, stage, playbook, some, variables, facts, always, force, new)
+        return
+    ensure_on(ctx, stage, [name for name in targets if name is not None])
     for name in targets:
         if name is not None:
             pin_host_key(ctx, stage, name)  # before any SSH to it, marks included
@@ -329,6 +394,8 @@ def stage_host(ctx: Context) -> None:
     if lan.state(ctx.home) == lan.CLOSED and not ctx.open_lan:
         cert, key = browser_cert(ctx, "host", "pve", address)
         api |= {"host_baseline_api_cert": cert, "host_baseline_api_key": key}
+    # What runs on demand, for the host's nb-power.
+    api["host_baseline_power"] = power.render_policy(ctx.plan)
     run_playbook(ctx, "host", "host-baseline.yml", None, api)
     # Before the firewall: a close in this run ends the LAN path apply came by.
     run_playbook(ctx, "host", "console.yml", None, console_vars(ctx))
@@ -763,7 +830,7 @@ def stop_files(ctx: Context) -> None:
     """Before a kept mount changes under it: a container keeps its own copy of
     the mount, so it must not run while the host unmounts."""
     if not ctx.files_stopped and files_mount_points(ctx) is not None and files_running(ctx):
-        host_out(ctx, "tofu", f"pct shutdown {files_vmid(ctx)} --timeout 60 --forceStop 1")
+        shut_down(ctx, "tofu", FILES, files_vmid(ctx))
         ctx.say("tofu: stopped the files guest while its disks change")
     ctx.files_stopped = True
 
@@ -901,11 +968,13 @@ def check_writable(ctx: Context, m: dict) -> None:
 def resume_guests(ctx: Context) -> None:
     """After a mount was refused: start the guests this run stopped for it,
     so a refused change does not leave the share and Jellyfin down."""
-    for stopped, exists, running, vmid in (
-        (ctx.files_stopped, files_mount_points, files_running, files_vmid),
-        (ctx.media_stopped, media_mount_points, media_running, media_vmid),
+    for name, stopped, exists, running, vmid in (
+        (FILES, ctx.files_stopped, files_mount_points, files_running, files_vmid),
+        (media.JELLYFIN, ctx.media_stopped, media_mount_points, media_running, media_vmid),
     ):
-        if stopped and exists(ctx) is not None and not running(ctx):
+        # One that runs on demand and was off before the run stays off.
+        was_off = name in power.on_demand(ctx.bare) and name not in ctx.shut_down
+        if stopped and not was_off and exists(ctx) is not None and not running(ctx):
             rc, _, _ = ctx.reach.host(f"pct start {vmid(ctx)}")
             ctx.say(f"tofu: {'started' if rc == 0 else 'could not start'} guest {vmid(ctx)} again after the refused mount")
 
@@ -996,7 +1065,7 @@ def stop_media(ctx: Context) -> None:
     if found is None or not found[0]:
         return
     if media_running(ctx):
-        host_out(ctx, "tofu", f"pct shutdown {media_vmid(ctx)} --timeout 60 --forceStop 1")
+        shut_down(ctx, "tofu", media.JELLYFIN, media_vmid(ctx))
         ctx.say("tofu: stopped the Jellyfin guest while its disks change")
     ctx.media_stopped = True
 
@@ -1039,7 +1108,7 @@ def attach_media(ctx: Context) -> None:
             sets.append(f"--mp{index} {shlex.quote(line)}")
     if sets:
         if not ctx.media_stopped and media_running(ctx):
-            host_out(ctx, "tofu", f"pct shutdown {vmid} --timeout 60 --forceStop 1")
+            shut_down(ctx, "tofu", media.JELLYFIN, vmid)
         ctx.media_stopped = True
         host_out(ctx, "tofu", f"pct set {vmid} {' '.join(sets)}")
         ctx.say(f"tofu: gave the Jellyfin guest {len(sets)} kept disk(s), read-only")
@@ -1047,7 +1116,7 @@ def attach_media(ctx: Context) -> None:
     # once the guest starts again.
     if not ctx.media_stopped and not (ctx.legacy_mounted and legacy.shares(ctx.bare)):
         return
-    host_out(ctx, "tofu", f"pct reboot {vmid} --timeout 60" if media_running(ctx) else f"pct start {vmid}")
+    see_changes(ctx, "tofu", media.JELLYFIN, 60, wake=False)
     ctx.media_stopped = False
 
 
@@ -1153,12 +1222,9 @@ def attach_shares(ctx: Context) -> None:
     free_moved(ctx)
     if not ctx.files_stopped and not ctx.legacy_mounted:
         return
-    if files_running(ctx):
-        # A disk mounted on the host after the guest started shows up in it
-        # only once the guest starts again.
-        host_out(ctx, "tofu", f"pct reboot {vmid} --timeout 60")
-    else:
-        host_out(ctx, "tofu", f"pct start {vmid}")
+    # A disk mounted on the host after the guest started shows up in it
+    # only once the guest starts again.
+    see_changes(ctx, "tofu", FILES, 60, wake=False)
     ctx.files_stopped = False
 
 
@@ -1252,8 +1318,18 @@ def update_guests(ctx: Context) -> dict[str | None, dict]:
             "updates_reboot_time": ctx.bare["updates"]["reboot_at"],
             "updates_guest_agent": guest["kind"] == "vm",
             "updates_keep_host_keys": guest["kind"] == "vm",
+            "updates_busy_ports": busy_ports(ctx, name),
         }
     return guests
+
+
+def busy_ports(ctx: Context, name: str) -> list[int]:
+    """The service's own TCP ports, where a connection from outside means
+    someone is using it (the updates role's nb-busy, until the service's
+    role says what use is). Not node_exporter's, which monitoring scrapes
+    all day, nor SSH, whose sessions nb-busy counts by themselves."""
+    ports = {p["port"] for p in ctx.model["services"][name].get("ports", []) if p["proto"] == "tcp"}
+    return sorted(ports - {22, NODE_EXPORTER["port"]})
 
 
 def stage_updates(ctx: Context) -> None:
@@ -1262,11 +1338,42 @@ def stage_updates(ctx: Context) -> None:
 
 def guest_out(ctx: Context, stage: str, name: str, argv: list[str], stdin: str | None = None) -> str:
     """Run a command in a container through the host's pct and return its output."""
+    ensure_on(ctx, stage, [name])
     vmid = ctx.bare["guests"][name]["vmid"]
     rc, out, err = ctx.reach.host(shlex.join(["pct", "exec", str(vmid), "--", *argv]), stdin=stdin)
     if rc != 0:
         raise ApplyError(stage, f"{name}: {argv[0]} {argv[1] if len(argv) > 1 else ''} failed: {(err.strip() or f'exit {rc}')[:200]}")
     return out
+
+
+def shut_down(ctx: Context, stage: str, name: str, vmid: int, timeout: int = 60) -> None:
+    """A clean shutdown of a container this run starts again (see_changes).
+    vmid: the plan may no longer hold the guest."""
+    host_out(ctx, stage, f"pct shutdown {vmid} --timeout {timeout} --forceStop 1")
+    ctx.shut_down.add(name)
+
+
+def start(ctx: Context, stage: str, name: str) -> None:
+    """Start a container that is off: through nb-power when it runs on
+    demand, so its memory is found first and it is stopped again when the
+    run ends."""
+    if name in power.on_demand(ctx.bare) and name not in ctx.shut_down:
+        ensure_on(ctx, stage, [name])
+    else:
+        host_out(ctx, stage, f"pct start {ctx.bare['guests'][name]['vmid']}")
+    ctx.shut_down.discard(name)
+
+
+def see_changes(ctx: Context, stage: str, name: str, timeout: int, wake: bool = True) -> None:
+    """Have a container see what was set for it on the host (a device, a
+    mount point): restarted when it runs, started when it does not. wake
+    False: one that runs on demand and was off before this run stays off;
+    it sees the change when it is next started."""
+    vmid = ctx.bare["guests"][name]["vmid"]
+    if "status: running" in host_out(ctx, stage, f"pct status {vmid}"):
+        host_out(ctx, stage, f"pct reboot {vmid} --timeout {timeout}")
+    elif wake or name not in power.on_demand(ctx.bare) or name in ctx.shut_down:
+        start(ctx, stage, name)
 
 
 STEP = "/etc/step-ca"
@@ -1310,7 +1417,7 @@ def stage_ca(ctx: Context) -> None:
     # A guest without a certificate good for another hour (they last 24 h,
     # so one runs out while the server is off) gets a one-time token for a
     # new one, and the role runs there whatever its inputs; all at once.
-    lapsed = {name for name in targets if not cert_valid(ctx, name)}
+    lapsed = {name for name in targets if name is not None and not cert_valid(ctx, name)}
     tokens: dict[str | None, dict] = {name: {"tls_cert_token": ca_token(ctx, "ca", name)} for name in sorted(lapsed)}
     variables = {"tls_cert_ca_url": f"https://step-ca.{domain}", "tls_cert_ca_root": root}
     run_playbooks(ctx, "ca", "tls-cert.yml", targets, variables, force=lapsed, fresh=tokens)
@@ -1318,6 +1425,7 @@ def stage_ca(ctx: Context) -> None:
 
 def cert_valid(ctx: Context, name: str) -> bool:
     """Whether name's tls_cert certificate is good for another hour, as the role asks."""
+    ensure_on(ctx, "ca", [name])
     path = shlex.quote(f"/etc/nullbill/tls/{name}.{ctx.bare['domain']}.crt")
     rc, out = _on_machine(ctx, name, f"openssl x509 -checkend 3600 -noout -in {path} >/dev/null 2>&1 && echo valid || true")
     return rc == 0 and out.strip() == "valid"
@@ -1501,8 +1609,7 @@ def give_gpu(ctx: Context, vmid: int, gpus: list[str]) -> None:
     if current:
         host_out(ctx, "inference", f"pct set {vmid} --delete {','.join(f'dev{n}' for n in sorted(current))}")
     host_out(ctx, "inference", f"pct set {vmid} " + " ".join(f"--dev{n} {shlex.quote(v)}" for n, v in enumerate(want)))
-    running = "status: running" in host_out(ctx, "inference", f"pct status {vmid}")
-    host_out(ctx, "inference", f"pct reboot {vmid} --timeout 120" if running else f"pct start {vmid}")
+    see_changes(ctx, "inference", llm.INFERENCE, 120)
     ctx.say(f"inference: gave the inference container {len(minors)} graphics card(s) and restarted it")
 
 
@@ -1529,14 +1636,14 @@ def stage_inference(ctx: Context) -> None:
     if loaded and loaded != version:
         # The container holds the old driver open, and its user space must
         # change along with it.
-        host_out(ctx, "inference", f"pct shutdown {vmid} --timeout 120 --forceStop 1")
+        shut_down(ctx, "inference", llm.INFERENCE, vmid, 120)
         ctx.say(f"inference: stopped the inference container to replace NVIDIA's driver {loaded} with {version}")
     # The module is built for the running kernel and must be the one loaded.
     kernel = host_out(ctx, "inference", "uname -r").strip()
     run_playbook(ctx, "inference", "nvidia-host.yml", None, facts=f"{kernel} {loaded}")
     give_gpu(ctx, vmid, section["gpus"])
     if "status: running" not in host_out(ctx, "inference", f"pct status {vmid}"):
-        host_out(ctx, "inference", f"pct start {vmid}")
+        start(ctx, "inference", llm.INFERENCE)
     backend_key = ctx.secrets.ensure("inference_key", lambda: secrets.token_urlsafe(32))
     variables = {
         "inference_nvidia_version": version,
@@ -1616,8 +1723,7 @@ def give_render_node(ctx: Context, vmid: int) -> str | None:
         host_out(ctx, "media", f"pct set {vmid} --delete {','.join(f'dev{n}' for n in sorted(current))}")
     if want:
         host_out(ctx, "media", f"pct set {vmid} --dev0 {shlex.quote(want[0])}")
-    running = "status: running" in host_out(ctx, "media", f"pct status {vmid}")
-    host_out(ctx, "media", f"pct reboot {vmid} --timeout 120" if running else f"pct start {vmid}")
+    see_changes(ctx, "media", media.JELLYFIN, 120)
     what = "gave the Jellyfin guest the integrated graphics" if want else "took the graphics off the Jellyfin guest"
     ctx.say(f"media: {what} and restarted it")
     return node
@@ -1877,6 +1983,9 @@ def stage_ci(ctx: Context) -> None:
     """Each Linux pool's golden image, then the dispatcher that clones it per job."""
     if not planned(ctx, "runner-dispatcher") or not linux_pools(ctx):
         return
+    # On demand, the workload is on while an image bakes: a bake takes the
+    # memory of one of its clones.
+    ensure_on(ctx, "ci", ["runner-dispatcher"])
     baked = [bake(ctx, name, guest) for name, guest in linux_pools(ctx).items()]
     # Making way for a new image stopped the dispatcher; its run starts it again.
     run_playbook(ctx, "ci", "runner-dispatcher.yml", "runner-dispatcher", dispatcher_vars(ctx), always=any(baked))
@@ -2096,6 +2205,7 @@ def stage_logs(ctx: Context) -> None:
 def vm_out(ctx: Context, stage: str, name: str, command: str) -> str:
     """Run a command on a VM as nullbill over SSH, through the host as
     Ansible reaches it, and return its output."""
+    ensure_on(ctx, stage, [name])
     pin_host_key(ctx, stage, name)
     conn = connection(ctx, name)
     argv = ["ssh", "-o", "BatchMode=yes", *shlex.split(conn["ansible_ssh_common_args"]), f"nullbill@{conn['ansible_host']}", command]
@@ -2303,11 +2413,14 @@ def run_apply(ctx: Context, stages: list[Stage] = STAGES, only: str | None = Non
     names = [n for n, _ in stages]
     if only is not None and only not in names:
         raise NullBillError(f"unknown stage {only!r}; stages are {', '.join(names)}")
-    for name, stage in stages:
-        if only in (None, name):
-            # The page follows apply by these lines (nullbill/web/progress.py).
-            print(f"{STAGE_MARK}{name}, {time.strftime(STAGE_TIME)}", flush=True)
-            stage(ctx)
+    try:
+        for name, stage in stages:
+            if only in (None, name):
+                # The page follows apply by these lines (nullbill/web/progress.py).
+                print(f"{STAGE_MARK}{name}, {time.strftime(STAGE_TIME)}", flush=True)
+                stage(ctx)
+    finally:
+        end_hold(ctx)
 
 
 SSH_RETRIES = 12

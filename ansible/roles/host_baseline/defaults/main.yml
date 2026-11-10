@@ -17,3 +17,8 @@ host_baseline_manage_services: true
 # Install ntfs-3g for a disk kept from a previous OS; apply sets it when the
 # plan keeps an NTFS partition.
 host_baseline_ntfs: false
+
+# nb-power's rules, as JSON text: which workloads run on demand, their
+# guests and how each stops (src/nullbill/power.py renders them from the
+# plan). The default is no rules: everything always runs.
+host_baseline_power: '{"groups": {}, "headroom_mib": 0}'

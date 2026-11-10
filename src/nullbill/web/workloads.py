@@ -8,9 +8,15 @@ turning it off deletes, and which of its guests the last setup run left on
 the server. Sizes come from the plan where it fits and from the catalog's
 floors and the owner's overrides where it does not, so a choice that does
 not fit still shows what it would take.
+
+`power` in its answer is When it runs: each planned workload that can be
+stopped (catalog.yaml's `power`, nullbill/power.py), whether it always runs
+or runs on demand and how it stops again. The memory meter counts what
+always runs and shows what runs on demand as sharing what that leaves.
 """
 
-from nullbill import games
+from nullbill import games, power
+from nullbill import model as modelling
 from nullbill import plan as planning
 from nullbill.errors import NullBillError
 from nullbill.render import strip_notes
@@ -242,6 +248,46 @@ def _game(model: dict, name: str) -> dict | None:
     return out
 
 
+def _when(model: dict, planned: dict, counted_for: dict[str, int]) -> list[dict]:
+    """When it runs: a row per planned workload other than core.
+    counted_for: what the plan counts for each guest."""
+    rows = []
+    found = dict.fromkeys(svc["workload"] for svc in planned.values() if svc["workload"] != "core")
+    # In the page's order, then what is not a choice there (the kept disks' shares).
+    for workload in [*(w for w in WORKLOADS if w in found), *(w for w in found if w not in WORKLOADS)]:
+        members = [n for n, svc in planned.items() if svc["workload"] == workload]
+        rule = {"title": workload, **modelling.POWER_DEFAULTS, **model["power"].get(workload, {})}
+        kinds = {planned[n]["kind"] for n in members}
+        blocked = None
+        if kinds == {"vm-pool"}:
+            blocked = "Nothing to stop: its VMs exist only while a job runs."
+        elif workload in UNFINISHED:
+            blocked = UNFINISHED[workload]
+        # A container says whether it is in use and a pool's clones show
+        # it; a VM alone shows only its CPU (power.groups).
+        sees_use = kinds != {"vm"} or "cpu_pct" in rule.get("busy", {})
+        rows.append(
+            {
+                "name": workload,
+                "title": rule["title"],
+                "run": rule["run"],
+                "stop": rule["stop"],
+                "idle_minutes": rule["idle_minutes"],
+                "guests": members,
+                "memory_mib": sum(counted_for[n] for n in members),
+                "blocked": blocked,
+                "auto": sees_use,
+                "auto_why": None
+                if sees_use
+                else (
+                    "A VM does not say whether someone is using it, so it never stops by itself. "
+                    f"To let it, set power.{workload}.busy.cpu_pct in config.yaml (docs/runbooks/on-demand.md)."
+                ),
+            }
+        )
+    return rows
+
+
 def options(model: dict, facts: dict | None, existing: set[str] | None) -> dict:
     """Each choice and the memory they come to, for `model` (a merged config)."""
     errors: list[str] = []
@@ -291,24 +337,37 @@ def options(model: dict, facts: dict | None, existing: set[str] | None) -> dict:
             }
         )
 
+    least = {n: counted(_size(model, n, None)) for n in planned}
+    when = _when(model, planned, least)
+    # What runs on demand shares what the rest leaves (power.groups says
+    # which rules count; one that cannot be stopped always runs).
+    demand = [w for w in when if w["run"] == power.ON_DEMAND and not w["blocked"]]
+    parked = {n for w in demand for n in w["guests"]}
     memory = None
     if facts:
-        base = [n for n, svc in planned.items() if option_of(n, svc) is None]
-        optional = [n for n, svc in planned.items() if option_of(n, svc) is not None]
+        base = [n for n, svc in planned.items() if option_of(n, svc) is None and n not in parked]
+        optional = [n for n, svc in planned.items() if option_of(n, svc) is not None and n not in parked]
         reserve_mib = planning.reserve(model, facts)[0]
-        base_mib = sum(counted(_size(model, n, None)) for n in base)
-        chosen_mib = sum(counted(_size(model, n, None)) for n in optional)
+        base_mib = sum(least[n] for n in base)
+        chosen_mib = sum(least[n] for n in optional)
+        free_mib = facts["memory_mib"] - reserve_mib - base_mib - chosen_mib
+        total = sum(w["memory_mib"] for w in demand)
         memory = {
             "host_mib": facts["memory_mib"],
             "reserve_mib": reserve_mib,
             "base_mib": base_mib,
             "chosen_mib": chosen_mib,
-            "free_mib": facts["memory_mib"] - reserve_mib - base_mib - chosen_mib,
+            # With everything on demand off; what runs on demand shares it.
+            "free_mib": free_mib,
+            "demand_mib": total,
+            "demand_largest_mib": max((w["memory_mib"] for w in demand), default=0),
+            "together": total <= free_mib,
             "share_pct": share,
             "base": base,
         }
     return {
         "items": items,
+        "power": when,
         "memory": memory,
         "errors": errors,
         "adds": None if existing is None else sorted(set(planned) - existing),

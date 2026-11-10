@@ -7,7 +7,7 @@ of them, so the owner sees every problem in one run.
 import ipaddress
 from typing import Any
 
-from nullbill import backups, ci, games, legacy, media
+from nullbill import backups, ci, games, legacy, media, power
 from nullbill.errors import NullBillError
 from nullbill.flows import SHARED
 from nullbill.proxy import allows
@@ -223,7 +223,12 @@ def _media(facts: dict, errors: _Errors) -> str | None:
     return max(usable, key=lambda s: (s["avail_gib"], s["name"]))["name"]
 
 
-def _size(model: dict, planned: dict, facts: dict, errors: _Errors) -> tuple[dict, dict[str, Note], dict]:
+def _size(
+    model: dict, planned: dict, facts: dict, errors: _Errors, on_demand: dict[str, list[str]] | None = None
+) -> tuple[dict, dict[str, Note], dict]:
+    """on_demand: the workloads that run on demand, each with its guests
+    (power.groups). They share what the guests that always run leave, so
+    each has to fit there by itself, not all of them at once."""
     overrides = model.get("overrides", {})
     for name in sorted(set(overrides) - set(planned)):
         errors.append(f"overrides.{name}: not a planned service")
@@ -259,12 +264,22 @@ def _size(model: dict, planned: dict, facts: dict, errors: _Errors) -> tuple[dic
     def counted(name: str, size: dict) -> int:
         return counted_mib(planned[name]["kind"], size["memory_mib"], container_pct, counts.get(name, 1))
 
+    on_demand = on_demand or {}
+    parked = {n for members in on_demand.values() for n in members}
     floor_total = sum(counted(n, s) for n, s in sizes.items())
-    if floor_total > available:
-        errors.append(
-            f"memory: planned guests need {floor_total} MiB at their floors (containers at {container_pct}% of their limit); "
-            f"the host has {facts['memory_mib']} MiB minus a {reserve_mib} MiB host reserve"
-        )
+    always_floor = sum(counted(n, s) for n, s in sizes.items() if n not in parked)
+    has = f"the host has {facts['memory_mib']} MiB minus a {reserve_mib} MiB host reserve"
+    if always_floor > available:
+        which = "guests that always run" if parked else "planned guests"
+        errors.append(f"memory: {which} need {always_floor} MiB at their floors (containers at {container_pct}% of their limit); {has}")
+    else:
+        for workload, members in on_demand.items():
+            needs = sum(counted(n, sizes[n]) for n in members)
+            if needs > available - always_floor:
+                errors.append(
+                    f"memory: {model['power'][workload]['title']} needs {needs} MiB while it runs, and with everything else "
+                    f"on demand off {available - always_floor} MiB is left beside the guests that always run ({has})"
+                )
 
     # Memory left after floors grows the pools whose count is not pinned, by
     # their grow weight, capped at one clone per `cores` host threads. Then
@@ -302,15 +317,20 @@ def _size(model: dict, planned: dict, facts: dict, errors: _Errors) -> tuple[dic
     if storage and disk > room:
         copies = f" besides {reserved} GiB for copies of kept disks" if reserved else ""
         errors.append(f"disk: guests need {disk} GiB, storage {storage['name']} has {room} GiB free{copies}")
-    allocated = sum(counted(n, s) for n, s in sizes.items())
+    allocated = sum(counted(n, s) for n, s in sizes.items() if n not in parked)
     limits_total = sum(s["memory_mib"] * counts.get(n, 1) for n, s in sizes.items())
+    group_mib = {w: sum(counted(n, sizes[n]) for n in members) for w, members in on_demand.items()}
 
+    counting = f"VMs in full, containers at {container_pct}% of their limit."
     memory = {
         "host_mib": facts["memory_mib"],
         "reserve_mib": Note(reserve_mib, reserve_why),
-        "guests_mib": Note(allocated, f"VMs in full, containers at {container_pct}% of their limit."),
+        "guests_mib": Note(allocated, counting + (" Only the guests that always run." if parked else "")),
         "limits_mib": Note(limits_total, "Every guest's memory limit added up; containers take theirs only as they use it."),
-        "unallocated_mib": Note(facts["memory_mib"] - reserve_mib - allocated, "Not assigned to any guest."),
+        "unallocated_mib": Note(
+            facts["memory_mib"] - reserve_mib - allocated,
+            "Shared by what runs on demand (power)." if parked else "Not assigned to any guest.",
+        ),
     }
     disk_section = {
         "storage": storage["name"] if storage else None,
@@ -320,7 +340,7 @@ def _size(model: dict, planned: dict, facts: dict, errors: _Errors) -> tuple[dic
         "media": Note(_media(facts, errors), "Holds the downloaded container template and cloud image."),
     }
     pool_counts = {n: Note(counts[n], f"Clones, {limits[n]}.") for n in pools}
-    return sizes, pool_counts, {"memory": memory, "disk": disk_section}
+    return sizes, pool_counts, {"memory": memory, "disk": disk_section, "on_demand_mib": group_mib}
 
 
 def reserve(model: dict, facts: dict) -> tuple[int, str]:
@@ -577,7 +597,8 @@ def build_plan(model: dict, facts: dict) -> dict:
         errors.append("intent asks for inference, but no host-shared GPU budgets VRAM to it")
     engine = _engine(model, inference_gpus) if "inference" in planned else None
     llm = _model(model, gpu_section, inference_gpus, errors) if "inference" in planned and inference_gpus else None
-    sizes, counts, capacity = _size(model, planned, facts, errors)
+    on_demand = power.groups(model, planned, errors)
+    sizes, counts, capacity = _size(model, planned, facts, errors, on_demand)
     disk_section, pbs = _disks(model, facts, errors, want_pbs="pbs" in planned, capacity=capacity["disk"])
     errors.raise_if_any()
 
@@ -611,10 +632,13 @@ def build_plan(model: dict, facts: dict) -> dict:
             del entry["ip"]
         if svc.get("agent_managed"):
             entry["agent_managed"] = True
+        if svc["workload"] in on_demand:
+            entry["run"] = Note(power.ON_DEMAND, "Off until started on the page; it does not start with the server (power).")
         if svc.get("installed"):
             entry["installed"] = Note(True, "Made by install.sh; apply adds its mgmt leg (docs/adr/0006-nullbill-on-the-server.md).")
         guests[name] = entry
 
+    demand = power.section(model, on_demand, capacity["on_demand_mib"], capacity["memory"]["unallocated_mib"].value)
     n_gpus = len([g for g in facts["gpus"] if not g["integrated"]])
     host_class = "small" if n_gpus == 0 else "mid" if n_gpus == 1 else "large"
     plan: dict[str, Any] = {
@@ -635,6 +659,7 @@ def build_plan(model: dict, facts: dict) -> dict:
         else Note({}, "Not planned."),
         "media": media_section,
         "games": games_section,
+        **({"power": demand} if demand else {}),
         "disks": disk_section,
         **_copies(facts),
         "backups": _backups(planned, pbs),

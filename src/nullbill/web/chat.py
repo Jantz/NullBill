@@ -111,6 +111,10 @@ Rules:
   few lines. Name the page's places as the owner sees them: Overview, Services, Activity, Alerts, Setup, Access, Agent.
 - A fix that belongs in NullBill's code: say so, name the file and the change; the owner can ask the operator agent
   (Agent page, Settings) to open a pull request with it.
+- A guest that runs on demand and is off (status, on_demand) is off on purpose, not broken. On the host,
+  `nb-power status` says what is on and why; `nb-power start NAME` and `nb-power stop NAME` are the page's Start and
+  Stop. Never start one with pct or qm: nb-power counts the memory. Whether it runs on demand at all is the owner's
+  choice, under Setup, What to run.
 """
 
 
@@ -927,6 +931,12 @@ class Tools:
             "agent_root_on_host": st["agent_powers"],
             "waiting_to_delete": st["removals"],
             "monitoring": self.app.status(),
+            # Off here is off on purpose; in_use is why a running one stays on.
+            "on_demand": [
+                {"name": g["name"], "title": g["title"], "state": g["state"], "memory_mib": g["memory_mib"], "stops": g["stop"]}
+                | ({"in_use": g["busy"]} if g.get("busy") else {})
+                for g in (self.app.on_demand() or {}).get("groups", [])
+            ],
             "access_mode": self.chat.settings()["mode"],
             "stages": progress.JOB_STAGES["apply"],
         }

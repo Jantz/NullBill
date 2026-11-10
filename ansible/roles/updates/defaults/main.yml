@@ -26,3 +26,9 @@ updates_guest_agent: false
 # apply would refuse the VM as an impostor. A CI pool's golden image is not
 # a guest this role runs on: each clone still makes keys of its own.
 updates_keep_host_keys: false
+# Install nb-busy, which tells the host whether this guest is in use; off
+# on the host itself. updates_busy_ports: the service's TCP ports from the
+# catalog, where a connection from outside counts as use unless the
+# service's role has put its own answer in /etc/nullbill/busy.d.
+updates_report_use: true
+updates_busy_ports: []

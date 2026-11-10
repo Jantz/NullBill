@@ -9,7 +9,7 @@ variables and environment, never part of the rendered files.
 
 import json
 
-from nullbill import agent, backups, ci, legacy, media
+from nullbill import agent, backups, ci, legacy, media, power
 from nullbill.flows import mac
 from nullbill.render import strip_notes
 
@@ -109,6 +109,18 @@ def _dns(plan: dict, zone: str) -> dict:
     return {"domain": plan["domain"], "servers": [plan["zones"][zone]["gateway"]]}
 
 
+def _on_demand(resource: dict, guest: dict, on_boot: str) -> dict:
+    """A guest that runs on demand (power.py) is made stopped and does not
+    start with the server; the host's nb-power starts and stops it, so
+    OpenTofu leaves whether it runs alone."""
+    if guest.get("run") != power.ON_DEMAND:
+        return resource
+    resource |= {on_boot: False, "started": False}
+    lifecycle = resource.setdefault("lifecycle", {})
+    lifecycle["ignore_changes"] = [*lifecycle.get("ignore_changes", []), "started"]
+    return resource
+
+
 def _container(name: str, guest: dict, plan: dict, model: dict, storage: str) -> dict:
     zone = guest["zone"]
     index, host = model["zones"][zone]["index"], model["services"][name]["id"]
@@ -156,7 +168,7 @@ def _container(name: str, guest: dict, plan: dict, model: dict, storage: str) ->
         # apply sets the kept disks' bind mounts and the integrated GPU's
         # render node as root, as for the files guest and inference.
         container["lifecycle"] = {"ignore_changes": ["mount_point", "device_passthrough"]}
-    return _in_agent_pool(container, guest)
+    return _in_agent_pool(_on_demand(container, guest, "start_on_boot"), guest)
 
 
 def _nic(bridge: str, address: str, model: str = "virtio") -> dict:
@@ -289,7 +301,7 @@ def _vm(name: str, guest: dict, plan: dict, model: dict, storage: str) -> dict:
         vm["lifecycle"] = {"ignore_changes": ["template"]}
         # In no pool: the dispatcher may clone it, nobody may start or change it.
         return vm
-    return _in_agent_pool(vm, guest)
+    return _in_agent_pool(_on_demand(vm, guest, "on_boot"), guest)
 
 
 MAPPING = "proxmox_hardware_mapping_pci"

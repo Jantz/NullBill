@@ -52,6 +52,15 @@ info=$(curl -sS -H "$pascal" http://127.0.0.1:8096/System/Info/Public)
 grep -q '"StartupWizardCompleted":true' <<<"$info" || fail "first-run setup done"
 pass "first-run setup done once, its password and API key root only"
 
+# nb-busy's question, before anyone has signed in: nb-jellyfin's own
+# sign-in for the API key does not count. The library scan Jellyfin runs
+# when it starts does, until it ends.
+for _ in $(seq 60); do
+  [ -z "$(/etc/nullbill/busy.d/jellyfin)" ] && break
+  sleep 2
+done
+[ -z "$(/etc/nullbill/busy.d/jellyfin)" ] || { /etc/nullbill/busy.d/jellyfin; fail "an unused Jellyfin reports nothing"; }
+
 code() { curl -sS -o /dev/null -w '%{http_code}' "$@"; }
 client='Authorization: MediaBrowser Client="check", Device="check", DeviceId="check", Version="1"'
 login() { # password
@@ -102,3 +111,35 @@ curl -fsS -X DELETE -H "$(key)" "http://127.0.0.1:8096/Library/VirtualFolders?na
 [ "$(nb-jellyfin library old-hdd /media/old-hdd)" = same ] || fail "a removed library stays removed"
 [ "$(folders)" = "[]" ] || fail "no library after the owner removed it (got $(folders))"
 pass "each kept disk becomes a library once, and one the owner removed is not made again"
+
+# In use: a device that signed in a moment ago, then one that plays. The
+# session is the one login() above made as device "check".
+nb-jellyfin busy | grep -qx "open on 1 device" || { nb-jellyfin busy; fail "a device that asked for something lately counts as use"; }
+token=$(curl -sS -H "$pascal" -H "$client" -H 'Content-Type: application/json' \
+  -d "{\"Username\": \"nullbill-admin\", \"Pw\": \"$(cat /etc/nullbill/jellyfin-admin-password)\"}" \
+  http://127.0.0.1:8096/Users/AuthenticateByName | python3 -c 'import json, sys; print(json.load(sys.stdin)["AccessToken"])')
+user_auth="Authorization: MediaBrowser Client=\"check\", Device=\"check\", DeviceId=\"check\", Version=\"1\", Token=\"$token\""
+[ "$(code -X POST -H "$user_auth" "http://127.0.0.1:8096/Library/VirtualFolders?name=Films&collectionType=movies&paths=/media/old-hdd/Films&refreshLibrary=true")" = 204 ] \
+  || fail "a library added"
+item=""
+for _ in $(seq 60); do
+  item=$(curl -sS -H "$pascal" -H "$user_auth" "http://127.0.0.1:8096/Items?Recursive=true&IncludeItemTypes=Movie" \
+    | python3 -c 'import json, sys; items = json.load(sys.stdin)["Items"]; print(items[0]["Id"] if items else "")')
+  [ -n "$item" ] && break
+  sleep 2
+done
+[ -n "$item" ] || fail "the library scan found the film"
+[ "$(code -X POST -H "$user_auth" -H 'Content-Type: application/json' -d "{\"ItemId\": \"$item\", \"CanSeek\": true}" http://127.0.0.1:8096/Sessions/Playing)" = 204 ] \
+  || fail "playback reported"
+nb-jellyfin busy >/tmp/busy.txt
+grep -qx "playing on 1 device" /tmp/busy.txt || { cat /tmp/busy.txt; fail "a device that plays counts as use"; }
+[ "$(code -X POST -H "$user_auth" -H 'Content-Type: application/json' -d "{\"ItemId\": \"$item\"}" http://127.0.0.1:8096/Sessions/Playing/Stopped)" = 204 ] \
+  || fail "playback stopped"
+pass "nb-jellyfin busy: nothing while unused, then a device that is open and one that plays"
+
+# Jellyfin gone: the guest must not be stopped for want of an answer.
+# shellcheck disable=SC2046
+kill $(pidof jellyfin)
+for _ in $(seq 30); do pidof jellyfin >/dev/null || break; sleep 1; done
+nb-jellyfin busy | grep -q "^cannot ask Jellyfin who is using it" || { nb-jellyfin busy; fail "no answer counts as use"; }
+pass "nb-jellyfin busy: a Jellyfin that does not answer counts as in use"

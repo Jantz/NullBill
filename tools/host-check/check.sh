@@ -181,6 +181,34 @@ test ! -e /var/lib/prometheus/node-exporter/nullbill-backups.prom || fail "backu
 grep -qx "OnUnitActiveSec=1h" /etc/systemd/system/nb-backup-metrics.timer || fail "backup metrics timer"
 echo "ok   backup metrics script and hourly timer, silent until the nightly job exists"
 
+# What runs on demand: nothing by default, so nb-power asks PVE nothing;
+# with rules from the plan it reads them (tests/test_nb_power.py covers
+# what it then does, against pct and qm stand-ins).
+grep -q "ExecStart=/usr/local/sbin/nb-power tick" /etc/systemd/system/nb-power.service || fail "on-demand unit"
+grep -q "OnUnitActiveSec=1min" /etc/systemd/system/nb-power.timer || fail "on-demand timer"
+[ "$(/usr/local/sbin/nb-power status)" = "nothing runs on demand" ] || fail "nb-power with no rules"
+/usr/local/sbin/nb-power tick || fail "nb-power tick with no rules"
+test ! -e /var/lib/prometheus/node-exporter/nullbill-power.prom || fail "on-demand metrics without rules"
+rules='{"groups": {"media": {"guests": [{"kind": "lxc", "memory_mib": 2048, "name": "jellyfin", "vmid": 2024}], "idle_minutes": 30, "memory_mib": 1024, "stop": "auto", "title": "Jellyfin"}}, "headroom_mib": 3000}'
+python3 -c 'import json, sys; print(json.dumps({"host_baseline_power": sys.argv[1]}))' "$rules" >/tmp/power.json
+play -e @/tmp/power.json >/tmp/power.log 2>&1 || { cat /tmp/power.log; fail "run with on-demand rules"; }
+[ "$(cat /etc/nullbill/power.json)" = "$rules" ] || fail "on-demand rules written as given"
+cat >/usr/local/bin/pct <<'PCT'
+#!/bin/sh
+[ "$1" = list ] && echo "2024 stopped jellyfin"
+exit 0
+PCT
+printf '#!/bin/sh\nexit 0\n' >/usr/local/bin/qm
+chmod +x /usr/local/bin/pct /usr/local/bin/qm
+/usr/local/sbin/nb-power status | grep -q "^media  *off  *1024 MiB  Jellyfin$" || { /usr/local/sbin/nb-power status; fail "nb-power reads its rules"; }
+/usr/local/sbin/nb-power tick || fail "nb-power tick"
+grep -qx 'nb_power_guest_off{guest="jellyfin",group="media"} 1' /var/lib/prometheus/node-exporter/nullbill-power.prom || fail "on-demand metrics"
+rm /usr/local/bin/pct /usr/local/bin/qm
+play >/tmp/power-off.log 2>&1 || { cat /tmp/power-off.log; fail "run without on-demand rules"; }
+/usr/local/sbin/nb-power tick || fail "nb-power tick after the rules went"
+test ! -e /var/lib/prometheus/node-exporter/nullbill-power.prom || fail "on-demand metrics left behind"
+echo "ok   nb-power and its timer: silent without rules, reads the plan's rules, exports what is off"
+
 legacy_disk_checks
 
 test -s /etc/audit/rules.d/50-nullbill.rules || fail "audit rules"

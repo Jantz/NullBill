@@ -38,18 +38,18 @@ from pathlib import Path
 
 import yaml
 
-from nullbill import browserca, hostroot, lan, legacy, llm, names, owner, people, tailscale
+from nullbill import browserca, hostroot, lan, legacy, llm, names, owner, people, power, tailscale
 from nullbill.apply import DISKS_FILE, GUESTS, NTFY, REMOVALS, SPKI, STAGES
 from nullbill.cli import plan_text, reach_target
 from nullbill.errors import NullBillError
-from nullbill.model import build_model
+from nullbill.model import POWER_DEFAULTS, build_model
 from nullbill.plan import build_plan, guest_storage, planned_services
 from nullbill.probe import ssh_run
 from nullbill.render import strip_notes
 from nullbill.secretfile import Codec, Secrets, Sops
 from nullbill.tailnet import TAG, render_tailnet
 from nullbill.tailscale import MissingScope, Tailnet, TailscaleError
-from nullbill.web import chat, progress, workloads
+from nullbill.web import chat, demand, progress, workloads
 from nullbill.web.services import PASSWORDS, services, shares
 
 SESSION_S = 12 * 3600
@@ -136,6 +136,11 @@ WATCH_S = 5
 # What Tailscale said about the tailnet's devices and policy is shown for
 # this long before the People tab asks again.
 TAILNET_CACHE_S = 30
+# What runs on demand is asked of the host over SSH, at most this often.
+POWER_CACHE_S = 5
+# A start waits for the guest to boot, a stop for a clean shutdown: a VM
+# gets three minutes for it (nb-power's stop_guest).
+POWER_TIMEOUT_S = 330
 SECURITY_HEADERS = {
     "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'",
     "X-Content-Type-Options": "nosniff",
@@ -293,6 +298,10 @@ class App:
     github: Callable[[str, str], dict] = github_json
     # The page reaches the host over SSH for the agent's switch.
     host_run: Callable[[str, str], tuple[int, str, str]] = ssh_run
+    # Starting and stopping what runs on demand, which takes longer.
+    host_act: Callable[[str, str], tuple[int, str, str]] = functools.partial(ssh_run, timeout=POWER_TIMEOUT_S)
+    power_seen: tuple[float, dict | None] | None = None
+    power_acting: dict[str, str] = field(default_factory=dict)
     # Tailscale's API with the owner's OAuth client, for the People tab.
     tailnet_client: Callable[[str, str], Tailnet] = Tailnet
     tailnet_seen: tuple[float, dict] | None = None
@@ -385,13 +394,25 @@ class App:
                 for a in self.fetch(api + "alerts")["data"]["alerts"]
                 if a.get("state") == "firing" and a["labels"].get("alertname") != "Watchdog"
             ]
-            up = query("up")
+            up = [(r["metric"].get("instance", "?"), r["value"][1]) for r in query("up")]
+            # Off on purpose is not down (nb-power's metrics, from the host).
+            on_demand = bool((plan or {}).get("power"))
+            off = {r["metric"].get("guest", "?") for r in query("nb_power_guest_off == 1")} if on_demand else set()
+            asks = query("nb_power_group_idle_seconds and on (group) (nb_power_group_asks == 1)") if on_demand else []
             return {
                 "monitoring": "ok",
                 "alerts": sorted(alerts, key=lambda a: (a["severity"] != "page", a["name"])),
-                "targets": len(up),
-                "down": sorted(r["metric"].get("instance", "?") for r in up if r["value"][1] == "0"),
-                "answering": sorted(r["metric"].get("instance", "?") for r in up if r["value"][1] == "1"),
+                "targets": sum(1 for name, _ in up if name not in off),
+                "down": sorted(name for name, value in up if value == "0" and name not in off),
+                "answering": sorted(name for name, value in up if value == "1"),
+                "off": sorted(off),
+                "asks": sorted(
+                    (
+                        {"name": r["metric"].get("group", "?"), "title": r["metric"].get("title", "?"), "idle_s": int(float(r["value"][1]))}
+                        for r in asks
+                    ),
+                    key=lambda a: a["name"],
+                ),
                 "security_waiting": instances('sum by (instance) (apt_upgrades_pending{origin=~".*-security.*"}) > 0'),
                 "reboot_waiting": instances("node_reboot_required == 1"),
             }
@@ -755,6 +776,78 @@ class App:
         name = f"{llm.GATEWAY}.{plan['domain']}"
         return {"url": f"https://{name}:{llm.GATEWAY_PORT}/v1", "name": name, "ip": guest["ip"], "model": model, "key_set": has_key}
 
+    # On demand (nullbill/power.py): what the host's nb-power says is on,
+    # and the owner's Start, Stop and Keep on.
+    def saved_plan(self) -> dict:
+        path = self.home / "plan.yaml"
+        return (yaml.safe_load(path.read_text()) or {}) if path.exists() else {}
+
+    def on_demand(self, fresh: bool = False) -> dict | None:
+        """What runs on demand and what each is doing; None when nothing
+        does. The host is asked only when the plan or a change not built
+        yet says something may run on demand there."""
+        planned = demand.rules(self.saved_plan())
+        if not planned and not self.config_changed():
+            return None
+        target = self.host_target() if self.built() else None
+        if target is None:
+            return demand.view(planned, None, {}, "Nothing is on the server yet: run setup.") if planned else None
+        now = time.monotonic()
+        with self.lock:
+            seen = self.power_seen
+        if fresh or seen is None or now - seen[0] > POWER_CACHE_S:
+            live = power.status(target, self.host_run)
+            with self.lock:
+                self.power_seen = (now, live)
+        else:
+            live = seen[1]
+        if not planned and not (live and live["groups"]):
+            return None
+        why = None if live else "The server does not say what is on right now. If you just chose what runs on demand, run setup."
+        with self.lock:
+            acting = dict(self.power_acting)
+        return demand.view(planned, live, acting, why)
+
+    def power_act(self, body: dict, by: str = "the page") -> dict:
+        """Start or stop a workload that runs on demand, or keep it on. A
+        start that does not fit and a stop of something in use change
+        nothing and say so, so the page asks before it sends it again with
+        what the owner agreed to (`stop`, `force`)."""
+        target = self.host_target() if self.built() else None
+        live = power.status(target, self.host_run) if target else None
+        if live is None:
+            raise NullBillError("the server does not answer for what runs on demand; run setup")
+        groups = {g["name"]: g for g in live["groups"]}
+        action, name, line = demand.command(body, set(groups), by)
+        group = groups[name]
+        if action == "stop" and group.get("setup"):
+            raise NullBillError(f"a setup run is using {group['title']} and stops it again when it is done")
+        if action == "stop" and group.get("busy") and body.get("force") is not True:
+            return {"ok": False, "busy": group["busy"], "title": group["title"], "view": self.on_demand()}
+        with self.lock:
+            if name in self.power_acting:
+                raise NullBillError(f"{group['title']} is {self.power_acting[name]}; wait for it")
+            if action != "keep":
+                self.power_acting[name] = "starting" if action == "start" else "stopping"
+        print(f"nullbill-web: on demand: {action} {name} by {by}", file=sys.stderr, flush=True)
+        try:
+            rc, out, err = self.host_act(target, line)
+        finally:
+            with self.lock:
+                self.power_acting.pop(name, None)
+                self.power_seen = None
+        try:
+            answer = json.loads(out)
+        except ValueError:
+            answer = None
+        if rc == power.NO_ROOM and isinstance(answer, dict) and answer.get("error") == "no-room":
+            return {"ok": False, "no_room": answer, "title": group["title"], "view": self.on_demand(fresh=True)}
+        if rc != 0 or not isinstance(answer, dict) or not answer.get("ok"):
+            said = answer.get("error") if isinstance(answer, dict) else None
+            raise NullBillError(str(said or err.strip()[:300] or f"nb-power: exit {rc}"))
+        keys = ("already", "stopped", "warnings", "keep")
+        return {"ok": True, "title": group["title"], **{k: answer[k] for k in keys if k in answer}, "view": self.on_demand(fresh=True)}
+
     def removals(self) -> list[str]:
         """Guests the last setup stopped before deleting, until the owner
         confirms. One that was gone from the plan and is in the saved plan
@@ -810,7 +903,7 @@ class App:
         try:
             model = build_model(config)
         except NullBillError as exc:
-            return {"items": [], "memory": None, "errors": exc.messages, "adds": None, "removes": None, "advice": []}
+            return {"items": [], "power": [], "memory": None, "errors": exc.messages, "adds": None, "removes": None, "advice": []}
         out = workloads.options(model, self.facts(), self.existing_guests())
         other = "Turn off a choice, or change one, until this no longer applies."
         out["advice"] = list(dict.fromkeys(progress.advice(m, default=other) for m in out["errors"]))
@@ -929,6 +1022,8 @@ class App:
             del config["host"]
         if isinstance(body.get("gpus"), dict):
             self._gpu_pins(config, body["gpus"])
+        if isinstance(body.get("power"), dict):
+            self._power_pins(config, body["power"], strict=saving)
         if isinstance(body.get("disks"), dict):
             pins = self._disk_pins(config, body["disks"], confirm=saving)
             if pins:
@@ -936,6 +1031,41 @@ class App:
             else:
                 config.pop("disks", None)
         return config
+
+    def _power_pins(self, config: dict, chosen: dict, strict: bool = True) -> None:
+        """When it runs, per workload on the form: config.yaml's `power`
+        keeps only what differs from the catalog, and what the page does
+        not set (a title, busy.cpu_pct) stays as the owner wrote it."""
+        catalog = build_model({})
+        known = {svc["workload"] for svc in catalog["services"].values()} - {"core"}
+        pins = config.get("power") or {}
+        for name, want in chosen.items():
+            if name not in known or not isinstance(want, dict):
+                continue
+            default = {**POWER_DEFAULTS, **catalog["power"].get(name, {})}
+            pin = {k: v for k, v in pins.get(name, {}).items() if k not in POWER_DEFAULTS}
+            for key in POWER_DEFAULTS:
+                value = want.get(key, default[key])
+                if key == "idle_minutes":
+                    try:
+                        value = int(value)
+                        if not 5 <= value <= 10080:
+                            raise ValueError
+                    except (TypeError, ValueError):
+                        if strict:
+                            title = default.get("title", name)
+                            raise NullBillError(f"{title}: the time without use is a number of minutes from 5 to 10080 (a week)") from None
+                        value = pins.get(name, {}).get(key, default[key])
+                if value != default[key]:
+                    pin[key] = value
+            if pin:
+                pins[name] = pin
+            else:
+                pins.pop(name, None)
+        if pins:
+            config["power"] = pins
+        else:
+            config.pop("power", None)
 
     def _gpu_pins(self, config: dict, answers: dict) -> None:
         """Pin the VRAM the owner gave, in GB, for GPUs the probe could not read."""
@@ -1513,6 +1643,7 @@ class App:
             "removal_notes": self.removal_notes(removals),
             "options": self.options(),
             "plan": self.plan(),
+            "on_demand": demand.rules(self.saved_plan()),
             "alerts": self.alerts() if has_password else None,
             "agent_credential": self.agent_credential(),
             "tailscale_key": self.tailscale_key(),
@@ -1661,6 +1792,8 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 return self.json(401, {"error": "sign in first"})
             if path == "/api/status":
                 return self.json(200, app.status())
+            if path == "/api/on-demand":
+                return self.json(200, {"view": app.on_demand()})
             if path == "/api/people":
                 try:
                     return self.json(200, app.people_view(fresh="fresh=1" in query.split("&")))
@@ -1760,6 +1893,8 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                     return self.json(200, {"ok": True, "plan": app.plan()})
                 if self.path == "/api/choices/preview":
                     return self.json(200, app.preview(body))
+                if self.path == "/api/on-demand":
+                    return self.json(200, app.power_act(body))
                 if self.path == "/api/alerts":
                     app.save_alerts(body)
                     return self.json(200, {"ok": True, "alerts": app.alerts()})

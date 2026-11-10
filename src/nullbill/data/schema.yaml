@@ -169,6 +169,23 @@ $defs:
       # storage only. The PVE storage and volume group name; default nb-data.
       storage: {type: string, pattern: "^nb-[a-z][a-z0-9-]{0,30}$"}
 
+  # How a workload may be unloaded (catalog.yaml's power).
+  power:
+    type: object
+    additionalProperties: false
+    properties:
+      # What the page and the alerts call it.
+      title: {type: string, minLength: 1, maxLength: 40}
+      run: {enum: [always, on-demand]}
+      stop: {enum: [auto, ask, manual]}
+      idle_minutes: {type: integer, minimum: 5, maximum: 10080}
+      busy:
+        type: object
+        additionalProperties: false
+        properties:
+          # Percent of one core, over a minute, that counts as use.
+          cpu_pct: {type: integer, minimum: 1, maximum: 6400}
+
   override:
     type: object
     additionalProperties: false
@@ -265,6 +282,7 @@ $defs:
       additionalProperties: false
       properties:
         allow: {type: array, uniqueItems: true, items: {$ref: "#/$defs/domain_pattern"}}
+    power: {type: object, propertyNames: {$ref: "#/$defs/name"}, additionalProperties: {$ref: "#/$defs/power"}}
 
   # A local model llama.cpp serves (catalog.yaml's models).
   llm:
@@ -396,6 +414,7 @@ $defs:
       updates: {$ref: "#/$defs/common/updates"}
       images: {$ref: "#/$defs/common/images"}
       verify: {$ref: "#/$defs/common/verify"}
+      power: {$ref: "#/$defs/common/power"}
       models: {$ref: "#/$defs/common/models"}
       games: {$ref: "#/$defs/common/games"}
       gpus:
@@ -429,7 +448,7 @@ $defs:
 
   model:
     type: object
-    required: [network, host, zones, roles, services, people, engines, models, games, proxy, tailnet, images, verify, updates]
+    required: [network, host, zones, roles, services, people, engines, models, games, proxy, tailnet, images, verify, updates, power]
     properties:
       network: {$ref: "#/$defs/common/network", required: [base, domain, vmid_base]}
       host:
@@ -471,6 +490,11 @@ $defs:
                   java: {required: [version, url, sha256]}
               terraria: {required: [title, version, url, sha256, settings]}
               factorio: {required: [title, version, url, sha256, settings, space_age, admins]}
+      power:
+        type: object
+        propertyNames: {$ref: "#/$defs/name"}
+        additionalProperties:
+          allOf: [{$ref: "#/$defs/power"}, {required: [title, run, stop, idle_minutes]}]
       proxy:
         allOf:
           - {$ref: "#/$defs/common/proxy"}

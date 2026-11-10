@@ -11,6 +11,7 @@ import re
 import shlex
 from typing import Any
 
+from nullbill import power
 from nullbill.probe import LEGACY_ROOT, Runner
 from nullbill.render import strip_notes
 from nullbill.results import Result
@@ -406,8 +407,19 @@ def check(plan_with_notes: dict, target: str, run: Runner) -> list[Result]:
     """Each kept partition mounted on the host as planned and, if shared,
     seen by the files guest with the same mode; Samba as the role set it."""
     plan = strip_notes(plan_with_notes)
-    results = []
+    results: list[Result] = []
     vmid = plan["guests"].get("files", {}).get("vmid")
+
+    def in_guest(label: str, command: str) -> tuple[int, str, str] | None:
+        """The command's answer from inside the files guest, or None, with
+        the check reported SKIP, while that guest is off on demand: the
+        host's own mounts and storages are checked all the same."""
+        try:
+            return run(target, f"pct exec {vmid} -- {command}")
+        except power.Off as asleep:
+            results.append(Result("SKIP", label, power.off_reason(asleep.title)))
+            return None
+
     for m in mounts(plan):
         label = f"kept disk {m['name']} is mounted {m['mode']} on the host"
         rc, out, err = run(target, f"findmnt -rno FSTYPE,OPTIONS --mountpoint {shlex.quote(m['mount'])}")
@@ -423,7 +435,10 @@ def check(plan_with_notes: dict, target: str, run: Runner) -> list[Result]:
             continue
         label = f"files guest sees kept disk {m['name']} {m['mode']}"
         where = f"{SHARE_ROOT}/{m['share']}"
-        rc, out, err = run(target, f"pct exec {vmid} -- findmnt -rno FSTYPE,OPTIONS --mountpoint {shlex.quote(where)}")
+        found = in_guest(label, f"findmnt -rno FSTYPE,OPTIONS --mountpoint {shlex.quote(where)}")
+        if found is None:
+            continue
+        rc, out, err = found
         fstype, mode = _mounted(out)
         if rc != 0 or not fstype:
             results.append(Result("FAIL", label, (err.strip() or f"nothing mounted at {where}")[:120]))
@@ -434,7 +449,10 @@ def check(plan_with_notes: dict, target: str, run: Runner) -> list[Result]:
     for c in copies(plan):
         label = f"files guest sees the copy {c['name']} rw"
         where = f"{SHARE_ROOT}/{c['name']}"
-        rc, out, err = run(target, f"pct exec {vmid} -- findmnt -rno FSTYPE,OPTIONS --mountpoint {shlex.quote(where)}")
+        found = in_guest(label, f"findmnt -rno FSTYPE,OPTIONS --mountpoint {shlex.quote(where)}")
+        if found is None:
+            continue
+        rc, out, err = found
         fstype, mode = _mounted(out)
         if rc != 0 or not fstype:
             results.append(Result("FAIL", label, (err.strip() or f"nothing mounted at {where}")[:120]))
@@ -444,10 +462,11 @@ def check(plan_with_notes: dict, target: str, run: Runner) -> list[Result]:
             results.append(Result("PASS", label))
     if shares(plan) or copies(plan):
         script = "; ".join(f"testparm -s --parameter-name={shlex.quote(p)} 2>/dev/null" for p in SAMBA)
-        rc, out, err = run(target, f"pct exec {vmid} -- sh -c {shlex.quote(script)}")
-        got = dict(zip(SAMBA, out.split(), strict=False))
-        wrong = [f"{p} = {got.get(p, '?')}" for p, want in SAMBA.items() if got.get(p) != want]
-        results.append(Result("FAIL", SAMBA_LABEL, "; ".join(wrong)[:120]) if wrong else Result("PASS", SAMBA_LABEL))
+        found = in_guest(SAMBA_LABEL, f"sh -c {shlex.quote(script)}")
+        if found is not None:
+            got = dict(zip(SAMBA, found[1].split(), strict=False))
+            wrong = [f"{p} = {got.get(p, '?')}" for p, want in SAMBA.items() if got.get(p) != want]
+            results.append(Result("FAIL", SAMBA_LABEL, "; ".join(wrong)[:120]) if wrong else Result("PASS", SAMBA_LABEL))
     for name in storages(plan):
         rc, out, err = run(target, f"pvesm status --storage {shlex.quote(name)}")
         row = next((line.split() for line in out.splitlines() if line.split()[:1] == [name]), [])

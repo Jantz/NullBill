@@ -84,6 +84,20 @@ ADVICE = [
         "Your choices need more disk space than Proxmox's storage has free. Under Setup, What to run, untick a workload "
         "and press Save and plan, or free space in Proxmox and read the hardware again.",
     ),
+    (
+        r"needs \d+ MiB while it runs",
+        "One of the things you set to run on demand does not fit beside what always runs. Under Setup, What to run, "
+        "set something else to run on demand, or untick a workload, and press Save and plan until Plan shows no problems.",
+    ),
+    (
+        r"setup has to start .* to configure",
+        "Setup starts what runs on demand to bring it up to date, and the server has no memory free for it right now. "
+        "On Services, stop one of the things that are on, then run setup again; what it starts is stopped again when it ends.",
+    ),
+    (
+        r"the host has no nb-power yet",
+        "Run setup in full once, with the Run setup button: it installs what starts and stops the things that run on demand.",
+    ),
     (r"could not read VRAM", "Under Setup, What to run, give the graphics card's memory in GB, as on its box, then press Save and plan."),
     (
         r"stays read-only: |cannot be read-write|not the one you said may be discarded",

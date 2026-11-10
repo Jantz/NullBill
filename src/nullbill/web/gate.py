@@ -1250,6 +1250,16 @@ def r_smartctl(args, _p):
     )
 
 
+def r_nb_power(args, _p):
+    """The host's switch for what runs on demand (nullbill/power.py)."""
+    verb = next((a for a in args if not a.startswith("-")), "")
+    if verb == "status":
+        return read()
+    if verb in ("start", "stop", "keep"):
+        return change("starts or stops a workload that runs on demand, or keeps it on")
+    return change("changes what the host runs on demand")
+
+
 def r_nvidia(args, _p):
     return (
         change("changes the graphics card's settings or writes a file")
@@ -1686,6 +1696,7 @@ RULES = {
     "dpkg": r_dpkg,
     "smartctl": r_smartctl,
     "nvidia-smi": r_nvidia,
+    "nb-power": r_nb_power,
     "nvme": r_nvme,
     "parted": r_parted,
     "fdisk": r_fdisk,

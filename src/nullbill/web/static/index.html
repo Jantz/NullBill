@@ -218,6 +218,20 @@
         <thead><tr><th scope="col">Name</th><th scope="col">Status</th><th scope="col" class="hide-phone">Address</th><th scope="col" class="hide-narrow">Sign-in</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
         <tbody id="service-rows"></tbody></table></div>
       <p id="services-background" class="foot-note"></p>
+      <section class="block" id="demand" aria-labelledby="h-demand" hidden>
+        <div class="block-head"><h2 id="h-demand">On demand</h2><span class="meta" id="demand-meta"></span></div>
+        <p class="help">Installed, and running only while you want them: what is off holds no memory. Start one here when you need it. <a href="#setup/choices">Setup, What to run</a> says which run on demand and how each stops again.</p>
+        <p class="note" id="demand-why" hidden><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><span id="demand-why-text"></span></p>
+        <div class="memory-block" id="demand-memory" hidden>
+          <div class="memory-head"><span class="label">Memory shared by what runs on demand</span><span class="push meta" id="demand-fit" role="status"></span></div>
+          <div id="demand-bar" class="memory" aria-hidden="true"><span class="m-chosen"></span><span class="m-free"></span></div>
+        </div>
+        <div class="table-wrap"><table class="table demand">
+          <caption class="sr-only">What runs on demand</caption>
+          <thead><tr><th scope="col">Name</th><th scope="col">State</th><th scope="col" class="num hide-phone">Memory</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+          <tbody id="demand-rows"></tbody></table></div>
+        <details class="disclosure small" id="demand-log" hidden><summary>What was started and stopped lately</summary><ul class="events" id="demand-events"></ul></details>
+      </section>
     </section>
 
     <!-- Activity -->
@@ -298,7 +312,7 @@
           <div class="pick" id="pick">
             <div class="budget" id="budget">
               <div class="memory-head"><span class="label">Memory with these choices</span><span class="meta" id="budget-total"></span><span class="push" id="budget-fit" role="status"></span></div>
-              <div id="budget-bar" class="memory" aria-hidden="true"><span class="m-reserve"></span><span class="m-base"></span><span class="m-chosen"></span><span class="m-free"></span></div>
+              <div id="budget-bar" class="memory" aria-hidden="true"><span class="m-reserve"></span><span class="m-base"></span><span class="m-chosen"></span><span class="m-demand"></span><span class="m-free"></span></div>
               <ul class="legend" id="budget-legend"></ul>
             </div>
             <p class="note" id="budget-hint" hidden><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><span><a href="#setup/hardware">Read the hardware</a> first to see what fits in this server.</span></p>
@@ -311,6 +325,10 @@
             <fieldset class="group"><legend>Workloads</legend><div class="opts" id="workload-rows"></div></fieldset>
             <fieldset class="group"><legend>Game servers</legend><div class="opts" id="game-rows"></div></fieldset>
             <fieldset class="group"><legend>Extras</legend><div class="opts" id="extra-rows"></div></fieldset>
+            <fieldset class="group" id="when" hidden><legend>When it runs</legend>
+              <p class="help">What always runs holds its memory all the time. What runs on demand stays installed and is off until you start it on the Services page, so it shares the memory the rest leaves and more fits in this server than runs at once. Setup starts one only while it configures it.</p>
+              <div class="whens" id="when-rows"></div>
+            </fieldset>
             <details class="disclosure small" id="budget-base"><summary>What always runs, and how memory is counted</summary><p id="budget-base-text"></p></details>
           </div>
           <fieldset class="group" id="gpus" hidden><legend>Graphics card</legend>

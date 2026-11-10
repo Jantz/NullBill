@@ -70,19 +70,19 @@ Runner = Callable[[str, str], tuple[int, str, str]]
 SSH_TIMEOUT_S = 120
 
 
-def ssh_run(target: str, command: str) -> tuple[int, str, str]:
-    """A command that outlives SSH_TIMEOUT_S is a failed command (exit 124,
+def ssh_run(target: str, command: str, timeout: int = SSH_TIMEOUT_S) -> tuple[int, str, str]:
+    """A command that outlives the timeout is a failed command (exit 124,
     as timeout(1) says), not a traceback that ends verify without a word."""
     try:
         proc = subprocess.run(
             ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", target, command],
             capture_output=True,
             text=True,
-            timeout=SSH_TIMEOUT_S,
+            timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
         out = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else exc.stdout or ""
-        return 124, out, f"no answer within {SSH_TIMEOUT_S} s"
+        return 124, out, f"no answer within {timeout} s"
     return proc.returncode, proc.stdout, proc.stderr
 
 

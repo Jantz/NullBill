@@ -64,9 +64,16 @@ if smb "nbshare%$pw" old-hdd ls --option='client max protocol=SMB2_10'; then fai
 client=$!
 sleep 2
 smbstatus 2>/dev/null >/tmp/smbstatus.txt
+/etc/nullbill/busy.d/files >/tmp/busy.txt
 wait "$client"
 grep -qE '^old-hdd .*AES-(128|256)-(GCM|CCM)' /tmp/smbstatus.txt || { cat /tmp/smbstatus.txt; fail "the session was not encrypted"; }
 pass "SMB before 3 is refused, and a client asking for no encryption is encrypted anyway"
+
+# nb-busy's question, for shares that run on demand: the device connected
+# a moment ago counted, and nobody is connected now.
+[ "$(cat /tmp/busy.txt)" = "1 device connected to the shares" ] || { cat /tmp/busy.txt; fail "a connected device counts as use"; }
+[ -z "$(/etc/nullbill/busy.d/files)" ] || { /etc/nullbill/busy.d/files; fail "shares nobody is connected to report nothing"; }
+pass "nb-busy: a device connected to a share is use, none is not"
 
 # Into a file first: grep -q stops at the first match, and under pipefail
 # journalctl's SIGPIPE would fail the pipeline.

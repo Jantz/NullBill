@@ -14,7 +14,7 @@ import json
 import secrets
 import shlex
 
-from nullbill import ci
+from nullbill import ci, power
 from nullbill.probe import Runner
 from nullbill.pveapi import audit, caller
 from nullbill.render import strip_notes
@@ -77,19 +77,24 @@ sys.exit(1)
 """
 
 
-def ssh_guest(plan: dict) -> str | None:
-    """The agent-managed guest verify reaches over agent SSH."""
-    return next((n for n, g in plan["guests"].items() if g.get("agent_managed") and g["kind"] != "vm-pool"), None)
+def ssh_guest(plan: dict, off: dict[str, str] | None = None) -> str | None:
+    """The agent-managed guest verify reaches over agent SSH: the first
+    that runs (off: those on demand that do not), else the first."""
+    guests = [n for n, g in plan["guests"].items() if g.get("agent_managed") and g["kind"] != "vm-pool"]
+    return next((n for n in guests if n not in (off or {})), guests[0] if guests else None)
+
+
+def _ssh_labels(plan: dict, guest: str) -> list[str]:
+    names = [f"agent reaches {guest} over SSH as agent", "agent SSH to router is refused"]
+    if "monitoring" in plan["guests"]:
+        names.append(f"the agent's command on {guest} is in Loki under its uid")
+    return names
 
 
 def _labels(plan: dict) -> list[str]:
     names = [label for label, _, _ in expectations(plan)] + ["agent token is refused a snapshot of router"]
     guest = ssh_guest(plan)
-    if guest:
-        names += [f"agent reaches {guest} over SSH as agent", "agent SSH to router is refused"]
-        if "monitoring" in plan["guests"]:
-            names.append(f"the agent's command on {guest} is in Loki under its uid")
-    return names
+    return names + (_ssh_labels(plan, guest) if guest else [])
 
 
 def skipped(plan_with_notes: dict, reason: str) -> list[Result]:
@@ -103,13 +108,16 @@ def _as_agent(vmid: int, command: str) -> str:
     return f"pct exec {vmid} -- runuser -l agent -c {shlex.quote(command)}"
 
 
-def ssh_check(plan: dict, target: str, run: Runner, marker: str) -> list[Result]:
+def ssh_check(plan: dict, target: str, run: Runner, marker: str, off: dict[str, str] | None = None) -> list[Result]:
     """nb-ssh from the operator as the agent: it reaches an agent-managed
     guest as `agent`, not the router, and the command lands in Loki under
     the uid that ran it."""
-    guest = ssh_guest(plan)
+    guest = ssh_guest(plan, off)
     if guest is None:
         return []
+    if guest in (off or {}):
+        # Every agent-managed guest runs on demand and is off.
+        return [Result("SKIP", label, power.off_reason(off[guest])) for label in _ssh_labels(plan, guest)]
     operator = plan["guests"]["operator"]["vmid"]
     domain = plan["domain"]
     nb_ssh = "nb-ssh -o ConnectTimeout=10"
@@ -139,7 +147,7 @@ def ssh_check(plan: dict, target: str, run: Runner, marker: str) -> list[Result]
     return results
 
 
-def check(plan_with_notes: dict, target: str, run: Runner, marker: str | None = None) -> list[Result]:
+def check(plan_with_notes: dict, target: str, run: Runner, marker: str | None = None, off: dict[str, str] | None = None) -> list[Result]:
     plan = strip_notes(plan_with_notes)
     operator = plan["guests"].get("operator")
     if operator is None:
@@ -167,4 +175,4 @@ def check(plan_with_notes: dict, target: str, run: Runner, marker: str | None = 
         results.append(Result("FAIL", label, f"PVE accepted it: delete snapshot {DENIED_SNAPSHOT} on {router['vmid']}"))
     else:
         results.append(Result("FAIL", label, f"{status} {body[:80]}"))
-    return results + ssh_check(plan, target, run, marker or f"nb-verify-{secrets.token_hex(4)}")
+    return results + ssh_check(plan, target, run, marker or f"nb-verify-{secrets.token_hex(4)}", off)

@@ -667,6 +667,9 @@ def test_status_reads_prometheus_on_the_monitoring_guest(site):
         "targets": 2,
         "down": ["forgejo:9100"],
         "answering": ["pbs:9100"],
+        # Nothing runs on demand in this plan.
+        "off": [],
+        "asks": [],
         "security_waiting": [],
         "reboot_waiting": ["pve:9100"],
     }
@@ -1526,3 +1529,255 @@ def test_people_and_jobs_wait_for_each_other(site, tmp_path):
     release.write_text("")
     wait(client, job["id"])
     assert client.call("/api/people", FRIEND)[0] == 200
+
+
+# On demand (nullbill/power.py): When it runs under What to run, and the
+# Services page's switches, which go to nb-power on the host.
+NO_BACKUPS = {"owner_login": "owner-a@example.internal", "backups": False}
+
+
+def power_of(app):
+    return yaml.safe_load((app.home / "config.yaml").read_text()).get("power")
+
+
+def test_when_it_runs_saves_only_what_differs_from_the_catalog_and_the_meter_follows(site):
+    app, client = site
+    sign_in(app, client)
+    wait(client, client.call("/api/jobs", {"action": "probe"})[1]["id"])
+    choices = {**NO_BACKUPS, "workloads": ["agents", "linux-ci", "media"]}
+    client.call("/api/choices", choices)
+    options = client.call("/api/state")[1]["options"]
+    rows = {w["name"]: w for w in options["power"]}
+    assert list(rows) == ["agents", "linux-ci", "media"] and client.call("/api/state")[1]["on_demand"] is None
+    assert rows["media"] == {
+        "name": "media",
+        "title": "Jellyfin",
+        "run": "always",
+        "stop": "auto",
+        "idle_minutes": 30,
+        "guests": ["jellyfin"],
+        "memory_mib": 1024,
+        "blocked": None,
+        "auto": True,
+        "auto_why": None,
+    }
+    always = options["memory"]
+    assert always["demand_mib"] == 0 and always["together"] is True
+    # The form, not saved: Jellyfin on demand leaves its memory to share.
+    form = {
+        "media": {"run": "on-demand", "stop": "auto", "idle_minutes": 30},
+        "agents": {"run": "always", "stop": "ask", "idle_minutes": 120},
+    }
+    view = client.call("/api/choices/preview", {**choices, "power": form})[1]
+    memory = view["memory"]
+    assert memory["chosen_mib"] == always["chosen_mib"] - 1024 and memory["free_mib"] == always["free_mib"] + 1024
+    assert (memory["demand_mib"], memory["demand_largest_mib"], memory["together"]) == (1024, 1024, True)
+    assert power_of(app) is None
+    # Saved: config.yaml gets the one thing that is not the catalog's.
+    assert client.call("/api/choices", {**choices, "power": form})[0] == 200
+    assert power_of(app) == {"media": {"run": "on-demand"}}
+    state = client.call("/api/state")[1]
+    assert state["on_demand"]["groups"] == [
+        {"name": "media", "title": "Jellyfin", "stop": "auto", "idle_minutes": 30, "memory_mib": 1024, "guests": ["jellyfin"]}
+    ]
+    assert state["on_demand"]["together"] is True and "run: on-demand" in state["plan"]["text"]
+    # Minutes: a number in range when saving; a half-typed one does not break the preview.
+    odd = {**choices, "power": {"media": {"run": "on-demand", "stop": "ask", "idle_minutes": "3"}}}
+    status, answer = client.call("/api/choices", odd)
+    assert status == 400 and "Jellyfin: the time without use is a number of minutes from 5 to 10080" in answer["error"]
+    assert client.call("/api/choices/preview", odd)[1]["errors"] == []
+    # What the page does not set stays; back at the catalog's rule, the key goes.
+    config = yaml.safe_load((app.home / "config.yaml").read_text())
+    config["power"]["media"]["busy"] = {"cpu_pct": 20}
+    (app.home / "config.yaml").write_text(yaml.safe_dump(config))
+    client.call("/api/choices", {**choices, "power": {"media": {"run": "on-demand", "stop": "manual", "idle_minutes": 45}}})
+    assert power_of(app) == {"media": {"busy": {"cpu_pct": 20}, "run": "on-demand", "stop": "manual", "idle_minutes": 45}}
+    client.call(
+        "/api/choices",
+        {**choices, "power": {"media": {"run": "always", "stop": "auto", "idle_minutes": 30}, "bogus": {"run": "on-demand"}}},
+    )
+    assert power_of(app) == {"media": {"busy": {"cpu_pct": 20}}}
+    # A workload the form does not show keeps its rule.
+    client.call("/api/choices", {**choices, "power": {"agents": {"run": "on-demand", "stop": "ask", "idle_minutes": 120}}})
+    assert power_of(app) == {"media": {"busy": {"cpu_pct": 20}}, "agents": {"run": "on-demand"}}
+
+
+def test_a_vm_alone_never_stops_by_itself_and_a_pool_alone_cannot_run_on_demand(site):
+    app, client = site
+    sign_in(app, client)
+    wait(client, client.call("/api/jobs", {"action": "probe"})[1]["id"])
+    view = client.call("/api/choices/preview", {**NO_BACKUPS, "workloads": ["windows-dev", "windows-ci"]})[1]
+    rows = {w["name"]: w for w in view["power"]}
+    assert rows["windows-dev"]["auto"] is False and "busy.cpu_pct" in rows["windows-dev"]["auto_why"]
+    assert rows["windows-dev"]["stop"] == "ask" and rows["windows-dev"]["blocked"] is None
+    assert rows["windows-ci"]["blocked"] and rows["windows-ci"]["title"] == "windows-ci"
+
+
+class PowerHost:
+    """Stands in for nb-power on the host."""
+
+    def __init__(self):
+        self.calls = []
+        self.answers = []
+        self.groups = [
+            self.group(
+                "media", "Jellyfin", "auto", 1024, "on", busy=["playing on 1 device"], idle_s=0, keep=False, asks=False, setup=False
+            ),
+            self.group("agents", "Workspace", "ask", 512, "off"),
+        ]
+
+    @staticmethod
+    def group(name, title, stop, mib, state, **more):
+        guest = {"media": "jellyfin", "agents": "workspace"}[name]
+        running = "running" if state == "on" else "stopped"
+        entry = {
+            "name": name,
+            "title": title,
+            "stop": stop,
+            "idle_minutes": 30 if stop == "auto" else 120,
+            "memory_mib": mib,
+            "state": state,
+        }
+        return {**entry, "guests": [{"name": guest, "kind": "lxc", "vmid": 2030, "state": running}], **more}
+
+    def status(self):
+        used = sum(g["memory_mib"] for g in self.groups if g["state"] == "on")
+        events = [{"at": 1700000000, "group": "media", "what": "started", "why": "by the page"}]
+        return {
+            "now": 1700000100,
+            "ticked": 1700000090,
+            "headroom_mib": 1280,
+            "used_mib": used,
+            "free_mib": 1280 - used,
+            "setup": False,
+        } | {
+            "groups": self.groups,
+            "events": events,
+        }
+
+    def __call__(self, target, command):
+        assert target == "root@192.0.2.10"
+        self.calls.append(command)
+        if command == "/usr/local/sbin/nb-power status --json":
+            return 0, json.dumps(self.status()), ""
+        rc, answer = self.answers.pop(0)
+        return rc, json.dumps(answer), ""
+
+    def acts(self):
+        return [c.removeprefix("/usr/local/sbin/nb-power ") for c in self.calls if " status " not in c]
+
+
+def on_demand_site(app, client):
+    sign_in(app, client)
+    wait(client, client.call("/api/jobs", {"action": "probe"})[1]["id"])
+    rules = {"media": {"run": "on-demand"}, "agents": {"run": "on-demand"}}
+    assert client.call("/api/choices", {**NO_BACKUPS, "workloads": ["agents", "linux-ci", "media"], "power": rules})[0] == 200
+    assert client.call("/api/state")[1]["plan"]["errors"] == []
+    host = PowerHost()
+    app.host_run = app.host_act = host
+    return host
+
+
+def test_the_services_page_shows_what_runs_on_demand_and_asks_the_host_only_once_built(site):
+    app, client = site
+    assert client.call("/api/on-demand")[0] == 401
+    host = on_demand_site(app, client)
+    view = client.call("/api/on-demand")[1]["view"]
+    assert view["live"] is False and "run setup" in view["why"] and host.calls == []
+    assert [(g["name"], g["state"]) for g in view["groups"]] == [("agents", "unknown"), ("media", "unknown")]
+    built(app, client)
+    host.groups[1]["idle_minutes"] = 60
+    view = client.call("/api/on-demand")[1]["view"]
+    assert view["live"] is True and view["why"] is None and (view["headroom_mib"], view["used_mib"]) == (1280, 1024)
+    media, agents = view["groups"]
+    assert (
+        media["state"] == "on"
+        and media["busy"] == ["playing on 1 device"]
+        and media["guests"] == [{"name": "jellyfin", "state": "running"}]
+    )
+    # The host's rule for the workspace is older than the saved one: the next setup run brings it.
+    assert agents["state"] == "off" and "next" not in media and agents["next"] == "rules"
+    assert view["events"] == [{"at": 1700000000, "title": "Jellyfin", "what": "started", "why": "by the page"}]
+    # Asked again within seconds, the host is not.
+    client.call("/api/on-demand")
+    assert len(host.calls) == 1
+    # A workload the host does not know yet waits for the next setup run.
+    host.groups.pop()
+    app.power_seen = None
+    pending = client.call("/api/on-demand")[1]["view"]["groups"][1]
+    assert (pending["name"], pending["state"], pending["next"]) == ("agents", "pending", "on-demand")
+    # The host does not answer.
+    app.host_run = lambda target, command: (255, "", "ssh: connect to host 192.0.2.10 port 22: No route to host")
+    app.power_seen = None
+    view = client.call("/api/on-demand")[1]["view"]
+    assert view["live"] is False and "does not say what is on" in view["why"] and view["groups"][1]["state"] == "unknown"
+
+
+def test_start_and_stop_go_to_the_host_and_ask_before_stopping_anything_in_use(site):
+    app, client = site
+    host = on_demand_site(app, client)
+    assert client.call("/api/on-demand", {"action": "start", "name": "agents"})[0] == 400  # nothing is on the server yet
+    built(app, client)
+    for bad in (
+        {"action": "restart", "name": "media"},
+        {"action": "start", "name": "forgejo"},
+        {"action": "start", "name": "media; reboot"},
+    ):
+        assert client.call("/api/on-demand", bad)[0] == 400
+    assert client.call("/api/on-demand", {"action": "keep", "name": "media"})[0] == 400
+    assert client.call("/api/on-demand", {"action": "start", "name": "agents", "stop": ["forgejo"]})[0] == 400
+    assert host.acts() == []
+    # No room: nothing changes, and the answer says what would have to stop.
+    refusal = {"ok": False, "error": "no-room", "name": "agents", "title": "Workspace", "need_mib": 512, "free_mib": 256, "enough": True}
+    refusal["stop"] = [
+        {"name": "media", "title": "Jellyfin", "memory_mib": 1024, "busy": ["playing on 1 device"], "idle_s": 0, "auto": False}
+    ]
+    host.answers.append((3, refusal))
+    status, answer = client.call("/api/on-demand", {"action": "start", "name": "agents"})
+    assert status == 200 and answer["ok"] is False and answer["no_room"] == refusal and answer["view"]["live"]
+    # Agreed to: the same start, naming what to stop.
+    host.answers.append((0, {"ok": True, "name": "agents", "already": False, "stopped": ["Jellyfin"], "warnings": []}))
+    status, answer = client.call("/api/on-demand", {"action": "start", "name": "agents", "stop": ["media"], "keep": True})
+    assert status == 200 and answer["ok"] is True and answer["stopped"] == ["Jellyfin"] and answer["title"] == "Workspace"
+    assert host.acts() == ["start agents --by 'the page' --json", "start agents --by 'the page' --stop media --keep --json"]
+    assert app.power_acting == {}
+    # Stopping what is in use asks first, with the reasons.
+    status, answer = client.call("/api/on-demand", {"action": "stop", "name": "media"})
+    assert status == 200 and answer["ok"] is False and answer["busy"] == ["playing on 1 device"] and len(host.acts()) == 2
+    host.answers.append((0, {"ok": True, "name": "media", "already": False}))
+    assert client.call("/api/on-demand", {"action": "stop", "name": "media", "force": True})[1]["ok"] is True
+    host.answers.append((0, {"ok": True, "name": "media", "keep": True}))
+    assert client.call("/api/on-demand", {"action": "keep", "name": "media", "on": True})[1]["keep"] is True
+    assert host.acts()[2:] == ["stop media --by 'the page' --json", "keep media on --json"]
+    # What nb-power refuses is said in its words.
+    host.answers.append((1, {"ok": False, "error": "jellyfin did not start: unable to open file"}))
+    status, answer = client.call("/api/on-demand", {"action": "start", "name": "media"})
+    assert status == 400 and answer["error"] == "jellyfin did not start: unable to open file"
+    # A setup run that started it stops it again itself.
+    host.groups[0]["setup"], calls = True, len(host.acts())
+    status, answer = client.call("/api/on-demand", {"action": "stop", "name": "media", "force": True})
+    assert status == 400 and "a setup run is using Jellyfin" in answer["error"] and len(host.acts()) == calls
+
+
+def test_a_guest_that_is_off_on_demand_is_not_down_and_an_idle_one_asks(site):
+    app, client = site
+    on_demand_site(app, client)
+
+    def fetch(url):
+        if url.endswith("/alerts"):
+            return {"data": {"alerts": []}}
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)["query"][0]
+        up = [{"metric": {"instance": n}, "value": [0, v]} for n, v in (("jellyfin", "0"), ("forgejo", "0"), ("workspace", "1"))]
+        results = {
+            "up": up,
+            "nb_power_guest_off == 1": [{"metric": {"guest": "jellyfin", "group": "media"}, "value": [0, "1"]}],
+            "nb_power_group_idle_seconds and on (group) (nb_power_group_asks == 1)": [
+                {"metric": {"group": "agents", "title": "Workspace"}, "value": [0, "7260"]}
+            ],
+        }
+        return {"data": {"result": results.get(query, [])}}
+
+    app.fetch = fetch
+    data = client.call("/api/status")[1]
+    assert data["down"] == ["forgejo"] and data["off"] == ["jellyfin"] and data["answering"] == ["workspace"]
+    assert data["asks"] == [{"name": "agents", "title": "Workspace", "idle_s": 7260}]

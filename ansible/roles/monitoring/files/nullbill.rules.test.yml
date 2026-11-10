@@ -86,12 +86,12 @@ tests:
       - eval_time: 31m
         alertname: CertificateExpiresSoon
         exp_alerts:
-          - exp_labels: {severity: page, job: tls, instance: "forgejo:443"}
+          - exp_labels: {severity: page, job: tls, instance: "forgejo:443", guest: forgejo}
             exp_annotations: {summary: "certificate on forgejo:443 expires within 6 hours; its renewal has stopped"}
       - eval_time: 11m
         alertname: CertificateProbeFailing
         exp_alerts:
-          - exp_labels: {severity: page, job: tls, instance: "forgejo:443"}
+          - exp_labels: {severity: page, job: tls, instance: "forgejo:443", guest: forgejo}
             exp_annotations: {summary: "TLS handshake with forgejo:443 fails"}
   # Update alerts, minute by minute (a sample older than five minutes no
   # longer counts). forgejo's runs fail and leave security updates pending;
@@ -256,3 +256,103 @@ tests:
         exp_alerts:
           - exp_labels: {severity: page, job: node, instance: model-gateway}
             exp_annotations: {summary: "model-gateway has used up its memory and barely runs; restart it in Proxmox; if it fills up again, it needs a larger memory limit"}
+  # On demand: the inference workload is off on purpose, Jellyfin is on and
+  # down. Nothing pages for what is off; what is on is watched as ever.
+  - interval: 1m
+    input_series:
+      - series: 'nb_power_guest_off{job="host",instance="pve",guest="inference",group="inference"}'
+        values: "1x40"
+      - series: 'nb_power_guest_off{job="host",instance="pve",guest="model-gateway",group="inference"}'
+        values: "1x40"
+      - series: 'nb_power_guest_off{job="host",instance="pve",guest="jellyfin",group="media"}'
+        values: "0x40"
+      - series: 'nb_power_guest_off{job="host",instance="pve",guest="runner-dispatcher",group="linux-ci"}'
+        values: "0x40"
+      - series: 'up{job="node",instance="inference"}'
+        values: "0x40"
+      - series: 'up{job="node",instance="jellyfin"}'
+        values: "0x40"
+      - series: 'probe_success{job="tls",instance="model-gateway.nullbill.internal:4000"}'
+        values: "0x40"
+      - series: 'probe_success{job="tls",instance="runner-dispatcher.nullbill.internal:8443"}'
+        values: "0x40"
+      - series: 'probe_ssl_earliest_cert_expiry{job="tls",instance="model-gateway.nullbill.internal:4000"}'
+        values: "0x40"
+      # Windows desktop (stop: ask) has gone its idle time without use.
+      - series: 'nb_power_group_asks{job="host",instance="pve",group="windows-dev",title="Windows desktop"}'
+        values: "0x10 1x30"
+      - series: 'nb_power_group_idle_seconds{job="host",instance="pve",group="windows-dev",title="Windows desktop"}'
+        values: "14400+60x40"
+      - series: 'nb_power_used_mib{job="host",instance="pve"}'
+        values: "4096x10 6144x30"
+      - series: 'nb_power_headroom_mib{job="host",instance="pve"}'
+        values: "5000x40"
+      - series: 'nb_power_tick_timestamp_seconds{job="host",instance="pve"}'
+        values: "0+60x5 300x35"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: TargetDown
+        exp_alerts:
+          - exp_labels: {severity: page, job: node, instance: jellyfin}
+            exp_annotations: {summary: "node target jellyfin is not answering"}
+      - eval_time: 20m
+        alertname: CertificateProbeFailing
+        exp_alerts:
+          - exp_labels: {severity: page, job: tls, instance: "runner-dispatcher.nullbill.internal:8443", guest: runner-dispatcher}
+            exp_annotations: {summary: "TLS handshake with runner-dispatcher.nullbill.internal:8443 fails"}
+      - eval_time: 35m
+        alertname: CertificateExpiresSoon
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: OnDemandLeftOn
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: OnDemandLeftOn
+        exp_alerts:
+          - exp_labels: {severity: warn, job: host, instance: pve, group: windows-dev, title: Windows desktop}
+            exp_annotations:
+              summary: "Windows desktop is on and has not been used for 4h 17m 0s; stop it on the page (Services) to free its memory, or press Keep on"
+      - eval_time: 25m
+        alertname: OnDemandOverbooked
+        exp_alerts: []
+      - eval_time: 27m
+        alertname: OnDemandOverbooked
+        exp_alerts:
+          - exp_labels: {severity: warn, job: host, instance: pve}
+            exp_annotations: {summary: "more runs on demand than the plan counts memory for (6144 MiB); stop something on the page (Services)"}
+      - eval_time: 24m
+        alertname: OnDemandNotWatched
+        exp_alerts: []
+      - eval_time: 26m
+        alertname: OnDemandNotWatched
+        exp_alerts:
+          - exp_labels: {severity: page, job: host, instance: pve}
+            exp_annotations:
+              summary: "the PVE host has not looked at what runs on demand for 21m 0s (nb-power.timer); nothing stops by itself until it does"
+  # Jellyfin was off for days and started at hour 73: its old success time
+  # pages only if apt has still not caught up six hours later.
+  - interval: 1m
+    input_series:
+      - series: 'nb_unattended_upgrade_success_timestamp_seconds{job="node",instance="jellyfin"}'
+        values: "0x4900"
+      - series: 'apt_package_cache_timestamp_seconds{job="node",instance="jellyfin"}'
+        values: "0x4900"
+      - series: 'nb_power_guest_started_timestamp_seconds{job="host",instance="pve",guest="jellyfin",group="media"}'
+        values: "262800x4900"
+    alert_rule_test:
+      - eval_time: 78h
+        alertname: UnattendedUpgradesFailing
+        exp_alerts: []
+      - eval_time: 78h
+        alertname: PackageListsStale
+        exp_alerts: []
+      - eval_time: 80h10m
+        alertname: UnattendedUpgradesFailing
+        exp_alerts:
+          - exp_labels: {severity: page, job: node, instance: jellyfin}
+            exp_annotations: {summary: "jellyfin has had no successful unattended upgrade for three days"}
+      - eval_time: 80h10m
+        alertname: PackageListsStale
+        exp_alerts:
+          - exp_labels: {severity: page, job: node, instance: jellyfin}
+            exp_annotations: {summary: "jellyfin has not fetched package lists for two days; check its mirror and proxy"}

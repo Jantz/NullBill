@@ -17,8 +17,12 @@ groups:
         labels: {severity: warn}
         annotations:
           summary: "The PVE host started {{ $value | humanizeDuration }} ago, after a power cut or a reboot"
+      # Not a guest that runs on demand and is off (the host's nb-power
+      # says which, docs/adr/0013-on-demand.md): that one is down on purpose.
       - alert: TargetDown
-        expr: up == 0
+        expr: >-
+          up == 0
+          unless on(instance) label_replace(nb_power_guest_off == 1, "instance", "$1", "guest", "(.+)")
         for: 5m
         labels: {severity: page}
         annotations:
@@ -54,7 +58,11 @@ groups:
       - alert: CertificateExpiresSoon
         # step-ca certificates last 24 h and renew with 8 h left, so under
         # 6 h means renewal has stopped.
-        expr: probe_ssl_earliest_cert_expiry - time() < 6 * 3600
+        # A guest on demand that is off answers nothing, and one just
+        # started gets a new certificate within the minute (nb-power).
+        expr: >-
+          label_replace(probe_ssl_earliest_cert_expiry - time() < 6 * 3600, "guest", "$1", "instance", "([^.:]+)[.:].*")
+          unless on(guest) nb_power_guest_off == 1
         for: 30m
         labels: {severity: page}
         annotations:
@@ -67,7 +75,9 @@ groups:
         annotations:
           summary: "the PVE API certificate guests use expires within 14 days; run apply"
       - alert: CertificateProbeFailing
-        expr: probe_success{job="tls"} == 0
+        expr: >-
+          label_replace(probe_success{job="tls"} == 0, "guest", "$1", "instance", "([^.:]+)[.:].*")
+          unless on(guest) nb_power_guest_off == 1
         for: 10m
         labels: {severity: page}
         annotations:
@@ -82,8 +92,12 @@ groups:
         labels: {severity: page}
         annotations:
           summary: "{{ $labels.instance }} has had security updates waiting for two days; they are not installing"
+      # A guest on demand that was off for days starts with an old success
+      # time; nb-power has apt catch up at once, so give it six hours.
       - alert: UnattendedUpgradesFailing
-        expr: time() - nb_unattended_upgrade_success_timestamp_seconds > 3 * 86400
+        expr: >-
+          time() - nb_unattended_upgrade_success_timestamp_seconds > 3 * 86400
+          unless on(instance) label_replace(time() - nb_power_guest_started_timestamp_seconds < 6 * 3600, "instance", "$1", "guest", "(.+)")
         for: 1h
         labels: {severity: page}
         annotations:
@@ -95,7 +109,9 @@ groups:
         annotations:
           summary: "{{ $labels.instance }} has unattended upgrades switched off"
       - alert: PackageListsStale
-        expr: time() - apt_package_cache_timestamp_seconds > 2 * 86400
+        expr: >-
+          time() - apt_package_cache_timestamp_seconds > 2 * 86400
+          unless on(instance) label_replace(time() - nb_power_guest_started_timestamp_seconds < 6 * 3600, "instance", "$1", "guest", "(.+)")
         for: 1h
         labels: {severity: page}
         annotations:
@@ -145,6 +161,30 @@ groups:
         labels: {severity: page}
         annotations:
           summary: "{{ $labels.instance }} has not refreshed its backup metrics for three hours (nb-backup-metrics.timer)"
+  # On demand (docs/adr/0013-on-demand.md): the host's nb-power, every
+  # minute, for the workloads that are installed and run only when wanted.
+  - name: nullbill-on-demand
+    rules:
+      # stop: ask. It never stops by itself; the owner is told once.
+      - alert: OnDemandLeftOn
+        expr: nb_power_group_idle_seconds and on(group) nb_power_group_asks == 1
+        for: 5m
+        labels: {severity: warn}
+        annotations:
+          summary: "{{ $labels.title }} is on and has not been used for {{ $value | humanizeDuration }}; stop it on the page (Services) to free its memory, or press Keep on"
+      # Started around nb-power (in Proxmox, say), or the plan shrank.
+      - alert: OnDemandOverbooked
+        expr: nb_power_used_mib > nb_power_headroom_mib
+        for: 15m
+        labels: {severity: warn}
+        annotations:
+          summary: "more runs on demand than the plan counts memory for ({{ $value }} MiB); stop something on the page (Services)"
+      - alert: OnDemandNotWatched
+        expr: time() - nb_power_tick_timestamp_seconds > 600
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: "the PVE host has not looked at what runs on demand for {{ $value | humanizeDuration }} (nb-power.timer); nothing stops by itself until it does"
   # CI images: apply records each bake on the host (nullbill/ci.py) and bakes
   # an image again after a week; the page runs that weekly.
   - name: nullbill-ci

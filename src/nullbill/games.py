@@ -15,6 +15,7 @@ server asks it about each player who joins.
 
 import shlex
 
+from nullbill import power
 from nullbill.model import NODE_EXPORTER
 from nullbill.probe import Runner
 from nullbill.proxy import PROXY, allows, proxy_port
@@ -229,7 +230,12 @@ def skipped(plan_with_notes: dict, model: dict, reason: str) -> list[Result]:
 def check(plan_with_notes: dict, model: dict, target: str, run: Runner) -> list[Result]:
     results = []
     for label, command, want in commands(strip_notes(plan_with_notes), model):
-        rc, out, err = run(target, command)
+        try:
+            rc, out, err = run(target, command)
+        except power.Off as asleep:
+            # One game off on demand says nothing of the others.
+            results.append(Result("SKIP", label, power.off_reason(asleep.title)))
+            continue
         got = out.strip()
         results.append(Result("PASS", label) if got == want else Result("FAIL", label, (got or err.strip() or f"exit {rc}")[:120]))
     return results

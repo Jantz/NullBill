@@ -33,6 +33,7 @@ extend-include = [
   "ansible/roles/game_minecraft/files/nb-tls-tunnel",
   "ansible/roles/game_server/files/nb-game",
   "ansible/roles/host_baseline/files/nb-backup-metrics",
+  "ansible/roles/host_baseline/files/nb-power",
   "ansible/roles/jellyfin/files/nb-jellyfin",
   "ansible/roles/log_shipper/files/nb-log-shipper",
   "ansible/roles/operator/files/nb-log-tool-use",
@@ -40,6 +41,7 @@ extend-include = [
   "ansible/roles/runner_dispatcher/files/nb-dispatcher",
   "ansible/roles/step_ca/files/agent-provisioner",
   "tools/game-pins",
+  "ansible/roles/updates/files/nb-busy",
 ]
 
 [tool.ruff.lint]

@@ -6,7 +6,7 @@ import re
 import pytest
 from conftest import fixture_config
 
-from nullbill import legacy
+from nullbill import legacy, power
 from nullbill.errors import NullBillError
 from nullbill.model import build_model
 from nullbill.plan import build_plan
@@ -361,6 +361,21 @@ def test_verify_passes_a_kept_disk_mounted_and_shared_as_planned(facts):
         ("PASS", "files guest sees kept disk data ro", ""),
         ("PASS", "files guest's Samba takes SMB3 with encryption only, and no guests", ""),
     ]
+
+
+def test_verify_checks_the_hosts_mount_while_the_files_guest_is_off(facts):
+    """File shares on demand and off: the checks inside its guest are
+    skipped, the host's mount is checked all the same."""
+    p = plan(facts("large"), {OLD: {"use": "legacy"}})
+    awake = power.guard(strip_notes(p), answers(), {"files": "File shares"})
+    why = "File shares is off (it runs on demand); start it on the page, under Services, to check it"
+    assert verdicts(p, awake) == [
+        ("PASS", "kept disk data is mounted ro on the host", ""),
+        ("SKIP", "files guest sees kept disk data ro", why),
+        ("SKIP", "files guest's Samba takes SMB3 with encryption only, and no guests", why),
+    ]
+    missing = power.guard(strip_notes(p), answers(host=""), {"files": "File shares"})
+    assert verdicts(p, missing)[0][0] == "FAIL"
 
 
 def test_verify_fails_a_missing_or_wrongly_mounted_kept_disk(facts):

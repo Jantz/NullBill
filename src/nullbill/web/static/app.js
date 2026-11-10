@@ -76,6 +76,7 @@ let previewTimer = null;
 let previewSeq = 0;
 let statusTimer = null;
 let lastStatus = null;     // the last /api/status
+let demand = null;         // the last /api/on-demand: what runs on demand, live from the host
 let job = null;            // the followed run: {id, view, node, offset, timer, watched, feedback}
 let currentView = null;
 let currentSub = "";
@@ -446,6 +447,7 @@ function route(focus) {
       title = `${job && job.id === sub ? JOB_NAMES[job.view.action] || "Run" : "Run"} · Activity`;
     }
   }
+  if (view === "services" && viewChanged) loadDemand().catch(() => {});
   placeChat();
   placeJob();
   setSide(false);
@@ -697,7 +699,90 @@ function renderOptions(st) {
     if (item.game && item.game.admins) $(`opt-${item.name}-admins`).value = item.game.admins.join(", ");
   }
   optionsView = st.options;
+  paintWhen(st.options, true);
   paintOptions();
+}
+
+// When it runs: a row per workload that can be stopped (options.power). The
+// controls are set when a row is made and when the saved choices are shown;
+// a preview only repaints what follows from them, so nothing the owner is
+// typing is overwritten.
+const STOPS = {auto: "By itself when unused", ask: "Only by me, with a reminder", manual: "Only by me"};
+
+function whenRow(w) {
+  const id = `when-${w.name}`;
+  const run = make("select", {id: `${id}-run`}, make("option", {value: "always", textContent: "Always"}), make("option", {value: "on-demand", textContent: "On demand"}));
+  const stop = make("select", {id: `${id}-stop`}, ...Object.entries(STOPS).map(([value, textContent]) => make("option", {value, textContent})));
+  const idle = make("input", {type: "number", id: `${id}-idle`, min: "5", max: "10080", step: "5", inputMode: "numeric"});
+  run.dataset.role = "run";
+  stop.dataset.role = "stop";
+  idle.dataset.role = "idle";
+  for (const control of [run, stop, idle]) control.setAttribute("aria-describedby", `${id}-note`);
+  const row = make("div", {className: "when", role: "group", ariaLabel: w.title},
+    make("div", {className: "when-main"}, make("span", {className: "opt-title", textContent: w.title}), make("span", {className: "opt-desc when-size"})),
+    make("label", {className: "when-field"}, make("span", {className: "label", textContent: "Runs"}), run),
+    make("label", {className: "when-field when-stop"}, make("span", {className: "label", textContent: "Stops"}), stop),
+    make("label", {className: "when-field when-idle"}, make("span", {className: "label", textContent: "Unused for, min"}), idle),
+    make("p", {className: "when-note", id: `${id}-note`}));
+  row.dataset.name = w.name;
+  setWhen(row, w);
+  return row;
+}
+
+function setWhen(row, w) {
+  row.querySelector("[data-role=run]").value = w.blocked ? "always" : w.run;
+  row.querySelector("[data-role=stop]").value = w.stop === "auto" && !w.auto ? "ask" : w.stop;
+  row.querySelector("[data-role=idle]").value = w.idle_minutes;
+}
+
+function span(minutes) {
+  if (!Number.isFinite(minutes) || minutes <= 0) return "that long";
+  if (minutes % 1440 === 0) return minutes === 1440 ? "a day" : `${minutes / 1440} days`;
+  if (minutes % 60 === 0) return `${minutes / 60} h`;
+  return minutes > 60 ? `${Math.floor(minutes / 60)} h ${minutes % 60} min` : `${minutes} min`;
+}
+
+function paintWhen(view, reset) {
+  const rows = (view && view.power) || [];
+  const box = $("when-rows");
+  show("when", rows.length > 0);
+  const have = new Map([...box.querySelectorAll(".when")].map((r) => [r.dataset.name, r]));
+  for (const [name, row] of have) if (!rows.some((w) => w.name === name)) row.remove();
+  for (const w of rows) {
+    let row = have.get(w.name);
+    if (!row) row = whenRow(w);
+    else if (reset) setWhen(row, w);
+    have.set(w.name, row);
+  }
+  // In the server's order; a row is moved only when the order changed, so focus stays.
+  const order = rows.map((w) => w.name);
+  if ([...box.children].map((r) => r.dataset.name).join() !== order.join()) box.replaceChildren(...order.map((n) => have.get(n)));
+  for (const w of rows) {
+    const row = have.get(w.name);
+    const run = row.querySelector("[data-role=run]");
+    const stop = row.querySelector("[data-role=stop]");
+    const idle = row.querySelector("[data-role=idle]");
+    run.disabled = Boolean(w.blocked);
+    stop.querySelector("option[value=auto]").disabled = !w.auto;
+    const onDemand = run.value === "on-demand" && !w.blocked;
+    row.querySelector(".when-stop").hidden = !onDemand;
+    row.querySelector(".when-idle").hidden = !onDemand || stop.value === "manual";
+    row.querySelector(".when-size").textContent = `${andList(w.guests)} · ${gib(w.memory_mib)} while it runs`;
+    const after = span(Number(idle.value));
+    const text = w.blocked ? w.blocked
+      : !onDemand ? `Always on: it holds its ${gib(w.memory_mib)} all the time.`
+        : `Off until you start it on the Services page. ${{
+          auto: `Stops by itself once nobody has used it for ${after}.`,
+          ask: `Never stops by itself; you are told once nobody has used it for ${after}.`,
+          manual: "Runs until you stop it.",
+        }[stop.value]}`;
+    const note = row.querySelector(".when-note");
+    const why = onDemand && !w.auto ? w.auto_why : "";
+    if (note.dataset.text !== text + why) {
+      note.dataset.text = text + why;
+      note.replaceChildren(text, why ? make("span", {className: "why", textContent: ` ${why}`}) : "");
+    }
+  }
 }
 
 function guestLine(g) {
@@ -726,6 +811,7 @@ function optionState(item, checked) {
 function paintOptions() {
   const view = optionsView;
   if (!view) return;
+  paintWhen(view, false);
   const share = view.memory ? view.memory.share_pct : 100;
   for (const item of view.items) {
     const row = $("pick").querySelector(`.opt[data-name="${item.name}"]`);
@@ -778,23 +864,38 @@ function paintBudget(view) {
   if (!m) return;
   const over = m.free_mib < 0;
   $("budget-total").textContent = `${gib(m.host_mib)} in the server`;
+  // What runs on demand shares what is left: drawn hatched, inside the free part.
+  const demandMib = m.demand_mib || 0;
   // Not every refusal is about memory: Minecraft waits for its EULA, say.
-  const fit = hasErrors ? status("bad", over ? `Does not fit: ${gib(-m.free_mib)} too much` : "Cannot be planned yet") : status("good", `Fits, ${gib(m.free_mib)} free`);
+  const fit = hasErrors ? status("bad", over ? `Does not fit: ${gib(-m.free_mib)} too much` : "Cannot be planned yet")
+    : !demandMib ? status("good", `Fits, ${gib(m.free_mib)} free`)
+      : m.together ? status("good", `Fits, ${gib(m.free_mib - demandMib)} free with everything on`)
+        : status("warn", "Fits, but not all at once");
   if ($("budget-fit").textContent !== fit.textContent) $("budget-fit").replaceChildren(fit);
   const bar = $("budget-bar");
   bar.classList.toggle("over", over);
   const room = Math.max(0, m.host_mib - m.reserve_mib - m.base_mib);
-  for (const [cls, v] of [["m-reserve", m.reserve_mib], ["m-base", m.base_mib], ["m-chosen", Math.min(m.chosen_mib, room)], ["m-free", Math.max(0, m.free_mib)]]) {
-    bar.querySelector(`.${cls}`).style.width = `${(100 * v) / m.host_mib}%`;
+  const shared = Math.max(0, Math.min(demandMib, m.free_mib));
+  const widths = [["m-reserve", m.reserve_mib], ["m-base", m.base_mib], ["m-chosen", Math.min(m.chosen_mib, room)], ["m-demand", shared], ["m-free", Math.max(0, m.free_mib - shared)]];
+  for (const [cls, v] of widths) {
+    const part = bar.querySelector(`.${cls}`);
+    part.style.width = `${(100 * v) / m.host_mib}%`;
+    part.hidden = v <= 0;
   }
-  $("budget-legend").replaceChildren(
+  const left = !demandMib ? `Free ${gib(m.free_mib)}`
+    : m.together ? `Free with all of it on ${gib(m.free_mib - demandMib)}`
+      : `Not all at once: it shares ${gib(m.free_mib)}`;
+  $("budget-legend").replaceChildren(...[
     make("li", {className: "k-reserve", textContent: `Proxmox ${gib(m.reserve_mib)}`}),
     make("li", {className: "k-base", textContent: `Always on ${gib(m.base_mib)}`}),
-    make("li", {className: over ? "k-over" : "k-chosen", textContent: `Your choices ${gib(m.chosen_mib)}`}),
-    make("li", {className: "k-free", textContent: over ? `${gib(-m.free_mib)} too much` : `Free ${gib(m.free_mib)}`}));
+    make("li", {className: over ? "k-over" : "k-chosen", textContent: `Your choices${demandMib ? ", always on" : ""} ${gib(m.chosen_mib)}`}),
+    demandMib ? make("li", {className: "k-demand", textContent: `On demand ${gib(demandMib)}`}) : null,
+    make("li", {className: "k-free", textContent: over ? `${gib(-m.free_mib)} too much` : left})].filter(Boolean));
   $("budget-base-text").textContent = `Always on: ${andList(m.base)}. They and Proxmox itself are not a choice. `
     + `A VM counts with all of its memory; a container counts at ${m.share_pct}% of its limit, because it takes memory only as it uses it. `
-    + "Each row shows the least it takes; memory left free goes to more CI runners at a time.";
+    + "Each row shows the least it takes; memory left free goes to more CI runners at a time. "
+    + "What runs on demand is off until you start it, so it counts only against the memory the rest leaves: each has to fit there by itself, "
+    + "and when not all of it fits at once, starting one asks before it stops another.";
 }
 
 // The form changed: ask the server what it comes to. The newest answer wins.
@@ -814,6 +915,8 @@ function previewChoices() {
       optionsView = view;
       paintOptions();
       paintSavebar();
+      // A row that came or went with this answer may have made the form the saved one again.
+      if (!choicesDirty()) paintStates();
     } catch { /* the rows keep the last answer; saving says what is wrong */ }
   }, 150);
 }
@@ -981,6 +1084,14 @@ function choicesBody() {
     owner_login: $("owner-login").value.trim(),
     disks,
     gpus,
+    power: Object.fromEntries([...$("when-rows").querySelectorAll(".when")].map((row) => {
+      const idle = row.querySelector("[data-role=idle]").value.trim();
+      return [row.dataset.name, {
+        run: row.querySelector("[data-role=run]").value,
+        stop: row.querySelector("[data-role=stop]").value,
+        idle_minutes: /^\d+$/.test(idle) ? Number(idle) : idle,
+      }];
+    })),
   };
 }
 
@@ -1678,6 +1789,19 @@ function attentionItems() {
     add("warn", "Your saved choices are not built yet", "Run setup so the server follows them.", [fb, b]);
   }
   if (state.agent_powers) add("warn", "The operator agent has root on Proxmox", "The checks warn while this is on.", [link("Agent settings", "#agent/settings")]);
+  // What only the owner stops, left on and unused for as long as its rule says.
+  for (const a of (s && s.monitoring === "ok" && s.asks) || []) {
+    const fb = make("p", {className: "feedback"});
+    const act = (text, body) => {
+      const b = make("button", {type: "button", className: "btn small", textContent: text});
+      b.addEventListener("click", () => demandAct(b, fb, {name: a.name, ...body}));
+      return b;
+    };
+    const planned = ((state.on_demand || {}).groups || []).find((g) => g.name === a.name);
+    add("warn", `${a.title} is on and has not been used for ${span(Math.floor(a.idle_s / 60))}`,
+      planned ? `Stopping it frees ${gib(planned.memory_mib)}; nothing is deleted.` : "It runs on demand.",
+      [fb, act("Keep on", {action: "keep", on: true}), act("Stop", {action: "stop"})]);
+  }
   return out;
 }
 
@@ -1708,7 +1832,9 @@ function renderOverview(items) {
         make("dd", {}, href ? make("a", {href}, inner) : inner), sub ? make("dd", {className: "sub", textContent: sub, title: sub}) : null));
     };
     if (s && s.monitoring === "ok") {
-      cell("Systems", `${s.targets - s.down.length} of ${s.targets} up`, s.down.length ? "bad" : "good", s.down.length ? `Down: ${s.down.join(", ")}` : "");
+      const off = s.off || [];
+      cell("Systems", `${s.targets - s.down.length} of ${s.targets} up`, s.down.length ? "bad" : "good",
+        s.down.length ? `Down: ${s.down.join(", ")}` : off.length ? `Off on demand: ${off.join(", ")}` : "", off.length && !s.down.length ? "#services" : null);
       cell("Alerts", s.alerts.length ? `${s.alerts.length} firing` : "None firing", s.alerts.length ? (s.alerts.some((a) => a.severity === "page") ? "bad" : "warn") : "good", "", "#alerts");
       cell("Security updates", s.security_waiting.length ? `${s.security_waiting.length} waiting` : "Up to date", s.security_waiting.length ? "warn" : "good",
         s.security_waiting.length ? s.security_waiting.join(", ") : "Installed nightly");
@@ -1728,13 +1854,14 @@ function renderOverview(items) {
   const services = (st.services && st.services.items) || [];
   show("ov-services", services.length > 0 && built());
   $("ov-services-rows").replaceChildren(...services.slice(0, 6).map((sv) => {
-    const [kind, word] = serviceState(sv.watch);
+    const [kind, word] = serviceState(sv.watch, sv.watch || sv.name);
+    const off = Boolean((demandOf(sv.watch || sv.name) || {}).off);
     const address = sv.url || (sv.addresses || [])[0] || "";
     return make("tr", {},
       make("td", {className: "name"}, make("a", {href: "#services", textContent: sv.title})),
       make("td", {}, status(kind, word)),
       make("td", {className: "hide-phone mono", textContent: address.replace(/^[A-Z][^:]{0,40}: /, "")}),
-      make("td", {className: "actions"}, openLink(sv)));
+      make("td", {className: "actions"}, off ? make("a", {className: "btn small", href: "#services", textContent: "Start"}) : openLink(sv)));
   }));
   const runs = st.runs || [];
   show("ov-runs", runs.length > 0);
@@ -1856,9 +1983,34 @@ function copyButton(label, get, feedback) {
   return button;
 }
 
-function serviceState(watch) {
+// On demand. A service's guest may be off on purpose: the live answer from
+// the host says so at once, Prometheus within a minute or two.
+function demandOf(watch) {
+  if (!watch || !state) return null;
+  const live = demand && demand.live ? demand.groups : [];
+  for (const g of live) {
+    const guest = g.guests.find((m) => m.name === watch);
+    if (!guest || g.state === "pending") continue;
+    // A pool has no guest of its own to be off: it follows its workload.
+    const off = guest.state ? guest.state !== "running" : g.state === "off";
+    return {name: g.name, title: g.title, off, acting: g.acting || "", live: true};
+  }
+  const planned = ((state.on_demand || {}).groups || []).find((g) => g.guests.includes(watch));
+  if (!planned || !lastStatus || lastStatus.monitoring !== "ok") return null;
+  return {name: planned.name, title: planned.title, off: (lastStatus.off || []).includes(watch), acting: "", live: false};
+}
+
+// watch: the name monitoring knows the service's guest by; guest: the guest
+// itself, which the host may know more about than monitoring does yet.
+function serviceState(watch, guest = watch) {
   const ok = lastStatus && lastStatus.monitoring === "ok";
   if (!built()) return ["", "Not built yet"];
+  const d = demandOf(guest);
+  if (d && d.acting) return ["run", d.acting === "starting" ? "Starting" : "Stopping"];
+  if (d && d.off) return ["", "Off, on demand"];
+  // Just started, or a guest monitoring cannot ask: the host says it runs.
+  const heard = Boolean(watch) && ok && (lastStatus.answering.includes(watch) || lastStatus.down.includes(watch));
+  if (d && d.live && !heard) return ["good", "On"];
   if (!watch) return ["", "No status"];
   if (!ok) return ["", lastStatus ? "No status" : "Asking…"];
   if (lastStatus.answering.includes(watch)) return ["good", "Running"];
@@ -1944,13 +2096,16 @@ function renderServices(st) {
     toggle.setAttribute("aria-expanded", open ? "true" : "false");
     toggle.setAttribute("aria-controls", detailId);
     const first = s.url || (s.addresses || [])[0] || "";
+    const said = make("p", {className: "feedback svc-feedback"});
+    said.setAttribute("role", "status");
     const row = make("tr", {className: "link-row"},
-      make("td", {}, make("div", {className: "svc"}, toggle, make("span", {className: "name", textContent: s.title}))),
+      make("td", {}, make("div", {className: "svc"}, toggle, make("span", {className: "name", textContent: s.title})), said),
       make("td", {className: "state-cell"}),
       make("td", {className: "hide-phone mono", textContent: first.replace(/^[A-Z][^:]{0,40}: /, "")}),
       make("td", {className: "hide-narrow mono nowrap", textContent: (s.user || "").split(",")[0]}),
       make("td", {className: "actions"}, openLink(s)));
     row.dataset.watch = s.watch || "";
+    row.dataset.guest = s.watch || s.name;
     const feedback = make("p", {className: "feedback"});
     feedback.setAttribute("role", "status");
     const detail = make("tr", {className: "detail", id: detailId, hidden: !open}, make("td", {colSpan: 5}, ...serviceDetail(s, feedback)));
@@ -1971,15 +2126,204 @@ function renderServices(st) {
 
 function paintServices() {
   for (const row of document.querySelectorAll("#service-rows tr.link-row")) {
-    const [kind, word] = serviceState(row.dataset.watch);
-    row.querySelector(".state-cell").replaceChildren(status(kind, word));
+    const [kind, word] = serviceState(row.dataset.watch, row.dataset.guest);
+    const cell = row.querySelector(".state-cell");
+    if (cell.textContent !== word) cell.replaceChildren(status(kind, word));
+    // A service that is off on demand gets Start where Open would be.
+    const d = built() ? demandOf(row.dataset.guest) : null;
+    const off = Boolean(d && d.off);
+    const actions = row.querySelector("td.actions");
+    const open = actions.querySelector("a.btn");
+    let start = actions.querySelector("button.start");
+    if (off && !start) {
+      start = make("button", {type: "button", className: "btn small start"}, "Start", make("span", {className: "sr-only", textContent: ` ${d.title}`}));
+      start.addEventListener("click", (event) => {
+        event.stopPropagation();
+        demandAct(start, row.querySelector(".svc-feedback"), {action: "start", name: start.dataset.name});
+      });
+      actions.append(start);
+    }
+    if (start) {
+      start.hidden = !off;
+      if (d) start.dataset.name = d.name;
+    }
+    if (open) open.hidden = off;
   }
+}
+
+function demandState(g) {
+  const idle = g.idle_s === undefined ? "" : g.idle_s < 90 ? "used just now" : `unused for ${span(Math.floor(g.idle_s / 60))}`;
+  const changes = {always: "Always on after the next setup run.", rules: "Its rule changes with the next setup run.", "on-demand": ""}[g.next] || "";
+  const sub = (...parts) => parts.filter(Boolean).join(" ");
+  if (g.acting) return ["run", g.acting === "starting" ? "Starting" : "Stopping", "This can take a minute or two."];
+  if (g.state === "pending") return ["", "Not yet", "Runs on demand after the next setup run."];
+  if (g.state === "unknown") return ["", "No status", ""];
+  if (g.state === "missing") return ["", "Not made yet", "Run setup to make it."];
+  if (g.state === "off") return ["", "Off", changes];
+  if (g.setup) return ["run", "On for setup", "A setup run started it and stops it again when it is done."];
+  if (g.state === "partly") {
+    const down = g.guests.filter((m) => m.state && m.state !== "running").map((m) => m.name);
+    return ["warn", "Partly on", sub(`${andList(down)} ${down.length === 1 ? "is" : "are"} off; Start brings ${down.length === 1 ? "it" : "them"} up.`, changes)];
+  }
+  if (g.busy && g.busy.length) return ["good", "In use", sub(`${sentence(g.busy.join("; "))}`, changes)];
+  if (g.keep) return ["good", "Kept on", sub(`${sentence(idle)} It stays on until you stop it.`, changes)];
+  if (g.asks) return ["warn", "On, unused", sub(`${sentence(idle)} Stop it to free ${gib(g.memory_mib)}, or keep it on.`, changes)];
+  if (g.stops_in_s !== undefined) {
+    const left = Math.ceil(g.stops_in_s / 60);
+    return ["good", "On", sub(`${sentence(idle)} Stops by itself ${left <= 1 ? "within a minute" : `in ${span(left)}`} if nobody uses it.`, changes)];
+  }
+  const rule = g.stop === "ask" ? `You are told once it has gone ${span(g.idle_minutes)} unused.` : g.stop === "manual" ? "It runs until you stop it." : "";
+  return ["good", "On", sub(sentence(idle), rule, changes)];
+}
+
+function demandRow(g) {
+  const said = make("p", {className: "feedback"});
+  said.setAttribute("role", "status");
+  const button = (cls, text, body) => {
+    const b = make("button", {type: "button", className: `btn small ${cls}`}, text, make("span", {className: "sr-only", textContent: ` ${g.title}`}));
+    b.addEventListener("click", () => demandAct(b, said, body(b)));
+    return b;
+  };
+  const keep = button("keep", "Keep on", (b) => ({action: "keep", name: g.name, on: b.getAttribute("aria-pressed") !== "true"}));
+  keep.title = "Not stopped for being unused, and you are not asked, until you stop it";
+  const row = make("tr", {},
+    make("td", {}, make("span", {className: "name", textContent: g.title}), make("span", {className: "sub demand-guests"}), said),
+    make("td", {className: "demand-state"}),
+    make("td", {className: "num hide-phone demand-memory"}),
+    make("td", {className: "actions"}, make("span", {className: "row"}, keep,
+      button("start", "Start", () => ({action: "start", name: g.name})), button("stop", "Stop", () => ({action: "stop", name: g.name})))));
+  row.dataset.name = g.name;
+  return row;
+}
+
+// Rows are made once per workload and then repainted, so a button keeps
+// its focus and its line of feedback through every refresh.
+function paintDemand() {
+  const view = demand;
+  const groups = view ? view.groups : [];
+  show("demand", groups.length > 0);
+  if (!groups.length) return;
+  const body = $("demand-rows");
+  const have = new Map([...body.children].map((r) => [r.dataset.name, r]));
+  if ([...have.keys()].join() !== groups.map((g) => g.name).join()) body.replaceChildren(...groups.map((g) => have.get(g.name) || demandRow(g)));
+  for (const g of groups) {
+    const row = body.querySelector(`tr[data-name="${g.name}"]`);
+    const [kind, word, sub] = demandState(g);
+    const cell = row.querySelector(".demand-state");
+    if (cell.dataset.text !== word + sub) {
+      cell.dataset.text = word + sub;
+      cell.replaceChildren(status(kind, word), sub ? make("span", {className: "sub", textContent: sub}) : "");
+    }
+    row.querySelector(".demand-guests").textContent = andList(g.guests.map((m) => m.name));
+    row.querySelector(".demand-memory").textContent = gib(g.memory_mib);
+    const on = g.state === "on" || g.state === "partly";
+    const known = view.live && !["pending", "unknown", "missing"].includes(g.state);
+    row.querySelector(".start").hidden = !known || g.state === "on";
+    row.querySelector(".stop").hidden = !known || !on;
+    const keep = row.querySelector(".keep");
+    keep.hidden = !known || !on || g.stop === "manual" || Boolean(g.setup);
+    keep.setAttribute("aria-pressed", g.keep ? "true" : "false");
+    for (const b of row.querySelectorAll("button")) {
+      if (g.acting || g.setup) { b.setAttribute("aria-disabled", "true"); b.dataset.why = g.acting ? "Wait until it has finished." : "A setup run is using it."; }
+      else if (b.dataset.why) { b.removeAttribute("aria-disabled"); delete b.dataset.why; }
+    }
+  }
+  show("demand-why", Boolean(view.why));
+  $("demand-why-text").textContent = view.why || "";
+  const used = view.used_mib;
+  show("demand-memory", view.live && used !== null);
+  if (view.live && used !== null) {
+    const room = Math.max(view.headroom_mib, used, 1);
+    const over = used > view.headroom_mib;
+    $("demand-bar").classList.toggle("over", over);
+    $("demand-bar").querySelector(".m-chosen").style.width = `${(100 * used) / room}%`;
+    $("demand-bar").querySelector(".m-free").style.width = `${(100 * Math.max(0, view.headroom_mib - used)) / room}%`;
+    const text = over ? `${gib(used)} in use, ${gib(used - view.headroom_mib)} more than the plan counts` : `${gib(used)} of ${gib(view.headroom_mib)} in use`;
+    if ($("demand-fit").textContent !== text) $("demand-fit").replaceChildren(over ? status("warn", text) : text);
+  }
+  const on = groups.filter((g) => g.state === "on" || g.state === "partly").length;
+  $("demand-meta").textContent = view.live ? `${on} of ${groups.length} on${view.setup ? " · a setup run is holding what it started" : ""}` : "";
+  show("demand-log", view.events.length > 0);
+  $("demand-events").replaceChildren(...view.events.map((e) => make("li", {}, make("time", {textContent: clock(e.at)}),
+    `${e.title}: ${e.what}${e.why ? ` (${e.why})` : ""}`)));
+}
+
+function setDemand(view) {
+  demand = view || null;
+  paintDemand();
+  paintServices();
+  paintStates();
+}
+
+async function loadDemand() {
+  if (!state || !(state.on_demand || state.config_changed)) return setDemand(null);
+  setDemand((await api("/api/on-demand")).view);
+}
+
+// Start, Stop or Keep on. A start that does not fit, and a stop of
+// something in use, change nothing on the server and come back as a
+// question; only the owner's yes sends them again.
+async function demandAct(button, feedback, body) {
+  const busy = {start: "Starting…", stop: "Stopping…", keep: "Saving…"}[body.action];
+  await press(button, feedback, busy, async () => {
+    const group = demand && demand.groups.find((g) => g.name === body.name);
+    const acting = (on) => {
+      if (!group || body.action === "keep") return;
+      if (on) group.acting = body.action === "start" ? "starting" : "stopping"; else delete group.acting;
+      paintDemand();
+      paintServices();
+    };
+    acting(true);
+    let answer;
+    try {
+      answer = await api("/api/on-demand", body);
+      if (!answer.ok && answer.no_room) {
+        const r = answer.no_room;
+        if (!r.enough) {
+          throw new ApiError(`${r.title} needs ${gib(r.need_mib)} and does not fit, even with everything else on demand stopped. Run setup if you changed what runs since the last run; otherwise let more run on demand under Setup, What to run.`, 409);
+        }
+        acting(false);
+        const used = r.stop.some((o) => o.busy.length);
+        const ok = await confirmDialog({
+          title: `Stop ${andList(r.stop.map((o) => o.title))} to start ${r.title}?`,
+          text: `${r.title} needs ${gib(r.need_mib)} and ${gib(Math.max(0, r.free_mib))} is free. Stopping shuts down cleanly; nothing is deleted.`,
+          points: r.stop.map((o) => `${o.title}, ${gib(o.memory_mib)}: ${o.busy.length ? `in use (${o.busy.join("; ")})` : o.idle_s < 90 ? "used just now" : `unused for ${span(Math.floor(o.idle_s / 60))}`}`),
+          yes: `Stop ${r.stop.length > 1 ? "them" : "it"} and start ${r.title}`,
+          danger: used,
+        });
+        if (!ok) { setDemand(answer.view); return ""; }
+        acting(true);
+        answer = await api("/api/on-demand", {...body, stop: r.stop.map((o) => o.name)});
+        if (!answer.ok) { setDemand(answer.view); throw new ApiError("What is running changed meanwhile. Press Start again.", 409); }
+      }
+      if (!answer.ok && answer.busy) {
+        acting(false);
+        const ok = await confirmDialog({title: `Stop ${answer.title} while it is in use?`, text: "It shuts down cleanly, but whoever is using it is cut off:", points: answer.busy.map(sentence), yes: "Stop it"});
+        if (!ok) { setDemand(answer.view); return ""; }
+        acting(true);
+        answer = await api("/api/on-demand", {...body, force: true});
+      }
+    } finally {
+      acting(false);
+    }
+    setDemand(answer.view);
+    // Prometheus hears of it within a minute or two; the page already knows.
+    if (lastStatus && lastStatus.asks) lastStatus.asks = lastStatus.asks.filter((a) => a.name !== body.name);
+    paintStates();
+    if (body.action === "keep") return body.on ? "Kept on until you stop it." : "It may stop by itself again.";
+    if (body.action === "stop") return answer.already ? `${answer.title} was off already.` : `Stopped ${answer.title}.`;
+    const parts = [answer.already ? `${answer.title} is on.` : `Started ${answer.title}.`];
+    if ((answer.stopped || []).length) parts.push(`Stopped ${andList(answer.stopped)} to make room.`);
+    for (const w of answer.warnings || []) parts.push(sentence(w));
+    return parts.join(" ");
+  });
 }
 
 async function refreshStatus() {
   lastStatus = await api("/api/status");
   paintServices();
   paintStates();
+  if (currentView === "services" && !$("confirm").open) loadDemand().catch(() => {});
 }
 
 async function refresh() {

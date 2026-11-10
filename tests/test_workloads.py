@@ -87,3 +87,24 @@ def test_minecraft_ticked_without_the_agreement_does_not_plan(facts):
     assert any(e.startswith("games.minecraft.eula: set it to true once you agree") for e in view["errors"])
     minecraft = next(i for i in view["items"] if i["name"] == "minecraft")
     assert minecraft["chosen"] and minecraft["game"]["eula"]["agreed"] is False
+
+
+@pytest.mark.parametrize("cls", CLASSES)
+def test_what_runs_on_demand_shares_what_the_rest_leaves_as_the_plan_counts_it(cls, facts):
+    on_demand = {w: {"run": "on-demand"} for w in fixture_config(cls)["intent"]["workloads"] if w not in ("linux-ci", "windows-ci")}
+    model = build_model(fixture_config(cls) | {"power": on_demand})
+    plan = strip_notes(build_plan(model, facts(cls)))
+    view = workloads.options(model, facts(cls), existing=None)
+    memory, rows = view["memory"], {w["name"]: w for w in view["power"]}
+    groups = plan["power"]["groups"]
+    assert {n for n, w in rows.items() if w["run"] == "on-demand"} == set(groups) == set(on_demand)
+    assert all(rows[n]["memory_mib"] == g["memory_mib"] and rows[n]["guests"] == g["guests"] for n, g in groups.items())
+    assert memory["demand_mib"] == sum(g["memory_mib"] for g in groups.values())
+    assert memory["demand_largest_mib"] == max(g["memory_mib"] for g in groups.values())
+    assert memory["together"] is plan["power"]["together"]
+    # Pools grow into what is left with everything on, so the plan's share is at most the meter's.
+    assert memory["demand_mib"] <= plan["power"]["headroom_mib"] <= memory["free_mib"]
+    parked = {g for group in groups.values() for g in group["guests"]}
+    assert not parked & set(memory["base"]) and memory["base_mib"] + memory["chosen_mib"] <= plan["host"]["guests_mib"]
+    # A pool alone has nothing to stop; its dispatcher makes the CI workload stoppable.
+    assert rows["linux-ci"]["blocked"] is None and rows["linux-ci"]["run"] == "always"

@@ -10,7 +10,7 @@ import pytest
 from conftest import FakeTailnet, fixture_config
 from fixturedata import games_config
 
-from nullbill import applied, apply, backups, browserca, ci, flows, games, hostroot, lan, llm, names, owner
+from nullbill import applied, apply, backups, browserca, ci, flows, games, hostroot, lan, llm, names, owner, power
 from nullbill.apply import ApplyError, Context, connection, run_apply
 from nullbill.artifacts import render_all
 from nullbill.errors import NullBillError
@@ -112,6 +112,11 @@ class FakeReach:
         # Guests tls-cert.yml gave a certificate, by VMID, and those whose ran out since.
         self.certs = set()
         self.expired = set()
+        # nb-power: the on-demand guests that run, those it started for
+        # setup, and what the host really has free for one more.
+        self.power_on = set()
+        self.power_started = []
+        self.power_room = 2
 
     def mark(self, machine, command):
         """apply's reads and writes of the marks on one machine."""
@@ -135,6 +140,8 @@ class FakeReach:
                 return (*self.mark(int(vmid), inner), "")
             return (*self.mark("host", command), "")
         self.calls.append(("host", command))
+        if command.startswith(power.COMMAND + " "):
+            return self.nb_power(shlex.split(command)[1:])
         if command == "uname -r":
             return 0, "6.12.40-1-pve\n", ""
         if command == apply.CLUSTER_VMS:
@@ -250,6 +257,34 @@ class FakeReach:
         if command.startswith("pct exec "):
             return self.guest(shlex.split(command)[2], shlex.split(command)[4:], stdin)
         return 127, "", f"fake host: unexpected {command}"
+
+    def nb_power(self, argv):
+        """nb-power for apply: ensure starts what is off, making room with
+        what it started before; setup end stops those again."""
+        if argv == ["setup", "end"]:
+            said = "".join(f"{name} is off again, as it was before setup\n" for name in self.power_started)
+            self.power_on -= set(self.power_started)
+            self.power_started = []
+            return 0, said, ""
+        assert argv[0] == "ensure"
+        said = ""
+        new = [name for name in argv[1:] if name not in self.power_on]
+        if len(new) > self.power_room:
+            return (
+                1,
+                "",
+                f"nb-power: setup has to start {' and '.join(new)} to configure it, and the host has 100 MiB really free; stop one\n",
+            )
+        for name in new:
+            while len(self.power_on) >= self.power_room:
+                gone = next(n for n in self.power_started if n not in argv[1:])
+                self.power_started.remove(gone)
+                self.power_on.discard(gone)
+                said += f"stopped {gone}\n"
+            self.power_on.add(name)
+            self.power_started.append(name)
+            said += f"started {name}\n"
+        return 0, said, ""
 
     def copy(self, command):
         """nb-legacy-copy, run as a transient unit that stays active for two polls."""
@@ -563,6 +598,8 @@ def test_host_stage_runs_the_baseline_then_installs_the_lan_open_firewall(ctx):
         "host_baseline_api_address": "10.42.1.254",
         # ntfs-3g only when the plan keeps an NTFS disk.
         "host_baseline_ntfs": False,
+        # Nothing runs on demand, so nb-power has no rules.
+        "host_baseline_power": '{\n  "groups": {},\n  "headroom_mib": 0\n}\n',
     }
     assert reach.calls[0][2] == {"pve": connection(c, None)}
     expected = {f"/etc/pve/firewall/{rel.removeprefix('firewall/')}" for rel in c.files if rel.startswith("firewall/")}
@@ -2436,3 +2473,130 @@ def test_games_stage_does_nothing_without_a_game(ctx):
     c = ctx("large")
     apply.stage_games(c)
     assert c.reach.calls == []
+
+
+# On demand (power.py).
+
+
+def on_demand(ctx, *workloads, fixture="mid", config=None, **kw):
+    """A context whose plan runs these workloads on demand."""
+    config = copy.deepcopy(config or fixture_config(fixture))
+    config["power"] = {name: {"run": "on-demand"} for name in workloads}
+    return ctx(fixture, config=config, **kw)
+
+
+def power_calls(c):
+    return [x.removeprefix(power.COMMAND + " ") for x in host_calls(c) if isinstance(x, str) and x.startswith(power.COMMAND + " ")]
+
+
+def test_host_stage_hands_nb_power_the_plans_rules(ctx):
+    c = on_demand(ctx, "inference")
+    apply.stage_host(c)
+    rules = json.loads(c.reach.calls[0][3]["host_baseline_power"])
+    assert rules == power.policy(c.plan) and list(rules["groups"]) == ["inference"]
+    group = rules["groups"]["inference"]
+    assert (group["title"], group["stop"], group["idle_minutes"]) == ("Local AI models", "auto", 30)
+    assert [(g["name"], g["vmid"], g["kind"]) for g in group["guests"]] == [("inference", 2020, "lxc"), ("model-gateway", 2021, "lxc")]
+    # Its certificate lasts a day and runs out while the guest is off.
+    assert group["guests"][1]["certs"] == ["model-gateway.nullbill.internal"] and "certs" not in group["guests"][0]
+    assert rules["ca"] == {"vmid": 2012, "url": "https://step-ca.nullbill.internal"}
+    assert rules["headroom_mib"] == c.bare["power"]["headroom_mib"] > group["memory_mib"]
+
+
+def test_certificates_nb_power_renews_are_those_apply_issues():
+    assert set(power.CERT_GUESTS) == set(apply.TLS)
+
+
+def test_setup_has_nb_power_start_what_runs_on_demand_and_stop_it_when_the_run_ends(ctx):
+    c = on_demand(ctx, "inference")
+    c.reach.inference_ct["status"] = "stopped"
+    run_apply(c, only="inference")
+    asked = power_calls(c)
+    # The card first, which needs no running container; then through
+    # nb-power, never pct start, so its memory is found first.
+    assert asked[0] == "ensure inference" and "ensure model-gateway" in asked and asked[-1] == "setup end"
+    assert asked.count("setup end") == 1 and "pct start 2020" not in host_calls(c)
+    assert host_calls(c)[-1] == f"{power.COMMAND} setup end"
+    said = [line for line in c.log if "on demand" in line]
+    assert said == [
+        "inference: started inference, which runs on demand, to set it up",
+        "inference: started model-gateway, which runs on demand, to set it up",
+        "on demand: inference is off again, as it was before setup",
+        "on demand: model-gateway is off again, as it was before setup",
+    ]
+    # Guests that always run are never asked about.
+    assert not [a for a in asked if "workspace" in a or "step-ca" in a]
+
+
+def test_a_run_that_fails_still_stops_what_it_started(ctx):
+    c = on_demand(ctx, "inference", reach=FakeReach(fail_playbook="model-gateway.yml"))
+    with pytest.raises(ApplyError, match="model-gateway.yml failed"):
+        run_apply(c, only="inference")
+    assert power_calls(c)[-1] == "setup end" and c.reach.power_on == set()
+
+
+def test_no_memory_for_a_guest_setup_must_start_stops_the_run_with_what_to_do(ctx):
+    c = on_demand(ctx, "inference")
+    c.reach.inference_ct["status"] = "stopped"
+    c.reach.power_room = 0
+    with pytest.raises(ApplyError, match="apply stopped at inference: setup has to start inference to configure it") as e:
+        run_apply(c, only="inference")
+    assert "on demand" in progress.advice(str(e.value), "inference")
+    # The run still ends its hold: a start that failed part way may have left a guest on.
+    assert power_calls(c) == ["ensure inference", "setup end"]
+
+
+def test_a_host_without_nb_power_yet_says_to_run_setup_in_full(ctx, monkeypatch):
+    c = on_demand(ctx, "inference")
+    monkeypatch.setattr(c.reach, "nb_power", lambda argv: (127, "", "bash: nb-power: command not found"))
+    with pytest.raises(ApplyError, match="the host has no nb-power yet; run setup in full once"):
+        apply.guest_out(c, "inference", "inference", ["true"])
+
+
+def test_what_does_not_fit_at_once_is_set_up_one_workload_at_a_time(ctx):
+    c = on_demand(ctx, "inference", "agents", "linux-ci")
+    c.reach.power_room = 4
+    apply.stage_updates(c)
+    runs = [sorted(call[2]) for call in c.reach.calls if call[0] == "playbook"]
+    # Everything fits at once: one run on every guest.
+    assert len(runs) == 1 and {"workspace", "inference", "model-gateway", "runner-dispatcher", "forgejo"} <= set(runs[0])
+    assert power_calls(c) == ["ensure runner-dispatcher workspace inference model-gateway"]
+    # It does not: the guests that always run, then each workload by itself.
+    c = on_demand(ctx, "inference", "agents", "linux-ci")
+    c.plan["power"].value["together"] = False
+    apply.stage_updates(c)
+    runs = [sorted(call[2]) for call in c.reach.calls if call[0] == "playbook"]
+    assert runs[1:] == [["workspace"], ["inference", "model-gateway"], ["runner-dispatcher"]]
+    assert "forgejo" in runs[0] and not set(runs[0]) & {"workspace", "inference", "model-gateway", "runner-dispatcher"}
+    assert power_calls(c) == ["ensure workspace", "ensure inference model-gateway", "ensure runner-dispatcher"]
+    assert "updates: stopped workspace again to make room; this run is done with it" in c.log
+    # Each guest's playbook is marked done where it ran, as in one run.
+    c.reach.calls.clear()
+    apply.stage_updates(c)
+    assert [call for call in c.reach.calls if call[0] == "playbook"] == []
+
+
+def test_each_guest_reports_use_of_its_own_ports(ctx):
+    c = ctx("mid")
+    guests = apply.update_guests(c)
+    # Not node_exporter's port, which monitoring scrapes, nor SSH: nb-busy counts sessions.
+    assert guests["model-gateway"]["updates_busy_ports"] == [4000]
+    assert guests["workspace"]["updates_busy_ports"] == []
+    assert guests["forgejo"]["updates_busy_ports"] == [443]
+
+
+def test_a_guest_on_demand_that_is_off_stays_off_when_its_disks_change(ctx, monkeypatch):
+    monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
+    c = on_demand(ctx, "files", fixture="large", config=legacy_config())
+    c.reach.files_ct["status"] = "stopped"
+    apply.stage_tofu(c)
+    # Its mount point is set; it sees the disk when it is next started.
+    assert c.reach.files_ct["mps"] == {"mp0": "/mnt/nb-legacy/data,mp=/srv/share/data,backup=0,ro=1"}
+    assert c.reach.files_ct["status"] == "stopped" and power_calls(c) == []
+    apply.stage_files(c)
+    assert power_calls(c) == ["ensure files"]
+    # One that ran, and that apply stopped for the change, runs again after.
+    c.reach.files_ct["status"] = "running"
+    replan(c, {**legacy_config(mode="rw"), "power": {"files": {"run": "on-demand"}}})
+    apply.stage_tofu(c)
+    assert c.reach.files_ct["mps"]["mp0"].endswith(",ro=0") and c.reach.files_ct["status"] == "running"

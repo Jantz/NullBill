@@ -81,11 +81,23 @@ def _node_exporter(model: dict) -> None:
             svc["ports"] = [*svc.get("ports", []), copy.deepcopy(NODE_EXPORTER)]
 
 
+# A workload config.yaml puts on demand without a rule of its own in the
+# catalog's `power`: it is named as the workload and never stops by itself.
+POWER_DEFAULTS = {"run": "always", "stop": "ask", "idle_minutes": 120}
+
+
+def _power_defaults(model: dict) -> None:
+    for name, entry in model.get("power", {}).items():
+        if isinstance(entry, dict):
+            model["power"][name] = {"title": name, **POWER_DEFAULTS, **entry}
+
+
 def build_model(config: dict) -> dict:
     _check("config", config, "config.yaml")
     catalog = _data("catalog.yaml")
     _check("model", catalog, "catalog.yaml")
     model = merge(catalog, config)
+    _power_defaults(model)
     _check("model", model, "catalog.yaml + config.yaml")
     _agent_ssh(model)
     _node_exporter(model)

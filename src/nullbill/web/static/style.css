@@ -569,6 +569,27 @@ input:not([type=checkbox]):not([type=radio])[readonly] { background: var(--bg-su
 .opt-facts dt { color: var(--text-3); font-weight: 500; }
 .opt-facts dd { margin: 0; display: grid; gap: 4px; color: var(--text-2); }
 .opt-facts ul { list-style: disc; padding-left: 16px; }
+/* When it runs: a row per workload, its rule in controls beside it. */
+.m-demand, .k-demand::before { background: repeating-linear-gradient(135deg, var(--accent) 0 3px, transparent 3px 6px); }
+.whens { border: 1px solid var(--line); border-radius: var(--radius-lg); }
+.when { display: grid; grid-template-columns: minmax(0, 1fr) 132px 236px 92px; column-gap: 12px; align-items: end; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+.when:last-child { border-bottom: 0; }
+.when-main { display: grid; min-width: 0; align-self: center; }
+.when-field { display: grid; gap: 4px; min-width: 0; }
+.when-field[hidden] { display: none; }
+.when-note { grid-column: 1 / -1; margin-top: 6px; font-size: 12px; color: var(--text-2); max-width: 88ch; }
+.when-note .why { color: var(--warn); }
+select:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
+select:disabled { color: var(--text-3); background: var(--bg-sub); cursor: not-allowed; }
+/* Services, On demand. */
+#demand { margin-top: 28px; }
+.demand .sub { white-space: normal; max-width: 56ch; }
+.demand td.actions .row { justify-content: flex-end; flex-wrap: nowrap; }
+.demand .btn[aria-pressed="true"] { background: var(--accent-bg); border-color: var(--accent); color: var(--text); }
+.demand .feedback, .services .svc-feedback { display: flex; margin-top: 2px; white-space: normal; }
+.demand .feedback:empty, .services .svc-feedback:empty { display: none; }
+.events { display: grid; gap: 4px; font-size: 12px; color: var(--text-2); }
+.events time { color: var(--text-3); font-variant-numeric: tabular-nums; margin-right: 8px; }
 .points { list-style: disc; padding-left: 18px; display: grid; gap: 6px; margin: 0 0 12px; color: var(--text-2); font-size: 13px; }
 .fields { display: grid; gap: 12px; }
 .disks { display: grid; gap: 12px; }
@@ -971,6 +992,9 @@ dialog::backdrop { background: var(--scrim); }
   .opt-num::before { content: attr(data-label) " " / ""; color: var(--text-3); }
   .opt-facts { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   .opt-facts dd { margin-bottom: 8px; }
+  .when { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); row-gap: 8px; }
+  .when-main, .when-stop { grid-column: 1 / -1; }
+  .demand td.actions .row { flex-wrap: wrap; }
 }
 @container main (max-width: 560px) {
   .table .hide-phone { display: none; }

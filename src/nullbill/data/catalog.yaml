@@ -398,6 +398,70 @@ services:
     ports:
       - {port: 3389, proto: tcp, from: ["role:owner"]}
 
+# Workloads that can be installed and yet off (docs/adr/0013-on-demand.md).
+# run: always starts with the server and is counted by the plan all the
+# time. on-demand stays off until the owner starts it on the page; the plan
+# then only asks that it fits beside what always runs, and the host's
+# nb-power starts it when what else runs on demand leaves room.
+# stop, for what runs on demand: auto stops it by itself after idle_minutes
+# without use; ask never does, and tells the owner once it has gone that
+# long without use; manual never stops it and never asks.
+# Use is what each of its containers reports (nb-busy, from the updates
+# role and the service's own role) and a pool's running clones. A VM
+# reports nothing, so one that should stop by itself needs busy.cpu_pct:
+# percent of one core, over a minute, that counts as use.
+# Core guests always run; a workload not listed here cannot be on demand.
+power:
+  agents:
+    title: Workspace
+    run: always
+    # Work in progress lives in it: shells, editors, agents.
+    stop: ask
+    idle_minutes: 120
+  linux-ci:
+    title: Linux CI runners
+    run: always
+    stop: auto
+    idle_minutes: 30
+  inference:
+    title: Local AI models
+    run: always
+    stop: auto
+    idle_minutes: 30
+  media:
+    title: Jellyfin
+    run: always
+    stop: auto
+    idle_minutes: 30
+  files:
+    title: File shares
+    run: always
+    stop: auto
+    idle_minutes: 30
+  windows-dev:
+    title: Windows desktop
+    run: always
+    # Open programs and unsaved files: only the owner knows when it is done.
+    stop: ask
+    idle_minutes: 240
+  # A game server is in use while someone plays or it does not answer
+  # (nb-game busy). It saves its world when it stops.
+  minecraft:
+    title: Minecraft
+    run: always
+    stop: auto
+    idle_minutes: 30
+  terraria:
+    title: Terraria
+    run: always
+    stop: auto
+    idle_minutes: 30
+  factorio:
+    title: Factorio
+    run: always
+    stop: auto
+    idle_minutes: 30
+
 # Inference engine by the number of host-shared GPUs given to inference.
 # llama.cpp serves quantised models and splits one across several cards by
 # layer. vLLM, whose tensor parallelism suits several cards better, is not

@@ -148,6 +148,20 @@
   ansible.builtin.command: nginx -t
   changed_when: false
 
+# What use of the gateway is, for local models that run on demand: the
+# updates role's nb-busy runs it (docs/adr/0013-on-demand.md).
+- name: Directory for nb-busy's programs
+  ansible.builtin.file:
+    path: /etc/nullbill/busy.d
+    state: directory
+    mode: "0755"
+
+- name: The gateway's answer to nb-busy
+  ansible.builtin.template:
+    src: busy.j2
+    dest: /etc/nullbill/busy.d/model-gateway
+    mode: "0755"
+
 - name: Run LiteLLM and nginx
   ansible.builtin.systemd_service:
     name: "{{ item }}"
