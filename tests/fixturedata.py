@@ -56,8 +56,10 @@ def games_config() -> dict:
 def custom_config() -> dict:
     """The large class with two services of the owner's own, as the page's
     agent adds them (custom.define): a container a friend is given, with
-    names of its own to fetch from, and a VM only the owner reaches."""
-    from nullbill import custom
+    names of its own to fetch from, and a VM only the owner reaches. And
+    with what else config.yaml adds to the catalog's guests: a second
+    Minecraft server beside the first (games.add), given to the friend."""
+    from nullbill import custom, games
     from nullbill.model import build_model
 
     config = fixture_config("large")
@@ -75,5 +77,9 @@ def custom_config() -> dict:
     }
     for name, want in own.items():
         config = custom.define(config, build_model(config), name, want)
-    friend = {"role": "friend", "login": "friend-c@example.internal", "services": ["paperless"]}
+    config, world = games.add(config, build_model(config), "minecraft", "Creative")
+    config["games"] |= {"minecraft": {"eula": True}}
+    config["games"][world] |= {"settings": {"gamemode": "creative"}, "admins": ["owner_a"]}
+    config["intent"]["workloads"] = [*config["intent"]["workloads"], "minecraft", world]
+    friend = {"role": "friend", "login": "friend-c@example.internal", "services": ["paperless", world]}
     return {**config, "people": {**config["people"], "friend-c": friend}}

@@ -1981,7 +1981,7 @@ def stage_games(ctx: Context) -> None:
     console as the owner would."""
     for name in games.planned(ctx.bare, ctx.model):
         game = ctx.model["games"][name]
-        run_playbook(ctx, "games", games.playbook(name), name, games.variables(ctx.bare, ctx.model, name))
+        run_playbook(ctx, "games", games.playbook(ctx.model, name), name, games.variables(ctx.bare, ctx.model, name))
         guest_out(ctx, "games", name, [games.NB_GAME, "wait", str(games.START_WAIT_S)])
         # Only a game with admins in config.yaml is asked for its list:
         # Terraria keeps none, and nb-game fails there.
@@ -1989,7 +1989,7 @@ def stage_games(ctx: Context) -> None:
         if game.get("admins"):
             missing = games.missing_admins(ctx.model, name, guest_out(ctx, "games", name, [games.NB_GAME, "admins"]))
         for admin in missing:
-            guest_out(ctx, "games", name, [games.NB_GAME, "console", games.admin_command(name, admin)])
+            guest_out(ctx, "games", name, [games.NB_GAME, "console", games.admin_command(ctx.model, name, admin)])
         deadline = time.monotonic() + games.ADMIN_WAIT_S
         while missing and time.monotonic() < deadline:
             sleep(1)

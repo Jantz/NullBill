@@ -11,6 +11,7 @@ server restarts (an update restarting it, say), and the restarted server
 shows it again.
 """
 
+import copy
 import difflib
 import functools
 import hashlib
@@ -40,7 +41,7 @@ from pathlib import Path
 
 import yaml
 
-from nullbill import browserca, custom, direct, hostroot, lan, legacy, llm, names, owner, people, power, tailscale, version
+from nullbill import browserca, custom, direct, games, hostroot, lan, legacy, llm, names, owner, people, power, tailscale, version
 from nullbill.apply import DISKS_FILE, GUESTS, NTFY, REMOVALS, SPKI, STAGES
 from nullbill.cli import plan_text, reach_target
 from nullbill.errors import NullBillError, Refused
@@ -1085,8 +1086,10 @@ class App:
     # (chat.Tools.t_add_service), or the owner writes it into config.yaml.
     # The page lists them under Setup, What to run, like every choice.
     def own_workloads(self, config: dict) -> list[str]:
+        """The choices config.yaml adds to the catalog's: further game
+        servers and the workloads of the owner's own services."""
         try:
-            return custom.workloads(build_model(config))
+            return workloads.added(build_model(config))
         except NullBillError:
             return []
 
@@ -1180,37 +1183,132 @@ class App:
         self.plan()
         return title
 
+    # Game servers (nullbill/games.py). Besides the catalog's one of each
+    # game, config.yaml can name more (games.<name>.game): the page's Add a
+    # game server and the agent's add_game_server make one, and every
+    # server's row carries its own settings, admins and memory.
+    def add_game(self, game: str, title: str, form: dict | None = None, on: bool = True, save: bool = True) -> dict:
+        """One more server of a game, saved and planned. form: what the
+        page's `games` form takes for a server (_games_config). on False
+        leaves it unticked. save False only says what it would be (`lines`)
+        and raises what config.yaml or the plan say against it, as the
+        agent's request does before the owner sees it."""
+        config = self.config()
+        if config is None:
+            raise NullBillError("nothing is chosen yet; save your choices under Setup, What to run, first")
+        new, name = games.add(config, build_model(config), str(game), title)
+        if on:
+            ticked = new.setdefault("intent", {}).setdefault("workloads", list(DEFAULT_WORKLOADS))
+            ticked.append(name)
+        if form:
+            self._games_config(new, {name: form})
+        model = build_model(new)
+        out = {"name": name, "title": model["games"][name]["title"], "lines": games.describe(model, name, on)}
+        if not save:
+            facts = self.facts()
+            if facts is not None and on:
+                build_plan(model, facts)
+            return out
+        self._save_config(new)
+        self.plan()
+        return out
+
+    def forget_game(self, name: str, save: bool = True) -> str:
+        """Take a further game server out of config.yaml. Only one that is
+        off and has no guest on the server: deleting a guest, and the world
+        in it, is setup's, after it asks the owner. save False only says
+        whether it may."""
+        config = self.config() or {}
+        model = build_model(config)
+        new = games.forget(config, model, name)
+        title = model["games"][name]["title"]
+        if name in config.get("intent", {}).get("workloads", []):
+            raise NullBillError(f"{title} is turned on; turn it off under Setup, What to run, and save first")
+        if name in (self.existing_guests() or set()):
+            raise NullBillError(
+                f"{title}'s guest is still on the server; run setup, which deletes it after asking you, then remove it here"
+            )
+        if save:
+            self._save_config(new)
+            self.plan()
+        return title
+
     @staticmethod
     def _games_config(config: dict, form: object) -> None:
-        """What the page asks beside each game's tick, put into config.yaml's
-        games: the owner's agreement to an EULA and the admins' names.
-        Nothing changes without the form's `games` (the agent's choices have
-        none: an agreement is the owner's to give)."""
+        """What the page asks beside each game server's tick, put into
+        config.yaml: the owner's agreement to the game's EULA (once for all
+        its servers), the admins' names, the server's settings (`settings`
+        by name, `other` as lines of name = value), its memory, and a
+        further server's title. A key the form leaves out stays as it is;
+        nothing changes without the form's `games`. Every problem is raised
+        together, a message each."""
         if not isinstance(form, dict):
             return
+        chosen = copy.deepcopy(config.get("games") or {})
+        sizes = copy.deepcopy(config.get("overrides") or {})
+        # Only games and sizes matter here; the rest of the form may not be whole yet.
+        model = build_model({"games": chosen, "overrides": sizes})
         catalog = build_model({})["games"]
-        chosen = config.get("games") or {}
+        problems: list[str] = []
         for name, asked in form.items():
-            if name not in catalog or not isinstance(asked, dict):
+            if name not in model["games"] or not isinstance(asked, dict):
                 continue
+            of = games.kind(model, name)
             game = dict(chosen.get(name) or {})
-            if "eula" in catalog[name] and "eula" in asked:
-                game["eula"] = bool(asked["eula"])
-            if "admins" in catalog[name] and "admins" in asked:
-                admins = list(dict.fromkeys(a for a in re.split(r"[\s,]+", str(asked["admins"])) if a))
-                if any(not re.fullmatch(r"[A-Za-z0-9_.-]{1,60}", a) for a in admins):
-                    raise NullBillError(f"{catalog[name]['title']} admins are player names, as shown in the game, separated by commas")
+            if "eula" in catalog[of] and "eula" in asked:
+                # The agreement is the game's, whichever of its servers asks.
+                agreed = {**(chosen.get(of) or {}), "eula": bool(asked["eula"])}
+                if of == name:
+                    game = agreed
+                elif agreed["eula"] != catalog[of]["eula"]:
+                    chosen[of] = agreed
+                else:
+                    chosen[of] = {k: v for k, v in agreed.items() if k != "eula"}
+                    if not chosen[of]:
+                        del chosen[of]
+            # Each part is read on its own, so one refusal does not hide the next.
+            found = len(problems)
+            if "admins" in catalog[of] and "admins" in asked:
+                given = asked["admins"]
+                admins = list(dict.fromkeys(a for a in (given if isinstance(given, list) else re.split(r"[\s,]+", str(given))) if a))
+                if any(not isinstance(a, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,60}", a) for a in admins):
+                    problems.append(f"{model['games'][name]['title']}: admins are player names, as shown in the game, separated by commas")
                 game["admins"] = admins
-            # What equals the catalog is not written down.
-            game = {key: value for key, value in game.items() if value != catalog[name].get(key)}
+            memory = None
+            for part in ("title", "settings", "memory_mib"):
+                try:
+                    if part == "title" and of != name and "title" in asked:
+                        game["title"] = games.read_title(model, name, asked["title"])
+                    if part == "settings" and ("settings" in asked or "other" in asked):
+                        game["settings"] = games.read_settings(model, name, asked.get("settings"), asked.get("other"))
+                    if part == "memory_mib" and "memory_mib" in asked:
+                        memory = games.read_memory(model, name, asked["memory_mib"])
+                except NullBillError as exc:
+                    problems.extend(exc.messages)
+            if len(problems) > found:
+                continue
+            if "memory_mib" in asked:
+                size = {k: v for k, v in sizes.get(name, {}).items() if k != "memory_mib"} | ({"memory_mib": memory} if memory else {})
+                sizes = {k: v for k, v in sizes.items() if k != name} | ({name: size} if size else {})
+            # What equals the catalog is not written down; a further server
+            # always keeps which game it is and its address.
+            start = catalog.get(name) or {"settings": {}, "admins": []}
+            game = {key: value for key, value in game.items() if key in ("game", "id") or value != start.get(key)}
             if game:
                 chosen[name] = game
             else:
                 chosen.pop(name, None)
-        if chosen:
-            config["games"] = chosen
-        else:
-            config.pop("games", None)
+        if problems:
+            raise (
+                Refused("Some game server settings cannot be used, so nothing was saved", problems)
+                if len(problems) > 1
+                else NullBillError(*problems)
+            )
+        for section, value in (("games", chosen), ("overrides", sizes)):
+            if value:
+                config[section] = value
+            else:
+                config.pop(section, None)
 
     def _choices_config(self, body: dict, saving: bool = True) -> dict:
         """config.yaml with the page's form put into it. Saving checks what
@@ -1271,7 +1369,9 @@ class App:
         for name, want in chosen.items():
             if name not in known or not isinstance(want, dict):
                 continue
-            default = {**POWER_DEFAULTS, **catalog["power"].get(name, {})}
+            # A further game server starts with its game's rule (model._more_games).
+            of = (config.get("games") or {}).get(name, {}).get("game", name)
+            default = {**POWER_DEFAULTS, **catalog["power"].get(of, {})}
             pin = {k: v for k, v in pins.get(name, {}).items() if k not in POWER_DEFAULTS}
             for key in POWER_DEFAULTS:
                 value = want.get(key, default[key])
@@ -2344,6 +2444,10 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                     return self.json(200, app.preview(body))
                 if self.path == "/api/own-service/remove":
                     return self.json(200, {"ok": True, "removed": app.forget_service(str(body.get("name", "")))})
+                if self.path == "/api/game-server":
+                    return self.json(200, {"ok": True, "added": app.add_game(str(body.get("game", "")), str(body.get("title", "")))})
+                if self.path == "/api/game-server/remove":
+                    return self.json(200, {"ok": True, "removed": app.forget_game(str(body.get("name", "")))})
                 if self.path == "/api/on-demand":
                     return self.json(200, app.power_act(body))
                 if self.path == "/api/alerts":

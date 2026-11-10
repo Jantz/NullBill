@@ -262,6 +262,35 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}, "why": WHY}, "required": ["name"]},
     },
     {
+        "name": "add_game_server",
+        "description": "One more server of a game NullBill has built in (status, what_to_run, names each game server "
+        "and its game), in a container of its own with its own world. The next setup run builds it. Its name on the "
+        "server comes from the title. Refused when the plan does not fit; then say what would have to change.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "game": {"enum": ["minecraft", "terraria", "factorio"]},
+                "title": {"type": "string", "description": "What the owner and their friends see it called, such as Creative world."},
+                "settings": {
+                    "type": "object",
+                    "description": "The server's own options by their own names (server.properties, serverconfig.txt, "
+                    "server-settings.json), such as gamemode: creative. NullBill sets the port and who may connect itself.",
+                },
+                "admins": {"type": "array", "items": {"type": "string"}, "description": "Player names; Terraria has none."},
+                "memory_mib": {"type": "integer", "description": "The container's memory; the game's own when omitted."},
+                "on": {"type": "boolean", "description": "Whether it is ticked under Setup, What to run. A new one is on."},
+                "why": WHY,
+            },
+            "required": ["game", "title"],
+        },
+    },
+    {
+        "name": "remove_game_server",
+        "description": "Forget a further game server: only one that is turned off (set_choices) and whose guest a setup "
+        "run has deleted, which asks the owner first. A game's first server is turned off, never removed.",
+        "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}, "why": WHY}, "required": ["name"]},
+    },
+    {
         "name": "set_choices",
         "description": "Change what the server runs (the Setup page's choices); the next setup run builds it. Disks "
         "are the owner's to change on the Setup page.",

@@ -72,6 +72,8 @@ BACKGROUND_DIR = "/var/log/nb-agent"
 # Jobs the agent may start, and their tier. probe and verify only read.
 JOB_TIERS = {"probe": gate.READ, "verify": gate.READ, "apply": gate.CHANGE, "upgrade": gate.CHANGE}
 CHOICE_KEYS = {"workloads", "backups", "console", "owner_login", "gpus"}
+# What add_game_server takes for the new server, as the page's form does.
+GAME_KEYS = {"settings", "admins", "memory_mib"}
 # Credentials the CLI reads from its environment.
 CREDENTIAL_ENV = {"anthropic_api_key": "ANTHROPIC_API_KEY", "claude_oauth_token": "CLAUDE_CODE_OAUTH_TOKEN"}
 SECRET_PATTERNS = re.compile(
@@ -121,6 +123,12 @@ Rules:
   download it checks, ends with a systemd unit listening on the ports you declared, holds no password or key. For
   Docker use kind vm. Then start_job apply, and check with run_command where=<name> that it answers before you say it
   works. remove_service forgets one that is off and whose guest setup has deleted.
+- Minecraft, Terraria and Factorio are built in, and the owner can have several servers of each: add_game_server
+  makes one more, in a container of its own, with its own world, settings (the server's own options by name,
+  docs/runbooks/games.md), admins and memory. NullBill keeps the port and who may connect. Minecraft's EULA is the
+  owner's to agree to, once, beside Minecraft under Setup, What to run. remove_game_server forgets a further server
+  that is off and whose guest setup has deleted. Never write a game NullBill has built in as a service of the
+  owner's own.
 - A guest that runs on demand and is off (status, on_demand) is off on purpose, not broken. On the host,
   `nb-power status` says what is on and why; `nb-power start NAME` and `nb-power stop NAME` are the page's Start and
   Stop. Never start one with pct or qm: nb-power counts the memory. Whether it runs on demand at all is the owner's
@@ -848,6 +856,8 @@ def tool_label(name: str, args: dict) -> str:
         "read_service": f"Read your own service {args.get('name', '')}",
         "add_service": f"Your own service {args.get('name', '')}: add or change",
         "remove_service": f"Your own service {args.get('name', '')}: remove",
+        "add_game_server": f"Add the game server {args.get('title', '')}",
+        "remove_game_server": f"Remove the game server {args.get('name', '')}",
         "ask_owner": "Asked you a question",
         "watch_job": f"Watching {args.get('id', 'a run')}",
         "read_run": f"Read the output of {args.get('id', 'a command')}",
@@ -940,6 +950,7 @@ class Tools:
             "what_to_run": [
                 {k: i[k] for k in ("name", "title", "chosen", "memory_mib", "disk_gib", "on_server", "blocked")}
                 | ({"own": True} if i.get("own") else {})
+                | ({"game_server_of": i["game"]["kind"]} if i.get("game") else {})
                 for i in options["items"]
             ],
             "memory_free_mib": (options["memory"] or {}).get("free_mib"),
@@ -1256,6 +1267,26 @@ class Tools:
         verdict = gate.change("takes a service that is off, and has no guest, out of the choices; its setup script is set aside")
         return self.gated({"act": "forget", "service": str(name)}, verdict, why, f"Remove your own service {title}")
 
+    def t_add_game_server(self, game: str, title: str, why: str = "", on: bool = True, **form: object) -> str:
+        """One more server of a game NullBill has a role for. No code comes
+        with it and it opens what the game's own server opens, so it is a
+        change like the choices; an agreement (EULA) stays the owner's."""
+        form = {k: v for k, v in form.items() if v is not None}
+        unknown = set(form) - GAME_KEYS
+        if unknown:
+            raise NullBillError(
+                f"add_game_server takes game, title, on and {', '.join(sorted(GAME_KEYS))}; not {', '.join(sorted(unknown))}"
+            )
+        want = self.app.add_game(str(game), str(title), form, bool(on), save=False)
+        verdict = gate.change("adds a game server NullBill has built in; the next setup run builds it")
+        action = {"act": "game", "game": str(game), "name": str(title), "form": form, "on": bool(on), "lines": want["lines"]}
+        return self.gated(action, verdict, why, f"Add the game server {want['title']}")
+
+    def t_remove_game_server(self, name: str, why: str = "") -> str:
+        title = self.app.forget_game(str(name), save=False)
+        verdict = gate.change("takes a game server that is off, and has no guest, out of the choices")
+        return self.gated({"act": "forget_game", "server": str(name)}, verdict, why, f"Remove the game server {title}")
+
     def t_ask_owner(self, question: str, options: list | None = None) -> str:
         options = [str(o)[:120] for o in (options or [])][:6]
         self.chat.ask(str(question)[:1500], options)
@@ -1340,6 +1371,14 @@ class Tools:
             return f"saved {action['service']}; the plan {fits}; {then}"
         if kind == "forget":
             return f"removed {self.app.forget_service(action['service'])} from the choices"
+        if kind == "game":
+            added = self.app.add_game(action["game"], action["name"], action["form"], action["on"])
+            plan = self.app.plan()
+            fits = "fits" if not plan.get("errors") else "does not fit: " + "; ".join(plan["errors"])
+            then = "the next setup run builds it (start_job apply)" if action["on"] else "it is off; set_choices turns it on"
+            return f"saved the game server {added['name']} ({added['title']}); the plan {fits}; {then}"
+        if kind == "forget_game":
+            return f"removed {self.app.forget_game(action['server'])} from the choices"
         raise NullBillError(f"unknown action {kind}")
 
     def guest(self, name: str) -> dict:

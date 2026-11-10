@@ -112,6 +112,13 @@ done
 ansible-playbook -i localhost, -c local -e "@$tests/vars.json" -e "$here" /ansible/game-minecraft.yml >/tmp/third.log 2>&1 || { cat /tmp/third.log; fail "third run"; }
 grep -Eq 'localhost +: ok=[0-9]+ +changed=0 ' /tmp/third.log || { grep -B3 changed: /tmp/third.log; fail "the role changed a running server's files"; }
 pass "the settings from config.yaml are the server's, and the role leaves the file the server rewrote alone"
+# The settings the page offers by name (games.py's OPTIONS; a test keeps
+# this list equal to it): the server wrote each into its file, so it knows them.
+options="gamemode difficulty max-players view-distance hardcore level-seed white-list motd"
+for key in $options; do
+  grep -q "^$key=" /var/lib/minecraft/server.properties || { cat /var/lib/minecraft/server.properties; fail "the server has no setting $key"; }
+done
+pass "the server knows every setting the page offers by name"
 
 # ExecStop: "stop" on the console, and wait for the server to save and go.
 pid=$(pidof java)

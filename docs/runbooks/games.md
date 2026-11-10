@@ -57,10 +57,26 @@ the server.
 
 ## 3. Settings
 
-The page asks only for what every server needs. Everything else is the
-server's own option, by its own name, under `games.<name>.settings` in
-`config.yaml` in the NullBill container (`pct enter 2002`,
-`/var/lib/nullbill/config.yaml`):
+**You need:** the game ticked under **Setup**, **What to run**.
+
+1. In the game's row, open **Settings of this server**.
+2. Change what you want. The fields are the settings most people change,
+   in the game's own words: game mode, difficulty, players at once, world
+   size and seed, a password. **Memory** is the container's; give it more
+   for a larger world or more players.
+3. Anything else the server can do goes into **Other settings**, one on
+   each line as `name = value`, by the server's own name for it
+   (`server.properties` for Minecraft, the server's config file for
+   Terraria, `server-settings.json` for Factorio).
+4. Press **Save and plan**, then **Run setup**. A changed setting restarts
+   that server, which saves first; players are disconnected for a moment.
+
+If a setting is refused, the line under the form says which and why;
+nothing is saved until every line is right.
+
+The same settings are `games.<name>.settings` in `config.yaml` in the
+NullBill container (`pct enter 2002`, `/var/lib/nullbill/config.yaml`),
+for those who would rather write them:
 
 ```yaml
 games:
@@ -85,30 +101,84 @@ overrides:
   minecraft: {memory_mib: 6144} # more memory: Java gets all but 1024 MiB of it
 ```
 
-Then press **Run setup**. A changed setting restarts that server, which
-saves first; players are disconnected for a moment.
-
-- NullBill sets a few options itself and plan refuses them in `settings`:
+- NullBill sets a few options itself and refuses them among the settings:
   the port, anything that lists the server publicly or opens a second
   port, and the check of each player's account (`online-mode`,
   `require_user_verification`).
-- Options that shape a new world (`level-seed`, `autocreate`, `seed`)
-  count only when the world is made.
+- Settings that shape a new world (seed, world size, hardcore) count only
+  when the world is made; the page says so beside each.
 - **Factorio's Space Age.** With `space_age: false`, the default, the
   server runs the base game and anyone who owns Factorio can join. With
   `true`, every player must own the expansion. Choose before the first
   setup run: switching it later loads the existing map with other mods
   than it was made with.
 - **Memory.** The defaults suit a small world and a few players. Raise
-  `overrides.<name>.memory_mib` when the server lags or its log says it
-  ran out of memory; the **Plan** then shows whether that fits.
+  **Memory** in the server's settings (`overrides.<name>.memory_mib`) when
+  the server lags or its log says it ran out of memory; the meter above
+  the list shows at once whether that fits.
 - **Only while someone plays.** Under **When it runs**, set a game to
   **On demand** and it holds no memory while off. You start it on the
   **Services** page; it stops by itself once nobody has played for 30
   minutes, saving its world. A friend cannot start it, so start it before
   they join ([on demand](on-demand.md)).
 
-## 4. The server's console
+## 4. More than one server of a game
+
+A second Minecraft for a creative world, a Terraria in master mode beside
+the first: each is a server of its own, in a container of its own, with
+its own world, settings, admins and friends
+([ADR 0016](../adr/0016-more-game-servers.md)).
+
+**You need:** your choices saved, and for Minecraft the EULA agreed to
+(once, for every Minecraft server).
+
+1. Under **Setup**, **What to run**, **Game servers**, press **Add a game
+   server**. Choose the game and give the server a name, such as
+   `Creative world`, and press **Add**.
+2. The new server is a row of its own, ticked. Open **Settings of this
+   server** in it and set it up as in [Settings](#3-settings).
+3. Press **Save and plan**. If the meter says it does not fit, set the
+   servers you do not play at the same time to **On demand** under **When
+   it runs**: they then share the memory.
+4. Press **Run setup**.
+5. Under **Access**, **People**, tick the new server for each friend who
+   may join it. A friend ticked for one server does not reach the other.
+
+Each server has its own address and the game's usual port, shown on the
+**Services** page: a server named `Creative world` answers at
+`minecraft-creative-world.nullbill.internal:25565`.
+
+**The agent can do the same.** Ask it, for example "Add two more Minecraft
+servers: one creative for the kids, one hard survival with 6 GB". It asks
+you once per server in Manual mode and not at all in Auto, and never
+agrees to an EULA for you.
+
+**To remove one:** untick it, **Save and plan**, **Run setup** (which asks
+before it deletes the server and its world), then **Remove** under the
+row's **What it makes, needs and deletes**. The first server of a game is
+only ever turned off.
+
+In `config.yaml` a further server is an entry under `games` with the game
+it is one of and an address from 64 to 127 or 192 to 253 that nothing else
+uses:
+
+```yaml
+intent:
+  workloads: [agents, minecraft, minecraft-creative-world]
+games:
+  minecraft:
+    eula: true
+  minecraft-creative-world:
+    game: minecraft
+    id: 64
+    title: Creative world
+    settings: {gamemode: creative}
+    admins: [your_player_name]
+power:
+  minecraft-creative-world: {run: on-demand}
+```
+
+## 5. The server's console
 
 Each server takes its own commands on its console. In Proxmox, select the
 node, open **Shell**, and type the line after `nb-game console`:
@@ -126,14 +196,16 @@ The answer is in the server's log:
 pct exec 2025 -- journalctl -u minecraft -n 30
 ```
 
-(`-u terraria` in 2026, `-u factorio` in 2027.) Two more questions the
+(`-u terraria` in 2026, `-u factorio` in 2027. A further server of a game
+has a number of its own, shown with its console line on the **Services**
+page, and the game's unit name.) Two more questions the
 same tool answers: `pct exec 2025 -- nb-game status` (version, whether it
 answers, how many players) and `nb-game admins`.
 
 Admins you name on the page are added at each setup run. NullBill never
 takes one away; do that on the console (`deop NAME`, `/demote NAME`).
 
-## 5. Worlds: where they are, copying them out and in
+## 6. Worlds: where they are, copying them out and in
 
 Every world is in its container, which the nightly backup covers once you
 have a backup disk ([restore-guest.md](restore-guest.md) brings a whole

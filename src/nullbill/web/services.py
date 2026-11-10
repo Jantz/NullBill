@@ -325,16 +325,18 @@ def _entries(plan: dict, guests: dict, by_name: bool, forgejo_user: str | None, 
             continue
         number = game["port"].partition("/")[2]
         where = f"{at(name)}:{number}"
-        client = f"{games.CLIENT[name]} {game['version']}"
+        # A further server of a game says which (`game`); the game's own does not.
+        of = game.get("game", name)
+        client = f"{games.CLIENT[of]} {game['version']}"
         steps = [
-            step(f"In the game choose {games.JOIN[name]} and type the address. Your game must be {client}, the server's version."),
+            step(f"In the game choose {games.JOIN[of]} and type the address. Your game must be {client}, the server's version."),
             step(
                 f"Tick {game['title']} for each friend who may join, and send them what the page writes.",
                 href="#access/people",
                 link="Access, People",
             ),
         ]
-        if name in games.ADMIN_COMMAND:
+        if of in games.ADMIN_COMMAND:
             steps.append(
                 step(
                     f"To be an admin in the game, add your player name beside {game['title']}, then press Run setup.",
@@ -348,20 +350,20 @@ def _entries(plan: dict, guests: dict, by_name: bool, forgejo_user: str | None, 
                 step(
                     "Every player needs the Space Age expansion."
                     if game["space_age"]
-                    else "It runs the base game, so nobody needs the Space Age expansion (games.factorio.space_age in config.yaml)."
+                    else f"It runs the base game, so nobody needs the Space Age expansion (games.{name}.space_age in config.yaml)."
                 )
             )
         steps.append(
             step(
                 f"The server takes its own commands on its console. {shell}",
-                code=f"pct exec {vmid(name)} -- nb-game console {games.SAY[name]}",
+                code=f"pct exec {vmid(name)} -- nb-game console {games.SAY[of]}",
             )
         )
         out.append(
             {
                 "name": name,
                 "title": game["title"],
-                "what": f"A {game['title']} server for you and the people you let in. Players need {client}.",
+                "what": f"A {games.TITLE[of]} server for you and the people you let in. Players need {client}.",
                 "addresses": [f"In the game: {where}", *([f"By address: {ip(name)}:{number}"] if by_name else [])],
                 "steps": steps,
                 "watch": name,

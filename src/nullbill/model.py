@@ -100,6 +100,50 @@ def _own_vm_ssh(model: dict) -> None:
             svc["ports"] = [*svc.get("ports", []), copy.deepcopy(VM_SSH)]
 
 
+# One more server of a game the catalog has (docs/adr/0016-more-game-
+# servers.md): what the game's own entry says, with this server's own
+# title, settings and admins.
+OWN_PER_SERVER = ("title", "settings", "admins")
+
+
+def _more_games(model: dict, catalog: dict, config: dict) -> None:
+    """Each games entry under a name of its own becomes a game server like
+    the catalog's: a service, a workload and a rule for when it runs, all
+    of that name, made from the game's. Its address (`id`) is its own; the
+    port is the game's, since every guest has its own address."""
+    problems = []
+    for name, entry in model["games"].items():
+        if name in catalog["games"]:
+            continue
+        kind = entry["game"]
+        if name in catalog["services"] or name in (config.get("services") or {}):
+            problems.append(f"config.yaml: games.{name}: a service has this name already; give the server another")
+            continue
+        if "eula" in entry:
+            problems.append(f"config.yaml: games.{name}.eula: the agreement is given once, as games.{kind}.eula, for all its servers")
+            continue
+        own = {key: value for key, value in entry.items() if key not in ("game", "id")}
+        try:
+            _check(f"game_{kind}", own, f"config.yaml: games.{name}")
+        except NullBillError as exc:
+            problems.extend(exc.messages)
+            continue
+        base = model["games"][kind]
+        title = entry.get("title") or f"{base['title']} ({name})"
+        full = {key: copy.deepcopy(value) for key, value in base.items() if key not in OWN_PER_SERVER}
+        full |= {"settings": {}} | ({"admins": []} if "admins" in base else {})
+        model["games"][name] = merge(full, entry) | {"title": title}
+        svc = copy.deepcopy(catalog["services"][kind])
+        svc |= {"id": entry["id"], "workload": name, "description": f"{title}: one more {base['title']} server. Not agent-managed."}
+        if "share" in svc:
+            svc["share"]["title"] = title
+        model["services"][name] = svc
+        rule = catalog["power"].get(kind, {})
+        model["power"][name] = {**rule, "title": title, **(config.get("power") or {}).get(name, {})}
+    if problems:
+        raise NullBillError(*problems)
+
+
 # A workload config.yaml puts on demand without a rule of its own in the
 # catalog's `power`: it is named as the workload and never stops by itself.
 POWER_DEFAULTS = {"run": "always", "stop": "ask", "idle_minutes": 120}
@@ -116,6 +160,7 @@ def build_model(config: dict) -> dict:
     catalog = _data("catalog.yaml")
     _check("model", catalog, "catalog.yaml")
     model = merge(catalog, config)
+    _more_games(model, catalog, config)
     _power_defaults(model)
     _check("model", model, "catalog.yaml + config.yaml")
     _own_vm_ssh(model)

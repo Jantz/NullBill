@@ -67,17 +67,20 @@ DOMAIN = re.compile(r"\.?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z
 
 
 def names(model: dict) -> list[str]:
-    """The services config.yaml added to the catalog's, in its order."""
+    """The services config.yaml added to the catalog's, in its order. A
+    further server of a game the catalog has is not one: NullBill has a
+    role for it (games.py)."""
     known = shipped("services")
-    return [name for name in model["services"] if name not in known]
+    return [name for name in model["services"] if name not in known and name not in model["games"]]
 
 
 def workloads(model: dict) -> list[str]:
     """The workloads only such services have: each is a choice of its own
     under Setup, What to run. One that joins core or a catalog workload
     follows that instead."""
-    taken = {svc["workload"] for name, svc in model["services"].items() if name in shipped("services")} | {"core"}
-    return list(dict.fromkeys(w for w in (model["services"][n]["workload"] for n in names(model)) if w not in taken))
+    own = names(model)
+    taken = {svc["workload"] for name, svc in model["services"].items() if name not in own} | {"core"}
+    return list(dict.fromkeys(w for w in (model["services"][n]["workload"] for n in own) if w not in taken))
 
 
 def planned(plan: dict, model: dict) -> list[str]:
@@ -338,7 +341,7 @@ def define(config: dict, model: dict, name: str, want: dict) -> dict:
         raise NullBillError(
             f"name {name!r}: lowercase letters, digits and dashes, starting with a letter, at most 31; not {', '.join(RESERVED)}"
         )
-    if name in shipped("services"):
+    if name in shipped("services") or name in model["games"]:
         raise NullBillError(f"{name} is one of NullBill's own services; turn it on with set_choices, or pick another name")
     taken = {svc["workload"] for n, svc in model["services"].items() if n != name} | set(model["zones"])
     if name in taken:

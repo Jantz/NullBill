@@ -11,7 +11,10 @@ not fit still shows what it would take.
 
 Besides the catalog's workloads there are the owner's own: a workload only
 services config.yaml added have (nullbill/custom.py) is a choice like any
-other, with what NullBill knows of it in place of the catalog's text.
+other, with what NullBill knows of it in place of the catalog's text. A
+further server of a game (games.more) is a choice too, with the game's text
+and its own title; every game server's row carries what the page lets the
+owner set for it (`game`: its settings, admins and memory).
 
 `power` in its answer is When it runs: each planned workload that can be
 stopped (catalog.yaml's `power`, nullbill/power.py), whether it always runs
@@ -117,13 +120,13 @@ TEXT = {
         "title": "Minecraft",
         "what": "A Minecraft: Java Edition world for you and the people you let in.",
         "needs": [
-            "Your agreement to Minecraft's EULA, ticked beside this choice.",
+            "Your agreement to Minecraft's EULA, ticked beside this choice, once for every Minecraft server.",
             "A Minecraft: Java Edition account for each player, as for any server.",
         ],
         "on": (
             "Setup installs Mojang's own server in a container of its own and makes a new world. "
-            "The address is on the Services page; under Access, People, tick Minecraft for each friend who may join. "
-            "Its memory is for a small world and a few players (docs/runbooks/games.md says how to give it more)."
+            "The address is on the Services page; under Access, People, tick it for each friend who may join. "
+            "Its memory is for a small world and a few players; Memory in its settings gives it more."
         ),
         "off": (
             "Deletes the server with its world, every player's inventory and its settings. "
@@ -136,7 +139,7 @@ TEXT = {
         "needs": ["Terraria on a computer for each player, as for any server."],
         "on": (
             "Setup installs Re-Logic's own server in a container of its own and makes a new world. "
-            "The address is on the Services page; under Access, People, tick Terraria for each friend who may join."
+            "The address is on the Services page; under Access, People, tick it for each friend who may join."
         ),
         "off": (
             "Deletes the server with its world. Characters stay with their players. "
@@ -149,7 +152,7 @@ TEXT = {
         "needs": ["Factorio and a factorio.com account for each player, as for any server."],
         "on": (
             "Setup installs Wube's own server in a container of its own and makes a new map of the base game. "
-            "The address is on the Services page; under Access, People, tick Factorio for each friend who may join."
+            "The address is on the Services page; under Access, People, tick it for each friend who may join."
         ),
         "off": "Deletes the server with its map and every save. docs/runbooks/games.md says how to copy the saves out first.",
     },
@@ -192,10 +195,16 @@ OWN_OFF = (
 
 def option_of(name: str, svc: dict, own: list[str] = ()) -> str | None:
     """The choice a service belongs to; None for what is always planned.
-    own: the workloads of the owner's own services."""
+    own: the workloads config.yaml added (`added`)."""
     if name == PBS:
         return BACKUPS
     return svc["workload"] if svc["workload"] in WORKLOADS or svc["workload"] in own else None
+
+
+def added(model: dict) -> list[str]:
+    """The choices config.yaml adds to the catalog's, in the page's order:
+    further game servers, then the owner's own services' workloads."""
+    return [*games.more(model), *custom.workloads(model)]
 
 
 def _text(model: dict, name: str) -> dict:
@@ -203,6 +212,8 @@ def _text(model: dict, name: str) -> dict:
     own what config.yaml says of it."""
     if name in TEXT:
         return TEXT[name]
+    if name in model["games"]:
+        return TEXT[games.kind(model, name)] | {"title": model["games"][name]["title"]}
     members = [n for n, svc in model["services"].items() if svc["workload"] == name]
     rule = model["power"].get(name) or {}
     one = members[0] if len(members) == 1 else None
@@ -260,7 +271,7 @@ def _note(name: str, plan: dict | None) -> str | None:
         return how if plan["media"]["library"] else f"No kept disk yet, so its library starts empty. {how}"
     if name in plan["games"]:
         game = plan["games"][name]
-        note = f"Players need {games.CLIENT[name]} {game['version']}, the same version as the server."
+        note = f"Players need {games.CLIENT[game.get('game', name)]} {game['version']}, the same version as the server."
         if "heap_mib" in game:
             note += f" Java gets {game['heap_mib'] / 1024:.1f} GiB of the container's memory for the world."
         if "space_age" in game:
@@ -280,14 +291,26 @@ def _note(name: str, plan: dict | None) -> str | None:
 
 
 def _game(model: dict, name: str) -> dict | None:
-    """What the page asks about a game beside its tick: the agreement its
-    server needs, and who its admins are. None for every other choice."""
+    """What the page asks about a game server beside its tick: the
+    agreement the game needs, who its admins are, its settings and its
+    memory. None for every other choice."""
     game = model["games"].get(name)
     if game is None:
         return None
-    out: dict = {}
+    of = games.kind(model, name)
+    out: dict = {
+        "kind": of,
+        "kind_title": games.TITLE[of],
+        "more": of != name,
+        "file": games.SETTINGS_FILE[of],
+        "options": games.options(model, name),
+        "other": games.other_settings(model, name),
+        "memory_mib": model.get("overrides", {}).get(name, {}).get("memory_mib") or games.floor_mib(model, name),
+        "floor_mib": games.floor_mib(model, name),
+        "max_mib": games.MAX_MEMORY_MIB,
+    }
     if "eula" in game:
-        out["eula"] = {"agreed": game["eula"], "url": games.EULA, "text": f"I agree to the {game['title']} EULA"}
+        out["eula"] = {"agreed": game["eula"], "url": games.EULA, "text": f"I agree to the {games.TITLE[of]} EULA"}
     if "admins" in game:
         out["admins"] = game["admins"]
     return out
@@ -298,9 +321,10 @@ def _when(model: dict, planned: dict, counted_for: dict[str, int]) -> list[dict]
     counted_for: what the plan counts for each guest."""
     rows = []
     own = custom.workloads(model)
+    order = [*WORKLOADS, *games.more(model)]
     found = dict.fromkeys(svc["workload"] for svc in planned.values() if svc["workload"] != "core")
     # In the page's order, then what is not a choice there (the kept disks' shares).
-    for workload in [*(w for w in WORKLOADS if w in found), *(w for w in found if w not in WORKLOADS)]:
+    for workload in [*(w for w in order if w in found), *(w for w in found if w not in order)]:
         members = [n for n, svc in planned.items() if svc["workload"] == workload]
         rule = {"title": workload, **modelling.POWER_DEFAULTS, **model["power"].get(workload, {})}
         kinds = {planned[n]["kind"] for n in members}
@@ -359,8 +383,10 @@ def options(model: dict, facts: dict | None, existing: set[str] | None, home: Pa
         return None if existing is None else [n for n in names if n in existing]
 
     own = custom.workloads(model)
+    more = games.more(model)
+    choices = [*more, *own]
     items = []
-    for name in [*WORKLOADS, *own, BACKUPS, CONSOLE]:
+    for name in [*WORKLOADS, *choices, BACKUPS, CONSOLE]:
         if name == CONSOLE:
             members: list[str] = []
             chosen = console["enabled"]
@@ -375,6 +401,10 @@ def options(model: dict, facts: dict | None, existing: set[str] | None, home: Pa
         least = [_size(model, n, None) for n in members]
         game = _game(model, name)
         here = known(members) if members else None
+        if game and game["more"]:
+            # Like a service of the owner's own: gone only once it is off
+            # and a setup run has deleted its guest.
+            game["removable"] = not chosen and not here
         items.append(
             {
                 "name": name,
@@ -401,8 +431,8 @@ def options(model: dict, facts: dict | None, existing: set[str] | None, home: Pa
     parked = {n for w in demand for n in w["guests"]}
     memory = None
     if facts:
-        base = [n for n, svc in planned.items() if option_of(n, svc, own) is None and n not in parked]
-        optional = [n for n, svc in planned.items() if option_of(n, svc, own) is not None and n not in parked]
+        base = [n for n, svc in planned.items() if option_of(n, svc, choices) is None and n not in parked]
+        optional = [n for n, svc in planned.items() if option_of(n, svc, choices) is not None and n not in parked]
         reserve_mib = planning.reserve(model, facts)[0]
         base_mib = sum(least[n] for n in base)
         chosen_mib = sum(least[n] for n in optional)
@@ -421,8 +451,14 @@ def options(model: dict, facts: dict | None, existing: set[str] | None, home: Pa
             "share_pct": share,
             "base": base,
         }
+    kinds = [n for n in games.names(model) if n not in more]
     return {
         "items": items,
+        # What Add a game server offers, and why it cannot when it cannot.
+        "games": {
+            "kinds": [{"name": n, "title": games.TITLE[n]} for n in kinds],
+            "full": None if custom.free_id(model) else "Every address for further servers is taken. Remove one you no longer use.",
+        },
         "power": when,
         "memory": memory,
         "errors": errors,
@@ -434,5 +470,5 @@ def options(model: dict, facts: dict | None, existing: set[str] | None, home: Pa
 def loss(name: str, model: dict) -> str:
     """What deleting a guest loses, for the page's question before it does."""
     svc = model["services"].get(name)
-    option = option_of(name, svc, custom.workloads(model)) if svc else None
+    option = option_of(name, svc, added(model)) if svc else None
     return _text(model, option)["off"] if option else "Deletes the guest and everything on its disk."

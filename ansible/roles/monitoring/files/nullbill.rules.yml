@@ -205,4 +205,4 @@ groups:
         for: 10m
         labels: {severity: page}
         annotations:
-          summary: "the {{ $labels.game }} server does not answer in its guest; its unit keeps restarting it, so read journalctl -u {{ $labels.game }} there"
+          summary: "the {{ $labels.game }} server on {{ $labels.instance }} does not answer; its unit keeps restarting it, so read journalctl -u {{ $labels.game }} in that guest"

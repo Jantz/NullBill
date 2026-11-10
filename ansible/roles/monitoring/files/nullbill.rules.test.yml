@@ -221,7 +221,7 @@ tests:
         alertname: GameServerDown
         exp_alerts:
           - exp_labels: {severity: page, job: node, instance: "minecraft:9100", game: minecraft}
-            exp_annotations: {summary: "the minecraft server does not answer in its guest; its unit keeps restarting it, so read journalctl -u minecraft there"}
+            exp_annotations: {summary: "the minecraft server on minecraft:9100 does not answer; its unit keeps restarting it, so read journalctl -u minecraft in that guest"}
   - interval: 1m
     input_series:
       - series: 'node_memory_MemAvailable_bytes{job="host",instance="pve:9100"}'

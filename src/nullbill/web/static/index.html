@@ -332,7 +332,19 @@
               <span class="meta" id="pick-count" role="status"></span>
             </div>
             <fieldset class="group" data-group="workloads"><legend>Workloads <span class="count"></span></legend><div class="opts" id="workload-rows"></div><button type="button" class="btn ghost small opts-more" hidden></button></fieldset>
-            <fieldset class="group" data-group="games"><legend>Game servers <span class="count"></span></legend><div class="opts" id="game-rows"></div><button type="button" class="btn ghost small opts-more" hidden></button></fieldset>
+            <fieldset class="group" data-group="games"><legend>Game servers <span class="count"></span></legend><div class="opts" id="game-rows"></div><button type="button" class="btn ghost small opts-more" hidden></button>
+              <div class="row game-add-row"><button type="button" class="btn small" id="game-add" aria-expanded="false" aria-controls="game-add-form"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>Add a game server</button><span class="feedback" id="game-add-said" role="status"></span></div>
+              <div class="game-add" id="game-add-form" hidden>
+                <p class="help">One more server of a game, in a container of its own with its own world, settings and admins. Friends are ticked for each server separately under Access, People.</p>
+                <div class="game-add-fields">
+                  <label class="field"><span class="label">Game</span><select id="game-add-kind"></select></label>
+                  <label class="field"><span class="label">Name</span><input id="game-add-title" type="text" maxlength="40" autocomplete="off" placeholder="Creative world"></label>
+                  <div class="row"><button type="button" class="btn primary small" id="game-add-go">Add</button><button type="button" class="btn ghost small" id="game-add-cancel">Cancel</button></div>
+                </div>
+                <p class="feedback" id="game-add-result" role="status"></p>
+                <div id="game-add-problem" class="problem" role="alert" hidden></div>
+              </div>
+            </fieldset>
             <fieldset class="group" data-group="own"><legend>Your own services <span class="count"></span></legend>
               <p class="help">Programs NullBill has no built-in support for. Each gets a guest of its own with a firewall, updates, monitoring and backups from NullBill; a setup script you can read puts the program in. The agent writes both, and nothing is saved before you approve it. <button type="button" class="linkish" id="own-ask">Ask the agent to add one</button></p>
               <div class="opts" id="own-rows"></div><button type="button" class="btn ghost small opts-more" hidden></button>
@@ -357,6 +369,7 @@
             <label class="field narrow"><span class="label">Email you sign in to Tailscale with</span>
               <input id="owner-login" type="email" autocomplete="email" placeholder="you@example.com" aria-describedby="choices-result"></label>
           </fieldset>
+          <div id="choices-refused" class="problem" role="alert" hidden></div>
           <div class="savebar" id="savebar">
             <span class="savebar-text" id="savebar-text">Saving makes a new plan. Nothing on the server changes until you run setup.</span>
             <p class="feedback" id="choices-result" role="status"></p>

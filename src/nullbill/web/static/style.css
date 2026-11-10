@@ -577,6 +577,23 @@ input:not([type=checkbox]):not([type=radio])[readonly] { background: var(--bg-su
 .opt-asks[hidden] { display: none; }
 .opt-ask.check { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; color: var(--text-2); }
 .opt-ask.field input { max-width: 44ch; }
+/* A game server's settings (app.js gameSettings) and Add a game server. */
+.game-settings > summary { cursor: pointer; width: fit-content; color: var(--text-2); font-weight: 500; }
+.game-settings > summary:hover { color: var(--text); }
+.game-settings[open] > summary { margin-bottom: 10px; }
+.game-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); gap: 12px 16px; align-items: start; }
+.game-field { display: grid; gap: 4px; min-width: 0; align-content: start; }
+.game-field.check { grid-template-columns: auto 1fr; column-gap: 8px; align-items: start; cursor: pointer; padding-top: 18px; }
+.game-field.check .hint { grid-column: 2; }
+.game-field.wide { margin-top: 12px; max-width: 72ch; }
+.game-field textarea { min-height: 64px; resize: vertical; font-family: var(--mono, ui-monospace, monospace); font-size: 12px; }
+.game-field input[type=number] { max-width: 12ch; }
+.game-add-row { margin-top: 10px; }
+.game-add { margin-top: 8px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-sub); display: grid; gap: 10px; max-width: 80ch; }
+.game-add[hidden] { display: none; }
+.game-add .help { margin: 0; }
+.game-add-fields { display: grid; grid-template-columns: minmax(120px, 180px) minmax(160px, 1fr) auto; gap: 12px; align-items: end; }
+@container main (max-width: 640px) { .game-add-fields { grid-template-columns: 1fr; } }
 .opt-note { color: var(--text-2); }
 .opt-note.why { color: var(--warn); }
 .opt-change { padding: 8px 10px; border: 1px solid var(--warn-line); border-radius: var(--radius); background: var(--warn-bg); color: var(--text); max-width: 80ch; }
@@ -639,6 +656,8 @@ select:disabled { color: var(--text-3); background: var(--bg-sub); cursor: not-a
   margin: 8px -32px -48px; padding: 12px 32px; background: var(--bg); border-top: 1px solid var(--line);
 }
 .savebar.dirty { background: var(--bg-sub); }
+/* The bar sticks to the bottom: a refusal scrolled into view stops above it. */
+#choices-refused { scroll-margin-bottom: 72px; }
 .savebar-text { flex: 1 1 240px; min-width: 0; color: var(--text-3); font-size: 12px; margin-right: auto; }
 .savebar.dirty .savebar-text { color: var(--text); font-weight: 500; }
 .memory-block { margin: 4px 0 16px; display: grid; gap: 8px; }

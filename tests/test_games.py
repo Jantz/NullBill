@@ -61,7 +61,7 @@ def test_every_game_has_a_service_a_role_and_a_playbook(facts):
     for name in GAMES:
         assert model["services"][name]["workload"] == name
         assert model["services"][name]["zone"] == "games"
-        assert (ROOT / "ansible" / games.playbook(name)).is_file()
+        assert (ROOT / "ansible" / games.playbook(model, name)).is_file()
         assert (ROOT / "ansible" / "roles" / f"game_{name}" / "tasks" / "main.yml").is_file()
 
 
@@ -217,8 +217,8 @@ def test_admins_are_made_on_the_console_only_when_missing(facts):
     assert games.missing_admins(model, "minecraft", "") == ["owner_a"]
     assert games.missing_admins(model, "minecraft", "notch\nowner_a\n") == []
     assert games.missing_admins(model, "terraria", "") == []
-    assert games.admin_command("minecraft", "owner_a") == "op owner_a"
-    assert games.admin_command("factorio", "owner_a") == "/promote owner_a"
+    assert games.admin_command(model, "minecraft", "owner_a") == "op owner_a"
+    assert games.admin_command(model, "factorio", "owner_a") == "/promote owner_a"
     config = games_config()
     config["games"]["minecraft"]["admins"] = ["Owner_A"]
     assert games.missing_admins(build_model(config), "minecraft", "owner_a\n") == []

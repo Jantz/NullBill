@@ -27,6 +27,19 @@ pass "the units pass systemd-analyze"
 if runuser -u game -- find /opt/factorio /etc/factorio -writable | grep -q .; then fail "the game user can write the server's files"; fi
 test -s /var/lib/factorio/saves/nullbill.zip || fail "the role made a first map"
 pass "the server's files are root's and read-only to it, the saves its own; a first map is made"
+# The settings the page offers by name (games.py's OPTIONS; a test keeps
+# this list equal to it): Wube's own example file names each.
+options="name description max_players game_password auto_pause autosave_interval afk_autokick_interval"
+python3 - /opt/factorio/*/data/server-settings.example.json "$options" <<'PY' || fail "Wube's example settings name every setting the page offers"
+import json
+import sys
+
+known = json.load(open(sys.argv[1]))
+missing = [key for key in sys.argv[2].split() if key not in known]
+if missing:
+    sys.exit(f"not in {sys.argv[1]}: {', '.join(missing)}")
+PY
+pass "the server knows every setting the page offers by name"
 mods() {
   python3 -c 'import json, sys; print(" ".join(sorted(m["name"] for m in json.load(open("/var/lib/factorio/mods/mod-list.json"))["mods"] if m["enabled"])))'
 }

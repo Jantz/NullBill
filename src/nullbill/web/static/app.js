@@ -726,7 +726,8 @@ function optionRow(item) {
     item.game ? gameAsks(item) : null,
     make("p", {className: "opt-change", role: "status", hidden: true}),
     make("details", {className: "opt-details"}, make("summary", {textContent: "What it makes, needs and deletes"}), make("dl", {className: "opt-facts"}),
-      item.own ? ownTools(item) : null));
+      item.own ? ownTools(item) : null,
+      item.game && item.game.more ? gameTools(item) : null));
   row.dataset.name = item.name;
   row.dataset.find = `${item.title} ${item.name} ${item.what}`.toLowerCase();
   return row;
@@ -775,13 +776,19 @@ function ownTools(item) {
   return make("div", {className: "own-tools"}, make("div", {className: "row"}, showScript, remove, said), scripts);
 }
 
-// What a game asks beside its tick (web/workloads.py's `game`): the
-// owner's agreement to its EULA, and who its admins are.
+// What a game server asks beside its tick (web/workloads.py's `game`): the
+// owner's agreement to the game's EULA, who its admins are, and its
+// settings.
 function gameAsks(item) {
   const asks = make("div", {className: "opt-asks", hidden: true});
   if (item.game.eula) {
     const agree = make("input", {type: "checkbox", id: `opt-${item.name}-eula`});
     agree.dataset.role = "eula";
+    agree.dataset.kind = item.game.kind;
+    // Agreed once for the game: every server of it shows the same tick.
+    agree.addEventListener("change", () => {
+      for (const other of $("game-rows").querySelectorAll("input[data-role=eula]")) if (other.dataset.kind === agree.dataset.kind) other.checked = agree.checked;
+    });
     asks.append(make("label", {className: "opt-ask check"}, agree, make("span", {}, `${item.game.eula.text} (`,
       make("a", {href: item.game.eula.url, target: "_blank", rel: "noopener noreferrer", textContent: "read it"}), "). Its server does not start without.")));
   }
@@ -790,7 +797,149 @@ function gameAsks(item) {
     admins.dataset.role = "admins";
     asks.append(make("label", {className: "opt-ask field"}, make("span", {className: "label", textContent: "Admins: player names as shown in the game, separated by commas"}), admins));
   }
+  asks.append(gameSettings(item));
   return asks;
+}
+
+// A game server's own settings: the ones most people change by name, any
+// other of the server's in a box, and its memory. Saved with the choices.
+function gameSettings(item) {
+  const g = item.game;
+  const field = (label, control, hint, cls) => {
+    const id = `opt-${item.name}-${control.dataset.key || control.dataset.role}`;
+    control.id = id;
+    const text = make("span", {className: "label", textContent: label});
+    const note = hint ? make("span", {className: "hint", id: `${id}-hint`, textContent: hint}) : null;
+    if (note) control.setAttribute("aria-describedby", note.id);
+    return make("label", {className: `game-field ${cls || ""}`.trim()}, ...(cls === "check" ? [control, text] : [text, control]), note);
+  };
+  const fields = make("div", {className: "game-fields"});
+  if (g.more) {
+    const title = make("input", {type: "text", maxLength: 40, autocomplete: "off"});
+    title.dataset.role = "title";
+    fields.append(field("Name", title, "What you and your friends see it called."));
+  }
+  const memory = make("input", {type: "number", min: String(g.floor_mib / 1024), max: String(g.max_mib / 1024), step: "0.5", inputMode: "decimal"});
+  memory.dataset.role = "memory";
+  fields.append(field("Memory, in GiB", memory, `At least ${gib(g.floor_mib)}. Give it more for a larger world or more players.`));
+  for (const o of g.options) {
+    let control;
+    if (o.type === "choice") {
+      control = make("select", {}, ...o.choices.map(([value, label]) => make("option", {value: String(value), textContent: label})));
+    } else if (o.type === "switch") {
+      control = make("input", {type: "checkbox"});
+    } else if (o.type === "number") {
+      control = make("input", {type: "number", min: String(o.min), max: String(o.max), step: "1", inputMode: "numeric"});
+    } else {
+      control = make("input", {type: "text", maxLength: 200, autocomplete: "off", spellcheck: false});
+    }
+    control.dataset.role = "setting";
+    control.dataset.key = o.key;
+    control.dataset.type = o.type;
+    fields.append(field(o.label, control, o.new_world ? "Used when the world is made, not after." : "", o.type === "switch" ? "check" : ""));
+  }
+  const other = make("textarea", {rows: 3, spellcheck: false, autocomplete: "off", placeholder: "name = value"});
+  other.dataset.role = "other";
+  const more = field("Other settings, one on each line", other,
+    `Any other option of the server's own, by its name in ${g.file}. NullBill keeps the port and who may connect to itself.`, "wide");
+  return make("details", {className: "game-settings"}, make("summary", {textContent: "Settings of this server"}), fields, more);
+}
+
+// The value a setting's control holds, as the server takes it.
+function settingValue(control) {
+  if (control.type === "checkbox") return control.checked;
+  if (control.dataset.type === "number") return control.value.trim() === "" ? control.dataset.start : control.value.trim();
+  return control.value;
+}
+
+function paintGame(item) {
+  const row = $("pick").querySelector(`.opt[data-name="${item.name}"]`);
+  const g = item.game;
+  if (g.eula) $(`opt-${item.name}-eula`).checked = g.eula.agreed;
+  if (g.admins) $(`opt-${item.name}-admins`).value = g.admins.join(", ");
+  const title = row.querySelector("[data-role=title]");
+  if (title) title.value = item.title;
+  row.querySelector("[data-role=memory]").value = String(g.memory_mib / 1024);
+  row.querySelector("[data-role=other]").value = g.other;
+  const options = new Map(g.options.map((o) => [o.key, o]));
+  for (const control of row.querySelectorAll("[data-role=setting]")) {
+    const o = options.get(control.dataset.key);
+    if (!o) continue;
+    control.dataset.start = String(o.default);
+    if (control.type === "checkbox") control.checked = Boolean(o.value);
+    else control.value = String(o.value);
+  }
+}
+
+// A further server of a game: Remove, once it is off and its guest is gone.
+function gameTools(item) {
+  const said = make("p", {className: "feedback"});
+  said.setAttribute("role", "status");
+  const remove = make("button", {type: "button", className: "btn small danger"}, "Remove", make("span", {className: "sr-only", textContent: ` ${item.title}`}));
+  remove.dataset.role = "remove";
+  remove.addEventListener("click", async () => {
+    const ok = await confirmDialog({title: `Remove ${item.title}?`,
+      text: "It leaves What to run, with its settings. Its guest and world are gone already.", yes: "Remove", danger: true});
+    if (!ok) return;
+    press(remove, said, "Removing…", async () => {
+      await api("/api/game-server/remove", {name: item.name});
+      announce(`Removed ${item.title}`, true);
+      await refresh();
+      return "";
+    });
+  });
+  return make("div", {className: "own-tools"}, make("div", {className: "row"}, remove, said));
+}
+
+// Add a game server: one more server of a game NullBill has, in a guest
+// of its own. Saved at once and ticked; the next setup run makes it.
+function openGameAdd(open) {
+  show("game-add-form", open);
+  $("game-add").setAttribute("aria-expanded", open ? "true" : "false");
+  if (!open) return;
+  const kinds = (state.options && state.options.games ? state.options.games.kinds : []);
+  $("game-add-kind").replaceChildren(...kinds.map((k) => make("option", {value: k.name, textContent: k.title})));
+  $("game-add-title").value = "";
+  say("game-add-result", "", "");
+  $("game-add-title").focus();
+}
+
+// The server names the game server each refusal is about first ("Creative
+// world: ..."): open those servers' settings, so what to change is in view.
+// The first such row, if any.
+function openRefusedGames(messages) {
+  let first = null;
+  for (const row of $("pick").querySelectorAll(".opt")) {
+    const settings = row.querySelector(".game-settings");
+    const title = settings && row.querySelector(".opt-title").textContent.toLowerCase();
+    if (!title || !messages.some((m) => m.toLowerCase().startsWith(`${title}:`) || m.toLowerCase().startsWith(`${title},`))) continue;
+    row.hidden = false;
+    settings.open = true;
+    first = first || row;
+  }
+  return first;
+}
+
+function addGameServer() {
+  const title = $("game-add-title");
+  showProblem("game-add-problem", null);
+  press($("game-add-go"), "game-add-result", "Adding…", async () => {
+    if (!title.value.trim()) throw new ApiError("Give it a name, such as Creative world.", 400);
+    let added;
+    try { ({added} = await api("/api/game-server", {game: $("game-add-kind").value, title: title.value})); } catch (error) { showProblem("game-add-problem", error); throw error; }
+    await refresh();
+    openGameAdd(false);
+    const row = $("pick").querySelector(`.opt[data-name="${added.name}"]`);
+    if (row) {
+      row.hidden = false;
+      row.querySelector(".game-settings").open = true;
+      row.querySelector(".opt-main input").focus();
+      row.scrollIntoView({block: "nearest"});
+    }
+    announce(`Added ${added.title}`, true);
+    say("game-add-said", "ok", `Added ${added.title}. It is on: change its settings in its row, and the next setup run makes it.`);
+    return "";
+  }, title);
 }
 
 function optionsHead() {
@@ -866,8 +1015,7 @@ function renderOptions(st) {
     input.checked = item.chosen;
     // What cannot work here can still be turned off, never on.
     input.disabled = Boolean(item.blocked) && !item.chosen;
-    if (item.game && item.game.eula) $(`opt-${item.name}-eula`).checked = item.game.eula.agreed;
-    if (item.game && item.game.admins) $(`opt-${item.name}-admins`).value = item.game.admins.join(", ");
+    if (item.game) paintGame(item);
   }
   optionsView = st.options;
   paintWhen(st.options, true);
@@ -1018,6 +1166,7 @@ function paintOptions() {
       row.querySelector("[data-role=script]").hidden = item.own.scripts.length === 0;
       row.querySelector("[data-role=remove]").hidden = !item.own.removable || checked;
     }
+    if (item.game && item.game.more) row.querySelector("[data-role=remove]").closest(".own-tools").hidden = !item.game.removable || checked;
     row.querySelector(".opt-facts").replaceChildren(
       ...(item.own ? fact("It is", make("ul", {}, ...item.own.facts.map((f) => li(f)))) : []),
       ...fact("It makes", ...makes),
@@ -1250,7 +1399,18 @@ function choicesBody() {
   for (const row of $("game-rows").querySelectorAll(".opt")) {
     const eula = row.querySelector("input[data-role=eula]");
     const admins = row.querySelector("input[data-role=admins]");
-    games[row.dataset.name] = {...(eula ? {eula: eula.checked} : {}), ...(admins ? {admins: admins.value} : {})};
+    const title = row.querySelector("[data-role=title]");
+    const memory = row.querySelector("[data-role=memory]");
+    const size = Number(memory.value);
+    games[row.dataset.name] = {
+      ...(eula ? {eula: eula.checked} : {}),
+      ...(admins ? {admins: admins.value} : {}),
+      ...(title ? {title: title.value} : {}),
+      // Empty: the game's own. What is no number goes as typed, for the server to refuse.
+      memory_mib: memory.value.trim() === "" ? null : Number.isFinite(size) ? Math.round(size * 1024) : memory.value,
+      settings: Object.fromEntries([...row.querySelectorAll("[data-role=setting]")].map((c) => [c.dataset.key, settingValue(c)])),
+      other: row.querySelector("[data-role=other]").value,
+    };
   }
   return {
     workloads: [...$("pick").querySelectorAll(".opt-main input:checked")].filter((i) => !i.closest("#extra-rows")).map((i) => i.value),
@@ -4378,6 +4538,21 @@ document.addEventListener("DOMContentLoaded", () => {
       foldOptions();
     });
   }
+  $("game-add").addEventListener("click", () => {
+    say("game-add-said", "", "");
+    const full = state.options && state.options.games ? state.options.games.full : null;
+    if (full) return say("game-add-said", "info", full);
+    if (choicesDirty()) return say("game-add-said", "info", "Save and plan first: you have changes here that are not saved yet.");
+    return openGameAdd($("game-add-form").hidden);
+  });
+  $("game-add-go").addEventListener("click", addGameServer);
+  $("game-add-cancel").addEventListener("click", () => openGameAdd(false));
+  // Enter in the name adds the server; it must not save the whole form.
+  $("game-add-title").addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    addGameServer();
+  });
   $("own-ask").addEventListener("click", () => {
     openAgent(true);
     const composer = $("composer-text");
@@ -4456,14 +4631,26 @@ document.addEventListener("DOMContentLoaded", () => {
   choices.addEventListener("submit", (event) => {
     event.preventDefault();
     const field = $("owner-login");
+    showProblem("choices-refused", null);
+    field.removeAttribute("aria-invalid");
+    // Only a refusal about the login marks its field; one about a game
+    // server opens that server's settings instead.
+    const login = (error) => { field.setAttribute("aria-invalid", "true"); field.focus(); return error; };
     press(submitter(event), "choices-result", "Saving and making the plan…", async () => {
-      if (!field.value.trim()) throw new ApiError("Enter the email address you sign in to Tailscale with.", 400);
-      const result = await api("/api/choices", choicesBody());
+      if (!field.value.trim()) throw login(new ApiError("Enter the email address you sign in to Tailscale with.", 400));
+      let result;
+      try { result = await api("/api/choices", choicesBody()); } catch (error) {
+        if (/Tailscale login/.test(error.message)) login(error);
+        const shown = openRefusedGames(error.list || [error.message]);
+        // Several refusals are a list above the bar, a line each.
+        if (!showProblem("choices-refused", error) && shown) shown.scrollIntoView({block: "nearest"});
+        throw error;
+      }
       savedChoices = null;
       await refresh();
       go("setup/plan");
       return result.plan.errors.length ? "Saved, but the plan does not fit yet." : "Saved. The plan fits.";
-    }, field);
+    });
   });
 
   // Access.

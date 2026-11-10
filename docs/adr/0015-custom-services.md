@@ -134,10 +134,11 @@ with a hundred guests was not measured.
 
 ## Consequences
 
-- **A hundred servers of one game are a hundred services of the owner's
-  own**, one definition and one script each (the scripts can be the same).
-  Several instances of a built-in game (`minecraft` twice) are not built:
-  the catalog's games are one guest each, with one pin and one world.
+- **A hundred servers of a game NullBill has no role for are a hundred
+  services of the owner's own**, one definition and one script each (the
+  scripts can be the same). Several servers of a built-in game
+  (`minecraft` twice) are game servers like the first, without a script:
+  ADR 0016, which the owner asked for the same day.
 - A service of the owner's own has no page of its own: no sign-in the page
   can show, no settings beside its tick, no version the page knows. Its
   secrets are made by its script inside its guest and stay there.

@@ -247,14 +247,16 @@ $defs:
           max_gpus: {type: integer, minimum: 1}
           engine: {enum: [llama.cpp]}
     models: {type: object, propertyNames: {$ref: "#/$defs/model_name"}, additionalProperties: {$ref: "#/$defs/llm"}}
-    # One entry per game NullBill has a role for (ansible/roles/game_<name>).
+    # One entry per game NullBill has a role for (ansible/roles/game_<name>),
+    # and under any other name one more server of one of those games.
     games:
       type: object
-      additionalProperties: false
+      propertyNames: {$ref: "#/$defs/name"}
       properties:
         minecraft: {$ref: "#/$defs/game_minecraft"}
         terraria: {$ref: "#/$defs/game_terraria"}
         factorio: {$ref: "#/$defs/game_factorio"}
+      additionalProperties: {$ref: "#/$defs/game_more"}
     tailnet:
       type: object
       additionalProperties: false
@@ -331,6 +333,23 @@ $defs:
     propertyNames: {type: string, pattern: "^[A-Za-z][A-Za-z0-9._-]{0,60}$"}
     # One line each: a second line in Terraria's file would be another key.
     additionalProperties: {type: [string, integer, number, boolean], pattern: "^[^\\r\\n]*$"}
+
+  # One more server of a game: a guest, a workload and a rule for when it
+  # runs, all of this entry's name (model.py's _more_games makes them from
+  # the game's own). `game` says which; `id` is its address like a
+  # service's, from the range of the owner's own. The rest is what the
+  # game's own entry takes, each server with its own title, settings and
+  # admins; the pinned download is the game's unless pinned here, and an
+  # agreement (eula) is given once, under the game's own name.
+  game_more:
+    type: object
+    required: [game, id]
+    properties:
+      game: {enum: [minecraft, terraria, factorio]}
+      id:
+        type: integer
+        anyOf: [{minimum: 64, maximum: 127}, {minimum: 192, maximum: 253}]
+      title: {type: string, minLength: 1, maxLength: 40}
 
   game_minecraft:
     type: object

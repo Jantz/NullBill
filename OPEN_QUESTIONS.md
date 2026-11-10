@@ -184,8 +184,12 @@ answered items move to the decisions list at the bottom.
   makes plus a setup script, which the page's agent may add once the owner
   has read and approved it. The page's lists fold and filter for many
   (owner asked, 2026-11-10; decided by Claude as asked,
-  docs/adr/0015-custom-services.md). Not built: several instances of one
-  built-in game; say if you want that rather than services of your own.
+  docs/adr/0015-custom-services.md).
+- Several servers of one built-in game, each with its own world, settings,
+  admins, memory and friends, added on the page or by the agent; every
+  game server's settings are on the page (owner asked, 2026-11-10: "multiple
+  Minecraft servers with customizations"; design by Claude,
+  docs/adr/0016-more-game-servers.md). Not built: mods and plugin servers.
 - Direct connections from mobile data: built, on by default, with a
   switch on the page (owner asked, 2026-11-09; design by Claude,
   docs/adr/0014-direct-connections.md; question 16 stays open for the

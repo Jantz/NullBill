@@ -25,6 +25,22 @@ for line in port=7777 upnp=0 worldname=Fixture autocreate=1 world=/var/lib/terra
   grep -qx "$line" /etc/terraria/serverconfig.txt || { cat /etc/terraria/serverconfig.txt; fail "serverconfig.txt has $line"; }
 done
 pass "the settings from config.yaml are in the server's config file"
+# The settings the page offers by name (games.py's OPTIONS; a test keeps
+# this list equal to it): Re-Logic's own example file, in the archive,
+# names each.
+options="worldname autocreate difficulty seed maxplayers password motd"
+python3 - /opt/terraria/terraria-server-*.zip "$options" <<'PY' || fail "Re-Logic's example config names every setting the page offers"
+import sys
+import zipfile
+
+archive = zipfile.ZipFile(sys.argv[1])
+(example,) = [n for n in archive.namelist() if n.endswith("/serverconfig.txt")]
+known = {line[1:].split("=")[0] for line in archive.read(example).decode("utf-8", "replace").splitlines() if line.startswith("#") and "=" in line}
+missing = [key for key in sys.argv[2].split() if key not in known]
+if missing:
+    sys.exit(f"not in {example}: {', '.join(missing)}")
+PY
+pass "the server knows every setting the page offers by name"
 
 # As in the games zone: the game user has no way out at all.
 loopback_only game

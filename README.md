@@ -32,7 +32,9 @@ is that first run.
   ([media.md](docs/runbooks/media.md)).
 - **Game servers**, optional: Minecraft, Terraria and Factorio, each the
   maker's own server in a container of its own, for you and the friends
-  you tick it for ([games.md](docs/runbooks/games.md)).
+  you tick it for. Add as many servers of a game as you like, each with
+  its own world and settings, set on the page
+  ([games.md](docs/runbooks/games.md)).
 - **Programs of your own**: anything else that runs on Debian gets the
   same guest, firewall, updates, backups and checks from NullBill, and a
   setup script you can read puts the program in. The page's agent writes

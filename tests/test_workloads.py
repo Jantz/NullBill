@@ -63,18 +63,28 @@ def test_a_game_asks_for_its_agreement_and_its_admins_beside_its_tick(facts):
     assert view["errors"] == []
     assert [i["name"] for i in view["items"] if i["game"] is not None] == ["minecraft", "terraria", "factorio"]
     minecraft = by_name["minecraft"]
-    assert minecraft["chosen"] and minecraft["game"] == {
-        "eula": {"agreed": True, "url": "https://aka.ms/MinecraftEULA", "text": "I agree to the Minecraft EULA"},
-        "admins": ["owner_a"],
+    game = minecraft["game"]
+    assert minecraft["chosen"] and game["eula"] == {
+        "agreed": True,
+        "url": "https://aka.ms/MinecraftEULA",
+        "text": "I agree to the Minecraft EULA",
     }
+    assert game["admins"] == ["owner_a"] and (game["kind"], game["more"], game["file"]) == ("minecraft", False, "server.properties")
+    # Its settings by name with their values now, and its memory.
+    set_now = {o["key"]: o["value"] for o in game["options"] if o["value"] != o["default"]}
+    assert set_now == {"difficulty": "hard", "max-players": 8} and game["other"] == ""
+    assert (game["memory_mib"], game["floor_mib"]) == (3072, 3072)
     # A container counts at half its limit: 3072 MiB for Minecraft.
     assert minecraft["memory_mib"] == 1536 and minecraft["guests"][0]["name"] == "minecraft"
     assert minecraft["note"] == (
         "Players need Minecraft: Java Edition 26.3, the same version as the server. "
         "Java gets 2.0 GiB of the container's memory for the world."
     )
-    assert by_name["terraria"]["game"] == {} and by_name["terraria"]["note"].startswith("Players need Terraria (PC) 1.4.5.8")
-    assert by_name["factorio"]["game"] == {"admins": ["owner_a"]}
+    terraria = by_name["terraria"]["game"]
+    assert "eula" not in terraria and "admins" not in terraria
+    assert by_name["terraria"]["note"].startswith("Players need Terraria (PC) 1.4.5.8")
+    assert {o["key"]: o["value"] for o in terraria["options"]}["worldname"] == "Fixture"
+    assert by_name["factorio"]["game"]["admins"] == ["owner_a"] and "eula" not in by_name["factorio"]["game"]
     assert by_name["factorio"]["note"].endswith("The base game: nobody needs the Space Age expansion.")
     assert by_name["media"]["game"] is None
     assert "world" in workloads.loss("minecraft", model)
