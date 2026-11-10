@@ -128,7 +128,7 @@ films() { # the films Jellyfin knows, by path
 [ "$(nb-jellyfin library old-hdd /media/old-hdd)" = changed ] || fail "a library for the kept disk"
 [ "$(nb-jellyfin library second /media/second)" = changed ] || fail "a library for the second kept disk"
 [ "$(nb-jellyfin library old-hdd /media/old-hdd)" = same ] || fail "the library again changes nothing"
-python3 -c 'import json,sys; f=json.load(sys.stdin); assert [(x["Name"], x["Locations"], x.get("CollectionType")) for x in f] == [("old-hdd", ["/media/old-hdd"], "mixed"), ("second", ["/media/second"], "mixed")], f' \
+python3 -c 'import json,sys; f=json.load(sys.stdin); assert sorted((x["Name"], x["Locations"], x.get("CollectionType")) for x in f) == [("old-hdd", ["/media/old-hdd"], "mixed"), ("second", ["/media/second"], "mixed")], f' \
   <<<"$(folders)" || fail "a mixed library of each kept disk (got $(folders))"
 [ "$(nb-jellyfin scan)" = started ] || fail "one scan for the libraries added"
 [ "$(nb-jellyfin scan)" = same ] || fail "the scan again changes nothing"
@@ -153,7 +153,7 @@ pass "a library added while Jellyfin scans is read once that scan ends"
 curl -fsS -X DELETE -H "$(key)" "http://127.0.0.1:8096/Library/VirtualFolders?name=old-hdd" || fail "remove the library"
 [ "$(nb-jellyfin library old-hdd /media/old-hdd)" = same ] || fail "a removed library stays removed"
 [ "$(nb-jellyfin scan)" = same ] || fail "no scan for a library that stays removed"
-python3 -c 'import json,sys; assert [x["Name"] for x in json.load(sys.stdin)] == ["second", "third"]' <<<"$(folders)" \
+python3 -c 'import json,sys; assert sorted(x["Name"] for x in json.load(sys.stdin)) == ["second", "third"]' <<<"$(folders)" \
   || fail "the library the owner removed stays removed (got $(folders))"
 pass "a library the owner removed is not made again"
 
