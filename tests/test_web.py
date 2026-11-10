@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 import yaml
 from fixturedata import fixture_config, write_raw
+from gitrepos import commit, git, make
 
 from nullbill import browserca, direct
 from nullbill.model import build_model
@@ -36,6 +37,9 @@ if sys.argv[1] == "probe":
     (run / "facts.json").write_text(json.dumps(facts))
     (home / "probe" / "latest").symlink_to("run1")
     print("probe stored")
+elif sys.argv[1] == "upgrade" and "NB_TEST_CHECKOUT" in os.environ:
+    from nullbill import upgrade
+    upgrade.upgrade(pathlib.Path(os.environ["NB_TEST_CHECKOUT"]), home, finish=lambda argv: None)
 else:
     print("ran", " ".join(sys.argv[1:]))
     sys.exit(3 if "--stage" in sys.argv else 0)
@@ -94,28 +98,64 @@ class Client:
         return response.status, json.loads(data) if kind.startswith("application/json") else data.decode(errors="replace")
 
 
-@pytest.fixture
-def site(tmp_path, monkeypatch):
+def start_site(tmp_path, monkeypatch, **more):
     home = tmp_path / "home"
     home.mkdir(mode=0o700)
     (home / "install.json").write_text(json.dumps({"host": "192.0.2.10", "node": "pve", "vmid": 2002}))
     script = tmp_path / "fake_nullbill.py"
     script.write_text(FAKE_PROBE.format(tests=str(Path(__file__).parent)))
     codec = MemoryCodec()
-    app = web.App(home, command=[sys.executable, str(script)], codec=lambda _: codec, send=Sent())
+    app = web.App(home, command=[sys.executable, str(script)], codec=lambda _: codec, send=Sent(), **more)
     app.ensure_setup_code()
     cert, key = web.ensure_certificate(home)
     server, _ = web.make_server(app, ("127.0.0.1", 0), cert, key)
     threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     monkeypatch.setattr(web.time, "sleep", lambda s: None)
-    yield app, Client(server.server_address[1], cert)
+    return app, Client(server.server_address[1], cert), server
+
+
+@pytest.fixture
+def site(tmp_path, monkeypatch):
+    app, client, server = start_site(tmp_path, monkeypatch)
+    yield app, client
     server.shutdown()
+
+
+@pytest.fixture
+def installed(tmp_path, monkeypatch):
+    """A page that runs from a checkout of its own origin, as install.sh
+    leaves it: (app, client, work), where commits pushed from work are
+    what main holds next."""
+    work, checkout = make(tmp_path)
+    monkeypatch.setenv("NB_TEST_CHECKOUT", str(checkout))
+    app, client, server = start_site(tmp_path, monkeypatch, repo=checkout)
+    yield app, client, work
+    server.shutdown()
+
+
+def restarted(app):
+    """The page as Update NullBill's restart leaves it: a new server over
+    the same home, serving the same clients."""
+    app.jobs.clear()
+    app.sessions.clear()
+    app.version_seen = None
+    app.load_jobs()
+    app.load_sessions()
+
+
+real_sleep = time.sleep
 
 
 def sign_in(app, client, password="correct horse battery"):
     code = app.code_file.read_text().strip()
     assert client.call("/api/login", {"secret": code.lower()})[0] == 200
     assert client.call("/api/password", {"password": password}) == (200, {"ok": True})
+
+
+def setup(client, action="apply", **more):
+    """Start a setup run as the page does: with the id of the review it showed."""
+    review = client.call("/api/state")[1]["review"]["id"]
+    return client.call("/api/jobs", {"action": action, "review": review, **more})
 
 
 def wait(client, job_id):
@@ -374,7 +414,7 @@ def test_choices_saved_after_the_last_good_setup_run_are_waiting(site):
     choices = {"workloads": ["agents"], "owner_login": "owner-a@example.internal"}
     client.call("/api/choices", choices)
     assert client.call("/api/state")[1]["config_changed"] is False  # nothing ran yet
-    job = client.call("/api/jobs", {"action": "apply"})[1]
+    job = setup(client)[1]
     assert wait(client, job["id"])["state"] == "done"
     config = app.home / "config.yaml"
     started = app.jobs[job["id"]].started
@@ -426,7 +466,7 @@ def test_a_choice_turned_off_after_setup_built_it_waits_for_the_owner_before_it_
     client.call("/api/choices", saved)
     state = client.call("/api/state")[1]
     assert state["removals"] == [] and state["options"]["removes"] is None  # nothing is built yet
-    job = client.call("/api/jobs", {"action": "apply"})[1]
+    job = setup(client)[1]
     assert wait(client, job["id"])["state"] == "done"
     config = app.home / "config.yaml"
     started = app.jobs[job["id"]].started
@@ -447,10 +487,10 @@ def test_a_choice_turned_off_after_setup_built_it_waits_for_the_owner_before_it_
     assert all("nothing of yours is on them" in note for note in state["removal_notes"].values())
     # Delete and run setup names exactly those to apply, and only if the owner was shown them all.
     for seen in ({}, {"guests": ["linux-runner"]}):
-        status, data = client.call("/api/jobs", {"action": "remove-guests", **seen})
+        status, data = setup(client, "remove-guests", **seen)
         assert status == 400 and "is now linux-runner, runner-dispatcher; look at it again" in data["error"]
     assert not (app.home / "removals.json").exists()
-    status, job = client.call("/api/jobs", {"action": "remove-guests", "guests": state["removals"]})
+    status, job = setup(client, "remove-guests", guests=state["removals"])
     assert status == 200 and job["args"] == ["apply", "--remove-guests"]
     wait(client, job["id"])
     assert json.loads((app.home / "removals.json").read_text()) == {
@@ -470,7 +510,7 @@ def test_activity_lists_runs_newest_first_and_built_waits_for_a_good_setup_run(s
     failed = client.call("/api/jobs", {"action": "apply", "stage": "host"})[1]
     wait(client, failed["id"])
     assert client.call("/api/state")[1]["built"] is False  # a failed run built nothing
-    good = client.call("/api/jobs", {"action": "apply"})[1]
+    good = setup(client)[1]
     wait(client, good["id"])
     st = client.call("/api/state")[1]
     assert st["built"] is True
@@ -508,7 +548,7 @@ def test_a_hung_run_is_stopped_with_everything_under_it(site, tmp_path, monkeypa
     )
     app.command = [sys.executable, str(hung)]
     monkeypatch.setattr(web, "STOP_WAIT_S", 1)
-    job = client.call("/api/jobs", {"action": "apply"})[1]
+    job = setup(client)[1]
     while not pids.exists() or not pids.read_text():
         time.sleep(0.05)
     grandchild = int(pids.read_text())
@@ -781,11 +821,11 @@ def test_deleting_guests_runs_only_for_what_setup_stopped_before_deleting(site):
     app, client = site
     sign_in(app, client)
     assert client.call("/api/state")[1]["removals"] == []
-    status, data = client.call("/api/jobs", {"action": "remove-guests"})
+    status, data = setup(client, "remove-guests")
     assert status == 400 and "not waiting to delete anything" in data["error"]
     (app.home / "removals.json").write_text('{"guests": ["windows-dev"]}\n')
     assert client.call("/api/state")[1]["removals"] == ["windows-dev"]
-    status, job = client.call("/api/jobs", {"action": "remove-guests"})
+    status, job = setup(client, "remove-guests")
     assert status == 200 and job["args"] == ["apply", "--remove-guests"]
     wait(client, job["id"])
     # Ticked again and saved: the plan has it, so nothing waits on the owner.
@@ -1349,7 +1389,12 @@ def test_the_app_files_are_served_with_their_types(site):
         assert icon["src"] in web.STATIC
     assert any(i.get("purpose") == "maskable" for i in manifest["icons"])
     sw = (Path(web.__file__).parent / "static" / "sw.js").read_text()
-    assert "/api/" not in sw.split("SHELL = ")[1].split("\n")[0]
+    # The worker stores the page's own files only, and knows the versioned
+    # ones by the names the server gives them.
+    plain = json.loads(sw.split("const PLAIN = ")[1].split(";")[0])
+    assert plain and set(plain) <= set(web.STATIC) and not any(p.startswith("/api/") for p in plain)
+    for name in web.VERSIONED:
+        assert name.replace(".", "\\.") in sw.split("const VERSIONED = ")[1].split("\n")[0], name
 
 
 def test_the_page_holds_every_element_and_icon_its_script_asks_for():
@@ -1423,7 +1468,7 @@ def with_tailscale(app, client):
 
 
 def built(app, client):
-    job = client.call("/api/jobs", {"action": "apply"})[1]
+    job = setup(client)[1]
     assert wait(client, job["id"])["state"] == "done"
 
 
@@ -1565,13 +1610,13 @@ def test_people_and_jobs_wait_for_each_other(site, tmp_path):
     app, client = site
     with_tailscale(app, client)
     app.people_busy = True
-    status, answer = client.call("/api/jobs", {"action": "apply"})
+    status, answer = setup(client)
     assert status == 400 and "Access, People" in answer["error"]
     assert client.call("/api/people", FRIEND)[0] == 400
     app.people_busy = False
     release = tmp_path / "release"
     app.command = [sys.executable, "-c", f"import os,time\nwhile not os.path.exists({str(release)!r}): time.sleep(0.02)"]
-    job = client.call("/api/jobs", {"action": "apply"})[1]
+    job = setup(client)[1]
     status, answer = client.call("/api/people", FRIEND)
     assert status == 400 and answer["error"] == "wait until the running job finishes"
     release.write_text("")
@@ -1829,3 +1874,251 @@ def test_a_guest_that_is_off_on_demand_is_not_down_and_an_idle_one_asks(site):
     data = client.call("/api/status")[1]
     assert data["down"] == ["forgejo"] and data["off"] == ["jellyfin"] and data["answering"] == ["workspace"]
     assert data["asks"] == [{"name": "agents", "title": "Workspace", "idle_s": 7260}]
+
+
+def test_the_page_names_its_script_and_styles_by_version(site):
+    # A stale copy of app.js, in a browser's or the service worker's cache,
+    # cannot answer for the one the updated page asks for.
+    _, client = site
+    page = client.call("/")[1]
+    for name in ("app.js", "style.css", "theme.js"):
+        assert f'"/{name}?v={web.shell()}"' in page and f'"/{name}"' not in page
+        assert client.call(f"/{name}?v={web.shell()}")[0] == 200
+    assert f'<meta name="nb-shell" content="{web.shell()}">' in page
+
+
+def test_a_restart_of_the_page_signs_nobody_out(site):
+    app, client = site
+    sign_in(app, client)
+    token = client.cookie.split("=", 1)[1]
+    saved = (app.home / "web" / "sessions.json").read_text()
+    assert token not in saved and stat.S_IMODE((app.home / "web" / "sessions.json").stat().st_mode) == 0o600
+    restarted(app)
+    assert client.call("/api/state")[1]["auth"] is True
+    # Signing out ends it for the next server too, and an expired session is not kept.
+    assert client.call("/api/logout", {})[0] == 200
+    restarted(app)
+    assert client.call("/api/state")[1]["auth"] is False
+    (app.home / "web" / "sessions.json").write_text(json.dumps({"0" * 64: time.time() - 1, "1" * 64: time.time() + 60}))
+    restarted(app)
+    assert list(app.sessions) == ["1" * 64]
+    (app.home / "web" / "sessions.json").write_text("not json")
+    restarted(app)
+    assert app.sessions == {}
+
+
+def test_setup_starts_only_from_the_review_the_owner_read(site):
+    app, client = site
+    sign_in(app, client)
+    wait(client, client.call("/api/jobs", {"action": "probe"})[1]["id"])
+    saved = {"workloads": ["agents"], "backups": False, "owner_login": "owner-a@example.internal"}
+    client.call("/api/choices", saved)
+    read = client.call("/api/state")[1]["review"]["id"]
+    # A page that does not say what it showed, such as one from before an update, starts nothing.
+    for body in ({"action": "apply"}, {"action": "apply", "review": "0" * 16}, {"action": "remove-guests", "guests": []}):
+        status, answer = client.call("/api/jobs", body)
+        assert status == 409 and answer["review"] is True and "look at it again under Setup, Review" in answer["error"]
+    assert not app.jobs or all(j.action == "probe" for j in app.jobs.values())
+    # The choices changed after the owner read the review: read again.
+    client.call("/api/choices", {**saved, "workloads": ["agents", "linux-ci"]})
+    assert client.call("/api/jobs", {"action": "apply", "review": read})[0] == 409
+    now = client.call("/api/state")[1]["review"]["id"]
+    assert now != read
+    status, job = client.call("/api/jobs", {"action": "apply", "review": now})
+    assert status == 200 and job["review"] == now and job["by"] == "owner"
+    assert wait(client, job["id"])["state"] == "done"
+    # The run kept the plan it started with, and which NullBill ran it.
+    assert app.jobs[job["id"]].plan_file.read_text() == (app.home / "plan.yaml").read_text()
+    assert stat.S_IMODE(app.jobs[job["id"]].plan_file.stat().st_mode) == 0o600
+    assert app.jobs[job["id"]].meta()["setup"] == web.version.setup_digest(web.REPO)
+    # What it would build is the same, so the id is: reading it again is not asked for.
+    assert client.call("/api/state")[1]["review"]["id"] == now
+    # One stage, the checks and reading the hardware change nothing the owner has to read first.
+    stage = client.call("/api/jobs", {"action": "apply", "stage": "host"})
+    assert stage[0] == 200 and not app.jobs[stage[1]["id"]].plan_file.exists()
+    wait(client, stage[1]["id"])
+    assert client.call("/api/jobs", {"action": "verify"})[0] == 200
+
+
+def test_the_review_says_why_a_run_is_due_and_what_it_changes(site, tmp_path):
+    app, client = site
+    sign_in(app, client)
+    review = client.call("/api/state")[1]["review"]
+    assert review["ready"] is False and review["guests"] == [] and [r["kind"] for r in review["reasons"]] == ["first"]
+    wait(client, client.call("/api/jobs", {"action": "probe"})[1]["id"])
+    saved = {"workloads": ["agents", "linux-ci"], "backups": False, "owner_login": "owner-a@example.internal"}
+    client.call("/api/choices", saved)
+    review = client.call("/api/state")[1]["review"]
+    assert review["ready"] is True and [r["kind"] for r in review["reasons"]] == ["first"]
+    assert {g["change"] for g in review["guests"]} == {"create"} and review["difference"] is None and review["sections"] == []
+    assert next(g for g in review["guests"] if g["name"] == "forgejo")["kind"] == "lxc"
+    job = setup(client)[1]
+    assert wait(client, job["id"])["state"] == "done"
+    (app.home / "guests.json").write_text(json.dumps({"guests": [g["name"] for g in review["guests"]]}))
+    review = client.call("/api/state")[1]["review"]
+    assert review["reasons"] == [] and {g["change"] for g in review["guests"]} == {"keep"} and review["known"] is True
+    # Choices saved after it: what the next run creates and deletes, and every changed line of the plan.
+    config = app.home / "config.yaml"
+    client.call("/api/choices", {**saved, "workloads": ["agents", "media"]})
+    os.utime(config, (time.time() + 5, time.time() + 5))
+    review = client.call("/api/state")[1]["review"]
+    assert [r["kind"] for r in review["reasons"]] == ["choices"]
+    changed = {g["name"]: g for g in review["guests"] if g["change"] != "keep"}
+    assert changed["jellyfin"]["change"] == "create" and changed["linux-runner"]["change"] == "delete"
+    assert "nothing of yours is on them" in changed["linux-runner"]["detail"][0]
+    assert changed["router"]["detail"] == ["its network legs change"]
+    assert "+  jellyfin:" in review["difference"] and "-  linux-runner:" in review["difference"]
+    assert "firewall rules" in review["sections"]
+    # A run that fails, and one the owner stops, leave the server unfinished.
+    app.command = [sys.executable, "-c", "import sys; sys.exit(1)"]
+    failed = setup(client, "remove-guests", guests=client.call("/api/state")[1]["removals"])[1]
+    assert wait(client, failed["id"])["state"] == "failed"
+    kinds = {r["kind"]: r["text"] for r in client.call("/api/state")[1]["review"]["reasons"]}
+    # (The deletion the owner confirmed is still written down, as after any run that did not get to it.)
+    assert set(kinds) == {"unfinished", "removals", "choices"} and "failed before it finished" in kinds["unfinished"]
+    meta = app.jobs[failed["id"]].meta_file
+    meta.write_text(json.dumps(json.loads(meta.read_text()) | {"stopped": time.time()}))
+    assert "was stopped before it finished" in client.call("/api/state")[1]["review"]["reasons"][0]["text"]
+    # An auth key that waits for the next run is a reason too.
+    assert client.call("/api/vpn", {"key": "tskey-auth-" + "k" * 24})[0] == 200
+    assert "key" in [r["kind"] for r in client.call("/api/state")[1]["review"]["reasons"]]
+
+
+def test_a_server_built_before_the_page_kept_plans_is_not_called_new(site):
+    app, client = site
+    sign_in(app, client)
+    wait(client, client.call("/api/jobs", {"action": "probe"})[1]["id"])
+    saved = {"workloads": ["agents"], "backups": False, "owner_login": "owner-a@example.internal"}
+    client.call("/api/choices", saved)
+    job = setup(client)[1]
+    wait(client, job["id"])
+    app.jobs[job["id"]].plan_file.unlink()
+    # Its choices are unchanged: what is planned is what is there.
+    review = client.call("/api/state")[1]["review"]
+    assert {g["change"] for g in review["guests"]} == {"keep"} and review["known"] is True and review["difference"] is None
+    # Changed since, with no record of the guests: nothing is called created or deleted.
+    (app.home / "guests.json").unlink(missing_ok=True)
+    config = app.home / "config.yaml"
+    config.write_text(config.read_text())
+    os.utime(config, (time.time() + 5, time.time() + 5))
+    review = client.call("/api/state")[1]["review"]
+    assert {g["change"] for g in review["guests"]} == {"keep"} and review["known"] is False
+
+
+def test_updates_are_found_and_the_ones_that_change_setup_wait_for_a_run(installed):
+    app, client, work = installed
+    sign_in(app, client)
+    first = git(work, "rev-parse", "HEAD")
+    about = client.call("/api/state")[1]["version"]
+    assert about["current"]["id"] == first[:12] and about["current"]["subject"] == "first"
+    assert about["available"] == [] and about["checked"] is None and about["last"] is None
+    assert about["server"] == {"built": None, "follows": None, "changes": []}
+    # The server is built with the first commit.
+    wait(client, client.call("/api/jobs", {"action": "probe"})[1]["id"])
+    client.call("/api/choices", {"workloads": ["agents"], "backups": False, "owner_login": "owner-a@example.internal"})
+    wait(client, setup(client)[1]["id"])
+    state = client.call("/api/state")[1]
+    assert state["version"]["server"]["follows"] is True and state["version"]["server"]["built"]["id"] == first[:12]
+    assert state["review"]["reasons"] == []
+    # main moves on: a change to the page, and one to a role.
+    page = commit(work, "body {}\n", "Page: a new colour", "src/nullbill/web/static/style.css")
+    role = commit(work, "- name: install\n", "Forgejo: a newer release", "ansible/roles/forgejo/tasks/main.yml")
+    assert client.call("/api/state")[1]["version"]["available"] == []  # nobody looked yet
+    status, answer = client.call("/api/updates/check", {})
+    assert status == 200 and answer["version"]["check_error"] is None and answer["version"]["checked"] > 0
+    assert [(c["id"], c["subject"], c["setup"]) for c in answer["version"]["available"]] == [
+        (role[:12], "Forgejo: a newer release", True),
+        (page[:12], "Page: a new colour", False),
+    ]
+    assert git(app.repo, "rev-parse", "HEAD") == first  # looking moves nothing
+    read = client.call("/api/state")[1]["review"]["id"]
+    # Update NullBill, and the page restarts with the new version.
+    assert wait(client, client.call("/api/jobs", {"action": "upgrade"})[1]["id"])["state"] == "done"
+    restarted(app)
+    state = client.call("/api/state")[1]
+    about = state["version"]
+    assert about["current"]["id"] == role[:12] and about["available"] == []
+    assert about["last"]["from"] == first[:12] and [c["id"] for c in about["last"]["changes"]] == [role[:12], page[:12]]
+    # The server was built with the old one: only the role's change waits for a setup run.
+    assert about["server"]["follows"] is False and about["server"]["built"]["id"] == first[:12]
+    assert [c["subject"] for c in about["server"]["changes"]] == ["Forgejo: a newer release"]
+    reasons = state["review"]["reasons"]
+    assert [r["kind"] for r in reasons] == ["update"] and "1 change to what setup builds" in reasons[0]["text"]
+    assert state["review"]["commits"] == about["server"]["changes"]
+    # What setup would do is not what the owner read before the update.
+    assert state["review"]["id"] != read and client.call("/api/jobs", {"action": "apply", "review": read})[0] == 409
+    wait(client, setup(client)[1]["id"])
+    state = client.call("/api/state")[1]
+    assert state["version"]["server"] == {"built": about["current"], "follows": True, "changes": []} and state["review"]["reasons"] == []
+    # An update to the page alone asks for no setup run.
+    commit(work, "body {{}}\n", "Page: another colour", "src/nullbill/web/static/style.css")
+    wait(client, client.call("/api/jobs", {"action": "upgrade"})[1]["id"])
+    restarted(app)
+    state = client.call("/api/state")[1]
+    assert state["version"]["current"]["subject"] == "Page: another colour" and state["version"]["server"]["follows"] is True
+    assert state["version"]["server"]["built"]["id"] == role[:12] and state["review"]["reasons"] == []
+
+
+def test_a_check_that_cannot_reach_the_repository_says_so_and_keeps_what_it_knew(installed, tmp_path):
+    app, client, work = installed
+    sign_in(app, client)
+    newest = commit(work, "two\n", "second")
+    assert len(client.call("/api/updates/check", {})[1]["version"]["available"]) == 1
+    git(app.repo, "remote", "set-url", "origin", str(tmp_path / "gone.git"))
+    status, answer = client.call("/api/updates/check", {})
+    assert status == 200 and "could not reach the repository" in answer["version"]["check_error"]
+    assert [c["id"] for c in answer["version"]["available"]] == [newest[:12]]
+    # One check at a time.
+    app.checking = True
+    status, answer = client.call("/api/updates/check", {})
+    assert status == 400 and "already on its way" in answer["error"]
+
+
+def test_the_page_looks_for_updates_once_a_day_and_never_while_a_job_runs(installed, tmp_path):
+    app, client, work = installed
+    sign_in(app, client)
+    now = time.time()
+    assert app.updates_due(now)
+    commit(work, "two\n", "second")
+    app.scheduled(now)
+    assert len(app.version_view()["available"]) == 1
+    assert not app.updates_due(now + web.UPDATE_CHECK_S - 60) and app.updates_due(now + web.UPDATE_CHECK_S + 60)
+    release = tmp_path / "release"
+    app.command = [sys.executable, "-c", f"import os,time\nwhile not os.path.exists({str(release)!r}): time.sleep(0.02)"]
+    job = client.call("/api/jobs", {"action": "verify"})[1]
+    assert not app.updates_due(now + web.UPDATE_CHECK_S + 60)
+    release.write_text("")
+    wait(client, job["id"])
+
+
+def test_a_setup_run_from_before_the_page_noted_its_version_is_found_in_gits_record(installed):
+    app, client, work = installed
+    sign_in(app, client)
+    first = git(work, "rev-parse", "HEAD")
+    wait(client, client.call("/api/jobs", {"action": "probe"})[1]["id"])
+    client.call("/api/choices", {"workloads": ["agents"], "backups": False, "owner_login": "owner-a@example.internal"})
+    job = app.jobs[setup(client)[1]["id"]]
+    wait(client, job.id)
+    # As an earlier page wrote it: no commit, no digest.
+    meta = json.loads(job.meta_file.read_text())
+    job.meta_file.write_text(json.dumps({k: v for k, v in meta.items() if k not in ("commit", "setup", "review")}))
+    real_sleep(1.1)
+    commit(work, "- name: install\n", "Forgejo: a newer release", "ansible/roles/forgejo/tasks/main.yml")
+    wait(client, client.call("/api/jobs", {"action": "upgrade"})[1]["id"])
+    restarted(app)
+    server = client.call("/api/state")[1]["version"]["server"]
+    assert server["follows"] is False and server["built"]["id"] == first[:12]
+    assert [c["subject"] for c in server["changes"]] == ["Forgejo: a newer release"]
+
+
+def test_a_nullbill_that_is_not_a_checkout_has_no_version_and_cannot_look(tmp_path, monkeypatch):
+    app, client, server = start_site(tmp_path, monkeypatch, repo=tmp_path / "nowhere")
+    try:
+        sign_in(app, client)
+        state = client.call("/api/state")[1]
+        assert state["version"] is None and state["review"]["reasons"][0]["kind"] == "first"
+        assert not app.updates_due(time.time())
+        status, answer = client.call("/api/updates/check", {})
+        assert status == 200 and client.call("/api/state")[1]["version"] is None
+    finally:
+        server.shutdown()

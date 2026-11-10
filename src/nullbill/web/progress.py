@@ -67,7 +67,7 @@ STOPPED = re.compile(r"apply stopped at ([a-z-]+): (.*)$", re.S)
 
 STOPPED_ADVICE = (
     "What finished before you stopped it stays done. Start it again with the button below; the step it was "
-    "in the middle of runs again. If it hung on a download, press Update NullBill first, in case a fix for it "
+    "in the middle of runs again. If it hung on a download, press Update NullBill on the Updates page first, in case a fix for it "
     "is out."
 )
 
@@ -96,7 +96,7 @@ ADVICE = [
     ),
     (
         r"the host has no nb-power yet",
-        "Run setup in full once, with the Run setup button: it installs what starts and stops the things that run on demand.",
+        "Run setup in full once, from Setup, Review and run: it installs what starts and stops the things that run on demand.",
     ),
     (r"could not read VRAM", "Under Setup, What to run, give the graphics card's memory in GB, as on its box, then press Save and plan."),
     (
@@ -176,7 +176,7 @@ ADVICE = [
     (
         r"Tunnel connection failed: 403|403 Forbidden.*proxy|proxy.*403 Forbidden",
         "NullBill's internet proxy refused a site this guest needs: the site is not on its allowed list. "
-        "Update NullBill and run setup again; if it stops here again, copy the details and report them.",
+        "Update NullBill on the Updates page and run setup again; if it stops here again, copy the details and report them.",
     ),
     (r"No space left on device", "A disk is full. Free space on it, or choose fewer workloads under Setup, then run setup again."),
     (

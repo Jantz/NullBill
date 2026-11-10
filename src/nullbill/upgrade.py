@@ -13,15 +13,21 @@ a job while another runs.
 
 Only main is followed: what the page installs is what the public repository
 holds, never a commit made on this machine.
+
+Each move is written to $NULLBILL_HOME/web/last-update.json (LAST) before
+the page restarts, so the restarted page can say what it was updated from.
 """
 
+import json
 import subprocess
+import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from nullbill.errors import NullBillError
 
 BRANCH = "main"
+LAST = "web/last-update.json"
 FINISH = ["systemd-run", "--quiet", "--wait", "--pipe", "--collect", "--unit", "nullbill-upgrade"]
 
 
@@ -37,7 +43,9 @@ def _git(root: Path, *args: str) -> str:
 
 def _finish(argv: Sequence[str]) -> None:
     if subprocess.run(list(argv), check=False).returncode != 0:
-        raise NullBillError("tools/finish-upgrade failed; its output is above. Press Update NullBill again once it is fixed")
+        raise NullBillError(
+            "tools/finish-upgrade failed; its output is above. Press Update NullBill on the Updates page again once it is fixed"
+        )
 
 
 def upgrade(root: Path, home: Path, say: Callable[[str], None] = print, finish: Callable[[Sequence[str]], None] = _finish) -> str | None:
@@ -58,6 +66,9 @@ def upgrade(root: Path, home: Path, say: Callable[[str], None] = print, finish: 
     say(f"Updating NullBill from {old[:12]} to {new[:12]}:")
     say(_git(root, "log", "--format=  %h %s", f"{old}..{new}") or f"  (from {old[:12]}, which {BRANCH} no longer holds)")
     _git(root, "checkout", "--quiet", "--detach", new)
+    record = home / LAST
+    record.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    record.write_text(json.dumps({"from": old, "to": new, "at": time.time()}) + "\n")
     finish([*FINISH, "-p", f"Environment=NULLBILL_HOME={home}", "-p", "Environment=HOME=/root", str(root / "tools" / "finish-upgrade")])
     say(f"NullBill is at {new[:12]}; the page restarted with it")
     return new

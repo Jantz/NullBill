@@ -108,7 +108,7 @@ Rules:
 - Never ask the owner to paste a password, key or token into the chat; the page has fields for those.
 - When a decision is the owner's (what to run, deleting anything, spending money), ask with ask_owner and give options.
 - Write short, plain replies: what you found, what you did or propose, what the owner should do. No headings for a
-  few lines. Name the page's places as the owner sees them: Overview, Services, Activity, Alerts, Setup, Access, Agent.
+  few lines. Name the page's places as the owner sees them: Overview, Services, Activity, Alerts, Setup, Access, Agent, Updates.
 - A fix that belongs in NullBill's code: say so, name the file and the change; the owner can ask the operator agent
   (Agent page, Settings) to open a pull request with it.
 - A guest that runs on demand and is off (status, on_demand) is off on purpose, not broken. On the host,
@@ -386,7 +386,7 @@ class Chat:
         if not self.credential_env():
             raise NullBillError("sign the agent in first: paste an API key or subscription token on the Agent page")
         if not self.installed():
-            raise NullBillError("the agent CLI is not installed in the NullBill container; press Update NullBill")
+            raise NullBillError("the agent CLI is not installed in the NullBill container; press Update NullBill on the Updates page")
         with self.lock:
             if kind == "user":
                 self.emit("user", text=text)
@@ -896,6 +896,7 @@ class Tools:
         st = self.app.state(True)
         plan = st["plan"]
         options = st["options"]
+        version = st["version"]
         jobs = [
             {
                 "id": j.id,
@@ -926,6 +927,15 @@ class Tools:
             ],
             "recent_jobs": jobs,
             "choices_changed_since_last_setup": st["config_changed"],
+            # Why the page asks for a setup run (Setup, Review and run), and
+            # NullBill's own version (the Updates page).
+            "setup_run_due_because": [r["text"] for r in st["review"]["reasons"]],
+            "nullbill": version
+            and {
+                "version": version["current"]["id"],
+                "updates_available": [c["subject"] for c in version["available"]],
+                "updates_waiting_for_a_setup_run": [c["subject"] for c in version["server"]["changes"]],
+            },
             "home_network": st["lan"]["state"],
             "tailscale": {"oauth_client": st["tailscale_client"], "auth_key_waiting": st["tailscale_key"]},
             "agent_root_on_host": st["agent_powers"],

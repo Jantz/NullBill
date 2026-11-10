@@ -38,7 +38,7 @@ from pathlib import Path
 
 import yaml
 
-from nullbill import browserca, direct, hostroot, lan, legacy, llm, names, owner, people, power, tailscale
+from nullbill import browserca, direct, hostroot, lan, legacy, llm, names, owner, people, power, tailscale, version
 from nullbill.apply import DISKS_FILE, GUESTS, NTFY, REMOVALS, SPKI, STAGES
 from nullbill.cli import plan_text, reach_target
 from nullbill.errors import NullBillError
@@ -49,7 +49,9 @@ from nullbill.render import strip_notes
 from nullbill.secretfile import Codec, Secrets, Sops
 from nullbill.tailnet import TAG, render_tailnet
 from nullbill.tailscale import MissingScope, Tailnet, TailscaleError
+from nullbill.upgrade import LAST as LAST_UPDATE
 from nullbill.web import chat, demand, progress, workloads
+from nullbill.web import review as reviewing
 from nullbill.web.services import PASSWORDS, services, shares
 
 SESSION_S = 12 * 3600
@@ -71,6 +73,16 @@ SCHEDULED = {"rebake-ci": ["apply", "--stage", "ci"]}
 # Deleting the guests the last apply stopped before deleting (apply.REMOVALS).
 REMOVE_ACTIONS = {"remove-guests": ["apply", "--remove-guests"]}
 REBAKE_WEEKDAY, REBAKE_HOUR = 6, 3
+# Setup runs of everything, as the page starts them. The owner starts one
+# only with the id of the review the page showed them (App.review).
+SETUP_ACTIONS = {"apply", *REMOVE_ACTIONS}
+# The page asks the repository for main's newest commit once a day, and when
+# the owner presses Check for updates. What it found is kept here.
+UPDATE_CHECK = "web/update-check.json"
+UPDATE_CHECK_S = 24 * 3600
+# Signed-in browsers, by the SHA-256 of each session's token, so an update
+# restarting the page does not sign the owner out in the middle of it.
+SESSIONS = "web/sessions.json"
 SCHEDULE_CHECK_S = 60
 ROOT_CERT = "/nullbill-root.crt"
 # An optional Healthchecks.io check notices silence; alerts go to NTFY.
@@ -123,8 +135,12 @@ STATIC = {
     "/icon-512.png": ("icon-512.png", "image/png"),
     "/icon-maskable-512.png": ("icon-maskable-512.png", "image/png"),
 }
+REVIEW_AGAIN = "what setup would do is not what this page showed you; look at it again under Setup, Review, and start it there"
 SHELL_HEADER = "X-NullBill-Shell"
 SHELL_META = b'<meta name="nb-shell" content="">'
+# The page names its script and styles with the digest, so a browser or the
+# service worker never pairs one version's page with another's files.
+VERSIONED = ("app.js", "style.css", "theme.js")
 # The page's agent (web/chat.py): the CLI, the user it runs as, its home,
 # and the socket its tools call the page on.
 AGENT_COMMAND = ["/usr/local/bin/claude"]
@@ -253,6 +269,11 @@ class Job:
     def meta_file(self) -> Path:
         return self.log.with_suffix(".json")
 
+    @property
+    def plan_file(self) -> Path:
+        """The plan a setup run started with (web/review.py)."""
+        return self.log.with_suffix(".plan.yaml")
+
     def meta(self) -> dict:
         try:
             return json.loads(self.meta_file.read_text())
@@ -311,6 +332,10 @@ class App:
     agent_home: Path = AGENT_HOME
     tools_socket: Path = TOOLS_SOCKET
     agent_cwd: Path = REPO
+    # The checkout this NullBill runs from (nullbill/version.py).
+    repo: Path = REPO
+    version_seen: tuple[tuple, dict] | None = None
+    checking: bool = False
 
     def __post_init__(self) -> None:
         self.chat = chat.Chat(self)
@@ -352,13 +377,34 @@ class App:
                 self.failures.append(now)
                 return None
             token = secrets.token_urlsafe(32)
-            self.sessions[token] = now + SESSION_S
+            self.sessions[hashlib.sha256(token.encode()).hexdigest()] = now + SESSION_S
+            self._save_sessions()
             return token
 
     def valid(self, token: str | None) -> bool:
         with self.lock:
-            expiry = self.sessions.get(token or "")
+            expiry = self.sessions.get(hashlib.sha256((token or "").encode()).hexdigest())
             return expiry is not None and expiry > time.time()
+
+    def logout(self, token: str | None) -> None:
+        with self.lock:
+            self.sessions.pop(hashlib.sha256((token or "").encode()).hexdigest(), None)
+            self._save_sessions()
+
+    def _save_sessions(self) -> None:
+        now = time.time()
+        self.sessions = {digest: expiry for digest, expiry in self.sessions.items() if expiry > now}
+        _write_private(self.home / SESSIONS, json.dumps(self.sessions) + "\n")
+
+    def load_sessions(self) -> None:
+        """Sessions an earlier server kept, so its restart signs nobody out."""
+        try:
+            saved = json.loads((self.home / SESSIONS).read_text())
+            kept = {str(digest): float(expiry) for digest, expiry in saved.items() if float(expiry) > time.time()}
+        except (OSError, ValueError, AttributeError, TypeError):
+            return
+        with self.lock:
+            self.sessions.update(kept)
 
     def set_password(self, password: str) -> None:
         if len(password) < MIN_PASSWORD:
@@ -956,7 +1002,7 @@ class App:
         if set(planned) - set(stopped):
             if seen is None or set(seen) != {*stopped, *planned}:
                 names = ", ".join(sorted({*stopped, *planned}))
-                raise NullBillError(f"what setup would delete is now {names}; look at it again under Setup, Build, before you confirm")
+                raise NullBillError(f"what setup would delete is now {names}; look at it again under Setup, Review, before you confirm")
             path = self.home / REMOVALS
             try:
                 gone = json.loads(path.read_text()).get("gone", []) if path.is_file() else []
@@ -1443,7 +1489,16 @@ class App:
         return client.removeprefix("::ffff:") == self.network()[1]
 
     # Jobs.
-    def start(self, action: str, stage: str | None = None, client: str = "", by: str = "owner", guests: list[str] | None = None) -> Job:
+    def start(
+        self,
+        action: str,
+        stage: str | None = None,
+        client: str = "",
+        by: str = "owner",
+        guests: list[str] | None = None,
+        review: str | None = None,
+    ) -> Job:
+        """review: the id of the review the owner started a setup run from."""
         if action == "keep-lan-closed" and not self.via_vpn(client):
             raise NullBillError("press Keep it closed on the page opened over Tailscale; that press is what shows Tailscale works")
         fixed = LAN_ACTIONS | SCHEDULED | REMOVE_ACTIONS
@@ -1473,7 +1528,15 @@ class App:
             with os.fdopen(fd, "w") as out:
                 argv = ["sh", "-c", JOB_WRAPPER, str(job.rc_file), *self.command, *args]
                 job.process = subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, env=env, stdin=subprocess.DEVNULL)
-            meta = {"action": action, "args": args, "started": job.started, "pid": job.process.pid, "by": by}
+            # Which NullBill the job runs with: what a finished setup run
+            # built the server from (built_with).
+            commit = version.head(self.repo)
+            meta = {"action": action, "args": args, "started": job.started, "pid": job.process.pid, "by": by, "commit": commit}
+            if action in SETUP_ACTIONS and not stage:
+                plan = self.home / "plan.yaml"
+                if plan.is_file():
+                    _write_private(job.plan_file, plan.read_text())
+                meta |= {"setup": version.setup_digest(self.repo) if commit else None, "review": review}
             _write_private(job.meta_file, json.dumps(meta))
             self.jobs[job_id] = job
             return job
@@ -1533,8 +1596,19 @@ class App:
         guests = (yaml.safe_load(path.read_text()) or {}).get("guests") or {}
         return any(g.get("kind") == "vm-pool" and g.get("zone") != "windows" for g in guests.values())
 
+    def updates_due(self, now: float) -> bool:
+        """Once a day, and not while a job runs: an update fetches too."""
+        if version.head(self.repo) is None or any(j.state() == "running" for j in self.jobs.values()):
+            return False
+        return now - float(self.update_check().get("checked") or 0) >= UPDATE_CHECK_S
+
     def scheduled(self, now: float) -> Job | None:
         self.tell_agent_jobs()
+        if self.updates_due(now):
+            try:
+                self.check_updates()
+            except NullBillError:
+                pass
         if not self.rebake_due(now):
             return None
         try:
@@ -1563,6 +1637,8 @@ class App:
             "offset": len(data),
             "started": job.started,
             "seconds": round((times["ended"] or now) - job.started),
+            "by": job.by,
+            "review": job.meta().get("review"),
             "progress": progress.summarize(job.action, data.decode(errors="replace"), state, times),
         }
 
@@ -1609,8 +1685,161 @@ class App:
         """The choices were saved after the start of the last setup run that
         finished, so the server does not follow them yet."""
         config = self.home / "config.yaml"
-        good = [j.started for j in self.jobs.values() if j.action == "apply" and j.state() == "done"]
-        return bool(good) and config.exists() and config.stat().st_mtime > max(good)
+        good = self.last_setup()
+        return good is not None and config.exists() and config.stat().st_mtime > good.started
+
+    def setup_runs(self) -> list[Job]:
+        """Setup runs of everything, oldest first; one stage alone is not one."""
+        runs = [j for j in self.jobs.values() if j.action in SETUP_ACTIONS and "--stage" not in j.args]
+        return sorted(runs, key=lambda j: j.started)
+
+    def last_setup(self) -> Job | None:
+        """The last setup run that finished: what the server was built by."""
+        return next((j for j in reversed(self.setup_runs()) if j.state() == "done"), None)
+
+    def built_with(self, job: Job) -> tuple[str | None, str | None]:
+        """(commit, setup digest) of the NullBill a setup run ran with. A
+        run from before the page wrote that down is looked up in git's
+        record of where the checkout was when it started."""
+        meta = job.meta()
+        if meta.get("setup"):
+            return meta.get("commit"), meta["setup"]
+        commit = version.at(self.repo, job.started)
+        return commit, version.setup_digest(self.repo, commit) if commit else None
+
+    # NullBill's own version (nullbill/version.py).
+    def update_check(self) -> dict:
+        try:
+            found = json.loads((self.home / UPDATE_CHECK).read_text())
+            return found if isinstance(found, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def check_updates(self) -> dict:
+        """Ask the repository for main's newest commit and keep the answer,
+        or why there is none."""
+        with self.lock:
+            if self.checking:
+                raise NullBillError("a check for updates is already on its way")
+            # git allows one fetch at a time in a checkout, and upgrade fetches.
+            if any(j.state() == "running" and j.action == "upgrade" for j in self.jobs.values()):
+                raise NullBillError("NullBill is updating right now")
+            self.checking = True
+        try:
+            found: dict = {"checked": time.time(), "commit": version.fetch(self.repo), "error": None}
+        except NullBillError as exc:
+            found = {"checked": time.time(), "commit": self.update_check().get("commit"), "error": exc.messages[0]}
+        finally:
+            with self.lock:
+                self.checking = False
+        _write_private(self.home / UPDATE_CHECK, json.dumps(found) + "\n")
+        return found
+
+    def version_view(self) -> dict | None:
+        """Which NullBill runs here, what main holds beyond it, and whether
+        the server was built with it. None when this is not a checkout."""
+        head = version.head(self.repo)
+        if head is None:
+            return None
+        check = self.update_check()
+        built = self.last_setup()
+        moved = self.home / LAST_UPDATE
+        key = (head, check.get("commit"), built.id if built else None, moved.stat().st_mtime if moved.exists() else None)
+        if self.version_seen is None or self.version_seen[0] != key:
+            newest = check.get("commit")
+            ahead = bool(newest) and version.behind(self.repo, head, newest)
+            server: dict = {"built": None, "follows": None, "changes": []}
+            if built is not None:
+                commit, digest = self.built_with(built)
+                server["built"] = version.describe(self.repo, commit) if commit else None
+                if digest is not None:
+                    server["follows"] = digest == version.setup_digest(self.repo)
+                if server["follows"] is False and commit:
+                    server["changes"] = [c for c in version.changes(self.repo, commit, head) if c["setup"]]
+            last = None
+            try:
+                record = json.loads(moved.read_text()) if moved.exists() else None
+                if record and record["to"] == head:
+                    last = {"at": record["at"], "from": record["from"][:12], "changes": version.changes(self.repo, record["from"], head)}
+            except (ValueError, KeyError, TypeError):
+                last = None
+            view = {
+                "current": version.describe(self.repo, head),
+                "available": version.changes(self.repo, head, newest) if ahead else [],
+                "server": server,
+                "last": last,
+            }
+            self.version_seen = (key, view)
+        return self.version_seen[1] | {"checked": check.get("checked"), "check_error": check.get("error")}
+
+    # What a setup run started now would do (web/review.py).
+    def built_plan(self) -> str | None:
+        """The plan the server was built from: the one the last setup run
+        that finished started with."""
+        built = self.last_setup()
+        return built.plan_file.read_text() if built is not None and built.plan_file.is_file() else None
+
+    def review(self, plan: dict | None = None, about: dict | None = None) -> dict:
+        """What the owner confirms before a setup run: why one is due, and
+        what it creates, deletes and changes. `id` names exactly this; the
+        page sends it back to start the run, and a run is refused when what
+        it would do is no longer what the owner read."""
+        plan = self.plan() if plan is None else plan
+        about = self.version_view() if about is None else about
+        built = self.last_setup()
+        runs = self.setup_runs()
+        stopped = self.removals()
+        removals = [*stopped, *(n for n in self.planned_removals() if n not in stopped)]
+        reasons: list[dict] = []
+
+        def why(kind: str, text: str) -> None:
+            reasons.append({"kind": kind, "text": text})
+
+        if built is None:
+            why("first", "Nothing is built yet. This run builds everything in the plan.")
+        if runs and runs[-1].state() == "failed":
+            by_owner = bool(runs[-1].meta().get("stopped"))
+            why("unfinished", f"The last setup run {'was stopped' if by_owner else 'failed'} before it finished.")
+        if stopped:
+            why("removals", "Setup stopped before deleting guests and waits for your word.")
+        if self.config_changed():
+            why("choices", "Your saved choices changed since the last setup run.")
+        waiting = (about or {}).get("server") or {}
+        if waiting.get("follows") is False:
+            count = len(waiting["changes"])
+            what = f"{count} change{'' if count == 1 else 's'} to what setup builds" if count else "what setup builds changed"
+            why("update", f"NullBill was updated since the last setup run: {what}.")
+        if self.tailscale_key():
+            why("key", "A Tailscale auth key waits to be used.")
+
+        text = plan.get("text")
+        config = self.home / "config.yaml"
+        seen = [text or "", config.read_text() if config.exists() else "", version.head(self.repo) or "", *sorted(removals)]
+        out: dict = {
+            "id": hashlib.sha256("\0".join(seen).encode()).hexdigest()[:16],
+            "ready": bool(text),
+            "reasons": reasons,
+            "guests": [],
+            "disks": [],
+            "sections": [],
+            "difference": None,
+            # False: built by a NullBill that kept no record of its guests.
+            "known": True,
+            "commits": waiting.get("changes") or [],
+        }
+        if not text:
+            return out
+        now = yaml.safe_load(text)
+        was_text = self.built_plan()
+        was = yaml.safe_load(was_text) if was_text else None
+        existing = self.existing_guests()
+        if existing is None and built is not None and was is None:
+            existing, out["known"] = set(now.get("guests") or {}), False
+        out["guests"] = reviewing.guests(now, was, existing, self.removal_notes(removals))
+        out["disks"] = reviewing.disks(now, was, self.facts() or {})
+        out["sections"] = reviewing.sections(now, was)
+        out["difference"] = reviewing.difference(was_text, text)
+        return out
 
     def hardware(self) -> dict | None:
         """The last probe, in a line or two."""
@@ -1643,6 +1872,8 @@ class App:
         latest = max(self.jobs.values(), key=lambda j: j.started, default=None)
         stopped = self.removals()
         removals = [*stopped, *(n for n in self.planned_removals() if n not in stopped)]
+        plan = self.plan()
+        about = self.version_view()
         return {
             "auth": True,
             "has_password": has_password,
@@ -1664,7 +1895,9 @@ class App:
             "removals_stopped": bool(stopped),
             "removal_notes": self.removal_notes(removals),
             "options": self.options(),
-            "plan": self.plan(),
+            "plan": plan,
+            "review": self.review(plan, about),
+            "version": about,
             "on_demand": demand.rules(self.saved_plan()),
             "alerts": self.alerts() if has_password else None,
             "agent_credential": self.agent_credential(),
@@ -1799,6 +2032,8 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 body = resources.files("nullbill.web").joinpath("static", name).read_bytes()
                 if path == "/":
                     body = body.replace(SHELL_META, SHELL_META.replace(b'""', f'"{shell()}"'.encode()))
+                    for versioned in VERSIONED:
+                        body = body.replace(f'"/{versioned}"'.encode(), f'"/{versioned}?v={shell()}"'.encode())
                 return self.send(200, body, kind if kind.startswith("image/") and kind != "image/svg+xml" else f"{kind}; charset=utf-8")
             # Public: a certificate, which a phone downloads to install.
             if path == ROOT_CERT:
@@ -1982,15 +2217,23 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                     return self.json(200, {"ok": True, "sent": app.test_alerts()})
                 if match := re.fullmatch(r"/api/jobs/([0-9T]+-[a-z-]+)/stop", self.path):
                     return self.json(200, app.job_view(app.stop(match[1])))
+                if self.path == "/api/updates/check":
+                    app.check_updates()
+                    return self.json(200, {"ok": True, "version": app.version_view()})
                 if self.path == "/api/jobs":
                     stage = body.get("stage")
                     seen = body.get("guests")
                     guests = [str(n) for n in seen] if isinstance(seen, list) else None
-                    job = app.start(str(body.get("action")), str(stage) if stage else None, self.client(), guests=guests)
+                    action, review = str(body.get("action")), None
+                    if action in SETUP_ACTIONS and not stage:
+                        # The owner starts what they read, or reads again.
+                        review = str(body.get("review") or "")
+                        if review != app.review()["id"]:
+                            return self.json(409, {"error": REVIEW_AGAIN, "review": True})
+                    job = app.start(action, str(stage) if stage else None, self.client(), guests=guests, review=review)
                     return self.json(200, app.job_view(job))
                 if self.path == "/api/logout":
-                    with app.lock:
-                        app.sessions.pop(self.token() or "", None)
+                    app.logout(self.token())
                     return self.json(200, {"ok": True}, {"Set-Cookie": "nb_session=; Path=/; Secure; HttpOnly; Max-Age=0"})
             except NullBillError as exc:
                 return self.json(400, {"error": "; ".join(exc.messages)})
@@ -2096,6 +2339,7 @@ def serve(home: Path, listen: str) -> None:
     host, _, port = listen.rpartition(":")
     app = App(home)
     app.load_jobs()
+    app.load_sessions()
     app.ensure_setup_code()
     cert, key = ensure_certificate(home)
     server, tls = make_server(app, (host or "0.0.0.0", int(port)), cert, key)

@@ -243,10 +243,11 @@ must hand out addresses by DHCP: the NullBill container takes one.
 ## 9. The setup page: first setup run
 
 The page has a sidebar with its pages, **Overview**, **Services**,
-**Activity** and **Alerts**, then **Setup**, **Access** and **Agent** under
-**Configure** (on a phone, a tab bar with **More**). The top bar shows the
-latest run, the **Setup guide** and **Run setup**; the arrow beside it has
-**Run the checks**, **Update NullBill** and **Read the hardware**. The agent
+**Activity** and **Alerts**, then **Setup**, **Access**, **Agent** and
+**Updates** under **Configure** (on a phone, a tab bar with **More**). The
+top bar shows the latest run, the **Setup guide** and **Run setup**, which
+opens the review a setup run starts from; the arrow beside it has **Run the
+checks** and **Read the hardware**. The agent
 sits beside every page (on a phone, its own tab). **Ctrl K** finds any page
 or command; **?** lists the shortcuts. Until the first setup run finishes,
 **Overview** lists these steps in order and links each one.
@@ -323,9 +324,10 @@ made one.
    **Save client**. You can skip Tailscale for now: the vpn stage then waits and
    everything else still runs, but the page stays reachable only from
    home.
-10. **Setup** page, **Build** tab: press **Run setup**. The top bar shows
-    its progress; the **Build** tab (and the run's page under **Activity**)
-    lists every stage, ticks each one off as it finishes, shows what the
+10. **Setup** page, **Review and run** tab (**Run setup** in the top bar
+    opens it): read what the run builds, then press **Start setup**. The
+    top bar shows its progress; the same tab (and the run's page under
+    **Activity**) lists every stage, ticks each one off as it finishes, shows what the
     running one does now, and the log beside it has every line. The first run downloads images and packages and
     takes a while; creating the guests, building the CI images and the
     first backup are the longest. Without an auth key yet, the vpn stage
@@ -365,7 +367,7 @@ console, and the Tailscale app on the phone or laptop you will use.
    90 days.
 2. On the page's **Access** page, **Tailscale** tab, paste it under
    **Auth key** and press **Save auth key**.
-3. Press **Run setup** again. This run is shorter. The vpn stage
+3. Press **Run setup**, then **Start setup**, again. This run is shorter. The vpn stage
    logs in once, forgets the key and prints the page's address on the
    tailnet. Note that address: once the home network is closed, it is the
    way in.
@@ -399,7 +401,7 @@ host's `mgmt` address: in **The full plan** on the **Setup** page's
 3. Back on the page opened over Tailscale, press **Keep it closed**. The
    page accepts it only when it arrives through Tailscale, which proves the
    way in works.
-4. Press **Run setup** once more. Proxmox then gets a certificate from
+4. Press **Run setup**, then **Start setup**, once more. Proxmox then gets a certificate from
    NullBill's browser CA, which your devices can trust (part 14).
 
 If you do not press it in time, the server opens the home network again by

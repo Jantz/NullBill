@@ -210,8 +210,9 @@ has every option) and put that save in, as above.
 ## When a game updates
 
 A player's game and the server must be the same version. NullBill pins
-each server's file by its checksum, and **Update NullBill** followed by
-**Run setup** moves to the version NullBill pins now. Worlds are kept.
+each server's file by its checksum, and **Update NullBill** (on the
+**Updates** page) followed by **Run setup** moves to the version NullBill
+pins now. Worlds are kept.
 
 When a game updates before NullBill does, either the players keep the
 older version (Minecraft's launcher: **Installations**, **New

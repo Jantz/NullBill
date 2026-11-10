@@ -1,46 +1,19 @@
 """nullbill upgrade against real git repositories: an origin with main and
 a detached checkout like install.sh's."""
 
+import json
 import os
-import subprocess
 
 import pytest
+from gitrepos import commit, git, make
 
 from nullbill import upgrade
 from nullbill.errors import NullBillError
 
 
-def git(path, *args):
-    env = {
-        "GIT_AUTHOR_NAME": "t",
-        "GIT_AUTHOR_EMAIL": "t@example.internal",
-        "GIT_COMMITTER_NAME": "t",
-        "GIT_COMMITTER_EMAIL": "t@example.internal",
-    }
-    return subprocess.run(
-        ["git", "-C", str(path), *args], capture_output=True, text=True, check=True, env=env | {"PATH": "/usr/bin:/bin"}
-    ).stdout.strip()
-
-
 @pytest.fixture
 def repos(tmp_path):
-    origin, work, checkout = tmp_path / "origin.git", tmp_path / "work", tmp_path / "checkout"
-    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
-    subprocess.run(["git", "clone", "-q", str(origin), str(work)], check=True)
-    (work / "README").write_text("one\n")
-    git(work, "add", "README")
-    git(work, "commit", "-q", "-m", "first")
-    git(work, "push", "-q", "origin", "HEAD:main")
-    subprocess.run(["git", "clone", "-q", str(origin), str(checkout)], check=True)
-    git(checkout, "checkout", "-q", "--detach", "main")
-    return work, checkout
-
-
-def commit(work, text, message):
-    (work / "README").write_text(text)
-    git(work, "commit", "-q", "-am", message)
-    git(work, "push", "-q", "origin", "HEAD:main")
-    return git(work, "rev-parse", "HEAD")
+    return make(tmp_path)
 
 
 def test_moves_to_mains_newest_commit_then_finishes_outside_the_pages_sandbox(repos, tmp_path):
@@ -54,19 +27,21 @@ def test_moves_to_mains_newest_commit_then_finishes_outside_the_pages_sandbox(re
     [argv] = finished
     assert argv[: len(upgrade.FINISH)] == upgrade.FINISH
     assert f"Environment=NULLBILL_HOME={tmp_path / 'home'}" in argv and argv[-1] == str(checkout / "tools" / "finish-upgrade")
-    # Again: nothing to do, nothing restarted.
+    # The restarted page reads what it was updated from.
+    first = git(work, "rev-parse", "HEAD~2")
+    moved = json.loads((tmp_path / "home" / upgrade.LAST).read_text())
+    assert (moved["from"], moved["to"]) == (first, newest) and moved["at"] > 0
+    # Again: nothing to do, nothing restarted, and the record stays.
     assert upgrade.upgrade(checkout, tmp_path / "home", say=said.append, finish=finished.append) is None
     assert len(finished) == 1 and "newest commit" in said[-1]
+    assert json.loads((tmp_path / "home" / upgrade.LAST).read_text()) == moved
 
 
 def test_files_it_checks_out_stay_readable_under_the_pages_umask(repos, tmp_path):
     # The page's UMask=0077 made changed files root-only, and nbagent could
     # not start its tools (python -m nullbill agent-tools).
     work, checkout = repos
-    (work / "docs").mkdir()
-    (work / "docs" / "new.md").write_text("new\n")
-    git(work, "add", "docs")
-    commit(work, "two\n", "second")
+    commit(work, "new\n", "second", "docs/new.md")
     old = os.umask(0o077)
     try:
         upgrade.upgrade(checkout, tmp_path / "home", say=lambda _: None, finish=lambda _: None)

@@ -6,7 +6,7 @@
 // server works, then done or the reason it was refused. The agent proposes;
 // the page decides by the owner's access mode and runs what is approved.
 
-const VIEWS = ["overview", "services", "activity", "alerts", "setup", "access", "agent"];
+const VIEWS = ["overview", "services", "activity", "alerts", "setup", "access", "agent", "updates"];
 const ALIASES = {home: "overview", agents: "agent", "": ""};
 const STEPS = ["hardware", "choices", "plan", "build"];
 const AGENT_TABS = ["chat", "settings", "log"];
@@ -109,6 +109,8 @@ function duration(s) {
   return `${Math.floor(m / 60)} h ${m % 60} min`;
 }
 function clock(t) { return new Date(t * 1000).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"}); }
+function day(t) { return new Date(t * 1000).toLocaleDateString([], {month: "short", day: "numeric"}); }
+function count(n, word) { return `${n} ${word}${n === 1 ? "" : "s"}`; }
 
 function announce(text, urgent) {
   const region = $(urgent ? "live-urgent" : "live");
@@ -135,6 +137,15 @@ function midWork() {
   return Boolean(choicesDirty() || document.querySelector("dialog[open]") || typing || draft);
 }
 
+// The reload must come from the server: the service worker keeps the page's
+// files for a slow line, and on one it answered a reload with the old ones.
+async function reloadFresh() {
+  try {
+    for (const key of await caches.keys()) await caches.delete(key);
+  } catch { /* no cache to empty */ }
+  location.reload();
+}
+
 // True when the page is on its way out and the answer need not be read.
 function outdated(shell) {
   let tried = shell;
@@ -142,12 +153,21 @@ function outdated(shell) {
   if (tried !== shell && !midWork()) {
     try {
       sessionStorage.setItem(RELOADED, shell);
-      location.reload();
+      reloadFresh();
       return true;
     } catch { /* say so instead */ }
   }
   show("outdated", true);
   return false;
+}
+
+// After such a reload: say once that this is the new version.
+function greetUpdated() {
+  try {
+    if (!SHELL || sessionStorage.getItem(RELOADED) !== SHELL || sessionStorage.getItem("nb-greeted") === SHELL) return;
+    sessionStorage.setItem("nb-greeted", SHELL);
+  } catch { return; }
+  toast("NullBill was updated, and this page reloaded with the new version.", currentView === "updates" ? null : {text: "What changed", href: "#updates"}, 20);
 }
 
 async function api(path, body) {
@@ -161,7 +181,7 @@ async function api(path, body) {
     response = await fetch(path, {credentials: "same-origin", cache: "no-store", ...options});
   } catch {
     connection(false);
-    throw new ApiError("The page cannot reach the NullBill server. If you just updated NullBill, wait a few seconds and try again.", 0);
+    throw new ApiError("The page cannot reach the NullBill server. While NullBill updates it is away for about a minute; then try again.", 0);
   }
   connection(true);
   const shell = response.headers.get("X-NullBill-Shell");
@@ -172,7 +192,11 @@ async function api(path, body) {
     signedOut();
     throw new ApiError("You were signed out. Sign in again; nothing you saved is lost.", 401);
   }
-  if (!response.ok) throw new ApiError(sentence(data.error || `The server answered ${response.status} ${response.statusText}`), response.status);
+  if (!response.ok) {
+    const error = new ApiError(sentence(data.error || `The server answered ${response.status} ${response.statusText}`), response.status);
+    error.review = Boolean(data.review);
+    throw error;
+  }
   return data;
 }
 
@@ -181,9 +205,16 @@ function connection(ok) {
   show("conn", !ok);
 }
 
-function toast(text) {
+// A line at the bottom until it is closed, or for `seconds` when it only
+// tells good news.
+let toastTimer = null;
+function toast(text, link, seconds) {
+  clearTimeout(toastTimer);
   $("toast-text").textContent = text;
   $("toast").hidden = !text;
+  show("toast-link", Boolean(text && link));
+  if (link) Object.assign($("toast-link"), {textContent: link.text, href: link.href});
+  if (text && seconds) toastTimer = setTimeout(() => toast(""), seconds * 1000);
 }
 
 // The line next to a control: busy, ok, error or info.
@@ -413,7 +444,7 @@ function route(focus) {
     if (link.dataset.view === view || link.getAttribute("href") === `#${view}`) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   }
-  const inMore = ["setup", "access", "alerts"].includes(view);
+  const inMore = ["setup", "access", "alerts", "updates"].includes(view);
   $("tab-more").classList.toggle("current", inMore);
   const changed = currentView !== view || currentSub !== sub;
   const viewChanged = currentView !== view;
@@ -448,6 +479,7 @@ function route(focus) {
     }
   }
   if (view === "services" && viewChanged) loadDemand().catch(() => {});
+  if (view === "updates" && viewChanged) say("update-result", "", "");
   placeChat();
   placeJob();
   setSide(false);
@@ -1615,10 +1647,11 @@ function guideItems(st) {
   ];
   const removals = st.removals || [];
   if (removals.length && st.removals_stopped) items.push(["setup/build", "Keep or delete guests", ["attention", `Setup stopped before deleting ${andList(removals)}.`]]);
-  items.push(["setup/build", "Run setup",
+  const due = setupDue();
+  items.push(["setup/build", "Review and run setup",
     SETUP_RUNS.has(running) ? ["running", "Running now."]
-      : !apply ? ["todo", "Builds everything in the plan, in about 20 minutes."]
-      : built() && apply.state === "done" ? (st.config_changed ? ["attention", "Choices changed since; run it again."] : ["done", `Finished ${ago(apply.started)}.`])
+      : !apply ? ["todo", "Shows what it builds, then builds it in about 20 minutes."]
+      : built() && apply.state === "done" ? (due.length ? ["attention", due[0].text] : ["done", `Finished ${ago(apply.started)}.`])
       : apply.state === "running" ? ["running", "Running now."] : ["attention", "Stopped. Activity says why."]]);
   const needed = items.length;
   items.push(["alerts", "Get alerts on your phone",
@@ -1687,7 +1720,7 @@ function paintStates() {
   renderGuide(items);
   for (const a of document.querySelectorAll("#stepper a")) {
     const s = a.dataset.step;
-    const attention = (s === "plan" && st.plan.errors.length > 0) || (s === "choices" && choicesDirty()) || (s === "build" && ((st.removals || []).length > 0 || Boolean(st.config_changed)));
+    const attention = (s === "plan" && st.plan.errors.length > 0) || (s === "choices" && choicesDirty()) || (s === "build" && built() && setupDue().length > 0);
     a.classList.toggle("done", stepDone(s) && !attention);
     a.classList.toggle("attention", attention);
     let note = a.querySelector(".step-state");
@@ -1718,12 +1751,18 @@ function paintStates() {
   renderPortMapping(st.port_mapping, st.direct);
   renderSshKeys(st);
   show("vpn-saved", st.tailscale_key);
-  show("pending-dot", Boolean(st.config_changed || st.tailscale_key));
-  // Run setup is the page's main action only when there is something to build.
-  const urge = !running && Boolean(st.config_changed || st.tailscale_key || (!built() && st.plan.text && !st.plan.errors.length));
+  // Run setup is the page's main action only when something waits to be
+  // built. It opens the review; nothing starts from the top bar.
+  const due = setupDue();
+  const waits = due.length > 0 && (built() || st.review.ready);
+  show("pending-dot", waits && built());
+  const urge = !running && waits;
   for (const id of ["run-setup", "run-menu"]) $(id).classList.toggle("primary", urge);
-  $("run-setup").title = st.config_changed ? "Run setup: your saved choices are not built yet" : st.tailscale_key ? "Run setup: an auth key waits" : "Run setup";
+  $("run-setup").title = waits ? `Review and run setup: ${due[0].text}` : "Review and run setup";
+  renderUpdates();
+  renderReview();
   renderReady();
+  if (job && job.view && job.view.state !== "running") drawOutcome(job.node, job.view);
   renderOverview(items);
   renderRuns();
   renderFiring();
@@ -1743,15 +1782,176 @@ function renderReady() {
   else ok(false, "Save your choices to make a plan.", "#setup/choices");
   if (!(state.chat && state.chat.signed_in)) ok(false, "No agent yet: setup runs, but nobody looks into a failure for you.", "#agent/settings");
   if (!state.tailscale_client && !(state.lan.via_vpn || state.lan.state === "closed")) ok(false, "No Tailscale client: setup runs, but the server stays off Tailscale.", "#access/tailscale");
-  if (state.config_changed) ok(false, "Your choices changed since the last setup run; run it so the server follows.");
   const removals = state.removals || [];
-  if (removals.length && !state.removals_stopped) ok(false, `This run deletes ${andList(removals)}; it asks you first.`);
   $("ready-list").replaceChildren(...items);
   show("removals", removals.length > 0);
-  $("removals-title").textContent = state.removals_stopped ? `Setup stopped before deleting ${andList(removals)}` : `The next setup run deletes ${andList(removals)}`;
+  $("removals-title").textContent = state.removals_stopped ? `Setup stopped before deleting ${andList(removals)}` : `This run deletes ${andList(removals)}`;
   $("removals-notes").replaceChildren(...removalPoints().map((t) => li(t)));
   $("removals-disks").textContent = removals.length > 1 ? "their disks" : "its disk";
   for (const id of ["removals-it", "removals-it2"]) $(id).textContent = removals.length > 1 ? "them" : "it";
+  // The one button that starts setup says what pressing it does.
+  const button = $("start-setup");
+  const ready = setupReady();
+  button.className = `btn ${removals.length ? "danger" : setupDue().length || !built() ? "primary" : ""}`.trim();
+  $("start-setup-text").textContent = removals.length ? `Delete ${count(removals.length, "guest")} and start setup` : built() && !setupDue().length ? "Run setup again" : "Start setup";
+  $("start-note").textContent = !ready ? "" : built() ? "Unchanged parts are skipped." : "The first run takes about 20 minutes, more with local AI models.";
+}
+
+// Why a setup run is due, from the server (App.review): nothing when the
+// server follows the saved choices and this NullBill.
+function setupDue() { return (state && state.review && state.review.reasons) || []; }
+function setupReady() { return Boolean(state && state.review && state.review.ready && state.probed && !state.plan.errors.length); }
+
+// A commit as a line: what it says, when, and, with `tag`, whether setup
+// has to follow. `waiting` holds the ids a setup run has not applied yet
+// (null: not known); without it every change to what setup builds needs one.
+function changeItem(c, tag, waiting) {
+  const needs = waiting === undefined || (waiting !== null && waiting.has(c.id));
+  const text = needs ? "Needs a setup run" : waiting === null ? "Changes what setup builds" : "Applied by a setup run";
+  return make("li", {}, make("span", {className: "change-subject", textContent: c.subject}),
+    make("span", {className: "meta"}, make("code", {textContent: c.id.slice(0, 7)}), ` ${day(c.time)}`),
+    tag && c.setup ? make("span", {className: `tag${needs ? "" : " done"}`, textContent: text}) : null);
+}
+
+// Setup, Review: why a run is due and what it does to the server, before
+// the owner starts it.
+const CHANGE_WORDS = {create: ["good", "Create"], delete: ["bad", "Delete"], change: ["warn", "Change"]};
+function renderReview() {
+  const r = state.review;
+  const due = setupDue();
+  const running = SETUP_RUNS.has(runningAction());
+  $("review-state").replaceChildren(running ? status("run", "Running") : !setupReady() ? status("", "Not ready")
+    : due.length ? status("warn", built() ? "Changes wait" : "Ready to build") : status("good", "Nothing waits"));
+  $("review-reasons").replaceChildren(...(due.length
+    ? due.map((x) => make("li", {className: "warn"}, icon(x.kind === "first" ? "info" : "alert"), make("span", {textContent: x.text})))
+    : [make("li", {className: "ok"}, icon("check"), make("span", {textContent: "Nothing waits: the server follows your saved choices and this version of NullBill. A run now checks every part again and repairs what drifted."}))]));
+  const commits = r.commits || [];
+  show("review-commits", commits.length > 0);
+  $("review-commits-summary").textContent = `The ${commits.length === 1 ? "change" : `${commits.length} changes`} in NullBill this run applies`;
+  $("review-commit-list").replaceChildren(...commits.map((c) => changeItem(c, false)));
+
+  const guests = r.guests || [];
+  show("review-what", r.ready);
+  if (!r.ready) return;
+  const by = (change) => guests.filter((g) => g.change === change);
+  const [created, deleted, changed, kept] = [by("create"), by("delete"), by("change"), by("keep")];
+  const erased = (r.disks || []).filter((d) => d.erases);
+  const parts = [];
+  if (created.length) parts.push(`creates ${count(created.length, "guest")}`);
+  if (deleted.length) parts.push(`deletes ${count(deleted.length, "guest")}`);
+  if (changed.length) parts.push(`changes ${count(changed.length, "guest")}`);
+  if (erased.length) parts.push(`erases ${count(erased.length, "disk")}`);
+  const stay = kept.length ? `${count(kept.length, "guest")} stay${kept.length === 1 ? "s" : ""} as ${kept.length === 1 ? "it is" : "they are"}` : "";
+  $("review-summary").textContent = parts.length ? sentence(`This run ${andList(parts)}${stay ? `; ${stay}` : ""}`)
+    : stay ? sentence(`This run creates and deletes nothing; ${stay}`) : "";
+  show("review-unknown", r.known === false);
+  const size = (g) => [
+    make("td", {className: "muted hide-phone", textContent: [g.kind, g.zone].filter(Boolean).join(" · ")}),
+    make("td", {className: "num muted hide-phone", textContent: g.cores ? `${g.cores}${g.count ? ` × ${g.count}` : ""}` : ""}),
+    make("td", {className: "num muted hide-phone", textContent: g.memory_mib ? gib(g.memory_mib) : ""})];
+  // Guests of one choice lose the same things: said once, then referred to.
+  const said = new Map();
+  const loss = (g) => {
+    const text = g.detail.join(" ");
+    if (said.has(text)) return `The same as for ${said.get(text)}, above.`;
+    said.set(text, g.name);
+    return text;
+  };
+  const rows = [...deleted, ...created, ...changed].map((g) => {
+    const [kind, word] = CHANGE_WORDS[g.change];
+    return make("tr", {className: `review-${g.change}`},
+      make("td", {className: "name"}, make("span", {textContent: g.name}),
+        g.detail.length ? make("span", {className: "sub", textContent: g.change === "change" ? sentence(andList(g.detail)) : loss(g)}) : null),
+      make("td", {}, status(kind, word)), ...size(g));
+  });
+  for (const d of r.disks || []) {
+    rows.push(make("tr", {className: d.erases ? "review-delete" : ""},
+      make("td", {className: "name"}, make("span", {textContent: `Disk ${d.id}`}), make("span", {className: "sub", textContent: d.text})),
+      make("td", {}, d.erases ? status("bad", "Erase") : status("", "Disk")),
+      make("td", {className: "muted hide-phone", textContent: d.size_gib ? `${d.size_gib} GiB` : ""}), make("td", {className: "hide-phone"}), make("td", {className: "hide-phone"})));
+  }
+  show("review-table", rows.length > 0);
+  $("review-rows").replaceChildren(...rows);
+  show("review-kept", kept.length > 0 && rows.length > 0);
+  $("review-kept-summary").textContent = `The ${count(kept.length, "guest")} that stay${kept.length === 1 ? "s" : ""} as ${kept.length === 1 ? "it is" : "they are"}`;
+  $("review-kept-names").textContent = kept.map((g) => g.name).join(", ");
+  const sections = r.sections || [];
+  show("review-sections", sections.length > 0);
+  $("review-sections").textContent = sections.length ? sentence(`The plan also differs in ${andList(sections)}`) : "";
+  show("review-diff", Boolean(r.difference));
+  const slot = $("review-diff-slot");
+  if (r.difference && slot.dataset.shown !== r.id) {
+    slot.replaceChildren(diffView(r.difference));
+    slot.dataset.shown = r.id;
+  }
+}
+
+// Updates: NullBill's own version, whether the server was built with it,
+// and the systems' security updates.
+function renderUpdates() {
+  const v = state.version;
+  const waiting = v ? v.server.changes : [];
+  const n = v ? v.available.length : 0;
+  const behind = Boolean(v && v.server.follows === false);
+  show("updates-none", !v);
+  show("updates-body", Boolean(v));
+  show("version-line", Boolean(v));
+  show("update-btn", n > 0);
+  $("update-count").textContent = n ? String(n) : "";
+  $("update-btn").title = n ? `${count(n, "change")} to NullBill wait to be installed` : "";
+  setNav("updates", n ? String(n) : behind ? "!" : "", n ? "run" : "warn", n ? `${count(n, "change")} available` : behind ? "the server waits for a setup run" : "");
+  setCount($("more-updates-badge"), n ? String(n) : behind ? "!" : "", n ? "run" : "warn", n ? `${count(n, "change")} available` : behind ? "the server waits for a setup run" : "");
+  if (!v) return;
+  const short = v.current.id.slice(0, 7);
+  $("version-line").replaceChildren(make("span", {textContent: `NullBill ${short}`}),
+    ...(n ? [make("span", {className: "dot info", ariaHidden: "true"}), make("span", {className: "sr-only", textContent: `, ${count(n, "change")} available`})] : []));
+  $("version-current").replaceChildren(make("code", {textContent: short}), make("span", {className: "meta", textContent: ` ${day(v.current.time)} · ${v.current.subject}`}));
+  const checked = v.checked ? `checked ${ago(v.checked)}` : "not checked yet";
+  $("version-newest").replaceChildren(v.check_error ? status("warn", "Could not check", sentence(v.check_error))
+    : n ? status("info", `${count(n, "change")} available`, checked)
+    : v.checked ? status("good", "Up to date", checked) : status("", "Not checked yet"));
+  const now = $("update-now");
+  now.hidden = n === 0;
+  $("update-check").classList.toggle("primary", false);
+  show("update-available", n > 0);
+  $("update-available-title").textContent = n ? `What the update brings (${needSetup(v.available)})` : "";
+  $("update-available-list").replaceChildren(...v.available.map((c) => changeItem(c, true)));
+  // The server.
+  const b = v.server.built;
+  $("server-built").replaceChildren(...(b ? [make("code", {textContent: b.id.slice(0, 7)}), make("span", {className: "meta", textContent: ` ${day(b.time)} · ${b.subject}`})]
+    : [make("span", {className: "meta", textContent: built() ? "Not recorded; the next setup run records it." : "Nothing is built yet."})]));
+  $("server-follows").replaceChildren(!built() ? status("", "Not built yet")
+    : behind ? status("warn", waiting.length ? `${count(waiting.length, "change")} wait for a setup run` : "Waits for a setup run")
+    : v.server.follows ? status("good", "Built with this version") : status("", "Not known"));
+  show("server-run", behind && !SETUP_RUNS.has(runningAction()));
+  show("server-waiting", waiting.length > 0);
+  $("server-waiting-list").replaceChildren(...waiting.map((c) => changeItem(c, false)));
+  // What the last update brought.
+  show("update-last", Boolean(v.last));
+  if (v.last) {
+    const all = v.last.changes;
+    const k = all.filter((c) => c.setup).length;
+    const builds = k === 0 ? "none of them to what setup builds" : k === all.length ? "all to what setup builds" : `${k} of them to what setup builds`;
+    $("update-last-text").textContent = `${ago(v.last.at)[0].toUpperCase()}${ago(v.last.at).slice(1)}, from ${v.last.from.slice(0, 7)} to ${short}: ${count(all.length, "change")}, ${all.length === 1 ? (k ? "to what setup builds" : "not to what setup builds") : builds}.`;
+    const pending = behind && waiting.length ? new Set(waiting.map((c) => c.id)) : v.server.follows ? new Set() : null;
+    $("update-last-list").replaceChildren(...all.map((c) => changeItem(c, built(), pending)));
+  }
+  renderSystemUpdates();
+}
+function needSetup(changes) {
+  const k = changes.filter((c) => c.setup).length;
+  return k === 0 ? "none needs a setup run" : k === changes.length ? (k === 1 ? "it needs a setup run" : "all need a setup run") : `${k} of them need a setup run`;
+}
+function renderSystemUpdates() {
+  const s = lastStatus;
+  if (!s || s.monitoring !== "ok") {
+    $("system-updates").replaceChildren(status("", built() ? "Monitoring does not answer" : "Shown once the server is built"));
+    show("system-restart-row", false);
+    return;
+  }
+  $("system-updates").replaceChildren(s.security_waiting.length ? status("warn", `Waiting on ${s.security_waiting.length}`, s.security_waiting.join(", ")) : status("good", "Up to date", "installed nightly"));
+  show("system-restart-row", s.reboot_waiting.length > 0);
+  $("system-restart").replaceChildren(status("warn", "Needed", s.reboot_waiting.join(", ")));
 }
 
 // What deleting the waiting guests loses, one line per choice they belong to.
@@ -1779,6 +1979,11 @@ async function confirmRemovals(button) {
 }
 
 // Overview: what needs the owner, health, services and recent runs.
+const DUE_TITLES = {
+  choices: "Your saved choices are not built yet",
+  update: "The last update has not reached the server yet",
+  key: "A Tailscale auth key waits for a setup run",
+};
 function attentionItems() {
   const out = [];
   const signed = Boolean(state.chat && state.chat.signed_in);
@@ -1814,11 +2019,15 @@ function attentionItems() {
   } else if (s && built() && s.monitoring !== "not planned" && !SETUP_RUNS.has(runningAction())) {
     add("warn", "Monitoring does not answer", "If setup just finished, wait a minute.", signed ? [ask("Ask the agent", "Monitoring does not answer. Find out why.")] : []);
   }
-  if (built() && state.config_changed && !SETUP_RUNS.has(runningAction())) {
-    const b = make("button", {type: "button", className: "btn small", textContent: "Run setup"});
-    const fb = make("p", {className: "feedback"});
-    b.addEventListener("click", () => startJob("apply", b, fb));
-    add("warn", "Your saved choices are not built yet", "Run setup so the server follows them.", [fb, b]);
+  // A failed run and guests waiting to be deleted have rows of their own.
+  const due = setupDue().filter((x) => DUE_TITLES[x.kind]);
+  if (built() && due.length && !SETUP_RUNS.has(runningAction())) {
+    add("warn", due.length > 1 ? "The server waits for a setup run" : DUE_TITLES[due[0].kind], due.map((x) => x.text).join(" "),
+      [make("a", {className: "btn small primary", href: "#setup/build", textContent: "Review and run"})]);
+  }
+  const fresh = (state.version && state.version.available) || [];
+  if (fresh.length && runningAction() !== "upgrade") {
+    add("info", "A NullBill update is available", `${count(fresh.length, "change")}, ${needSetup(fresh)}.`, [link("See the update", "#updates")]);
   }
   if (state.agent_powers) add("warn", "The operator agent has root on Proxmox", "The checks warn while this is on.", [link("Agent settings", "#agent/settings")]);
   // What only the owner stops, left on and unused for as long as its rule says.
@@ -1850,7 +2059,7 @@ function renderOverview(items) {
   $("attention-list").replaceChildren(...att.map((a) => make("li", {},
     make("span", {className: `dot ${a.kind}`, ariaHidden: "true"}),
     make("span", {className: "row-text"}, make("span", {className: "row-title", textContent: a.title}),
-      make("span", {className: "sr-only", textContent: a.kind === "bad" ? " (problem)" : " (warning)"}),
+      make("span", {className: "sr-only", textContent: a.kind === "bad" ? " (problem)" : a.kind === "info" ? " (note)" : " (warning)"}),
       a.sub ? make("span", {className: "row-sub", textContent: ` ${a.sub}`}) : null),
     make("span", {className: "row"}, ...a.actions))));
   // Health, once something is built.
@@ -2406,6 +2615,7 @@ async function refresh() {
     refreshStatus().catch(() => {});
     statusTimer = setInterval(() => refreshStatus().catch(() => {}), 30000);
     startChat();
+    greetUpdated();
   }
   // Follow the latest run unless the owner opened another one.
   if (st.job && (!job || (job.id !== st.job.id && !(currentView === "activity" && currentSub === job.id)))) follow(st.job, st.job.state === "running");
@@ -2421,14 +2631,17 @@ function refreshSoon() {
 }
 
 // Runs.
+const RUNNING_WHY = "Wait until the running job finishes; the top bar follows it.";
 function stopFollowing() { if (job) clearTimeout(job.timer); }
 
 function gateJobButtons() {
   const running = Boolean(runningAction());
-  for (const button of document.querySelectorAll("button[data-action], .job-retry, .job-again, #agent-powers, #run-menu")) {
+  for (const button of document.querySelectorAll("button[data-action], .job-retry, .job-again, #agent-powers, #start-setup, #update-now")) {
     if (button.classList.contains("busy")) continue;
-    button.setAttribute("aria-disabled", running ? "true" : "false");
-    button.dataset.why = running ? "Wait until the running job finishes; the top bar follows it." : "";
+    const why = running ? RUNNING_WHY
+      : button.id === "start-setup" && !setupReady() ? "Setup needs the hardware read and a plan that fits; the list above says what is missing." : "";
+    button.setAttribute("aria-disabled", why ? "true" : "false");
+    button.dataset.why = why;
   }
 }
 
@@ -2508,7 +2721,14 @@ function follow(first, watched, feedback) {
   job = {id: first.id, view: first, node, offset: 0, timer: null, watched, misses: 0, feedback, stage: null};
   const again = ["verify", "upgrade"].includes(first.action) ? first.action : "apply";
   for (const button of node.querySelectorAll(".job-retry, .job-again")) {
-    button.addEventListener("click", () => startJob(again, button, node.querySelector(button.classList.contains("job-again") ? ".job-stop-result" : ".job-copy-result")));
+    button.addEventListener("click", () => {
+      const feedback = node.querySelector(button.classList.contains("job-again") ? ".job-stop-result" : ".job-copy-result");
+      // Setup starts from its review, except a failed run of exactly what
+      // the owner read there, which starts again here.
+      if (again !== "apply" || (button.classList.contains("job-retry") && sameReview(job.view))) startJob(again, button, feedback);
+      else if (runningAction()) say(feedback, "info", RUNNING_WHY);
+      else go("setup/build");
+    });
   }
   node.querySelector(".job-copy").addEventListener("click", () => copyDetails(node));
   node.querySelector(".job-agent").addEventListener("click", () => {
@@ -2531,6 +2751,12 @@ function follow(first, watched, feedback) {
   placeJob();
   drawJob(job, first);
   tick(job);
+}
+
+// A setup run started from the review the page shows now: nothing it
+// would do has changed since the owner read it.
+function sameReview(view) {
+  return Boolean(view.review && state && state.review && view.review === state.review.id && !(state.removals || []).length);
 }
 
 async function tick(current) {
@@ -2652,8 +2878,10 @@ function drawJob(current, view) {
   node.querySelector(".job-stop").hidden = view.state !== "running";
   const againButton = node.querySelector(".job-again");
   const canAgain = view.state === "done" && ["apply", "verify", "rebake-ci", "upgrade", "remove-guests"].includes(view.action);
-  againButton.hidden = !canAgain;
-  againButton.textContent = view.action === "verify" ? "Run the checks again" : view.action === "upgrade" ? "Update again" : "Run setup again";
+  // On its review a setup run starts from the button above it.
+  const reviewed = SETUP_RUNS.has(view.action) && node.parentElement === $("build-job");
+  againButton.hidden = !canAgain || reviewed;
+  againButton.textContent = view.action === "verify" ? "Run the checks again" : view.action === "upgrade" ? "Check and update again" : "Review and run again";
   node.querySelector(".job-stages").hidden = !steps.length;
   const WORD = {done: "done", failed: "failed", running: "running", waiting: "waiting"};
   node.querySelector(".stages").replaceChildren(...steps.map((s) => make("li", {className: s.status},
@@ -2682,42 +2910,12 @@ function drawJob(current, view) {
     node.querySelector(".job-detail-text").textContent = lines.join("\n");
     node.querySelector(".job-advice").textContent = e.advice;
     const retry = node.querySelector(".job-retry");
-    retry.hidden = !["apply", "verify", "rebake-ci", "upgrade", "remove-guests"].includes(view.action);
-    retry.textContent = view.action === "verify" ? "Run the checks again" : view.action === "upgrade" ? "Update again" : "Run setup again";
+    retry.hidden = !["apply", "verify", "rebake-ci", "upgrade", "remove-guests"].includes(view.action) || (reviewed && !sameReview(view));
+    retry.textContent = view.action === "verify" ? "Run the checks again" : view.action === "upgrade" ? "Update again" : sameReview(view) ? "Run setup again" : "Review and run again";
     node.querySelector(".job-agent").hidden = !(state && state.chat && state.chat.signed_in);
   }
   if (view.state !== "running") node.querySelector(".job-stop-result").textContent = "";
-  const ok = node.querySelector(".job-ok");
-  ok.hidden = view.state !== "done";
-  const next = node.querySelector(".job-ok-next");
-  next.replaceChildren();
-  if (view.state === "done") {
-    const text = {
-      probe: ["The hardware is read.", "Choose what to run next."],
-      apply: ["Setup finished.", "Everything in the plan is in place; the checks ran at the end."],
-      verify: ["The checks finished.", "No check failed."],
-      upgrade: ["NullBill is updated.", "Run setup now, so the server follows the new version."],
-      "close-lan": ["The home network is closing.", "Open this page over Tailscale and press Keep it closed under Access."],
-      "keep-lan-closed": ["The home network stays closed.", "Proxmox now answers only over Tailscale."],
-      "open-lan": ["The home network is open again.", "Proxmox answers on your home network."],
-      "rebake-ci": ["The CI images are rebuilt.", ""],
-      "remove-guests": ["Setup finished.", "The guests you chose to delete are gone; everything else in the plan is in place."],
-    }[view.action] || ["Finished.", ""];
-    const warned = p.verify && p.verify.counts.DEGRADED ? p.verify.problems.filter((x) => x.status === "DEGRADED").map((x) => x.text) : [];
-    if (warned.length && view.action === "verify") text[1] = `No check failed; ${warned.length === 1 ? "one warns" : `${warned.length} warn`}: ${warned.join(", ")}.`;
-    ok.classList.toggle("warn", warned.length > 0);
-    ok.querySelector("use").setAttribute("href", warned.length ? "#i-alert" : "#i-check");
-    node.querySelector(".job-ok-title").textContent = text[0];
-    node.querySelector(".job-ok-text").textContent = text[1];
-    if (view.action === "probe") next.append(make("a", {className: "btn small", href: "#setup/choices", textContent: "Choose what to run"}));
-    if (view.action === "apply") next.append(make("a", {className: "btn small", href: "#services", textContent: "Open your services"}));
-    if (view.action === "upgrade") {
-      const run = make("button", {type: "button", className: "btn primary small", textContent: "Run setup"});
-      const result = make("p", {className: "feedback"});
-      run.addEventListener("click", () => startJob("apply", run, result));
-      next.append(run, result);
-    }
-  }
+  drawOutcome(node, view);
   const v = p.verify;
   const box = node.querySelector(".job-verify");
   box.hidden = !v;
@@ -2732,6 +2930,56 @@ function drawJob(current, view) {
   const atEnd = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40;
   pre.textContent += view.text;
   if (atEnd) pre.scrollTop = pre.scrollHeight;
+}
+
+// What a finished run comes to, and what to do next. Drawn again when the
+// state changes: what an update needs next is known once the page restarted.
+function drawOutcome(node, view) {
+  const p = view.progress;
+  const ok = node.querySelector(".job-ok");
+  ok.hidden = view.state !== "done";
+  const next = node.querySelector(".job-ok-next");
+  next.replaceChildren();
+  if (view.state !== "done") return;
+  const text = {
+    probe: ["The hardware is read.", "Choose what to run next."],
+    apply: ["Setup finished.", "Everything in the plan is in place; the checks ran at the end."],
+    verify: ["The checks finished.", "No check failed."],
+    upgrade: ["NullBill is up to date.", ""],
+    "close-lan": ["The home network is closing.", "Open this page over Tailscale and press Keep it closed under Access."],
+    "keep-lan-closed": ["The home network stays closed.", "Proxmox now answers only over Tailscale."],
+    "open-lan": ["The home network is open again.", "Proxmox answers on your home network."],
+    "rebake-ci": ["The CI images are rebuilt.", ""],
+    "remove-guests": ["Setup finished.", "The guests you chose to delete are gone; everything else in the plan is in place."],
+  }[view.action] || ["Finished.", ""];
+  const warned = p.verify && p.verify.counts.DEGRADED ? p.verify.problems.filter((x) => x.status === "DEGRADED").map((x) => x.text) : [];
+  if (warned.length && view.action === "verify") text[1] = `No check failed; ${warned.length === 1 ? "one warns" : `${warned.length} warn`}: ${warned.join(", ")}.`;
+  let warn = warned.length > 0;
+  if (view.action === "probe") next.append(make("a", {className: "btn small", href: "#setup/choices", textContent: "Choose what to run"}));
+  if (view.action === "apply") next.append(make("a", {className: "btn small", href: "#services", textContent: "Open your services"}));
+  if (view.action === "upgrade") {
+    // Did this run move NullBill, and does the server have to follow?
+    const v = state && state.version;
+    const moved = v && v.last && v.last.at >= view.started - 1 ? v.last : null;
+    if (moved) {
+      text[0] = `NullBill is updated to ${v.current.id.slice(0, 7)}.`;
+      text[1] = sentence(`${count(moved.changes.length, "change")}, ${needSetup(moved.changes)}`);
+    } else if (v) {
+      text[1] = "There was nothing newer to install.";
+    }
+    if (v && built() && v.server.follows === false) {
+      warn = true;
+      text[1] += " The server follows once you run setup; until then it runs as before.";
+      next.append(make("a", {className: "btn primary small", href: "#setup/build", textContent: "Review and run setup"}));
+    } else if (moved && built()) {
+      text[1] += " The server needs nothing more.";
+    }
+    next.append(make("a", {className: "btn small", href: "#updates", textContent: "Updates"}));
+  }
+  ok.classList.toggle("warn", warn);
+  ok.querySelector("use").setAttribute("href", warn ? "#i-alert" : "#i-check");
+  node.querySelector(".job-ok-title").textContent = text[0];
+  node.querySelector(".job-ok-text").textContent = text[1];
 }
 
 async function copyDetails(node) {
@@ -2758,28 +3006,53 @@ async function copyDetails(node) {
 }
 
 async function startJob(action, button, feedback) {
-  if (action === "remove-guests" || (action === "apply" && (state.removals || []).length)) {
-    if (!(await confirmRemovals(button))) {
-      if (action === "apply") say(feedback, "info", "Nothing was started.");
+  const setup = action === "apply" || action === "remove-guests";
+  if (setup) {
+    if (button.getAttribute("aria-disabled") === "true") { say(feedback, "info", button.dataset.why || RUNNING_WHY); return; }
+    action = (state.removals || []).length ? "remove-guests" : "apply";
+    if (action === "remove-guests" && !(await confirmRemovals(button))) {
+      say(feedback, "info", "Nothing was started.");
       return;
     }
-    action = "remove-guests";
   }
   if (action === "upgrade") {
-    const ok = await confirmDialog({title: "Update NullBill now?", text: "It fetches the newest version, and this page restarts: it is away for about a minute. Running guests are not touched.", yes: "Update", danger: false});
+    const fresh = (state.version && state.version.available) || [];
+    const ok = await confirmDialog({
+      title: "Update NullBill now?",
+      text: `${fresh.length ? `It installs ${count(fresh.length, "change")}. ` : ""}This page restarts and is away for about a minute, then reloads by itself. Nothing that runs on the server is touched${fresh.some((c) => c.setup) ? "; what changes there waits for the setup run you start afterwards" : ""}.`,
+      yes: "Update", danger: false,
+    });
     button.focus();
     if (!ok) return;
   }
+  let changed = false;
   await press(button, feedback, STARTING[action] || "Starting…", async () => {
-    // Deleting names what the owner was shown; the server refuses if that changed since.
-    const view = await api("/api/jobs", action === "remove-guests" ? {action, guests: state.removals} : {action});
+    // Setup names the review the owner read, and deleting names the guests
+    // they were shown; the server refuses when either has changed since.
+    const body = setup ? {action, review: state.review.id, ...(action === "remove-guests" ? {guests: state.removals} : {})} : {action};
+    let view;
+    try {
+      view = await api("/api/jobs", body);
+    } catch (error) {
+      if (!error.review) throw error;
+      changed = true;
+      return "";
+    }
     follow(view, true, feedback);
     refresh().catch(() => {});
-    const onBuild = currentView === "setup" && currentStep === "build" && SETUP_RUNS.has(action);
-    if (OPENS_RUN.has(action) && !onBuild) go(`activity/${view.id}`);
+    // A run started where it is reviewed shows there: setup on its review,
+    // an update on Updates, which is also where the page comes back to.
+    const here = (currentView === "setup" && currentStep === "build" && SETUP_RUNS.has(action)) || (currentView === "updates" && action === "upgrade");
+    if (OPENS_RUN.has(action) && !here) go(`activity/${view.id}`);
     else placeJob();
+    if (action === "upgrade" && here) return "Updating. This page reloads by itself when the new version runs.";
     return OPENS_RUN.has(action) ? "Started." : "Started. The top bar follows it.";
   });
+  if (changed) {
+    await refresh().catch(() => {});
+    go("setup/build");
+    say("build-result", "info", "Nothing was started: what setup would do changed while this page was open. It is shown again above. Read it, then start setup.");
+  }
 }
 
 function feedbackFor(button) {
@@ -2806,7 +3079,7 @@ function signInAgent(event, fieldId, resultId) {
     pollChat();
     if (fieldId !== "chat-credential") openAgent(false);
     return result.chat && !result.chat.installed
-      ? "Saved, but the agent program is not installed here yet: press Update NullBill."
+      ? "Saved, but the agent program is not installed here yet: press Update NullBill on the Updates page."
       : "Signed in. The agent says hello in its panel.";
   }, field);
 }
@@ -3302,12 +3575,17 @@ async function setMode(mode, feedback, focusAfter) {
 // Menus.
 function runMenu() {
   const button = $("run-menu");
-  if (button.getAttribute("aria-disabled") === "true") { say("actions-result", "info", button.dataset.why); return; }
-  const start = (action) => () => startJob(action, $("run-setup"), $("actions-result"));
+  const start = (action) => () => {
+    if (runningAction()) say("actions-result", "info", RUNNING_WHY);
+    else startJob(action, button, $("actions-result"));
+  };
+  const v = state.version;
+  const fresh = v ? v.available.length : 0;
   openMenu(button, [
-    {label: "Run the checks", desc: "Every allowed and denied path, then a report.", icon: "checks", run: start("verify")},
-    {label: "Update NullBill", desc: "Fetches the newest version; the page restarts.", icon: "update", run: start("upgrade")},
+    {label: "Run the checks", desc: "Every allowed and denied path, then a report. Changes nothing.", icon: "checks", run: start("verify")},
     {label: "Read the hardware", desc: "Changes nothing.", icon: "chip", run: start("probe")},
+    {sep: true},
+    {label: "Updates", desc: fresh ? `${count(fresh, "change")} to NullBill available.` : v ? `NullBill ${v.current.id.slice(0, 7)}.` : "", icon: "update", run: () => go("updates")},
   ]);
 }
 function themeName() { return document.documentElement.dataset.theme || "system"; }
@@ -3344,9 +3622,10 @@ function commands() {
   const out = [
     ...VIEWS.map((v) => ({label: $(`view-${v}`).dataset.title, kind: "Page", icon: {overview: "overview", agent: "agent", activity: "activity", alerts: "alerts", setup: "setup", access: "access", services: "services"}[v], run: () => go(v)})),
     ...STEPS.map((s) => ({label: `Setup: ${$("stepper").querySelector(`[data-step="${s}"]`).textContent.replace(/, (done|needs you)$/, "")}`, kind: "Step", icon: "setup", run: () => go(`setup/${s}`)})),
-    {label: "Run setup", kind: "Run", icon: "play", run: () => startJob("apply", $("run-setup"), $("actions-result"))},
-    {label: "Run the checks", kind: "Run", icon: "checks", run: () => startJob("verify", $("run-setup"), $("actions-result"))},
-    {label: "Update NullBill", kind: "Run", icon: "update", run: () => startJob("upgrade", $("run-setup"), $("actions-result"))},
+    {label: "Run setup: review, then start", kind: "Run", icon: "play", run: () => go("setup/build")},
+    {label: "Run the checks", kind: "Run", icon: "checks", run: () => startJob("verify", $("run-menu"), $("actions-result"))},
+    {label: "Update NullBill", kind: "Run", icon: "update", run: () => go("updates")},
+    {label: "Check for updates", kind: "Run", icon: "update", run: () => { go("updates"); $("update-check").click(); }},
     {label: "Read the hardware", kind: "Run", icon: "chip", run: () => { go("setup/hardware"); $("probe-button").click(); }},
     {label: "Open the agent", kind: "Agent", icon: "agent", run: () => openAgent(true)},
     {label: "New conversation with the agent", kind: "Agent", icon: "new-chat", run: newConversation},
@@ -3486,7 +3765,7 @@ function registerWorker() {
 
 // Keyboard.
 let gPending = 0;
-const G_KEYS = {o: "overview", h: "overview", s: "services", y: "activity", l: "alerts", u: "setup", x: "access", a: "agent"};
+const G_KEYS = {o: "overview", h: "overview", s: "services", y: "activity", l: "alerts", u: "setup", x: "access", a: "agent", p: "updates"};
 
 function typing(target) {
   return target && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
@@ -3595,7 +3874,8 @@ document.addEventListener("DOMContentLoaded", () => {
   setDock(!narrow.matches && store.get("nb-dock") !== "closed");
   placeChat();
   $("toast-close").addEventListener("click", () => toast(""));
-  $("outdated-reload").addEventListener("click", () => location.reload());
+  $("outdated-reload").addEventListener("click", reloadFresh);
+  $("toast-link").addEventListener("click", () => toast(""));
   // Logs and the plan: each scrolls on its own and copies whole.
   for (const pre of document.querySelectorAll("#plan, #tailnet-policy")) outputBox(pre);
   window.addEventListener("hashchange", () => route(true));
@@ -3699,7 +3979,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!target) return;
     $("more").close();
     const run = target.dataset.run;
-    if (run === "verify" || run === "upgrade") startJob(run, $("run-setup"), $("actions-result"));
+    if (run === "verify") startJob(run, $("run-menu"), $("actions-result"));
     if (run === "install") install();
     if (run === "logout") logout();
   });
@@ -3939,6 +4219,16 @@ document.addEventListener("DOMContentLoaded", () => {
     return "Topic copied.";
   }));
 
+  $("start-setup").addEventListener("click", () => startJob("apply", $("start-setup"), $("build-result")));
+  $("update-now").addEventListener("click", () => startJob("upgrade", $("update-now"), $("update-result")));
+  $("update-check").addEventListener("click", () => press($("update-check"), "update-result", "Asking the repository…", async () => {
+    state.version = (await api("/api/updates/check", {})).version;
+    paintStates();
+    const v = state.version;
+    if (!v) return "";
+    if (v.check_error) throw new ApiError(sentence(v.check_error), 400);
+    return v.available.length ? `${count(v.available.length, "change")} available.` : "NullBill is up to date.";
+  }));
   for (const button of document.querySelectorAll("button[data-action]")) {
     button.addEventListener("click", () => startJob(button.dataset.action, button, feedbackFor(button)));
   }

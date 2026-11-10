@@ -74,14 +74,25 @@ no longer works.
 - **The page** is where you manage NullBill. Its **Overview** page lists
   what needs you (firing alerts, guests that stopped answering, security
   updates waiting, a request from the agent), then health, services and
-  recent runs. **Run setup**, at the top of every page, applies a change
-  you made on the **Setup**, **Alerts**, **Agent** or **Access** page and
-  replaces certificates that expired while the server was off; the arrow
-  beside it has **Run the checks**, which runs every check again, and
-  **Update NullBill**, which moves the page and setup to NullBill's newest
-  version (press **Run setup** after it). The page installs as an app on your phone once it trusts the
-  server (**Access**, **Trust this server**;
-  [android-app.md](android-app.md) for Android).
+  recent runs. **Run setup**, at the top of every page, opens **Setup**,
+  **Review and run**: why a run is due, and what it does to the server
+  (the guests it creates, deletes and changes, what happens to each disk,
+  and every changed line of the plan). Nothing starts before you press
+  **Start setup** there. A run applies a change you made on the **Setup**,
+  **Alerts**, **Agent** or **Access** page and replaces certificates that
+  expired while the server was off. The arrow beside **Run setup** has
+  **Run the checks**, which runs every check again. The page installs as
+  an app on your phone once it trusts the server (**Access**, **Trust this
+  server**; [android-app.md](android-app.md) for Android).
+- **Updates**: the page looks for a newer NullBill once a day, and when
+  you press **Check for updates** on the **Updates** page. When there is
+  one, **Update** shows in the top bar and the **Updates** page lists what
+  it brings, each change marked when it needs a setup run. **Update
+  NullBill** installs it: the page restarts, is away for about a minute
+  and reloads by itself, still signed in. Nothing on the server changes
+  by that alone. When the update changed what setup builds, the page says
+  so on **Overview** and **Updates** and lists those changes; **Review and
+  run setup** then applies them.
 - **The agent** sits beside every page (on a phone, the **Agent** tab).
   Ask it why something broke, to update everything, or what to do next.
   It reads logs and runs read-only commands by itself; what it would
@@ -97,8 +108,8 @@ no longer works.
   `install.sh` again for that.
 - **A run that hangs**: the **Activity** page says when a run has printed
   nothing for half an hour. **Stop this run** under its progress ends it;
-  what it finished stays done. Press **Update NullBill**, in case a fix is
-  out, then start it again. A package download it left waiting in a guest
+  what it finished stays done. Press **Update NullBill** on the
+  **Updates** page, in case a fix is out, then start it again. A package download it left waiting in a guest
   is ended by the next run.
 - **Alerts** come to the ntfy topic the page's **Alerts** page shows. Each
   names what fired; Grafana and the page say more.

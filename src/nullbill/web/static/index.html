@@ -128,8 +128,10 @@
       <li><a href="#setup" data-view="setup"><svg class="icon" aria-hidden="true"><use href="#i-setup"/></svg><span>Setup</span><span class="count" hidden></span></a></li>
       <li><a href="#access" data-view="access"><svg class="icon" aria-hidden="true"><use href="#i-access"/></svg><span>Access</span><span class="count" hidden></span></a></li>
       <li><a href="#agent" data-view="agent"><svg class="icon" aria-hidden="true"><use href="#i-agent"/></svg><span>Agent</span><span class="count" hidden></span></a></li>
+      <li><a href="#updates" data-view="updates"><svg class="icon" aria-hidden="true"><use href="#i-update"/></svg><span>Updates</span><span class="count" hidden></span></a></li>
     </ul>
     <div class="side-foot">
+      <a class="version" id="version-line" href="#updates" hidden></a>
       <p id="conn" class="conn" role="status" hidden><span class="dot bad" aria-hidden="true"></span><span id="conn-text">Not connected</span></p>
       <button type="button" class="side-btn" id="account" aria-haspopup="menu" aria-expanded="false"><svg class="icon" aria-hidden="true"><use href="#i-cog"/></svg><span>Preferences</span><svg class="icon end" aria-hidden="true"><use href="#i-chevron-down"/></svg></button>
     </div>
@@ -145,9 +147,10 @@
     </a>
     <div class="top-actions">
       <button type="button" class="btn ghost" id="guide-btn" aria-haspopup="dialog" hidden><span class="ring" aria-hidden="true"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="8"/><circle class="ring-fill" cx="10" cy="10" r="8"/></svg></span><span class="vh-phone">Setup guide</span><span class="guide-frac" id="guide-frac" aria-hidden="true"></span><span class="sr-only" id="guide-count"></span></button>
+      <a class="btn ghost update-btn" id="update-btn" href="#updates" hidden><svg class="icon" aria-hidden="true"><use href="#i-update"/></svg><span class="vh-phone">Update</span><span class="count run" id="update-count"></span></a>
       <div class="split" role="group" aria-label="Runs">
-        <button type="button" class="btn primary" data-action="apply" id="run-setup"><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg><span>Run setup</span><span class="pending" id="pending-dot" hidden><span class="sr-only">(changes waiting)</span></span></button>
-        <button type="button" class="btn primary split-more" id="run-menu" aria-haspopup="menu" aria-expanded="false" title="More runs"><svg class="icon" aria-hidden="true"><use href="#i-chevron-down"/></svg><span class="sr-only">More runs</span></button>
+        <a class="btn" href="#setup/build" id="run-setup"><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg><span>Run setup</span><span class="pending" id="pending-dot" hidden><span class="sr-only">(changes waiting)</span></span></a>
+        <button type="button" class="btn split-more" id="run-menu" aria-haspopup="menu" aria-expanded="false" title="Checks, hardware and updates"><svg class="icon" aria-hidden="true"><use href="#i-chevron-down"/></svg><span class="sr-only">Checks, hardware and updates</span></button>
       </div>
       <button type="button" class="btn ghost agent-btn hide-phone" id="toggle-dock" aria-controls="dock" aria-expanded="true" aria-keyshortcuts="Alt+A"><svg class="icon" aria-hidden="true"><use href="#i-agent"/></svg><span>Agent</span><span class="count" id="agent-count" hidden></span></button>
     </div>
@@ -291,7 +294,7 @@
         <a href="#setup/hardware" data-step="hardware"><span class="tab-mark" aria-hidden="true"></span>Hardware</a>
         <a href="#setup/choices" data-step="choices"><span class="tab-mark" aria-hidden="true"></span>What to run</a>
         <a href="#setup/plan" data-step="plan"><span class="tab-mark" aria-hidden="true"></span>Plan</a>
-        <a href="#setup/build" data-step="build"><span class="tab-mark" aria-hidden="true"></span>Build</a>
+        <a href="#setup/build" data-step="build"><span class="tab-mark" aria-hidden="true"></span><span>Review<span class="hide-phone"> and run</span></span></a>
       </nav>
 
       <section class="step" id="step-hardware" aria-labelledby="h-step-hardware" hidden>
@@ -376,25 +379,96 @@
             <tbody id="plan-guests"></tbody></table></div>
         </div>
         <details id="plan-details" class="disclosure"><summary>The full plan</summary><pre id="plan" aria-label="The full plan"></pre></details>
-        <div class="row step-foot"><a class="btn ghost" href="#setup/choices"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg>What to run</a><a class="btn primary push" id="plan-next" href="#setup/build">Build<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></a></div>
+        <div class="row step-foot"><a class="btn ghost" href="#setup/choices"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg>What to run</a><a class="btn primary push" id="plan-next" href="#setup/build">Review and run<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></a></div>
       </section>
 
       <section class="step" id="step-build" aria-labelledby="h-step-build" hidden>
-        <div class="block-head"><h2 id="h-step-build" tabindex="-1">Build</h2></div>
-        <p class="help">Setup runs one stage after another and checks everything at the end. The first run takes about 20 minutes, more with local AI models.</p>
-        <ul id="ready-list" class="ready"></ul>
+        <div class="block-head"><h2 id="h-step-build" tabindex="-1">Review and run setup</h2><span class="meta" id="review-state"></span></div>
+        <p class="help">Read what this run does to the server, then start it. Nothing changes before you do. Setup runs one stage after another and checks everything at the end; parts that are in place and unchanged are skipped.</p>
+
+        <section class="review-part" aria-labelledby="h-review-why">
+          <h3 id="h-review-why">Why run it now</h3>
+          <ul id="review-reasons" class="ready"></ul>
+          <details class="disclosure small" id="review-commits" hidden><summary id="review-commits-summary"></summary><ul class="changes" id="review-commit-list"></ul></details>
+        </section>
+
+        <section class="review-part" id="review-what" aria-labelledby="h-review-what" hidden>
+          <h3 id="h-review-what">What it does to the server</h3>
+          <p id="review-summary" class="review-summary"></p>
+          <p class="note" id="review-unknown" hidden><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><span>This server was built by an earlier NullBill that kept no record of its guests, so the page cannot tell new guests from old ones here. This run makes that record.</span></p>
+          <div class="table-wrap" id="review-table" hidden><table class="table review">
+            <caption class="sr-only">What this setup run creates, deletes and changes</caption>
+            <thead><tr><th scope="col">What</th><th scope="col">This run</th><th scope="col" class="hide-phone">Kind</th><th scope="col" class="num hide-phone">Cores</th><th scope="col" class="num hide-phone">Memory</th></tr></thead>
+            <tbody id="review-rows"></tbody></table></div>
+          <details class="disclosure small" id="review-kept" hidden><summary id="review-kept-summary"></summary><p id="review-kept-names" class="help"></p></details>
+          <p class="help" id="review-sections" hidden></p>
+          <details class="disclosure small" id="review-diff" hidden><summary>Every changed line of the plan</summary><div id="review-diff-slot"></div></details>
+        </section>
+
+        <section class="review-part" aria-labelledby="h-review-ready">
+          <h3 id="h-review-ready">Before you start</h3>
+          <ul id="ready-list" class="ready"></ul>
+        </section>
+
         <div id="removals" class="problem" hidden>
           <h3 id="removals-title"></h3>
           <ul id="removals-notes"></ul>
           <p>Deleting erases everything on <span id="removals-disks">its disk</span>, for good. To keep <span id="removals-it">it</span>, <a href="#setup/choices">turn <span id="removals-it2">it</span> on again under What to run</a> and save.</p>
-          <div class="row"><button type="button" class="btn danger" data-action="remove-guests"><span>Delete and run setup</span></button><p class="feedback" role="status"></p></div>
         </div>
         <div class="row step-foot" id="build-start">
-          <button type="button" class="btn primary" data-action="apply"><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg><span>Run setup</span></button>
+          <button type="button" class="btn primary" id="start-setup"><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg><span id="start-setup-text">Start setup</span></button>
           <p class="feedback" id="build-result" role="status"></p>
+          <span class="meta push" id="start-note"></span>
         </div>
         <div id="build-job"></div>
       </section>
+    </section>
+
+    <!-- Updates -->
+    <section class="view" id="view-updates" data-title="Updates" aria-labelledby="h-updates" hidden>
+      <header class="page-head"><div><h1 id="h-updates" tabindex="-1">Updates</h1><p class="page-sub">NullBill's own version, whether the server was built with it, and the systems' security updates.</p></div></header>
+      <p class="note" id="updates-none" hidden><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><span>This NullBill was not installed with install.sh, so the page cannot update it. Update it the way you installed it.</span></p>
+      <div class="settings" id="updates-body">
+        <div class="setting">
+          <div class="setting-text"><h2>NullBill</h2>
+            <p>The page, its agent, and what setup builds. Updating fetches the newest version and restarts this page, which reloads by itself in about a minute. Nothing that runs on the server is touched.</p></div>
+          <div class="setting-control">
+            <dl class="props compact"><div><dt>Version</dt><dd id="version-current"></dd></div><div><dt>Newest</dt><dd id="version-newest"></dd></div></dl>
+            <div class="row">
+              <button type="button" class="btn primary" id="update-now"><svg class="icon" aria-hidden="true"><use href="#i-update"/></svg><span>Update NullBill</span></button>
+              <button type="button" class="btn" id="update-check"><span>Check for updates</span></button>
+              <p class="feedback" id="update-result" role="status"></p>
+            </div>
+          </div>
+          <div class="setting-wide" id="update-available" hidden>
+            <h3 class="mini-head" id="update-available-title"></h3>
+            <ul class="changes" id="update-available-list"></ul>
+          </div>
+        </div>
+        <div class="setting">
+          <div class="setting-text"><h2>The server</h2>
+            <p>An update changes the server only where it changed what setup builds, and only when you run setup. The page tells such changes from the rest and lists them here.</p></div>
+          <div class="setting-control">
+            <dl class="props compact"><div><dt>Built with</dt><dd id="server-built"></dd></div><div><dt>Status</dt><dd id="server-follows"></dd></div></dl>
+            <div class="row" id="server-run" hidden><a class="btn primary" href="#setup/build"><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg>Review and run setup</a></div>
+          </div>
+          <div class="setting-wide" id="server-waiting" hidden>
+            <h3 class="mini-head">Waiting for a setup run</h3>
+            <ul class="changes" id="server-waiting-list"></ul>
+          </div>
+        </div>
+        <div class="setting">
+          <div class="setting-text"><h2>Security updates</h2>
+            <p>Proxmox and every guest install Debian's security updates by themselves each night. Nothing restarts by itself: a restart that an update needs is listed here and on the Overview.</p></div>
+          <div class="setting-control">
+            <dl class="props compact"><div><dt>Status</dt><dd id="system-updates"></dd></div><div id="system-restart-row" hidden><dt>Restart</dt><dd id="system-restart"></dd></div></dl>
+          </div>
+        </div>
+        <div class="setting" id="update-last" hidden>
+          <div class="setting-text"><h2>Last update</h2><p id="update-last-text"></p></div>
+          <div class="setting-wide"><ul class="changes" id="update-last-list"></ul></div>
+        </div>
+      </div>
     </section>
 
     <!-- Access -->
@@ -744,7 +818,7 @@
       <dt><kbd>Ctrl</kbd> <kbd>K</kbd></dt><dd>Search and commands</dd>
       <dt><kbd>/</kbd></dt><dd>Write to the agent</dd>
       <dt><kbd>Alt</kbd> <kbd>A</kbd></dt><dd>Show or hide the agent</dd>
-      <dt><kbd>g</kbd> then <kbd>o</kbd> <kbd>s</kbd> <kbd>y</kbd> <kbd>l</kbd> <kbd>u</kbd> <kbd>x</kbd> <kbd>a</kbd></dt><dd>Overview, Services, Activity, Alerts, Setup, Access, Agent</dd>
+      <dt><kbd>g</kbd> then <kbd>o</kbd> <kbd>s</kbd> <kbd>y</kbd> <kbd>l</kbd> <kbd>u</kbd> <kbd>x</kbd> <kbd>a</kbd> <kbd>p</kbd></dt><dd>Overview, Services, Activity, Alerts, Setup, Access, Agent, Updates</dd>
       <dt><kbd>[</kbd> <kbd>]</kbd></dt><dd>Previous and next setup step</dd>
       <dt><kbd>Enter</kbd> / <kbd>Shift</kbd> <kbd>Enter</kbd></dt><dd>Send / new line, in the agent's box</dd>
       <dt><kbd>Alt</kbd> <kbd>Y</kbd> / <kbd>Alt</kbd> <kbd>N</kbd></dt><dd>Go to the agent's waiting request; inside it, approve / decline</dd>
@@ -763,8 +837,8 @@
       <li><a href="#alerts"><svg class="icon" aria-hidden="true"><use href="#i-alerts"/></svg>Alerts</a></li>
       <li><a href="#access"><svg class="icon" aria-hidden="true"><use href="#i-access"/></svg>Access</a></li>
       <li><a href="#agent/settings"><svg class="icon" aria-hidden="true"><use href="#i-cog"/></svg>Agent settings</a></li>
+      <li><a href="#updates"><svg class="icon" aria-hidden="true"><use href="#i-update"/></svg>Updates<span class="count run" id="more-updates-badge" hidden></span></a></li>
       <li class="sep"><button type="button" data-run="verify"><svg class="icon" aria-hidden="true"><use href="#i-checks"/></svg>Run the checks</button></li>
-      <li><button type="button" data-run="upgrade"><svg class="icon" aria-hidden="true"><use href="#i-update"/></svg>Update NullBill</button></li>
       <li><button type="button" data-run="install"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Install the app</button></li>
       <li class="sep theme-row"><span id="theme-label"><svg class="icon" aria-hidden="true"><use href="#i-moon"/></svg>Theme</span>
         <span class="segmented" role="radiogroup" aria-labelledby="theme-label" id="theme-pick">
@@ -783,6 +857,7 @@
 
 <div id="toast" class="toast" role="alert" hidden>
   <span id="toast-text"></span>
+  <a id="toast-link" class="btn small" href="#updates" hidden></a>
   <button type="button" id="toast-close" class="icon-btn" title="Dismiss"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg><span class="sr-only">Dismiss</span></button>
 </div>
 
