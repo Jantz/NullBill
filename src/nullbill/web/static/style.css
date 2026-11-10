@@ -1221,3 +1221,17 @@ dialog::backdrop { background: var(--scrim); }
 
 /* An open request is what to answer next: suggestions wait. */
 .chat.asking .chips { display: none; }
+
+/* Backups */
+#backups-form { display: grid; gap: 14px; }
+#backups-form .row { margin-top: 2px; }
+.backups-own { padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-lg); }
+.backups-look { margin-top: 14px; }
+.backups-not { margin-top: 14px; }
+#backups-pending { align-items: center; }
+#backups-stats .sub { overflow-wrap: anywhere; }
+#backups-key-fingerprint { overflow-wrap: anywhere; font-size: 12px; padding: 6px 0; }
+@container main (max-width: 640px) {
+  #backups-pending { flex-wrap: wrap; }
+  #backups-pending .btn { margin-left: 26px; }
+}

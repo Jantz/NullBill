@@ -189,7 +189,7 @@ services:
     kind: vm
     zone: mgmt
     workload: core
-    description: Proxmox Backup Server on its own disk. The host sends encrypted backups.
+    description: Proxmox Backup Server. The host sends encrypted backups.
     image: debian-13-cloud
     floor: {cores: 1, memory_mib: 2048, disk_gib: 8}
     ports:
@@ -363,6 +363,9 @@ services:
     workload: inference
     agent_managed: true
     gpu: true
+    # The driver, llama.cpp and the model are pinned downloads setup fetches
+    # again; nothing here is the owner's, and the model alone is gigabytes.
+    backup: false
     # The model lives in the GPU's VRAM (gpus.<pci>.consumers budgets it);
     # memory holds the server, the Vulkan driver's host buffers, the part
     # of the model llama.cpp keeps on the CPU, and the recurrent state it

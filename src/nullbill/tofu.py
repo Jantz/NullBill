@@ -283,9 +283,12 @@ def _vm(name: str, guest: dict, plan: dict, model: dict, storage: str) -> dict:
     if name == "pbs" and backups.enabled(plan):
         vm["disk"].append(
             {
-                "datastore_id": backups.DISK_STORAGE,
+                # A disk of PBS's own, or the storage the guests are on. apply
+                # moves and grows the volume itself before OpenTofu looks
+                # (apply.place_datastore), so this only ever makes it.
+                "datastore_id": backups.store(plan)[0],
                 "interface": "virtio1",
-                "size": backups.disk(plan)[1],
+                "size": backups.store(plan)[1],
                 "serial": backups.DISK_SERIAL,
                 "file_format": "raw",
                 "discard": "on",

@@ -152,6 +152,8 @@ def disks(now: dict, was: dict | None, facts: dict) -> list[dict]:
             text = "Left alone from now on. What is on it stays."
         else:
             continue
+        if use == "pbs" and ((was or {}).get("backups") or {}).get("status") == backups.SAME_DISK:
+            text += " The backups move onto it from the server's disk with their history; the backup server keeps running."
         rows.append({"id": disk_id, "size_gib": entry.get("size_gib"), "text": text, "erases": erases})
     return rows
 

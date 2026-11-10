@@ -68,6 +68,8 @@ class FakeReach:
         self.backup_disk = None
         self.pbs_fingerprint = "aa:bb:cc"
         self.backed_up = set()
+        # The pbs VM's datastore volume, once there is one: (storage, GiB).
+        self.datastore = None
         self.revert = None  # the LAN revert timer: None, "armed" or "gone"
         self.timeouts = []
         self.dispatcher_stopped = False
@@ -235,6 +237,16 @@ class FakeReach:
             return 0, self.files.get(command.split()[1], ""), ""
         if command.startswith("bash -c ") and "qm status" in command:
             self.timeouts.append(timeout)
+            return 0, "", ""
+        if command.startswith("qm config 2015 ") and self.datastore:
+            storage, size = self.datastore
+            return 0, f"name: pbs\nvirtio1: {storage}:vm-2015-disk-1,backup=0,serial=nb-backups,size={size}G\n", ""
+        if command.startswith("qm disk move 2015 virtio1 "):
+            self.timeouts.append(timeout)
+            self.datastore = (shlex.split(command)[5], self.datastore[1])
+            return 0, "", ""
+        if command.startswith("qm disk resize 2015 virtio1 "):
+            self.datastore = (self.datastore[0], int(command.split()[5].removesuffix("G")))
             return 0, "", ""
         if command.startswith("qm config "):
             return 0, "template: 1\n" if command.split()[2] in self.templates else "name: x\n", ""
@@ -1307,6 +1319,36 @@ def test_tofu_stage_makes_the_backup_disk_before_tofu_and_respects_wipe(ctx, mon
     assert s.reach.backup_disk is None
 
 
+def test_the_backups_volume_moves_to_a_disk_plugged_in_later_and_grows(ctx):
+    """One disk at first: the datastore is 64 GiB on local-lvm. Then a blank
+    disk: PVE moves the volume there while the VM runs and it grows to the
+    disk's size, before OpenTofu compares; nothing is made anew."""
+    c = ctx("mid")
+    apply.place_datastore(c)  # no pbs VM yet: OpenTofu makes it
+    assert not [call for call in c.reach.calls if call[1].startswith("qm disk")]
+    c.reach.datastore = ("local-lvm", 64)
+    apply.place_datastore(c)
+    disk = [call[1] for call in c.reach.calls if call[0] == "host" and call[1].startswith("qm disk")]
+    assert disk == ["qm disk move 2015 virtio1 nb-pbs-disk --delete 1", "qm disk resize 2015 virtio1 1862G"]
+    assert c.reach.datastore == ("nb-pbs-disk", 1862) and c.reach.timeouts == [apply.MOVE_BACKUPS_S]
+    assert any("moving the backups from local-lvm to nb-pbs-disk" in line for line in c.log)
+    apply.place_datastore(c)  # in place: nothing more
+    assert [call[1] for call in c.reach.calls if call[0] == "host" and call[1].startswith("qm disk")] == disk
+
+
+def test_the_backups_volume_grows_with_its_pin_and_never_shrinks(ctx):
+    c = ctx("small", config=fixture_config("small") | {"backups": {"size_gib": 96}})
+    c.reach.datastore = ("local-lvm", 64)
+    apply.place_datastore(c)
+    assert c.reach.datastore == ("local-lvm", 96)
+    assert [call[1] for call in c.reach.calls if call[1].startswith("qm disk")] == ["qm disk resize 2015 virtio1 96G"]
+    c = ctx("small")
+    c.reach.datastore = ("local-lvm", 96)
+    with pytest.raises(ApplyError, match="cannot shrink. Set backups.size_gib to 96 or more"):
+        apply.place_datastore(c)
+    assert not [call for call in c.reach.calls if call[1].startswith("qm disk")]
+
+
 def test_backups_stage_hands_tofu_the_pbs_token_fingerprint_and_a_kept_key(ctx, monkeypatch):
     monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
     c = ctx("mid")
@@ -1353,8 +1395,8 @@ def test_backups_stage_hands_tofu_the_pbs_token_fingerprint_and_a_kept_key(ctx, 
     assert c.reach.envs[-1]["TF_VAR_pbs_fingerprint"] == "dd:ee:ff"
 
 
-def test_backups_stage_does_nothing_without_a_backup_disk(ctx):
-    c = ctx("small")
+def test_backups_stage_does_nothing_with_backups_off(ctx):
+    c = ctx("small", config=fixture_config("small") | {"services": {"pbs": {"enabled": False}}})
     apply.stage_backups(c)
     assert c.reach.calls == []
 

@@ -169,6 +169,21 @@ groups:
         labels: {severity: page}
         annotations:
           summary: "the PVE host cannot list the backups on PBS; check the pbs guest"
+      # The host reads one file back from a container's newest backup after
+      # each night and again every hour while that fails.
+      - alert: BackupRestoreFailing
+        expr: nb_backup_restore_ok == 0
+        for: 2h
+        labels: {severity: page}
+        annotations:
+          summary: "a file could not be read back from {{ $labels.guest }}'s newest backup; the page's Backups page says why, and the backups may be unusable until it passes"
+      # Backups stop when the datastore is full; pruning frees room daily.
+      - alert: BackupStoreAlmostFull
+        expr: nb_backup_store_bytes{kind="used"} / ignoring(kind) nb_backup_store_bytes{kind="size"} > 0.9
+        for: 1h
+        labels: {severity: warn}
+        annotations:
+          summary: "the backups fill {{ $value | humanizePercentage }} of their room; give them more on the page's Backups page, or a disk of their own"
       - alert: BackupMetricsStale
         expr: time() - node_textfile_mtime_seconds{file=~".*nullbill-backups\\.prom"} > 3 * 3600
         for: 30m

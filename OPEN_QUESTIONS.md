@@ -4,10 +4,11 @@ Each question has a recommendation. Answer in chat or edit this file;
 answered items move to the decisions list at the bottom.
 
 1. **Second disk.** PBS needs its own disk to survive a system disk
-   failure. Is there a second drive, any size? Recommendation: an old HDD or
-   SSD of at least the system disk's used size; without one the plan says
-   DEGRADED and backups only guard against mistakes. Backups can also be
-   switched off.
+   failure. Is there a second drive, any size? Recommendation: any spare
+   HDD or SSD, also on USB, plugged in when you have one; until then the
+   backups live on the system disk (64 GiB), verify says DEGRADED and
+   they only guard against mistakes and broken updates (ADR 0017).
+   Backups can also be switched off.
 2. **Accounts.** Tailscale (free) and, for the offline alert,
    Healthchecks.io (free) need sign-ups by you during setup; ntfy needs only
    its phone app. Recommendation: sign up when the wizard asks.

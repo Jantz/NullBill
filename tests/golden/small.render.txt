@@ -1075,6 +1075,23 @@ WantedBy=timers.target
       "type": "string",
       "sensitive": true,
       "description": "Encrypts state and plans; 16 characters or more"
+    },
+    "pbs_fingerprint": {
+      "type": "string",
+      "default": "",
+      "description": "PBS certificate SHA-256; empty until PBS is set up"
+    },
+    "pbs_token_secret": {
+      "type": "string",
+      "default": "",
+      "sensitive": true,
+      "description": "Secret of the PVE host's PBS token"
+    },
+    "pbs_encryption_key": {
+      "type": "string",
+      "default": "",
+      "sensitive": true,
+      "description": "Backup encryption key (JSON), kept on the controller"
     }
   },
   "resource": {
@@ -1997,6 +2014,16 @@ WantedBy=timers.target
             "file_id": "${proxmox_download_file.debian_13_cloud.id}",
             "discard": "on",
             "iothread": true
+          },
+          {
+            "datastore_id": "local-lvm",
+            "interface": "virtio1",
+            "size": 64,
+            "serial": "nb-backups",
+            "file_format": "raw",
+            "discard": "on",
+            "iothread": true,
+            "backup": false
           }
         ],
         "initialization": {
@@ -2023,7 +2050,10 @@ WantedBy=timers.target
         },
         "depends_on": [
           "proxmox_network_linux_bridge.vmbr101"
-        ]
+        ],
+        "lifecycle": {
+          "prevent_destroy": true
+        }
       },
       "linux-runner": {
         "node_name": "${var.node_name}",
@@ -2114,6 +2144,51 @@ WantedBy=timers.target
             "template"
           ]
         }
+      }
+    },
+    "proxmox_storage_pbs": {
+      "nb_pbs": {
+        "count": "${var.pbs_fingerprint == \"\" ? 0 : 1}",
+        "id": "nb-pbs",
+        "server": "10.42.1.15",
+        "datastore": "backups",
+        "username": "nb-pve@pbs!pve",
+        "password": "${var.pbs_token_secret}",
+        "fingerprint": "${var.pbs_fingerprint}",
+        "encryption_key": "${var.pbs_encryption_key}",
+        "content": [
+          "backup"
+        ],
+        "backups": {
+          "keep_all": true
+        }
+      }
+    },
+    "proxmox_backup_job": {
+      "nb_nightly": {
+        "count": "${var.pbs_fingerprint == \"\" ? 0 : 1}",
+        "id": "nb-nightly",
+        "schedule": "02:00",
+        "storage": "${proxmox_storage_pbs.nb_pbs[0].id}",
+        "vmid": [
+          "2001",
+          "2002",
+          "2010",
+          "2011",
+          "2012",
+          "2013",
+          "2014",
+          "2016",
+          "2017",
+          "2018",
+          "2024",
+          "2019"
+        ],
+        "mode": "snapshot",
+        "enabled": true,
+        "repeat_missed": true,
+        "notes_template": "{{guestname}}",
+        "comment": "nullbill nightly backup; retention runs on PBS"
       }
     },
     "proxmox_virtual_environment_user": {

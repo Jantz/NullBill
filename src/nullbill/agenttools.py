@@ -225,6 +225,13 @@ TOOLS = [
         },
     },
     {
+        "name": "backups",
+        "description": "The Backups page: whether backups are on, where they go (the server's own disk, which a failing disk "
+        "takes along, or a disk of their own), each service's newest backup, the last restore test and the room they use, as "
+        "the server measured them, and whether the owner has downloaded the key.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "people",
         "description": "Access, People: who may open what over Tailscale, what can be given to a person, and what giving a service means.",
         "inputSchema": {"type": "object", "properties": {}},

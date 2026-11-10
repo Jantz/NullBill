@@ -1,9 +1,14 @@
-"""Nightly backups of every planned guest to PBS, encrypted on the PVE host.
+"""Nightly backups of the planned guests to PBS, encrypted on the PVE host.
 
 The PVE host encrypts with a key PBS never sees, using a token that can
 write and read its own snapshots but not delete them (ansible/roles/pbs);
 retention runs on PBS. verify checks that each guest has a fresh, encrypted
 backup and restores one file from the newest container backup.
+
+Where the backups live (docs/adr/0017-backups-on-one-disk.md): on a disk of
+PBS's own when the server has one, else in a volume of capped size on the
+storage the guests are on. The second kind survives a broken guest, a bad
+update and a mistake, not the disk; the plan and verify say so.
 """
 
 import json
@@ -32,20 +37,76 @@ DISK_STORAGE = "nb-pbs-disk"
 DISK_SERIAL = "nb-backups"
 DISK_PATH = f"/dev/disk/by-id/virtio-{DISK_SERIAL}"
 
+# plan's backups.status. OK: PBS has a disk of its own. SAME_DISK: its
+# datastore is a volume beside the guests.
+OK, SAME_DISK, NO_ROOM, DISABLED = "ok", "same-disk", "DEGRADED", "disabled"
+# The datastore beside the guests: this large unless backups.size_gib pins
+# it, smaller when the storage has less left, and never under MIN_GIB.
+SAME_DISK_GIB = 64
+MIN_GIB = 16
+SAME_DISK_WHY = "the backups are on the disk the server runs from, so a failing disk takes both"
+
 Clock = Callable[[], float]
 
 
 def enabled(plan: dict) -> bool:
-    """PBS storage and the job exist only when PBS has a disk of its own."""
-    return strip_notes(plan)["backups"]["status"] == "ok"
+    """PBS storage and the job exist only when the datastore has a place."""
+    return strip_notes(plan)["backups"]["status"] in (OK, SAME_DISK)
 
 
-def disk(plan: dict) -> tuple[str, int]:
-    """The pinned disk's id and the size of the datastore disk made on it:
-    a GiB less than the disk, for LVM's metadata."""
-    bare = strip_notes(plan)
-    disk_id = next(d for d, v in bare["disks"].items() if v["use"] == "pbs")
-    return disk_id, bare["disks"][disk_id]["size_gib"] - 1
+def separate_disk(model: dict, facts: dict) -> bool:
+    """Whether plan's disk rules give PBS a disk of its own: one pinned for
+    it, the one apply made its volume group on, or a blank one."""
+    pins = model.get("disks", {})
+    if any(pin["use"] == "pbs" for pin in pins.values()):
+        return True
+    made = next((d["id"] for d in facts["disks"] if DISK_STORAGE in d.get("vgs", [])), None)
+    free = [d for d in facts["disks"] if not d["system"] and d["id"] not in pins]
+    return any(d["id"] == made or (made is None and not d["signatures"]) for d in free)
+
+
+def same_disk_gib(model: dict, room_gib: int) -> int | None:
+    """The datastore's size beside the guests, given the room their floors
+    leave on the storage. A pinned size is taken as it is; None when not
+    even the smallest fits."""
+    pinned = model.get("backups", {}).get("size_gib")
+    if pinned:
+        return pinned
+    size = min(SAME_DISK_GIB, room_gib)
+    return size if size >= MIN_GIB else None
+
+
+def disk(plan: dict) -> str | None:
+    """The id of the disk PBS has to itself, if it has one."""
+    return next((d for d, v in strip_notes(plan)["disks"].items() if v["use"] == "pbs"), None)
+
+
+def store(plan: dict) -> tuple[str, int]:
+    """The PVE storage the datastore volume is on and its size in GiB."""
+    section = strip_notes(plan)["backups"]
+    return section["storage"], section["size_gib"]
+
+
+def left_out(plan: dict) -> list[str]:
+    """Planned guests the nightly job leaves out because their service says
+    so (`backup: false`): setup builds them again from what it pins."""
+    return strip_notes(plan)["backups"].get("left_out", [])
+
+
+def datastore_disk(config: str) -> tuple[str, str, int] | None:
+    """The datastore volume in `qm config`'s output, found by its serial:
+    its key (virtio1), the storage it is on and its size in GiB."""
+    for line in config.splitlines():
+        key, _, value = line.partition(": ")
+        fields = value.split(",")
+        if f"serial={DISK_SERIAL}" not in fields:
+            continue
+        size = next((f.removeprefix("size=") for f in fields if f.startswith("size=")), "")
+        units = {"G": 1, "T": 1024}
+        if size[-1:] not in units or not size[:-1].isdigit():
+            return None
+        return key, fields[0].split(":", 1)[0], int(size[:-1]) * units[size[-1]]
+    return None
 
 
 # host_baseline's hourly textfile metrics for the BackupTooOld alert.
@@ -61,10 +122,11 @@ def unbacked(plan: dict, entries: list[dict]) -> list[int]:
 
 
 def guests(plan: dict) -> dict[str, dict]:
-    """Guests the nightly job covers: all but PBS itself and pool templates,
-    which rebuild from their image."""
+    """Guests the nightly job covers: all but PBS itself, pool templates,
+    which rebuild from their image, and those their service leaves out."""
     bare = strip_notes(plan)
-    return {n: g for n, g in bare["guests"].items() if n != "pbs" and g["kind"] != "vm-pool"}
+    skip = {"pbs", *bare["backups"].get("left_out", [])}
+    return {n: g for n, g in bare["guests"].items() if n not in skip and g["kind"] != "vm-pool"}
 
 
 def _snapshot(volid: str) -> str:

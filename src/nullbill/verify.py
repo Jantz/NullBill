@@ -303,10 +303,12 @@ def run_verify(
                 say(result)
 
     bare = strip_notes(plan)
-    if bare["backups"]["status"] == "DEGRADED":
-        add(Result("DEGRADED", "backups", "no separate disk for PBS"))
-    elif bare["backups"]["status"] == "disabled":
+    if bare["backups"]["status"] == backups.NO_ROOM:
+        add(Result("DEGRADED", "backups", "no disk for PBS and no room beside the guests; nothing is backed up"))
+    elif bare["backups"]["status"] == backups.DISABLED:
         add(Result("DEGRADED", "backups", "switched off; nothing is backed up"))
+    elif bare["backups"]["status"] == backups.SAME_DISK:
+        add(Result("DEGRADED", "backups", f"{backups.SAME_DISK_WHY}; plug in a disk for them"))
     if target is None:
         planned, skipped = probes(plan, model, "unresolved")
         reason = "no target.ssh in config.yaml"

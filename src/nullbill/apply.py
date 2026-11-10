@@ -635,6 +635,8 @@ def tofu_env(ctx: Context, stage: str = "tofu") -> dict[str, str]:
 
 # The first backup of every guest, from the controller's side of one SSH call.
 FIRST_BACKUP_S = 3 * 3600
+# PVE copying the backups' volume to another storage, as long.
+MOVE_BACKUPS_S = 3 * 3600
 PBS_VARS = ("pbs_fingerprint", "pbs_token_secret", "pbs_encryption_key")
 
 
@@ -744,15 +746,44 @@ def _and(names: list[str]) -> str:
 def backup_disk(ctx: Context) -> None:
     """The disk the plan pins for PBS, as the LVM storage the pbs VM's
     datastore disk is made on; before OpenTofu makes that VM."""
-    if not backups.enabled(ctx.plan):
+    disk_id = backups.disk(ctx.plan) if backups.enabled(ctx.plan) else None
+    if disk_id is None:
         return
-    disk_id, _ = backups.disk(ctx.plan)
     keep_files(ctx, disk_id)
     wipe = "1" if ctx.model.get("disks", {}).get(disk_id, {}).get("wipe") else "0"
     out = host_out(ctx, "tofu", shlex.join(["/usr/local/sbin/nb-backup-disk", disk_id, wipe])).strip()
     converted(ctx, disk_id)
     if out == "made":
         ctx.say(f"tofu: {disk_id} is now the {backups.DISK_STORAGE} storage for PBS")
+
+
+def place_datastore(ctx: Context) -> None:
+    """The datastore volume of a pbs VM that exists, put where the plan has
+    it and grown to the plan's size, before OpenTofu compares: a blank disk
+    plugged in later takes the backups over from the system disk with their
+    history, by PVE's own move of a running VM's disk. The volume never
+    shrinks; the pbs role grows the filesystem into it."""
+    if not backups.enabled(ctx.plan):
+        return
+    vmid = strip_notes(ctx.plan)["guests"]["pbs"]["vmid"]
+    rc, out, _ = ctx.reach.host(f"qm config {vmid} --current")
+    found = backups.datastore_disk(out) if rc == 0 else None
+    if found is None:
+        return  # No pbs VM yet, or one from before it had a datastore: OpenTofu makes it.
+    key, storage, size = found
+    want_storage, want_size = backups.store(ctx.plan)
+    if size > want_size:
+        raise ApplyError(
+            "tofu",
+            f"the backups are in a {size} GiB volume on {storage}, and the plan asks for {want_size} GiB on {want_storage}; "
+            f"a volume with backups in it cannot shrink. Set backups.size_gib to {size} or more",
+        )
+    if storage != want_storage:
+        ctx.say(f"tofu: moving the backups from {storage} to {want_storage}; the backup server keeps running")
+        host_out(ctx, "tofu", f"qm disk move {vmid} {key} {shlex.quote(want_storage)} --delete 1", timeout=MOVE_BACKUPS_S)
+    if size < want_size:
+        host_out(ctx, "tofu", f"qm disk resize {vmid} {key} {want_size}G")
+        ctx.say(f"tofu: the backups' volume grows from {size} to {want_size} GiB")
 
 
 def storage_disks(ctx: Context) -> None:
@@ -1255,6 +1286,7 @@ def stage_tofu(ctx: Context) -> None:
     copy_disks(ctx)
     legacy_disks(ctx)
     backup_disk(ctx)
+    place_datastore(ctx)
     storage_disks(ctx)
     run_tofu(ctx, "tofu", init=True, downloads=True)
     forget_remade_vms(ctx)
@@ -2291,8 +2323,8 @@ def encryption_key(ctx: Context) -> str:
 
 
 def stage_backups(ctx: Context) -> None:
-    """PBS on its own disk, then the host's PBS storage and nightly job,
-    which OpenTofu adds once it has PBS's fingerprint and token."""
+    """PBS with its datastore volume, then the host's PBS storage and
+    nightly job, which OpenTofu adds once it has PBS's fingerprint and token."""
     if not backups.enabled(ctx.plan):
         return
     variables = {"pbs_disk": backups.DISK_PATH, "pbs_proxy_url": proxy_url(ctx, "pbs")}

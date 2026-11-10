@@ -193,7 +193,26 @@ tests:
         values: "0x1700"
       - series: 'node_textfile_mtime_seconds{instance="pve:9100",file="/var/lib/prometheus/node-exporter/nullbill-backups.prom"}'
         values: "0x1700"
+      - series: 'nb_backup_restore_ok{instance="pve:9100",vmid="2017",guest="forgejo"}'
+        values: "0x1700"
+      - series: 'nb_backup_store_bytes{instance="pve:9100",kind="size"}'
+        values: "1000x1700"
+      - series: 'nb_backup_store_bytes{instance="pve:9100",kind="used"}'
+        values: "950x1700"
     alert_rule_test:
+      - eval_time: 1h50m
+        alertname: BackupRestoreFailing
+        exp_alerts: []
+      - eval_time: 2h10m
+        alertname: BackupRestoreFailing
+        exp_alerts:
+          - exp_labels: {severity: page, instance: "pve:9100", vmid: "2017", guest: forgejo}
+            exp_annotations: {summary: "a file could not be read back from forgejo's newest backup; the page's Backups page says why, and the backups may be unusable until it passes"}
+      - eval_time: 1h10m
+        alertname: BackupStoreAlmostFull
+        exp_alerts:
+          - exp_labels: {severity: warn, instance: "pve:9100"}
+            exp_annotations: {summary: "the backups fill 95% of their room; give them more on the page's Backups page, or a disk of their own"}
       - eval_time: 26h50m
         alertname: BackupTooOld
         exp_alerts: []

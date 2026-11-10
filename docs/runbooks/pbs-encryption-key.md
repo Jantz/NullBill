@@ -11,7 +11,14 @@ copy offline.
 
 Reference: <https://pbs.proxmox.com/docs/backup-client.html#encryption>
 
-You do this yourself, once, after the first setup run with backups:
+The quick copy: the page's **Backups**, **The key**, **Download the key**
+gives you the key as a file (`nullbill-backup-key.json`). Put it in a
+password manager or on a USB stick kept away from the server, and never on
+a disk that syncs. The page shows the key's fingerprint and when you last
+downloaded it. In step 1 of a restore, that file is `nb-pbs.key.json`.
+
+The paper copy is safer, since no file exists to leak. You do this
+yourself, once, after the first setup run with backups:
 
 1. In the Proxmox web UI, select the node `pve` (the host, `pve.internal`)
    and open **Shell**. Make a paper copy and keep it offline, never in the
@@ -25,8 +32,10 @@ You do this yourself, once, after the first setup run with backups:
    Do not save it as a file on a synced or backed-up disk.
 2. Check the copy: the `fingerprint` line on the paper must equal the one
    `proxmox-backup-client key show /etc/pve/priv/storage/nb-pbs.enc`
-   prints. `nullbill verify` restores a file every run, which proves the
-   key on the host still opens the backups.
+   prints. The server reads a file back out of a backup after each night
+   (the page's **Backups**, **Restore test**), and `nullbill verify` does
+   on every run, which proves the key on the host still opens the
+   backups.
 
 ## Restoring after losing the host
 

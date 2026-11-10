@@ -78,7 +78,8 @@ setup page and remote access.
 
 - A spare x86 PC on your home network, with
   [Proxmox VE](https://www.proxmox.com/en/downloads) 9 installed (PVE 8 is past its end of life).
-  A second, empty disk is needed only for backups. A disk from your old
+  Backups work on its one disk and are better on a second, empty one
+  ([backups.md](docs/runbooks/backups.md)). A disk from your old
   PC can go in as it is: NullBill keeps its files and shares them to you,
   and can later copy them onto the server before it reuses the disk for
   backups or as extra storage
@@ -137,7 +138,7 @@ It runs these stages in order and stops at the first one that fails.
 | ci | Builds the CI runner image, then the service that gives each job its own copy. |
 | agents | The agent's container and CLI, and its SSH access to the guests it may manage. |
 | logs | Sends agent commands and SSH logins to Loki. |
-| backups | With a second disk: Proxmox Backup Server on it, a first backup of every guest, then one each night, encrypted before it leaves Proxmox. |
+| backups | Proxmox Backup Server, on a second disk when there is one, a first backup of every guest, then one each night, encrypted before it leaves Proxmox. |
 | vpn | Joins your Tailscale network, once you paste an auth key. |
 | verify | Checks every allowed and forbidden connection. |
 
@@ -156,8 +157,8 @@ It runs these stages in order and stops at the first one that fails.
 - **Use the coding agent**: [docs/runbooks/agent-access.md](docs/runbooks/agent-access.md)
   shows how to start it, read what it did, and cut it off.
 - **More step-by-step guides** are in [`docs/runbooks/`](docs/runbooks/):
-  the page as an app on Android, adding a person, CI runners, restoring a
-  guest, keeping a disk from your old PC, running something only on
+  the page as an app on Android, adding a person, CI runners, backups,
+  restoring a guest, keeping a disk from your old PC, running something only on
   demand, and keeping the keys you must not lose.
 
 ## Not done yet

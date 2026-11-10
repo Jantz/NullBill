@@ -1,7 +1,8 @@
 # Restore one guest
 
 Two ways back, newest first: a snapshot on the host (seconds, same disk),
-or the nightly backup on PBS (minutes, survives a lost disk). Find the
+or the nightly backup on PBS (minutes; it survives a lost disk only when
+the backups have a disk of their own, see [backups.md](backups.md)). Find the
 guest's VMID in `$NULLBILL_HOME/plan.yaml` (VMID = 2000 + its id).
 
 References: <https://pve.proxmox.com/pve-docs/chapter-vzdump.html#vzdump_restore>,

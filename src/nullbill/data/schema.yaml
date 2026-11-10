@@ -101,6 +101,10 @@ $defs:
       # proxy.allow. Only for fixed-address guests in egress: proxy zones.
       proxy_allow: {type: array, uniqueItems: true, items: {$ref: "#/$defs/domain_pattern"}}
       gpu: {type: boolean}
+      # false leaves the guest out of the nightly backups: for a guest that
+      # setup builds again from what it pins and that holds nothing of the
+      # owner's. Omitted means backed up.
+      backup: {type: boolean}
       # Set when NullBill does not put the program behind ports in place:
       # who does, or why nothing does yet. verify reports a flow to such a
       # port that finds nothing listening as DEGRADED with this text.
@@ -475,6 +479,14 @@ $defs:
           # Jellyfin transcodes on the host's integrated Intel graphics when
           # the probe finds them (auto), or on the CPU.
           transcode: {enum: [auto, cpu]}
+      backups:
+        type: object
+        additionalProperties: false
+        properties:
+          # Only while PBS has no disk of its own: the size of the datastore
+          # volume beside the guests (docs/adr/0017-backups-on-one-disk.md).
+          # Default 64, or what the storage has left. It can grow, not shrink.
+          size_gib: {type: integer, minimum: 16, maximum: 4096}
 
   model:
     type: object

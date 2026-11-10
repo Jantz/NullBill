@@ -83,6 +83,16 @@
         state: started
       when: pbs_manage_services | bool
 
+    # apply grows the volume when the plan does (a larger backups.size_gib,
+    # or a disk of PBS's own taking over from the system disk); ext4 grows
+    # while mounted.
+    - name: Filesystem as large as the datastore disk
+      ansible.builtin.command:
+        argv: [resize2fs, "{{ pbs_disk }}"]
+      register: pbs_grow
+      changed_when: "'Nothing to do' not in pbs_grow.stderr"
+      when: pbs_manage_services | bool
+
 - name: Proxmox release key
   ansible.builtin.include_role:
     name: downloads

@@ -110,4 +110,4 @@ def test_verify_without_target_skips_and_exits_zero(tmp_path, monkeypatch, capsy
     assert main(["verify"]) == 0
     out = capsys.readouterr().out.splitlines()
     assert out[-1].startswith("0 PASS, 0 FAIL, ") and out[-1].endswith(" SKIP, 1 DEGRADED")
-    assert out[0] == "DEGRADED backups: no separate disk for PBS"
+    assert out[0].startswith("DEGRADED backups: the backups are on the disk the server runs from")

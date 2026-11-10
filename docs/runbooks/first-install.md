@@ -61,7 +61,9 @@ Decide what each disk in the server is for. There are three uses:
   part 6.
 - **Backup disk** (optional): an empty second disk for the nightly backups.
   NullBill uses a disk for backups only when it is blank, or when you tell
-  it to erase one.
+  it to erase one. Without one the backups go on the system disk, which
+  covers mistakes and broken updates but not that disk failing; a disk can
+  be plugged in later ([backups.md](backups.md)).
 - **Kept disk** (optional): a disk from a Windows PC whose files you want
   to keep and reach over Tailscale. NullBill never formats it.
   [legacy-disk.md](legacy-disk.md) has the details.
@@ -289,7 +291,9 @@ made one.
      cannot be ticked: they are not built yet.
    - **Graphics card**: if it shows, type the card's memory in GB (12 for
      an RTX 4070). Proxmox cannot read it before a driver is installed.
-   - Tick **Nightly backups** only with a backup disk from part 2.
+   - **Nightly backups** work with or without a backup disk from part 2.
+     Where they go, and how much room they get, is on the page's
+     **Backups** ([backups.md](backups.md)).
    - Tick **On-site screen** only if you plugged the monitor into the
      motherboard (part 3) and turned on iGPU Multi-Monitor (part 4).
    - **Other disks**: each disk besides the system disk, with its
@@ -338,21 +342,13 @@ made one.
     If a stage fails, the agent looks into it by itself and proposes the
     fix in its panel; approve it there, or see
     [If a stage fails](#if-a-stage-fails).
-11. **Backups only: copy the backup encryption key** now, while the Proxmox
-    web UI still opens from home. Every backup is encrypted with it, and
-    without it nobody can read them, you included. In the Proxmox web UI's
-    **Shell**, run:
-
-    ```sh
-    proxmox-backup-client key paperkey /etc/pve/priv/storage/nb-pbs.enc --output-format text
-    ```
-
-    Write the key down or print it, and keep it offline, never as a file on
-    a synced disk. Then run
-    `proxmox-backup-client key show /etc/pve/priv/storage/nb-pbs.enc` and
-    check that its fingerprint equals the one on your copy.
-    [pbs-encryption-key.md](pbs-encryption-key.md) explains how a restore
-    uses it.
+11. **Backups only: keep the backup encryption key.** Every backup is
+    encrypted with it, and without it nobody can read them, you included.
+    On the page's **Backups**, under **The key**, press **Download the
+    key** and put the file in a password manager or on a USB stick kept
+    away from the server. For a paper copy instead, which is safer, see
+    [pbs-encryption-key.md](pbs-encryption-key.md); it also explains how
+    a restore uses the key.
 
 ## 10. Join Tailscale and open the page from anywhere
 

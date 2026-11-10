@@ -121,6 +121,7 @@
     <ul class="nav" id="nav">
       <li><a href="#overview" data-view="overview"><svg class="icon" aria-hidden="true"><use href="#i-overview"/></svg><span>Overview</span><span class="count" hidden></span></a></li>
       <li><a href="#services" data-view="services"><svg class="icon" aria-hidden="true"><use href="#i-services"/></svg><span>Services</span><span class="count" hidden></span></a></li>
+      <li><a href="#backups" data-view="backups"><svg class="icon" aria-hidden="true"><use href="#i-history"/></svg><span>Backups</span><span class="count" hidden></span></a></li>
       <li><a href="#activity" data-view="activity"><svg class="icon" aria-hidden="true"><use href="#i-activity"/></svg><span>Activity</span><span class="count" hidden></span></a></li>
       <li><a href="#alerts" data-view="alerts"><svg class="icon" aria-hidden="true"><use href="#i-alerts"/></svg><span>Alerts</span><span class="count" hidden></span></a></li>
     </ul>
@@ -238,6 +239,73 @@
           <tbody id="demand-rows"></tbody></table></div>
         <details class="disclosure small" id="demand-log" hidden><summary>What was started and stopped lately</summary><ul class="events" id="demand-events"></ul></details>
       </section>
+    </section>
+
+    <!-- Backups -->
+    <section class="view" id="view-backups" data-title="Backups" aria-labelledby="h-backups" hidden>
+      <header class="page-head"><div><h1 id="h-backups" tabindex="-1">Backups</h1><p class="page-sub" id="backups-sub"></p></div></header>
+      <div id="backups-unready" class="empty" hidden>
+        <h2>Not yet</h2>
+        <p>Read the hardware and choose what to run; backups are turned on here after that.</p>
+        <a class="btn" href="#setup">Open Setup</a>
+      </div>
+      <div id="backups-body" hidden>
+        <p class="note" id="backups-pending" hidden><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><span id="backups-pending-text"></span><a class="btn small primary push" href="#setup/build">Review and run setup</a></p>
+
+        <section class="block" id="backups-now" aria-labelledby="h-backups-now" hidden>
+          <div class="block-head"><h2 id="h-backups-now">Now</h2><span class="meta" id="backups-meta"></span></div>
+          <p class="note" id="backups-unread" hidden><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><span id="backups-unread-text"></span></p>
+          <dl class="stats" id="backups-stats"></dl>
+        </section>
+
+        <section class="block" aria-labelledby="h-backups-place">
+          <div class="block-head"><h2 id="h-backups-place">Where they go</h2></div>
+          <p class="note warn" id="backups-weak" hidden><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg><span>On the disk the server runs from, the backups bring back a broken service, a bad update or a mistake. If that disk fails, they are lost with it. Plug in any second disk, a USB one too, and press <b>Look for a new disk</b>: it shows below and takes the backups over with their history.</span></p>
+          <p class="backups-own" id="backups-own" hidden></p>
+          <form id="backups-form" novalidate>
+            <div class="options" id="backups-places" role="radiogroup" aria-labelledby="h-backups-place"></div>
+            <label class="field narrow" id="backups-size-field" hidden><span class="label">Room for the backups, in GiB</span>
+              <input id="backups-size" type="number" inputmode="numeric" step="1" autocomplete="off" aria-describedby="backups-size-hint">
+              <span class="hint" id="backups-size-hint"></span></label>
+            <label class="field narrow" id="backups-confirm-field" hidden><span class="label" id="backups-confirm-label"></span>
+              <input id="backups-confirm" autocomplete="off" spellcheck="false"></label>
+            <div class="problem" id="backups-refused" role="alert" hidden></div>
+            <div class="row"><button type="submit" class="btn primary" id="backups-save">Turn on backups</button><p class="feedback" id="backups-result" role="status"></p></div>
+          </form>
+          <div class="row backups-look"><button type="button" class="btn small" data-action="probe"><svg class="icon" aria-hidden="true"><use href="#i-disk"/></svg>Look for a new disk</button><p class="feedback" role="status"></p></div>
+          <p class="foot-note" id="backups-off-note" hidden>Turning backups off deletes them, so it is asked under <a href="#setup/choices">Setup, What to run</a>.</p>
+        </section>
+
+        <section class="block" id="backups-what" aria-labelledby="h-backups-what" hidden>
+          <div class="block-head"><h2 id="h-backups-what">What is backed up</h2><span class="meta" id="backups-schedule"></span></div>
+          <div class="table-wrap"><table class="table">
+            <caption class="sr-only">Each service's newest backup</caption>
+            <thead><tr><th scope="col">Service</th><th scope="col">Newest backup</th></tr></thead>
+            <tbody id="backups-rows"></tbody></table></div>
+          <ul class="facts backups-not" id="backups-not"></ul>
+        </section>
+
+        <section class="block" id="backups-key" aria-labelledby="h-backups-key" hidden>
+          <div class="block-head"><h2 id="h-backups-key">The key</h2></div>
+          <div class="settings"><div class="setting">
+            <div class="setting-text"><h2>Keep a copy off the server</h2><p id="backups-key-why"></p></div>
+            <div class="setting-control">
+              <p id="backups-key-state"></p>
+              <div class="copy-line" id="backups-key-print" hidden><code id="backups-key-fingerprint"></code></div>
+              <div class="row"><a class="btn" id="backups-key-get" href="/api/backups/key" download="nullbill-backup-key.json"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Download the key</a></div>
+            </div>
+          </div></div>
+        </section>
+
+        <section class="block" aria-labelledby="h-backups-back">
+          <div class="block-head"><h2 id="h-backups-back">Getting something back</h2></div>
+          <ul class="facts">
+            <li><b>A service as it was last night, or on an earlier night.</b> In Proxmox, open the storage <code>nb-pbs</code>, choose the backup and press Restore; it replaces the service's disk. <code>docs/runbooks/restore-guest.md</code> has each step.</li>
+            <li><b>The server's disk is gone.</b> Backups on a disk of their own are still there. Install Proxmox again, then follow <code>docs/runbooks/pbs-encryption-key.md</code> with the key you kept.</li>
+            <li><b>Your kept disks.</b> They are your own files and are not in these backups; keep a second copy of what matters.</li>
+          </ul>
+        </section>
+      </div>
     </section>
 
     <!-- Activity -->
@@ -881,7 +949,7 @@
       <dt><kbd>Ctrl</kbd> <kbd>K</kbd></dt><dd>Search and commands</dd>
       <dt><kbd>/</kbd></dt><dd>Write to the agent</dd>
       <dt><kbd>Alt</kbd> <kbd>A</kbd></dt><dd>Show or hide the agent</dd>
-      <dt><kbd>g</kbd> then <kbd>o</kbd> <kbd>s</kbd> <kbd>y</kbd> <kbd>l</kbd> <kbd>u</kbd> <kbd>x</kbd> <kbd>a</kbd> <kbd>p</kbd></dt><dd>Overview, Services, Activity, Alerts, Setup, Access, Agent, Updates</dd>
+      <dt><kbd>g</kbd> then <kbd>o</kbd> <kbd>s</kbd> <kbd>b</kbd> <kbd>y</kbd> <kbd>l</kbd> <kbd>u</kbd> <kbd>x</kbd> <kbd>a</kbd> <kbd>p</kbd></dt><dd>Overview, Services, Backups, Activity, Alerts, Setup, Access, Agent, Updates</dd>
       <dt><kbd>[</kbd> <kbd>]</kbd></dt><dd>Previous and next setup step</dd>
       <dt><kbd>Enter</kbd> / <kbd>Shift</kbd> <kbd>Enter</kbd></dt><dd>Send / new line, in the agent's box</dd>
       <dt><kbd>Alt</kbd> <kbd>Y</kbd> / <kbd>Alt</kbd> <kbd>N</kbd></dt><dd>Go to the agent's waiting request; inside it, approve / decline</dd>
@@ -897,6 +965,7 @@
   <form method="dialog">
     <ul class="sheet-list">
       <li><a href="#setup"><svg class="icon" aria-hidden="true"><use href="#i-setup"/></svg>Setup</a></li>
+      <li><a href="#backups"><svg class="icon" aria-hidden="true"><use href="#i-history"/></svg>Backups<span class="count" id="more-backups-badge" hidden></span></a></li>
       <li><a href="#alerts"><svg class="icon" aria-hidden="true"><use href="#i-alerts"/></svg>Alerts</a></li>
       <li><a href="#access"><svg class="icon" aria-hidden="true"><use href="#i-access"/></svg>Access</a></li>
       <li><a href="#agent/settings"><svg class="icon" aria-hidden="true"><use href="#i-cog"/></svg>Agent settings</a></li>

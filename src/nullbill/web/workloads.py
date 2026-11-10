@@ -24,7 +24,7 @@ always runs and shows what runs on demand as sharing what that leaves.
 
 from pathlib import Path
 
-from nullbill import custom, games, power
+from nullbill import backups, custom, games, power
 from nullbill import model as modelling
 from nullbill import plan as planning
 from nullbill.errors import NullBillError
@@ -158,16 +158,16 @@ TEXT = {
     },
     BACKUPS: {
         "title": "Nightly backups",
-        "what": "Every guest is backed up each night, encrypted, to a backup server on a disk of its own.",
+        "what": "Every service is backed up each night, encrypted, and each day one backup is opened again to prove it can be.",
         "needs": [
-            "A second disk: a blank one is taken by itself, or choose one to erase under Other disks. "
-            "Without one the backup server runs and nothing is backed up."
+            "Nothing more to start with. Without a disk of their own the backups sit on the server's disk: that brings back "
+            "a broken service, a bad update or a mistake, and is lost with the disk. A second disk, USB too, takes them over later."
         ],
         "on": (
-            "Setup makes the backup server and runs the first backups. Keep the encryption key somewhere off the server "
-            "(docs/runbooks/pbs-encryption-key.md): without it the backups cannot be read. Kept disks are never backed up."
+            "Setup makes the backup server and runs the first backups. The Backups page says where they go, shows each night's "
+            "result and holds the key to keep off the server. Kept disks and the local AI models are not backed up."
         ),
-        "off": "Deletes the backup server and every backup on its disk. The guests keep running, without backups.",
+        "off": "Deletes the backup server and every backup it holds. The guests keep running, without backups.",
     },
     CONSOLE: {
         "title": "On-site screen",
@@ -282,9 +282,12 @@ def _note(name: str, plan: dict | None) -> str | None:
             )
         return note
     if name == BACKUPS and PBS in guests:
-        if plan["backups"]["status"] == "ok":
-            return f"Backs up to {plan['backups']['target'].removeprefix('pbs datastore on ')}."
-        return "No disk for backups yet: nothing is backed up until you give it one under Other disks."
+        found = plan["backups"]
+        if found["status"] == backups.OK:
+            return f"Backs up to {found['target'].removeprefix('pbs datastore on ')}, a disk of their own."
+        if found["status"] == backups.SAME_DISK:
+            return f"Backs up to the server's own disk, up to {found['size_gib']} GiB. The Backups page says how to give them a disk."
+        return f"Nothing is backed up: no disk for backups, and under {backups.MIN_GIB} GiB left on the server's disk."
     if name == CONSOLE and plan["host"]["console"].get("enabled"):
         return f"Shown by the {plan['host']['console']['screen']}."
     return None

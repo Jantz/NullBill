@@ -53,7 +53,7 @@ from nullbill.secretfile import Codec, Secrets, Sops
 from nullbill.tailnet import TAG, render_tailnet
 from nullbill.tailscale import MissingScope, Tailnet, TailscaleError
 from nullbill.upgrade import LAST as LAST_UPDATE
-from nullbill.web import chat, demand, progress, workloads
+from nullbill.web import backupview, chat, demand, progress, workloads
 from nullbill.web import review as reviewing
 from nullbill.web.services import PASSWORDS, services, shares
 
@@ -189,6 +189,7 @@ STAMPED = (
     "web/agent-powers.json",
     "web/alerts-heard.json",
     "web/remote-agents.json",
+    backupview.KEY_SAVED,
 )
 # The runs that end with the checks, or are the checks.
 CHECKED = ("apply", "remove-guests", "verify")
@@ -958,6 +959,66 @@ class App:
         build_model(config)
         _write_private(self.home / "config.yaml", yaml.safe_dump(config, sort_keys=False))
         return asked
+
+    # Backups (web/backupview.py): where they go, what the host measured,
+    # and the key they are encrypted with.
+    def backups_view(self, plan: dict | None = None) -> dict:
+        plan = plan or self.plan()
+        config = self.config()
+        try:
+            model = build_model(config) if config else None
+        except NullBillError:
+            model = None
+        built = self.built_plan()
+        secret = Secrets(self.codec(self.home)).data.get("pbs_encryption_key")
+        return backupview.view(
+            config,
+            model,
+            self.facts(),
+            self.saved_plan() if plan["text"] else None,
+            yaml.safe_load(built) if built else None,
+            backupview.key_view(secret, self._key_record()),
+        )
+
+    def _key_record(self) -> dict:
+        try:
+            found = json.loads((self.home / backupview.KEY_SAVED).read_text())
+        except (OSError, ValueError):
+            return {}
+        return found if isinstance(found, dict) else {}
+
+    def backups_live(self) -> dict:
+        """The host's last reading of the backups, from Prometheus."""
+        built = self.built_plan()
+        plan = yaml.safe_load(built) if built else None
+        monitoring = ((plan or {}).get("guests") or {}).get("monitoring")
+        if not monitoring:
+            return {"state": "none", "at": time.time()}
+        api = f"http://{monitoring['ip']}:9090/api/v1/query?"
+        return backupview.live(plan, lambda expr: self.fetch(api + urllib.parse.urlencode({"query": expr}))["data"]["result"])
+
+    def save_backups(self, body: dict) -> None:
+        """Backups on, at the place the owner picked. Saved only when the
+        plan still holds with the backup server in it; a setup run then
+        makes it so."""
+        config = self.config()
+        if config is None or self.facts() is None:
+            raise NullBillError("read the hardware and save your choices under Setup first")
+        new = backupview.save(config, self.backups_view(), body, lambda c, chosen: self._disk_pins(c, chosen))
+        _, _, reasons = self.planned(new)
+        if reasons:
+            raise Refused("The plan does not hold with these backups", reasons)
+        self._save_config(new)
+
+    def backup_key(self) -> str:
+        """The key the backups are encrypted with, for the owner to keep off
+        the server; the page then says when this key was last taken."""
+        secret = Secrets(self.codec(self.home)).data.get("pbs_encryption_key")
+        if not secret:
+            raise NullBillError("no key yet; the first setup run with backups on makes it")
+        record = {"at": time.time(), "fingerprint": backupview.key_view(secret, {})["fingerprint"]}
+        _write_private(self.home / backupview.KEY_SAVED, json.dumps(record) + "\n")
+        return secret
 
     def password(self, name: str) -> str:
         if name not in PASSWORDS:
@@ -2304,6 +2365,7 @@ class App:
             "agent_github": self.agent_github(),
             "lan": self.lan_view(client),
             "checks": self.checks(),
+            "backups": self.backups_view(plan),
             "stamp": self.stamp(),
             "at": time.time(),
             "chat": self.chat.summary(),
@@ -2464,6 +2526,15 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 return self.json(200, {"direct": app.path()})
             if path == "/api/on-demand":
                 return self.json(200, {"view": app.on_demand()})
+            if path == "/api/backups":
+                return self.json(200, {"backups": app.backups_view(), "live": app.backups_live()})
+            if path == "/api/backups/key":
+                try:
+                    key = app.backup_key()
+                except NullBillError as exc:
+                    return self.json(404, refusal(exc))
+                disposition = {"Content-Disposition": f'attachment; filename="{backupview.KEY_FILE}"'}
+                return self.send(200, key.encode() + b"\n", "application/json", disposition)
             if path == "/api/own-service":
                 try:
                     return self.json(200, app.own_service(urllib.parse.parse_qs(query).get("name", [""])[0]))
@@ -2647,6 +2718,10 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                     return self.json(200, {"ok": True, "tailscale_key": app.tailscale_key()})
                 if self.path == "/api/ssh-keys":
                     return self.json(200, {"ok": True, "ssh_keys": app.save_ssh_keys(body)})
+                if self.path == "/api/backups":
+                    app.save_backups(body)
+                    plan = app.plan()
+                    return self.json(200, {"ok": True, "plan": plan, "backups": app.backups_view(plan)})
                 if self.path == "/api/port-mapping":
                     return self.json(200, {"ok": True, "port_mapping": app.save_port_mapping(body)})
                 if self.path == "/api/password-reveal":

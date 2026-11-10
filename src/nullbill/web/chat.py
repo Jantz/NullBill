@@ -1141,6 +1141,7 @@ def tool_label(name: str, args: dict) -> str:
         "metrics": f"Asked Prometheus: {args.get('query', '')}",
         "on_demand": f"On demand: {args.get('action', '')} {args.get('name', '')}",
         "people": "Looked at who has access",
+        "backups": "Looked at the backups",
         "set_person": f"Access for {args.get('name', '')}",
         "remove_person": f"Remove {args.get('name', '')}'s access",
         "stop_job": f"Stop {args.get('id', 'a run')}",
@@ -1463,6 +1464,19 @@ class Tools:
             lines.append(f"{name}{{{labels}}} {value}")
         more = f"\n[{len(result) - 200} more series; narrow the query]" if len(result) > 200 else ""
         return ("\n".join(lines) or "no series match") + more
+
+    def t_backups(self) -> str:
+        """The Backups page: where they go, what the server measured."""
+        view = self.app.backups_view()
+        view["key"] = {k: view["key"][k] for k in ("have", "saved_at")} | {
+            "owner_downloads_it": "on the Backups page; never read or show it"
+        }
+        out = {
+            "chosen_and_built": view,
+            "measured_on_the_server": self.app.backups_live(),
+            "to_change": "the owner picks the place on the Backups page (erasing a disk is theirs alone); set_choices turns them on or off",
+        }
+        return yaml.safe_dump(out, sort_keys=False, width=200)
 
     def t_people(self) -> str:
         """Access, People: who may open what."""

@@ -50,13 +50,60 @@ def test_nightly_job_covers_every_guest_but_pbs_and_templates(facts):
     assert storage["server"] == strip_notes(plan)["guests"]["pbs"]["ip"]
 
 
-def test_no_backup_resources_without_a_pbs_disk(facts):
+def test_without_a_pbs_disk_the_datastore_is_a_volume_beside_the_guests(facts):
     plan, model = planned(facts, "small")
     config = json.loads(render_tofu(plan, model)["main.tf.json"])
+    (root, datastore) = config["resource"]["proxmox_virtual_environment_vm"]["pbs"]["disk"]
+    assert (datastore["datastore_id"], datastore["size"], datastore["serial"]) == ("local-lvm", 64, backups.DISK_SERIAL)
+    assert datastore["backup"] is False and root["datastore_id"] == "local-lvm"
+    assert config["resource"]["proxmox_virtual_environment_vm"]["pbs"]["lifecycle"] == {"prevent_destroy": True}
+    assert "proxmox_backup_job" in config["resource"]
+    assert backups.enabled(plan) and backups.disk(plan) is None and backups.store(plan) == ("local-lvm", 64)
+    # The checks run as on a disk of PBS's own; verify adds what one disk cannot do.
+    assert {r.status for r in backups.check(plan, TARGET, backup_host(plan), time.time)} == {"PASS"}
+    results = run_verify(plan, model, None, lambda *a: (1, "", ""))
+    assert results[0].line() == (
+        "DEGRADED backups: the backups are on the disk the server runs from, so a failing disk takes both; plug in a disk for them"
+    )
+
+
+def test_no_backup_resources_without_room_for_the_datastore(facts):
+    f = facts("small")
+    model = build_model(fixture_config("small") | {"overrides": {"linux-runner": {"count": 1}}})
+    floors = strip_notes(build_plan(model, f))["disk"]["needed_gib"]
+    next(s for s in f["storage"] if s["name"] == "local-lvm")["avail_gib"] = floors + backups.MIN_GIB - 1
+    plan = build_plan(model, f)
+    assert strip_notes(plan)["backups"]["status"] == "DEGRADED" and not backups.enabled(plan)
+    config = json.loads(render_tofu(plan, model)["main.tf.json"])
     assert "proxmox_storage_pbs" not in config["resource"]
+    assert len(config["resource"]["proxmox_virtual_environment_vm"]["pbs"]["disk"]) == 1
     assert not any(v.startswith("pbs_") for v in config["variable"])
     assert backups.check(plan, TARGET, backup_host(plan), time.time) == []
     assert backups.skipped(plan, "no target") == []
+
+
+def test_a_guest_left_out_is_not_in_the_job_and_not_asked_for_a_backup(facts):
+    plan, model = planned(facts, "mid")
+    assert "inference" in strip_notes(plan)["guests"] and "inference" not in backups.guests(plan)
+    job = json.loads(render_tofu(plan, model)["main.tf.json"])["resource"]["proxmox_backup_job"]["nb_nightly"]
+    assert str(strip_notes(plan)["guests"]["inference"]["vmid"]) not in job["vmid"]
+    assert not any(r.name.startswith("inference ") for r in backups.check(plan, TARGET, backup_host(plan), time.time))
+
+
+def test_the_datastore_volume_is_found_in_a_vm_config_by_its_serial():
+    config = (
+        "boot: order=virtio0\nmemory: 2048\n"
+        "virtio0: local-lvm:vm-2015-disk-0,discard=on,iothread=1,size=8G\n"
+        "virtio1: local-lvm:vm-2015-disk-1,backup=0,discard=on,iothread=1,serial=nb-backups,size=64G\n"
+    )
+    assert backups.datastore_disk(config) == ("virtio1", "local-lvm", 64)
+    assert backups.datastore_disk(config.replace("local-lvm:vm-2015-disk-1", "nb-pbs-disk:vm-2015-disk-0").replace("64G", "2T")) == (
+        "virtio1",
+        "nb-pbs-disk",
+        2048,
+    )
+    assert backups.datastore_disk("name: pbs\nvirtio0: local-lvm:vm-2015-disk-0,size=8G\n") is None
+    assert backups.datastore_disk(config.replace("size=64G", "size=65536M")) is None
 
 
 def test_fresh_encrypted_backups_and_restore_pass(facts):

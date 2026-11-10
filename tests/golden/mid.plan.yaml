@@ -260,10 +260,14 @@ disks:
       - gpt
       - vfat
     use: system
-# PBS on its own disk.
+# PBS on its own disk. Not backed up: inference, which setup builds again.
 backups:
   target: pbs datastore on ata-SYNTHETIC_HDD_0002
   status: ok
+  storage: nb-pbs-disk
+  size_gib: 1862
+  left_out:
+    - inference
 # Allowed flows; everything else is denied.
 flows:
   - zone:* -> router udp/53

@@ -303,6 +303,13 @@ def _size(
     # Copies of kept disks this apply makes stay on their storage for good.
     reserved = legacy.reserved_gib(model, facts).get(storage["name"], 0) if storage else 0
     room = storage["avail_gib"] - reserved if storage else 0
+    # Without a disk of its own, PBS keeps the backups in a volume beside the
+    # guests. It comes before a pool's further clones, after every floor.
+    datastore = None
+    if storage and "pbs" in planned and not backups.separate_disk(model, facts):
+        floors = sum(s["disk_gib"] * (2 if n in counts else 1) for n, s in sizes.items())
+        datastore = backups.same_disk_gib(model, room - floors)
+        room -= datastore or 0
     while storage and disk_needed() > room:
         shrinkable = [n for n in growing if counts[n] > 1]
         if not shrinkable:
@@ -316,7 +323,8 @@ def _size(
     disk = disk_needed()
     if storage and disk > room:
         copies = f" besides {reserved} GiB for copies of kept disks" if reserved else ""
-        errors.append(f"disk: guests need {disk} GiB, storage {storage['name']} has {room} GiB free{copies}")
+        store = f" besides {datastore} GiB for the backups (backups.size_gib)" if datastore else ""
+        errors.append(f"disk: guests need {disk} GiB, storage {storage['name']} has {room} GiB free{copies}{store}")
     allocated = sum(counted(n, s) for n, s in sizes.items() if n not in parked)
     limits_total = sum(s["memory_mib"] * counts.get(n, 1) for n, s in sizes.items())
     group_mib = {w: sum(counted(n, sizes[n]) for n in members) for w, members in on_demand.items()}
@@ -337,6 +345,9 @@ def _size(
         "needed_gib": Note(disk, "Includes one golden template per pool."),
         "free_gib": storage["avail_gib"] if storage else None,
         **({"copies_gib": Note(reserved, "Taken by the copies of kept disks apply makes before converting them.")} if reserved else {}),
+        **(
+            {"backups_gib": Note(datastore, "The backups, in a volume beside the guests: PBS has no disk of its own.")} if datastore else {}
+        ),
         "media": Note(_media(facts, errors), "Holds the downloaded container template and cloud image."),
     }
     pool_counts = {n: Note(counts[n], f"Clones, {limits[n]}.") for n in pools}
@@ -512,12 +523,34 @@ def _health_note(smart: dict) -> str:
     return ""
 
 
-def _backups(planned: dict, pbs: str | None) -> Note:
+def _backups(model: dict, planned: dict, pbs: str | None, disks: dict, disk: dict) -> Note:
+    """Where the backups go. On a disk of PBS's own the datastore volume
+    takes the disk, less a GiB for LVM's metadata; else it is the volume
+    _size made room for beside the guests, and the plan says what that
+    does not protect from."""
     if "pbs" not in planned:
-        return Note({"target": None, "status": "disabled"}, "PBS is switched off (services.pbs.enabled: false); nothing is backed up.")
+        off = {"target": None, "status": backups.DISABLED}
+        return Note(off, "PBS is switched off (services.pbs.enabled: false); nothing is backed up.")
+    left_out = [n for n, svc in planned.items() if svc.get("backup") is False and n != "pbs" and svc["kind"] != "vm-pool"]
+    rest = {"left_out": left_out} if left_out else {}
+    why = f" Not backed up: {', '.join(left_out)}, which setup builds again." if left_out else ""
+    pinned = model.get("backups", {}).get("size_gib")
     if pbs:
-        return Note({"target": f"pbs datastore on {pbs}", "status": "ok"}, "PBS on its own disk.")
-    return Note({"target": None, "status": "DEGRADED"}, "No separate disk for PBS; add a blank disk or pin one.")
+        size = strip_notes(disks[pbs])["size_gib"] - 1
+        entry = {"target": f"pbs datastore on {pbs}", "status": backups.OK, "storage": backups.DISK_STORAGE, "size_gib": size}
+        unused = " backups.size_gib is not used while PBS has a disk." if pinned else ""
+        return Note(entry | rest, "PBS on its own disk." + unused + why)
+    size = strip_notes(disk).get("backups_gib")
+    if size is None:
+        none = {"target": None, "status": backups.NO_ROOM}
+        return Note(none, f"No disk for PBS, and under {backups.MIN_GIB} GiB left beside the guests; add a blank disk or pin one.")
+    storage = disk["storage"]
+    entry = {"target": f"pbs datastore on {storage}, beside the guests", "status": backups.SAME_DISK, "storage": storage, "size_gib": size}
+    how = "Pinned (backups.size_gib)." if pinned else "Set backups.size_gib for another size; it can grow, not shrink."
+    return Note(
+        entry | rest,
+        f"PBS has no disk of its own: {backups.SAME_DISK_WHY}. A blank disk plugged in later takes them over, history included. {how}{why}",
+    )
 
 
 def _flows(model: dict, planned: dict, zones: set[str]) -> list[str]:
@@ -665,7 +698,7 @@ def build_plan(model: dict, facts: dict) -> dict:
         **({"power": demand} if demand else {}),
         "disks": disk_section,
         **_copies(facts),
-        "backups": _backups(planned, pbs),
+        "backups": _backups(model, planned, pbs, disk_section, capacity["disk"]),
         "flows": Note(_flows(model, planned, set(zones)), "Allowed flows; everything else is denied."),
         "people": {
             name: {"role": p["role"], "services": p["services"]} if p.get("services") else p["role"] for name, p in model["people"].items()

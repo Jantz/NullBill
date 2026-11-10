@@ -134,7 +134,13 @@ def test_disk_with_signatures_needs_wipe_pin(facts):
 def test_unpinned_disk_with_signatures_is_untouched(facts):
     plan = plan_for(facts("large"), fixture_config("large"))
     assert plan["disks"]["ata-SYNTHETIC_HDD_0002"].value["use"] == "untouched"
-    assert plan["backups"].value == {"target": "pbs datastore on ata-SYNTHETIC_HDD_0003", "status": "ok"}
+    assert plan["backups"].value == {
+        "target": "pbs datastore on ata-SYNTHETIC_HDD_0003",
+        "status": "ok",
+        "storage": "nb-pbs-disk",
+        "size_gib": 3725,
+        "left_out": ["inference"],
+    }
 
 
 def test_the_pbs_disk_apply_made_stays_the_pbs_disk_after_a_new_probe(facts):
@@ -175,8 +181,77 @@ def test_a_storage_disk_apply_made_needs_no_wipe_after_a_new_probe(facts):
     assert message == "disks.ata-SYNTHETIC_HDD_0002: carries LVM2_member; set wipe: true to let apply format it"
 
 
-def test_single_disk_backups_degraded(facts):
-    assert plan_for(facts("small"), fixture_config("small"))["backups"].value["status"] == "DEGRADED"
+def test_one_disk_keeps_the_backups_beside_the_guests(facts):
+    """Without a disk for PBS the datastore is a volume on the guests'
+    storage, and the plan says what that does not protect from."""
+    plan = plan_for(facts("small"), fixture_config("small"))
+    assert plan["backups"].value == {
+        "target": "pbs datastore on local-lvm, beside the guests",
+        "status": "same-disk",
+        "storage": "local-lvm",
+        "size_gib": 64,
+    }
+    assert "a failing disk takes both" in plan["backups"].why
+    assert strip_notes(plan)["disk"]["backups_gib"] == 64
+
+
+def _room(f, gib):
+    next(s for s in f["storage"] if s["name"] == "local-lvm")["avail_gib"] = gib
+    return f
+
+
+def test_the_backups_volume_takes_what_the_storage_has_left_but_never_too_little(facts):
+    config = fixture_config("small")
+    floors = strip_notes(plan_for(facts("small"), config | {"overrides": {"linux-runner": {"count": 1}}}))["disk"]["needed_gib"]
+    # A pool's further clones give way to the backups; the guests' floors do not.
+    assert strip_notes(plan_for(_room(facts("small"), floors + 64), config))["backups"]["size_gib"] == 64
+    tight = strip_notes(plan_for(_room(facts("small"), floors + 20), config))
+    assert (tight["backups"]["status"], tight["backups"]["size_gib"], tight["disk"]["needed_gib"]) == ("same-disk", 20, floors)
+    none = plan_for(_room(facts("small"), floors + 15), config)
+    assert none["backups"].value == {"target": None, "status": "DEGRADED"}
+    assert "under 16 GiB left beside the guests" in none["backups"].why
+    assert "backups_gib" not in strip_notes(none)["disk"]
+
+
+def test_a_pinned_backups_size_is_taken_or_refused(facts):
+    config = fixture_config("small") | {"backups": {"size_gib": 32}}
+    assert strip_notes(plan_for(facts("small"), config))["backups"]["size_gib"] == 32
+    (message,) = errors_of(facts("small"), fixture_config("small") | {"backups": {"size_gib": 400}})
+    assert message.endswith("besides 400 GiB for the backups (backups.size_gib)")
+    # With a disk for PBS the pin waits unused, so plugging one in breaks nothing.
+    plan = plan_for(facts("mid"), fixture_config("mid") | {"backups": {"size_gib": 32}})
+    assert plan["backups"].value["size_gib"] == 1862 and "backups.size_gib is not used" in plan["backups"].why
+
+
+@pytest.mark.parametrize("fixture", ["small", "mid", "large"])
+def test_the_room_for_backups_follows_the_disk_rules(facts, fixture):
+    """_size decides on the volume beside the guests before _disks has
+    walked the disks; both must come to the same answer."""
+    from nullbill import backups
+
+    f = facts(fixture)
+    for disk in f["disks"]:
+        configs = [fixture_config(fixture)]
+        if not disk["system"]:
+            configs += [
+                fixture_config(fixture) | {"disks": {disk["id"]: {"use": "ignore"}}},
+                fixture_config(fixture) | {"disks": {disk["id"]: {"use": "pbs", "wipe": True}}},
+            ]
+        for config in configs:
+            model = build_model(config)
+            try:
+                plan = strip_notes(build_plan(model, f))
+            except NullBillError:
+                continue
+            assert backups.separate_disk(model, f) == (backups.disk(plan) is not None), config.get("disks")
+            assert (plan["backups"]["status"] == "ok") == (backups.disk(plan) is not None)
+
+
+def test_a_service_can_be_left_out_of_the_backups_or_taken_in(facts):
+    plan = strip_notes(plan_for(facts("mid"), fixture_config("mid")))
+    assert plan["backups"]["left_out"] == ["inference"]
+    config = fixture_config("mid") | {"services": {"inference": {"backup": True}, "forgejo": {"backup": False}}}
+    assert strip_notes(plan_for(facts("mid"), config))["backups"]["left_out"] == ["forgejo"]
 
 
 def test_gpu_over_budget_fails(facts):

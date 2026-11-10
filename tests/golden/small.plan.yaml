@@ -21,6 +21,8 @@ disk:
   # Includes one golden template per pool.
   needed_gib: 264
   free_gib: 350
+  # The backups, in a volume beside the guests: PBS has no disk of its own.
+  backups_gib: 64
   # Holds the downloaded container template and cloud image.
   media: local
 domain: nullbill.internal
@@ -206,10 +208,12 @@ disks:
       - gpt
       - vfat
     use: system
-# No separate disk for PBS; add a blank disk or pin one.
+# PBS has no disk of its own: the backups are on the disk the server runs from, so a failing disk takes both. A blank disk plugged in later takes them over, history included. Set backups.size_gib for another size; it can grow, not shrink.
 backups:
-  target: null
-  status: DEGRADED
+  target: pbs datastore on local-lvm, beside the guests
+  status: same-disk
+  storage: local-lvm
+  size_gib: 64
 # Allowed flows; everything else is denied.
 flows:
   - zone:* -> router udp/53

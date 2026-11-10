@@ -6,7 +6,7 @@
 // server works, then done or the reason it was refused. The agent proposes;
 // the page decides by the owner's access mode and runs what is approved.
 
-const VIEWS = ["overview", "services", "activity", "alerts", "setup", "access", "agent", "updates"];
+const VIEWS = ["overview", "services", "backups", "activity", "alerts", "setup", "access", "agent", "updates"];
 const ALIASES = {home: "overview", agents: "agent", "": ""};
 const STEPS = ["hardware", "choices", "plan", "build"];
 const AGENT_TABS = ["chat", "settings", "log"];
@@ -516,7 +516,7 @@ function route(focus) {
     if (link.dataset.view === view || link.getAttribute("href") === `#${view}`) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   }
-  const inMore = ["setup", "access", "alerts", "updates"].includes(view);
+  const inMore = ["setup", "access", "alerts", "updates", "backups"].includes(view);
   $("tab-more").classList.toggle("current", inMore);
   const changed = currentView !== view || currentSub !== sub;
   const viewChanged = currentView !== view;
@@ -551,6 +551,7 @@ function route(focus) {
     }
   }
   if (view === "services" && viewChanged) loadDemand().catch(() => {});
+  if (view === "backups" && viewChanged) loadBackups().catch(() => {});
   if (view === "updates" && viewChanged) say("update-result", "", "");
   placeChat();
   placeJob();
@@ -2508,6 +2509,9 @@ function attentionItems() {
   if (fresh.length && runningAction() !== "upgrade") {
     add("info", "A NullBill update is available", `${count(fresh.length, "change")}, ${needSetup(fresh)}.`, [link("See the update", "#updates")]);
   }
+  if (built() && state.backups.ready && !state.backups.on && !state.backups.built) {
+    add("warn", "Nothing on this server is backed up", "Backups can start on the server's own disk; no second disk is needed.", [link("Turn on backups", "#backups")]);
+  }
   if (state.agent_powers) add("warn", "The operator agent has root on Proxmox", "The checks warn while this is on.", [link("Agent settings", "#agent/settings")]);
   // What only the owner stops, left on and unused for as long as its rule says.
   for (const a of (s && s.monitoring === "ok" && s.asks) || []) {
@@ -2561,6 +2565,8 @@ function renderOverview(items) {
     } else {
       cell("Monitoring", !s ? "Asking…" : s.monitoring === "not planned" ? "Not planned" : "Not answering", !s ? "" : s.monitoring === "not planned" ? "" : "warn", "");
     }
+    const [bKind, bWord, bSub] = backupsWord(st.backups);
+    cell("Backups", bWord, bKind, bSub, "#backups");
     const lan = st.lan.state;
     cell("Home network", lan === "closed" ? "Closed" : lan === "closing" ? "Closing" : "Open", lan === "closed" ? "good" : "warn",
       lan === "closed" ? "Proxmox only over Tailscale" : "Proxmox answers on your LAN", "#access/lan");
@@ -3005,6 +3011,208 @@ async function loadDemand() {
   setDemand((await api("/api/on-demand")).view);
 }
 
+// Backups (web/backupview.py): where they go, what the server measured of
+// them and when, and the key to keep off the server.
+let backupsLive = null;    // the last /api/backups reading from the server
+let backupsDrawn = "";     // the places as last drawn: a refresh must not undo a choice being made
+const KEEP_WORDS = {"keep-daily": "daily", "keep-weekly": "weekly", "keep-monthly": "monthly"};
+function keepsText(keeps) { return Object.entries(keeps).map(([k, n]) => `${n} ${KEEP_WORDS[k] || k}`).join(", "); }
+function bytesGib(n) { const g = n / 2 ** 30; return g >= 100 ? `${Math.round(g)}` : g.toFixed(1); }
+
+// Backups in a word, for Overview: what was chosen and built, not a reading.
+function backupsWord(b) {
+  if (!b || !b.ready) return ["", "Not set up", ""];
+  if (!b.on) return b.built ? ["warn", "Being turned off", "The next setup run deletes them"] : ["warn", "Off", "Nothing is backed up"];
+  if (!b.built) return ["warn", b.where ? "Chosen, not built" : "No room", b.where ? "The next setup run makes them" : "Nothing is backed up"];
+  return b.built.kind === "disk" ? ["good", "On a disk of their own", `Nightly at ${b.schedule}`] : ["warn", "On the server's disk", "Lost if this disk fails"];
+}
+
+async function loadBackups() {
+  if (!state || !state.backups.ready) return;
+  const got = await api("/api/backups");
+  state.backups = got.backups;
+  backupsLive = got.live;
+  renderBackups();
+}
+
+function backupPlace(p, b) {
+  const size = `${p.size_gib} GiB ${p.rotational ? "hard disk" : "SSD"}`;
+  const failing = p.health === "FAILED" ? " It reports that it is failing." : "";
+  switch (p.kind) {
+    case "blank": return [p.id, `${size}, blank. A disk of their own: the backups outlive the server's disk.${failing}`, "", ""];
+    case "erase": return [p.id, `${size}, holding ${andList(p.holds)}. Erased for the backups: everything on it is lost.${failing}`, "", "danger-option"];
+    case "kept": return [p.id, `${size}, with files you keep.`, "Not offered: NullBill puts no backups on a disk it shares. Setup, What to run, Other disks can copy its files off and erase it.", ""];
+    case "storage": return [p.id, `${size}, extra storage in Proxmox.`, "Not offered while it is storage.", ""];
+    default: return [p.id, `${size}. The backups' own disk.`, "", ""];
+  }
+}
+
+function backupsPicked() {
+  const input = $("backups-places").querySelector("input:checked");
+  return input ? input.value : "";
+}
+
+function paintBackupsForm() {
+  const b = state.backups;
+  const picked = backupsPicked();
+  const place = b.places.find((p) => p.id === picked);
+  show("backups-size-field", picked === "system");
+  show("backups-confirm-field", Boolean(place && place.kind === "erase"));
+  if (place) $("backups-confirm-label").textContent = `Type ${place.confirm}, the end of its name, to erase everything on it`;
+  $("backups-save").textContent = b.on && (b.where || b.built) ? "Save" : "Turn on backups";
+}
+
+function renderBackups() {
+  if (!state) return;
+  const b = state.backups;
+  show("backups-unready", !b.ready);
+  show("backups-body", b.ready);
+  if (!b.ready) { $("backups-sub").textContent = ""; return; }
+  const has = b.built;
+  const want = b.where;
+  const live = has ? backupsLive : null;
+  const problems = state.plan.errors.length > 0;
+  $("backups-sub").textContent = !b.on ? (has ? "Turned off in your choices." : "Off. Nothing on this server is backed up.")
+    : has ? `Every service, each night at ${b.schedule}, encrypted on the server. Kept: ${keepsText(b.keeps)}.`
+      : "Every service, each night, encrypted on the server.";
+  const pending = !b.pending ? ""
+    : !b.on ? "Backups are turned off in your choices. The next setup run deletes the backup server and every backup."
+      : !want ? ""
+        : !has ? "Saved. The next setup run makes the backup server and the first backups."
+          : want.kind === "disk" && has.kind === "system" ? `${want.disk} is in the server for the backups. The next setup run moves them onto it with their history; the backup server keeps running.`
+            : want.size_gib !== has.size_gib ? `Saved. The next setup run gives the backups ${want.size_gib} GiB.` : "Saved. The next setup run makes the change.";
+  const stuck = b.on && !want ? (problems ? "The plan has problems, so nothing here can be built. Settle them under Setup, Plan."
+    : b.status === "DEGRADED" ? "Backups are on, and nothing is backed up: no disk for them, and too little room left on the server's disk. Plug in a disk and press Look for a new disk." : "") : "";
+  show("backups-pending", Boolean(pending || stuck));
+  $("backups-pending-text").textContent = pending || stuck;
+  $("backups-pending").classList.toggle("warn", Boolean(stuck));
+  show($("backups-pending").querySelector("a"), Boolean(pending));
+
+  // Now: what the server measured, with when.
+  show("backups-now", Boolean(has));
+  if (has) {
+    const stats = [];
+    const cell = (label, kind, value, sub) => stats.push(make("div", {}, make("dt", {textContent: label}),
+      make("dd", {}, make("span", {className: "status-val"}, make("span", {className: `dot ${kind}`, ariaHidden: "true"}), value)),
+      sub ? make("dd", {className: "sub", textContent: sub}) : null));
+    const why = !live ? "" : live.state === "unreachable" ? "Monitoring does not answer, so there is no reading of the backups. If setup just finished, wait a minute."
+      : live.state === "waiting" ? "No reading yet. The server reads its backups at the end of a setup run and every hour."
+        : live.state === "unlisted" ? "The server cannot list its backups: the backup server does not answer it. The alert BackupStatusUnknown follows if this lasts." : "";
+    show("backups-unread", Boolean(why));
+    $("backups-unread-text").textContent = why;
+    $("backups-unread").classList.toggle("warn", Boolean(live && live.state === "unlisted"));
+    cell("Where", has.kind === "disk" ? "good" : "warn", has.kind === "disk" ? "A disk of their own" : "The server's disk",
+      has.kind === "disk" ? has.disk : "Lost if this disk fails");
+    if (live && live.state === "ok") {
+      const n = live.guests.length;
+      const newest = Math.max(0, ...live.guests.map((g) => g.last || 0));
+      if (live.late.length) cell("Newest backups", "bad", `${live.late.length} of ${n} late`, `None from the last 26 hours: ${live.late.join(", ")}`);
+      else cell("Newest backups", "good", `${n} of ${n} in time`, newest ? `The newest from ${clock(newest)}` : "");
+      const r = live.restore;
+      if (!r) cell("Restore test", "", "Not run yet", "One backup is opened after each night's backups");
+      else cell("Restore test", r.ok ? "good" : "bad", r.ok ? "Passed" : "Failed",
+        `${r.ok ? "A file was read back from" : "No file could be read back from"} ${r.guest}'s backup of ${clock(r.backup)}; tested ${ago(r.at)}`);
+      const room = live.store;
+      if (room) {
+        const full = room.used / room.size;
+        cell("Room", full > 0.9 ? "warn" : "good", `${bytesGib(room.used)} of ${bytesGib(room.size)} GiB`,
+          full > 0.9 ? (has.kind === "system" ? "Nearly full: give them more below" : "Nearly full") : "Old backups are pruned daily");
+      }
+    }
+    $("backups-stats").replaceChildren(...stats);
+    $("backups-meta").textContent = live && live.read ? `Measured on the server ${readAt(live.read)}` : "";
+  }
+
+  // Where they go.
+  const holder = b.places.find((p) => p.kind === "made" || p.kind === "chosen");
+  const system = b.system;
+  show("backups-weak", b.on && Boolean(want || has) && (want || has).kind === "system");
+  show("backups-own", Boolean(holder));
+  show("backups-form", !holder);
+  show("backups-off-note", b.on);
+  show(document.querySelector(".backups-look"), !holder);
+  if (holder) {
+    $("backups-own").textContent = `${holder.id}, ${holder.size_gib} GiB: a disk of their own, so they outlive the disk the server runs from.`;
+  }
+  const drawn = JSON.stringify([b.places, system, want, b.on]);
+  if (!holder && drawn !== backupsDrawn) {
+    backupsDrawn = drawn;
+    const list = $("backups-places");
+    const firstBlank = b.places.find((p) => p.kind === "blank");
+    const chosen = want && want.kind === "system" ? "system" : firstBlank ? firstBlank.id : system.allowed ? "system" : "";
+    const radio = (value, disabled) => make("input", {type: "radio", name: "backups-place", value, checked: value === chosen, disabled});
+    const room = system.free_gib === null || system.free_gib === undefined ? "" : ` ${system.free_gib} GiB are free on it.`;
+    list.replaceChildren(
+      option(radio("system", !system.allowed), "On the disk the server runs from",
+        `Nothing to plug in.${room} Brings back a broken service, a bad update or a mistake; lost if this disk fails.`,
+        system.allowed ? "" : `Not offered: ${system.why}`),
+      ...b.places.map((p) => {
+        const [title, desc, why, cls] = backupPlace(p, b);
+        return option(radio(p.id, Boolean(why)), title, desc, why, cls);
+      }));
+    const size = $("backups-size");
+    size.min = system.min_gib;
+    size.max = 4096;
+    size.value = system.size_gib || system.default_gib;
+    $("backups-size-hint").textContent = "They take only what they use, up to this. It can grow later, not shrink.";
+    $("backups-confirm").value = "";
+    $("backups-refused").hidden = true;
+  }
+  if (!holder) paintBackupsForm();
+
+  // What is backed up, and what is not.
+  const rows = live && live.state === "ok" ? live.guests : b.covered.map((name) => ({name}));
+  show("backups-what", rows.length > 0);
+  $("backups-schedule").textContent = `Each night at ${b.schedule} · kept: ${keepsText(b.keeps)}`;
+  $("backups-rows").replaceChildren(...rows.map((g) => {
+    const late = live && live.state === "ok" && live.late.includes(g.name);
+    const when = g.last ? status(late ? "bad" : "good", clock(g.last), ago(g.last))
+      : g.last === null ? status("bad", "None yet") : status("", has ? "No reading yet" : b.on ? "After the next setup run" : "Once backups are on");
+    return make("tr", {}, make("td", {className: "name", textContent: g.name}), make("td", {}, when));
+  }));
+  $("backups-not").replaceChildren(
+    ...b.left_out.map((name) => make("li", {}, make("b", {textContent: `Not ${name}. `}), "Setup builds it again from what it pins, and nothing in it is yours.")),
+    make("li", {}, make("b", {textContent: "Not your kept disks. "}), "They hold your own files, and a media library is far larger than everything else here together."));
+
+  // The key.
+  const key = b.key;
+  show("backups-key", key.have);
+  if (key.have) {
+    $("backups-key-why").textContent = "Backups are encrypted on the server with this key before they are stored. If the server's disk is lost, backups on another disk open only with it, "
+      + "and the server's own copies of the key are lost too. Keep the file on another device, or print it."
+      + ((has || want || {}).kind === "system" ? " It starts to matter once the backups have a disk of their own." : "");
+    $("backups-key-state").replaceChildren(key.saved_at ? status("good", "Downloaded from this page", clock(key.saved_at)) : status("warn", "Not taken off the server yet"));
+    show("backups-key-print", Boolean(key.fingerprint));
+    $("backups-key-fingerprint").textContent = key.fingerprint ? `Fingerprint ${key.fingerprint}` : "";
+  }
+}
+
+function saveBackups(event) {
+  event.preventDefault();
+  const picked = backupsPicked();
+  const body = {place: picked};
+  if (picked === "system") body.size_gib = Number($("backups-size").value);
+  else body.confirm = $("backups-confirm").value.trim();
+  const field = picked === "system" ? $("backups-size") : $("backups-confirm-field").hidden ? null : $("backups-confirm");
+  $("backups-refused").hidden = true;
+  press($("backups-save"), "backups-result", "Saving…", async () => {
+    if (!picked) throw new ApiError("Choose where the backups go.", 400);
+    let got;
+    try {
+      got = await api("/api/backups", body);
+    } catch (error) {
+      showProblem("backups-refused", error);
+      throw error;
+    }
+    state.plan = got.plan;
+    state.backups = got.backups;
+    backupsDrawn = "";
+    renderBackups();
+    refreshSoon();
+    return got.backups.pending ? "Saved. A setup run makes it so." : "Saved. Nothing changes on the server.";
+  }, field);
+}
+
 // Start, Stop or Keep on. A start that does not fit, and a stop of
 // something in use, change nothing on the server and come back as a
 // question; only the owner's yes sends them again.
@@ -3073,6 +3281,7 @@ async function refreshStatus() {
   paintStates();
   if (currentView === "services" && !$("confirm").open) loadDemand().catch(() => {});
   if (pathShown()) loadPath().catch(() => {});
+  if (currentView === "backups") loadBackups().catch(() => {});
   if (state && lastStatus.stamp && lastStatus.stamp !== state.stamp) refreshSoon();
 }
 
@@ -3117,6 +3326,7 @@ async function refresh() {
   renderLan(st.lan);
   if (peopleShown() && !$("confirm").open) loadPeople(false).catch(() => {});
   renderTrust(st.trust);
+  renderBackups();
   onChoicesChanged();
   paintChatShell();
   if (first) {
@@ -4330,7 +4540,7 @@ async function newConversation() {
 // Command palette.
 function commands() {
   const out = [
-    ...VIEWS.map((v) => ({label: $(`view-${v}`).dataset.title, kind: "Page", icon: {overview: "overview", agent: "agent", activity: "activity", alerts: "alerts", setup: "setup", access: "access", services: "services"}[v], run: () => go(v)})),
+    ...VIEWS.map((v) => ({label: $(`view-${v}`).dataset.title, kind: "Page", icon: {overview: "overview", agent: "agent", activity: "activity", alerts: "alerts", setup: "setup", access: "access", services: "services", backups: "history"}[v], run: () => go(v)})),
     ...STEPS.map((s) => ({label: `Setup: ${$("stepper").querySelector(`[data-step="${s}"]`).textContent.replace(/, (done|needs you)$/, "")}`, kind: "Step", icon: "setup", run: () => go(`setup/${s}`)})),
     {label: "Run setup: review, then start", kind: "Run", icon: "play", run: () => go("setup/build")},
     {label: "Run the checks", kind: "Run", icon: "checks", run: () => startJob("verify", $("run-menu"), $("actions-result"))},
@@ -4504,7 +4714,7 @@ async function checkTrust() {
 
 // Keyboard.
 let gPending = 0;
-const G_KEYS = {o: "overview", h: "overview", s: "services", y: "activity", l: "alerts", u: "setup", x: "access", a: "agent", p: "updates"};
+const G_KEYS = {o: "overview", h: "overview", s: "services", b: "backups", y: "activity", l: "alerts", u: "setup", x: "access", a: "agent", p: "updates"};
 
 function typing(target) {
   return target && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
@@ -5059,6 +5269,10 @@ document.addEventListener("DOMContentLoaded", () => {
     return "Topic copied.";
   }));
 
+  $("backups-form").addEventListener("submit", saveBackups);
+  $("backups-places").addEventListener("change", paintBackupsForm);
+  // The download is a plain link; the page then says when the key was taken.
+  $("backups-key-get").addEventListener("click", () => setTimeout(() => loadBackups().catch(() => {}), 1500));
   $("start-setup").addEventListener("click", () => startJob("apply", $("start-setup"), $("build-result")));
   $("update-now").addEventListener("click", () => startJob("upgrade", $("update-now"), $("update-result")));
   $("update-check").addEventListener("click", () => press($("update-check"), "update-result", "Asking the repository…", async () => {
