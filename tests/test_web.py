@@ -587,14 +587,51 @@ def test_alerts_topic_is_made_with_the_password_and_tested(site):
     assert bad[0] == 400 and "hc-ping.com" in bad[1]["error"]
     ping = "https://hc-ping.com/0f4b3c9e-0000-4000-8000-000000000000"
     status, data = client.call("/api/alerts", {"healthchecks_url": ping})
-    assert status == 200 and data["alerts"] == {"ntfy_url": alerts["ntfy_url"], "healthchecks_url": ping}
+    assert status == 200 and data["alerts"] == {"ntfy_url": alerts["ntfy_url"], "healthchecks_url": ping, "heard": None}
     assert client.call("/api/alerts/test", {}) == (200, {"ok": True, "sent": ["ntfy", "Healthchecks.io"]})
     (ntfy, body, headers), (hc, _, _) = app.send
     assert (ntfy, hc) == (alerts["ntfy_url"], ping)
     assert headers["Title"] == "NullBill: test alert" and "reach this device" in body
     # Clearing the URL stops the ping; the topic stays.
     client.call("/api/alerts", {"healthchecks_url": ""})
-    assert client.call("/api/state")[1]["alerts"] == {"ntfy_url": alerts["ntfy_url"], "healthchecks_url": ""}
+    assert client.call("/api/state")[1]["alerts"] == {"ntfy_url": alerts["ntfy_url"], "healthchecks_url": "", "heard": None}
+
+
+def test_a_test_alert_opened_on_a_device_tells_the_guide(site):
+    """The server cannot ask ntfy whether a phone subscribed: the test alert
+    links to the page with a one-time word, and opening it says it arrived."""
+    app, client = site
+    sign_in(app, client)
+    # Without the page's origin there is no link to open.
+    client.call("/api/alerts/test", {})
+    assert "Click" not in app.send[-1][2]
+    for origin in ("http://10.42.1.2:8443", "https://evil.example/x", "https://a\r\nX: y"):
+        client.call("/api/alerts/test", {"origin": origin})
+        assert "Click" not in app.send[-1][2]
+    assert client.call("/api/alerts/test", {"origin": "https://10.42.1.2:8443"})[0] == 200
+    _, body, headers = app.send[-1]
+    link = headers["Click"]
+    assert link.startswith("https://10.42.1.2:8443/#alerts/heard/") and "Tap" in body
+    word = link.rsplit("/", 1)[1]
+    assert client.call("/api/alerts/heard", {"word": "nope"}) == (
+        400,
+        {"error": "that link is from an older test alert: send another from Alerts"},
+    )
+    assert client.call("/api/state")[1]["alerts"]["heard"] is None
+    before = time.time()
+    status, data = client.call("/api/alerts/heard", {"word": word})
+    assert status == 200 and data["alerts"]["heard"] >= before
+    assert word not in (app.home / "web" / "alerts-heard.json").read_text()
+    # A new topic has to be heard again.
+    store = web.Secrets(app.codec(app.home))
+    store.set("ntfy_topic", "nullbill-another-topic-0000000000000000")
+    assert client.call("/api/state")[1]["alerts"]["heard"] is None
+    assert client.call("/api/alerts/heard", {"word": word})[0] == 400
+
+
+def test_hearing_a_test_alert_needs_a_session(site):
+    _, client = site
+    assert client.call("/api/alerts/heard", {"word": "x"})[0] == 401
 
 
 def test_agent_credential_is_kept_by_kind_and_never_shown(site):

@@ -89,6 +89,10 @@ SCHEDULE_CHECK_S = 60
 ROOT_CERT = "/nullbill-root.crt"
 # An optional Healthchecks.io check notices silence; alerts go to NTFY.
 HEALTHCHECKS = re.compile(r"https://hc-ping\.com/[A-Za-z0-9_-]{8,}(/[a-z0-9_-]+)?")
+# The page's own origin, as the browser that asked for a test alert names it.
+ORIGIN = re.compile(r"https://([A-Za-z0-9.-]+|\[[0-9A-Fa-f:]+\])(:[0-9]{1,5})?")
+# Which test alerts were sent and when one was last opened on a device.
+HEARD = "web/alerts-heard.json"
 # The agent CLI signs in with an Anthropic API key or a Claude subscription
 # token from `claude setup-token`; each is kept under its own name.
 AGENT_CREDENTIALS = {"sk-ant-api": ("anthropic_api_key", "API key"), "sk-ant-oat": ("claude_oauth_token", "subscription token")}
@@ -471,7 +475,36 @@ class App:
     def alerts(self) -> dict:
         data = Secrets(self.codec(self.home)).data
         topic = data.get("ntfy_topic")
-        return {"ntfy_url": NTFY + topic if topic else None, "healthchecks_url": data.get("healthchecks_url", "")}
+        return {
+            "ntfy_url": NTFY + topic if topic else None,
+            "healthchecks_url": data.get("healthchecks_url", ""),
+            "heard": self.heard(topic)["at"] if topic else None,
+        }
+
+    # Whether alerts reach a device, which the server cannot ask ntfy: each
+    # test alert links to the page with a one-time word, and opening that
+    # link on the device it reached says so. A new topic starts over.
+    def heard(self, topic: str) -> dict:
+        try:
+            found = json.loads((self.home / HEARD).read_text())
+        except (OSError, ValueError):
+            found = {}
+        mark = hashlib.sha256(topic.encode()).hexdigest()[:16]
+        if not isinstance(found, dict) or found.get("topic") != mark:
+            return {"topic": mark, "sent": [], "at": None}
+        return {"topic": mark, "sent": list(found.get("sent") or [])[-5:], "at": found.get("at")}
+
+    def alert_heard(self, word: str) -> float:
+        topic = Secrets(self.codec(self.home)).data.get("ntfy_topic")
+        if not topic:
+            raise NullBillError("set a password first; that makes the ntfy topic")
+        with self.lock:
+            record = self.heard(topic)
+            if hashlib.sha256(str(word).encode()).hexdigest() not in record["sent"]:
+                raise NullBillError("that link is from an older test alert: send another from Alerts")
+            record["at"] = time.time()
+            _write_private(self.home / HEARD, json.dumps(record) + "\n")
+        return record["at"]
 
     def save_alerts(self, body: dict) -> None:
         url = str(body.get("healthchecks_url", "")).strip()
@@ -487,15 +520,26 @@ class App:
                 del store.data["healthchecks_url"]
                 store.codec.save(store.data)
 
-    def test_alerts(self) -> list[str]:
-        """Send one ntfy message and one Healthchecks.io ping; name what was sent."""
+    def test_alerts(self, origin: str = "") -> list[str]:
+        """Send one ntfy message and one Healthchecks.io ping; name what was
+        sent. With the page's origin, opening the message opens the page,
+        which then knows alerts reach a device."""
         alerts = self.alerts()
         if not alerts["ntfy_url"]:
             raise NullBillError("set a password first; that makes the ntfy topic")
         sent = []
         try:
             title = {"Title": "NullBill: test alert", "Tags": "white_check_mark"}
-            self.send(alerts["ntfy_url"], "Alerts from your server reach this device.", title)
+            body = "Alerts from your server reach this device."
+            if ORIGIN.fullmatch(origin):
+                word = secrets.token_urlsafe(16)
+                title["Click"] = f"{origin}/#alerts/heard/{word}"
+                body += " Tap to tell the page."
+                with self.lock:
+                    record = self.heard(Secrets(self.codec(self.home)).data["ntfy_topic"])
+                    record["sent"] = [*record["sent"][-4:], hashlib.sha256(word.encode()).hexdigest()]
+                    _write_private(self.home / HEARD, json.dumps(record) + "\n")
+            self.send(alerts["ntfy_url"], body, title)
             sent.append("ntfy")
             if alerts["healthchecks_url"]:
                 self.send(alerts["healthchecks_url"])
@@ -2340,7 +2384,10 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 if self.path == "/api/password-reveal":
                     return self.json(200, {"password": app.password(str(body.get("name", "")))})
                 if self.path == "/api/alerts/test":
-                    return self.json(200, {"ok": True, "sent": app.test_alerts()})
+                    return self.json(200, {"ok": True, "sent": app.test_alerts(str(body.get("origin", "")))})
+                if self.path == "/api/alerts/heard":
+                    app.alert_heard(str(body.get("word", "")))
+                    return self.json(200, {"ok": True, "alerts": app.alerts()})
                 if match := re.fullmatch(r"/api/jobs/([0-9T]+-[a-z-]+)/stop", self.path):
                     return self.json(200, app.job_view(app.stop(match[1])))
                 if self.path == "/api/updates/check":

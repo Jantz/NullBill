@@ -311,7 +311,9 @@ made one.
    page shows (server `ntfy.sh`, no account). Keep the topic to yourself:
    anyone who knows it can read your alerts. Paste the Healthchecks.io ping
    URL if you made one, press **Save URL**, then **Send a test alert** and
-   check that your phone shows it.
+   tap it on your phone: it opens the page there, which tells the setup
+   guide that alerts reach a device. A phone that cannot open the page yet
+   can tap it later.
 9. **Access** page, **Tailscale** tab, **OAuth client**: in the
    Tailscale admin console (<https://console.tailscale.com/admin>), signed
    in with the login from part 1, open **Settings, Trust credentials** and
@@ -445,7 +447,9 @@ Tailscale.
    server**: press **Download root certificate** and follow the steps for
    that system. The certificate warnings on the page, Proxmox, Forgejo and
    Grafana stop. [trust-this-server.md](trust-this-server.md) says what the
-   certificate vouches for.
+   certificate vouches for. Once you open the page again, its **Status**
+   says whether that browser trusts the server, and the setup guide counts
+   the step as done in a browser that does.
 2. On an Android phone, install the page as an app:
    [android-app.md](android-app.md) has each step, Tailscale included.
 

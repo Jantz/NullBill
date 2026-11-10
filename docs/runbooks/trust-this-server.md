@@ -66,6 +66,16 @@ system; they are:
 - **Linux, Firefox**: Settings, Privacy & Security, **View Certificates**,
   **Authorities**, **Import**, tick **Trust this CA to identify websites**.
 
+## Check it
+
+Open the page again on the device (close the browser first; browsers read
+new roots when they start). **Access**, **Trust this server**, **Status**
+says whether that browser trusts the server, and the setup guide marks the
+step done there. The page cannot read certificates; it registers its
+service worker, which a browser fetches only over a connection it trusts,
+not one you told it to continue past the warning. A browser without service
+workers, such as some private windows, cannot tell.
+
 ## Remove it
 
 Android: Settings, **Trusted credentials** (or **User certificates**), User,

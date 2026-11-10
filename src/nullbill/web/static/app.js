@@ -83,6 +83,7 @@ let currentSub = "";
 let currentStep = null;
 let agentTab = null;
 let installPrompt = null;  // the browser's install offer, once it makes one
+let trusted = null;        // whether this browser trusts the server's certificate: checkTrust's finding, null before it or where it cannot tell
 const expanded = new Set(); // services whose details are open
 
 // Words.
@@ -455,6 +456,11 @@ function parseHash() {
 
 function route(focus) {
   if (!state) return;
+  const [opened, word] = parseHash();
+  if (opened === "alerts" && word.startsWith("heard/")) {
+    history.replaceState(null, "", "#alerts");
+    confirmHeard(word.slice("heard/".length));
+  }
   const [view, sub] = parseHash();
   closeMenu(false);
   for (const v of VIEWS) $(`view-${v}`).hidden = v !== view;
@@ -1793,7 +1799,10 @@ function renderTrust(trust) {
   show("trust-wait", false);
   show("trust-props", ready && Boolean(trust.fingerprint));
   $("trust-fingerprint").textContent = ready && trust.fingerprint ? trust.fingerprint : "";
-  $("trust-state").replaceChildren(ready ? status("good", "Ready to install") : status("", "Made by the first setup run"));
+  $("trust-state").replaceChildren(!ready ? status("", "Made by the first setup run")
+    : trusted === true ? status("good", "This browser trusts this server")
+    : trusted === false ? status("warn", "This browser does not trust it yet")
+    : status("", "Ready to install", "this browser cannot tell whether it trusts it"));
 }
 
 // The setup guide: what is needed, then what is recommended. It sits on
@@ -1825,19 +1834,25 @@ function guideItems(st) {
       : built() && apply.state === "done" ? (due.length ? ["attention", due[0].text] : ["done", `Finished ${ago(apply.started)}.`])
       : apply.state === "running" ? ["running", "Running now."] : ["attention", "Stopped. Activity says why."]]);
   const needed = items.length;
+  // Done only for what the page can see: a test alert opened on a device,
+  // this page reached over Tailscale, this browser trusting the certificate.
+  const heard = st.alerts && st.alerts.heard;
   items.push(["alerts", "Get alerts on your phone",
-    st.alerts && st.alerts.healthchecks_url ? ["done", "ntfy and Healthchecks.io are set."] : ["todo", "Subscribe to your ntfy topic."]]);
+    heard ? ["done", `A test alert reached a device ${ago(heard)}.`] : ["todo", "Subscribe to your ntfy topic, send a test alert and tap it."]]);
   const joined = st.lan.via_vpn || st.lan.state === "closed";
+  const onTailnet = st.direct && st.direct.kind && !["waiting", "unread"].includes(st.direct.kind);
   items.push(["access/tailscale", "Reach it over Tailscale",
     joined ? ["done", "This page answers over Tailscale."]
       : st.tailscale_key ? ["attention", "Auth key saved: run setup."]
+      : onTailnet ? ["todo", "The server is on your tailnet: open this page over Tailscale."]
       : st.tailscale_client ? ["todo", "Add an auth key next."] : ["todo", "Add an OAuth client."]]);
   items.push(["access/lan", "Close Proxmox to the home network",
     st.lan.state === "closed" ? ["done", "Only over Tailscale."]
       : st.lan.state === "closing" ? ["attention", `Confirm within ${st.lan.minutes} minutes.`] : ["todo", "After Tailscale works."]]);
   items.push(["access/trust", "Trust this server on your devices",
-    store.get("nb-trusted") === "1" ? ["done", "Root certificate installed."]
-      : st.trust && st.trust.ready ? ["todo", "Install the root certificate."] : ["todo", "After setup makes the certificate."]]);
+    !(st.trust && st.trust.ready) ? ["todo", "After setup makes the certificate."]
+      : trusted === true ? ["done", "This browser trusts it. Install it on your other devices too."]
+      : trusted === false ? ["todo", "This browser does not trust it yet."] : ["todo", "Install the root certificate."]]);
   return items.map(([href, title, [kind, sub]], i) => ({href, title, kind, sub, later: i >= needed}));
 }
 
@@ -3926,6 +3941,19 @@ async function logout() {
   await refresh().catch((error) => toast(error.message));
 }
 
+// A test alert's link, opened on the device it reached.
+async function confirmHeard(word) {
+  say("test-result", "busy", "Telling the server the test alert arrived…");
+  try {
+    const result = await api("/api/alerts/heard", {word});
+    state.alerts = result.alerts;
+    paintStates();
+    say("test-result", "ok", "The test alert reached this device: alerts work here.");
+  } catch (error) {
+    say("test-result", "error", error.message);
+  }
+}
+
 // The installable app.
 function paintInstall() {
   const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
@@ -3947,12 +3975,28 @@ async function install() {
   paintInstall();
   if (choice && choice.outcome === "accepted") say("pwa-state", "ok", "Installed. Open NullBill from your home screen.");
 }
-function registerWorker() {
+// Whether this browser trusts the server's certificate, which no script can
+// read. A page's own requests do not tell: a browser that was told to
+// continue past the warning answers them like any other. But it will not
+// fetch a service worker's script over such a connection, so registering
+// the worker, and asking it to update in case it was registered while the
+// certificate was still trusted, tells. Checked in Chromium both ways; a
+// browser without workers (some private windows) leaves it unknown.
+async function checkTrust() {
   if (!("serviceWorker" in navigator) || !window.isSecureContext) return;
-  navigator.serviceWorker.register("/sw.js").catch(() => {
-    // A browser that does not trust the certificate refuses workers.
-    say("pwa-state", "info", "This browser does not trust the server's certificate yet, so it cannot install the app.");
-  });
+  try {
+    const registration = await navigator.serviceWorker.register("/sw.js");
+    await registration.update();
+    trusted = true;
+  } catch {
+    trusted = false;
+    say("pwa-state", "info", "This browser does not trust the server's certificate yet, so it cannot install the app. "
+      + "Installed it already? Close the browser and open this page again.");
+  }
+  if (state) {
+    renderTrust(state.trust);
+    paintStates();
+  }
 }
 
 // Keyboard.
@@ -4184,7 +4228,6 @@ document.addEventListener("DOMContentLoaded", () => {
   wireTabs("platform-tabs", showPlatform);
   showPlatform(guessPlatform());
   for (const code of document.querySelectorAll(".page-origin")) code.textContent = location.origin;
-  $("trust-download").addEventListener("click", () => store.set("nb-trusted", "1"));
 
   // Palette.
   let paletteSay = 0;
@@ -4418,8 +4461,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }, field);
   });
   $("test-alerts").addEventListener("click", () => press($("test-alerts"), "test-result", "Sending a test alert…", async () => {
-    const result = await api("/api/alerts/test", {});
-    return `Sent to ${result.sent.join(" and ")}. Check your phone.`;
+    const result = await api("/api/alerts/test", {origin: location.origin});
+    return `Sent to ${result.sent.join(" and ")}. Tap it on your phone: that tells this page it arrived.`;
   }));
   $("copy-topic").addEventListener("click", () => press($("copy-topic"), "test-result", "Copying…", async () => {
     try { await copyText($("ntfy-topic").textContent); } catch {
@@ -4449,7 +4492,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   window.addEventListener("appinstalled", () => { installPrompt = null; paintInstall(); });
   paintInstall();
-  registerWorker();
+  checkTrust();
 
   refresh().catch((error) => {
     show("loading", false);
