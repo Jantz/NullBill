@@ -195,6 +195,9 @@ async function api(path, body) {
   if (!response.ok) {
     const error = new ApiError(sentence(data.error || `The server answered ${response.status} ${response.statusText}`), response.status);
     error.review = Boolean(data.review);
+    // Several reasons come as a list too, for a place with room for one.
+    error.list = Array.isArray(data.errors) && data.errors.length > 1 ? data.errors : null;
+    error.headline = data.headline || "";
     throw error;
   }
   return data;
@@ -244,7 +247,7 @@ async function press(button, feedback, busyText, work, field) {
     const text = await work();
     say(feedback, text ? "ok" : "", text);
   } catch (error) {
-    say(feedback, "error", error.message);
+    say(feedback, "error", error.listed ? "" : error.message);
     if (field && error.status !== 0 && error.status !== 401) {
       field.setAttribute("aria-invalid", "true");
       field.focus();
@@ -254,6 +257,21 @@ async function press(button, feedback, busyText, work, field) {
     button.removeAttribute("aria-busy");
     gateJobButtons();
   }
+}
+
+// A refusal with several reasons, in a block of its own: what did not
+// happen, then each reason on its line. True when it took the error, which
+// then needs no line beside the button; one reason stays such a line.
+function showProblem(id, error) {
+  const node = $(id);
+  const list = (error && error.list) || null;
+  node.hidden = !list;
+  node.replaceChildren();
+  if (!list) return false;
+  node.append(make("h3", {textContent: sentence(error.headline)}), make("ul", {}, ...list.map((line) => make("li", {textContent: sentence(line)}))));
+  error.listed = true;
+  setTimeout(() => node.scrollIntoView({block: "nearest"}), 0);
+  return true;
 }
 
 function show(id, visible) { const node = typeof id === "string" ? $(id) : id; if (node) node.hidden = !visible; }
@@ -1547,6 +1565,27 @@ function renderPeople() {
   if (personInvited) showInvite(personInvited, false);
 }
 
+function nameFrom(login) {
+  return (login || "").split("@")[0].toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^[^a-z]+|-+$/g, "").slice(0, 31);
+}
+
+// Under the ticks, in one line: what this person opens once saved.
+function personSummary() {
+  const boxes = [...$("person-services").querySelectorAll("input:checked")];
+  const who = $("person-name").value.trim() || "They";
+  $("person-summary").replaceChildren(...(boxes.length
+    ? [`${who} will open `, make("b", {textContent: andList(boxes.map((box) => shareTitle(box.value)))}), ", and nothing else on the server."]
+    : [`Nothing is ticked: ${who === "They" ? "they" : who} can join your Tailscale network and open nothing.`]));
+}
+
+// A long tick list narrowed by name. What is ticked never hides.
+function filterPerson() {
+  const q = $("person-filter").value.trim().toLowerCase();
+  for (const option of $("person-services").querySelectorAll(".option")) {
+    option.hidden = Boolean(q) && !option.dataset.find.includes(q) && !option.querySelector("input").checked;
+  }
+}
+
 function openPerson(name, login) {
   const add = $("person-add");
   if (!name && add.getAttribute("aria-disabled") === "true") { say("people-result", "info", add.dataset.why); return; }
@@ -1556,34 +1595,47 @@ function openPerson(name, login) {
   show("person-invite", false);
   say("people-result", "", "");
   say("person-result", "", "");
+  showProblem("person-problem", null);
+  showProblem("people-problem", null);
   $("person-form-title").textContent = row ? `What ${row.name} may open` : "Add a person";
   $("person-save").textContent = row ? "Save" : "Add";
   const nameField = $("person-name");
-  nameField.value = row ? row.name : (login || "").split("@")[0].toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^[^a-z]+|-+$/g, "").slice(0, 31);
+  nameField.value = row ? row.name : nameFrom(login);
   nameField.readOnly = Boolean(row);
+  // Until the owner types a name, it follows the login.
+  nameField.dataset.follows = row ? "" : "login";
   $("person-name-hint").textContent = row ? "Stays as it is. For another name, remove them and add them again." : "For you only. Lowercase letters, digits and dashes.";
   $("person-login").value = row ? row.login : login || "";
   for (const field of [nameField, $("person-login")]) field.removeAttribute("aria-invalid");
   $("person-services").replaceChildren(...peopleView.shareable.map((s) => {
     const byRole = Boolean(row && row.by_role.includes(s.name));
     const box = make("input", {type: "checkbox", value: s.name, checked: byRole || Boolean(row && row.services.includes(s.name)), disabled: byRole});
-    return make("label", {className: "option"}, box, make("span", {className: "option-text"},
+    const option = make("label", {className: "option"}, box, make("span", {className: "option-text"},
       make("span", {className: "option-title", textContent: s.title}),
       s.what ? make("span", {className: "option-desc", textContent: s.what}) : null,
+      // Shown once ticked (style.css): what the tick opens, and what they can do behind it.
+      make("span", {className: "option-access", textContent: `Opens ${s.opens}. ${s.access}`}),
       byRole ? make("span", {className: "option-desc", textContent: "Their role gives them this."}) : null,
       !s.planned && !byRole ? make("span", {className: "option-why", textContent: "Not set up on the server yet. It opens for them once you turn it on under Setup, What to run."}) : null));
+    option.dataset.find = `${s.title} ${s.name} ${s.what}`.toLowerCase();
+    return option;
   }));
+  $("person-filter").value = "";
+  show("person-find", peopleView.shareable.length > FOLD_OVER);
   if (!peopleView.shareable.length) {
     $("person-services").replaceChildren(make("p", {className: "empty-line", textContent: "Nothing that can be given to a person is turned on under Setup, What to run."}));
   }
+  personSummary();
   show("person-form", true);
   renderPeople();
-  (row || nameField.value ? $("person-login") : nameField).focus();
+  // What is known is filled in; the cursor goes to what is next.
+  ((row || login) && $("person-services").querySelector("input:not(:disabled)") || $("person-login")).focus();
   $("person-form").scrollIntoView({block: "nearest"});
 }
 
 function closePerson() {
   personEdited = null;
+  showProblem("person-problem", null);
   show("person-form", false);
   renderPeople();
 }
@@ -1593,6 +1645,7 @@ function savePerson(button) {
   const fields = {name: $("person-name"), login: $("person-login")};
   for (const field of Object.values(fields)) field.removeAttribute("aria-invalid");
   const live = !peopleView.tailscale.waits;
+  showProblem("person-problem", null);
   press(button, "person-result", live ? "Sending to Tailscale, which tests it first…" : "Saving…", async () => {
     let out;
     try {
@@ -1602,8 +1655,8 @@ function savePerson(button) {
       });
     } catch (error) {
       const field = /^Name the person|is you/.test(error.message) ? fields.name : /login/i.test(error.message) ? fields.login : null;
-      if (field && error.status === 400) { field.setAttribute("aria-invalid", "true"); field.focus(); }
-      else setTimeout(() => $("person-result").scrollIntoView({block: "nearest"}), 0);
+      if (field && error.status === 400 && !error.list) { field.setAttribute("aria-invalid", "true"); field.focus(); }
+      else if (!showProblem("person-problem", error)) setTimeout(() => $("person-result").scrollIntoView({block: "nearest"}), 0);
       throw error;
     }
     peopleView = out;
@@ -1645,7 +1698,7 @@ async function removePerson(row, button) {
   });
   if (!sure) { button.focus(); return; }
   press(button, "people-result", `Removing ${row.name}…`, async () => {
-    const out = await api("/api/people/remove", {name: row.name});
+    const out = await peopleAsk("/api/people/remove", {name: row.name});
     peopleView = out;
     if (personEdited === row.name) { personEdited = null; show("person-form", false); }
     if (personInvited === row.name) { personInvited = null; show("person-invite", false); }
@@ -1656,8 +1709,22 @@ async function removePerson(row, button) {
   });
 }
 
+// A change from the toolbar or a row. Several reasons for a refusal go into
+// the block under the toolbar.
+async function peopleAsk(path, body) {
+  showProblem("people-problem", null);
+  try { return await api(path, body); } catch (error) { showProblem("people-problem", error); throw error; }
+}
+
 function wirePeople() {
   $("person-add").addEventListener("click", () => openPerson(""));
+  $("person-services").addEventListener("change", () => { personSummary(); filterPerson(); });
+  $("person-filter").addEventListener("input", filterPerson);
+  $("person-name").addEventListener("input", () => { $("person-name").dataset.follows = ""; personSummary(); });
+  $("person-login").addEventListener("input", () => {
+    const name = $("person-name");
+    if (name.dataset.follows === "login") { name.value = nameFrom($("person-login").value); personSummary(); }
+  });
   $("person-cancel").addEventListener("click", () => { closePerson(); $("person-add").focus(); });
   $("person-form").addEventListener("submit", (event) => { event.preventDefault(); savePerson(submitter(event)); });
   $("person-invite-close").addEventListener("click", () => { personInvited = null; show("person-invite", false); renderPeople(); $("person-add").focus(); });
@@ -1669,7 +1736,7 @@ function wirePeople() {
     return "Copied.";
   }));
   $("people-sync").addEventListener("click", () => press($("people-sync"), "people-result", "Sending the policy to Tailscale…", async () => {
-    peopleView = await api("/api/people/sync", {});
+    peopleView = await peopleAsk("/api/people/sync", {});
     renderPeople();
     return peopleView.message;
   }));

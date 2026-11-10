@@ -20,6 +20,7 @@ from fixturedata import fixture_config, write_raw
 from gitrepos import commit, git, make
 
 from nullbill import browserca, direct
+from nullbill.errors import NullBillError, Refused
 from nullbill.model import build_model
 from nullbill.probe import parse
 from nullbill.web import progress
@@ -1536,13 +1537,33 @@ def test_a_person_added_after_setup_is_in_force_at_once(site):
     assert grants == [[["tcp:443", "tcp:22"]], [["tcp:443", "tcp:22"], ["tcp:8096"]]]
 
 
+def test_a_refusal_with_several_reasons_lists_them():
+    one = web.refusal(NullBillError("name the person"))
+    assert one == {"error": "name the person"}
+    several = web.refusal(Refused("Nothing was saved", ["a", "b"]))
+    assert several == {"error": "Nothing was saved: a; b", "headline": "Nothing was saved", "errors": ["a", "b"]}
+    # Reasons that come without a headline still get one, since a list needs it.
+    assert web.refusal(NullBillError("a", "b")) == {"error": "a; b", "headline": "That did not work", "errors": ["a", "b"]}
+
+
 def test_what_tailscale_refuses_is_not_saved(site):
     app, client = site
     api = with_tailscale(app, client)
     built(app, client)
     api.refuse = "test(s) failed"
     status, answer = client.call("/api/people", FRIEND)
-    assert status == 400 and answer["error"].startswith("Tailscale did not take it, so nothing changed: ")
+    assert status == 400 and answer == {"error": "Tailscale did not take it, so nothing changed: test(s) failed"}
+    assert list(people_of(app)) == ["owner"] and api.pushes == []
+    # Several reasons come as a list under what did not happen, for the
+    # page to show as one, and still in one line for a reader of `error`.
+    tests = [f"a policy test failed for alex@example.internal: address 10.42.2.17:{port}: want: Accept, got: Drop" for port in (443, 22)]
+    api.refuse = tests
+    status, answer = client.call("/api/people", FRIEND)
+    assert status == 400 and answer == {
+        "error": f"Tailscale did not take it, so nothing changed: {'; '.join(tests)}",
+        "headline": "Tailscale did not take it, so nothing changed",
+        "errors": tests,
+    }
     assert list(people_of(app)) == ["owner"] and api.pushes == []
     api.refuse = None
     for bad, why in (

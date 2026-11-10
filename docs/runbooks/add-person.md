@@ -16,13 +16,35 @@ You need:
 
 Tailscale's free plan holds six people, you included.
 
+## What a person gets
+
+A tick opens that service's own port to the person's devices, the way a
+website is open to a visitor or a game server to a player. Nothing more:
+
+- They get no login to the server or to the service's container: no
+  shell, no root. Proxmox, the page, the services you did not tick and
+  your own devices do not answer them.
+- Inside a service they are what its own account makes them: a Jellyfin
+  user you made watches and cannot change the server; a Minecraft or
+  Factorio player has no admin commands unless you name them as an admin
+  under **Setup**, **What to run**; everyone who joins a Terraria world can
+  build and break; a Forgejo user you made can run CI jobs, which run
+  their code in a throwaway runner VM. The page says this under each
+  service once you tick it.
+- What stays is the risk of a security hole in the shared program
+  itself. Each one runs in a container or VM of its own that has no
+  rights on the server and reaches only what the firewall allows.
+
 ## Add
 
 1. On the page open **Access**, **People**, and press **Add a person**.
-2. Give them a short name for yourself (`alex`), their Tailscale login, and
-   tick what they may open. Only services meant for other people are
-   listed: Forgejo, Jellyfin, the local AI model, each game server.
-   Proxmox, this page, Grafana and the rest stay yours alone.
+2. Type their Tailscale login. The short name for yourself (`alex`) is
+   filled in from it and can be changed. Tick what they may open: under
+   each ticked service the page says which port opens and what they can
+   do there, and under the list what they will open in all. Only services
+   meant for other people are listed: Forgejo, Jellyfin, the local AI
+   model, each game server. Proxmox, this page, Grafana and the rest stay
+   yours alone.
 3. Press **Add**. The page sends the new access policy to Tailscale, which
    runs the policy's own tests first (your friend reaches what you ticked
    and is refused everywhere else). When it says **In force now**, it is.
@@ -72,8 +94,8 @@ page.
   arrive. **Send to Tailscale** puts the page's policy back. `nullbill
   verify` reports the same as `Tailscale holds each person to the services
   picked for them`.
-- **Tailscale did not take it**: the message names the failing test or the
-  limit. Nothing was saved.
+- **Tailscale did not take it**: the page lists each failing test or the
+  limit under that line. Nothing was saved.
 - They joined and nothing opens: on Linux they must run
   `sudo tailscale set --accept-routes --accept-dns`; on other devices
   Tailscale's app does it. If only names fail, addresses still work

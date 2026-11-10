@@ -28,6 +28,9 @@ LOGIN = re.compile(r"[^@\s]+@[^@\s]+")
 USERS_PAGE = "https://console.tailscale.com/admin/users"
 DOWNLOAD = "https://tailscale.com/download"
 ROOT_FILE = "nullbill-root.crt"
+# Beside the tick of a service whose catalog entry does not say what a
+# person can do with it (one of the owner's own, docs/adr/0015).
+UNKNOWN_ACCESS = "They can do whatever the program lets a visitor on that port do. If it has sign-ins of its own, they need one."
 # How a person's device comes to trust the browser CA (browserca.py), as
 # the page's Access, Trust this server tab tells the owner at more length.
 TRUST = [
@@ -43,9 +46,19 @@ def _guests(plan: dict | None) -> dict:
     return (strip_notes(plan) if plan else {}).get("guests") or {}
 
 
+def ports_text(ports: list[dict]) -> str:
+    """A service's shared ports in words: "port 8096", "ports 443 and 22",
+    "port 34197 (UDP)"."""
+    listed = [f"{p['port']}{' (UDP)' if p['proto'] == 'udp' else ''}" for p in ports]
+    return f"port{'s' if len(listed) > 1 else ''} {' and '.join([', '.join(listed[:-1]), listed[-1]] if len(listed) > 1 else listed)}"
+
+
 def shareable(model: dict, plan: dict | None) -> list[dict]:
     """Every service a person can be given, planned or not, as the owner's
-    tick list shows it."""
+    tick list shows it. `opens` is what a tick opens and `access` what the
+    person can do behind it, which only the program decides: the catalog
+    says it for its own services, and for one it does not know the page
+    says that it cannot know."""
     guests = _guests(plan)
     out = []
     for name, svc in model["services"].items():
@@ -59,6 +72,8 @@ def shareable(model: dict, plan: dict | None) -> list[dict]:
                 "title": share.get("title", name),
                 "what": share.get("what", svc.get("description", "")),
                 "ports": [f"{p['proto']}/{p['port']}" for p in ports],
+                "opens": ports_text(ports),
+                "access": share.get("access", UNKNOWN_ACCESS),
                 "planned": name in guests,
             }
         )

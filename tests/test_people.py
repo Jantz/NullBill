@@ -25,8 +25,11 @@ def test_only_services_with_a_shared_port_can_be_ticked(facts):
         "title": "Forgejo",
         "what": "Git repositories and CI",
         "ports": ["tcp/443", "tcp/22"],
+        "opens": "ports 443 and 22",
+        "access": "They need a Forgejo user that you make. With it they can run CI jobs, which run their code in a throwaway runner VM.",
         "planned": True,
     }
+    assert listed["factorio"]["opens"] == "port 34197 (UDP)" and listed["jellyfin"]["opens"] == "port 8096"
     # Not planned: still listed, so a tick survives a workload switched off.
     model, plan = built(facts, {"intent": {"workloads": ["agents"]}})
     games = {"minecraft": False, "terraria": False, "factorio": False}
@@ -41,6 +44,14 @@ def test_only_services_with_a_shared_port_can_be_ticked(facts):
     model, plan = built(facts, ssh)
     (workspace,) = [s for s in people.shareable(model, plan) if s["name"] == "workspace"]
     assert (workspace["title"], workspace["what"]) == ("workspace", "Credential-free workspace for coding agents.")
+    # What a person can do behind its port is not NullBill's to know.
+    assert (workspace["opens"], workspace["access"]) == ("port 22", people.UNKNOWN_ACCESS)
+
+
+def test_every_service_of_the_catalog_that_can_be_given_says_what_a_person_can_do_with_it():
+    services = build_model(fixture_config("large"))["services"]
+    given = [name for name, svc in services.items() if any("shared" in p["from"] for p in svc.get("ports", []))]
+    assert given and [name for name in given if not services[name].get("share", {}).get("access")] == []
 
 
 def test_adding_a_person_makes_a_friend_with_the_ticked_services(facts):

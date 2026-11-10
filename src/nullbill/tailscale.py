@@ -32,7 +32,12 @@ TIMEOUT_S = 30
 
 
 class TailscaleError(NullBillError):
-    pass
+    """`reasons` holds the message's parts one by one, for a reader that
+    lists them (the page) where a log wants one line."""
+
+    def __init__(self, *messages: str, reasons: list[str] | None = None) -> None:
+        super().__init__(*messages)
+        self.reasons = list(reasons or messages)
 
 
 class MissingScope(TailscaleError):
@@ -88,7 +93,7 @@ class Tailnet:
         status, _, data = self._authed("POST", "tailnet/-/acl/validate", json.dumps(policy).encode(), {"Content-Type": "application/json"})
         data = self._ok("checking the tailnet policy", status, data)
         if data.strip() and json.loads(data).get("message"):
-            raise TailscaleError(f"Tailscale refused the policy: {_message(data)}")
+            raise TailscaleError(f"Tailscale refused the policy: {_message(data)}", reasons=_reasons(data))
 
     def set_policy(self, policy: dict, etag: str) -> None:
         headers = {"Content-Type": "application/json", "If-Match": etag}
@@ -166,3 +171,14 @@ def _message(data: bytes) -> str:
     for item in body.get("data") or []:
         parts.append(f"{item.get('user', '')}: {'; '.join(map(str, item.get('errors', [])))}")
     return " | ".join(p for p in parts if p)
+
+
+def _reasons(data: bytes) -> list[str]:
+    """What Tailscale refused a policy for, a line each: every failing test
+    with whose it is, or else its message."""
+    body = json.loads(data)
+    lines = []
+    for item in body.get("data") or []:
+        who = str(item.get("user", "")) or "someone"
+        lines += [f"a policy test failed for {who}: {error}" for error in item.get("errors", [])]
+    return lines or [str(body.get("message", ""))]

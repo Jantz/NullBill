@@ -510,6 +510,14 @@ input:not([type=checkbox]):not([type=radio])[readonly] { background: var(--bg-su
 .disclosure > summary:hover { color: var(--text); }
 .disclosure[open] > summary { margin-bottom: 10px; }
 .disclosure.small { margin-top: 0; }
+.disclosure.tight { margin: 0 0 14px; }
+.facts { list-style: disc; padding-left: 18px; display: grid; gap: 6px; color: var(--text-2); max-width: 72ch; }
+.facts b { color: var(--text); }
+.group > .filter { margin-bottom: 8px; }
+.person-summary { color: var(--text-2); }
+.person-summary b { color: var(--text); font-weight: 500; }
+.panel > .problem { margin: 0; }
+.problem li { overflow-wrap: anywhere; }
 .disclosure.small p { color: var(--text-2); font-size: 12px; }
 
 /* Properties: a two-column list. */
@@ -535,6 +543,9 @@ input:not([type=checkbox]):not([type=radio])[readonly] { background: var(--bg-su
 .option-title { font-weight: 500; }
 .option-desc { color: var(--text-3); font-size: 12px; }
 .option-why { color: var(--warn); font-size: 12px; }
+/* What a tick gives, said when it is ticked: a list of unticked rows stays short. */
+.option-access { display: none; color: var(--text-2); font-size: 12px; margin-top: 2px; max-width: 72ch; }
+.option:has(input:checked) .option-access { display: block; }
 .option.danger-option:has(input:checked) { background: var(--bad-bg); }
 
 /* What to run: a row per choice, with what it takes and what a tick comes to. */

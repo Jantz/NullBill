@@ -220,7 +220,7 @@ class FakeTailnet:
         self.live = {"acls": [{"action": "accept", "src": ["*"], "dst": ["*:*"]}]}
         self.etag = "e0"
         self.devices_list = [{"id": "1", "tags": []}]
-        self.refuse = None  # a validate error message
+        self.refuse = None  # a validate error message, or its reasons as a list
         self.mangle = False  # store something other than what was pushed
         self.pushes = []
         self.dns = {"example.com": ["192.0.2.53"]}  # split DNS someone else set
@@ -238,7 +238,8 @@ class FakeTailnet:
 
     def validate(self, policy):
         if self.refuse:
-            raise TailscaleError(f"Tailscale refused the policy: {self.refuse}")
+            reasons = self.refuse if isinstance(self.refuse, list) else [self.refuse]
+            raise TailscaleError(f"Tailscale refused the policy: {' | '.join(reasons)}", reasons=reasons)
 
     def set_policy(self, policy, etag):
         assert etag == self.etag

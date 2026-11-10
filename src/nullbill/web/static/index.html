@@ -534,6 +534,13 @@
       <section class="tabpanel" id="sec-people" role="tabpanel" aria-labelledby="tab-people" hidden>
         <dl class="props compact"><div><dt>Status</dt><dd id="people-state"></dd></div></dl>
         <p class="help">Friends and family join your Tailscale network with their own account and open only the services you tick for them, from their own devices. Tailscale holds them to it, and a change is in force within seconds.</p>
+        <details class="disclosure tight" id="people-what"><summary>What a person can and cannot do</summary>
+          <ul class="facts">
+            <li><b>They can</b> use each service you tick, from their own devices, the way anyone uses a website or joins a game server. A tick opens that service's port and nothing more.</li>
+            <li><b>They cannot</b> log in to the server or to a container: no shell, no root. This page, Proxmox, the services you did not tick and your own devices do not answer them.</li>
+            <li><b>Inside a service</b> they are what its own account makes them, such as a Jellyfin viewer or a Minecraft player. They are an admin there only if you make them one.</li>
+            <li><b>If a shared program has a security hole</b>, someone you gave it to could misuse it. The program runs in a container or VM of its own, which has no rights on the server and reaches only what the firewall allows.</li>
+          </ul></details>
         <p id="people-waits" class="note" hidden><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><span></span></p>
         <div id="people-drift" class="note warn" hidden><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
           <span>Tailscale's access policy is not the one this page made: someone changed it in Tailscale, or a change did not arrive. Until it is sent again, people may open more or less than listed here.</span>
@@ -546,20 +553,24 @@
           <p class="feedback" id="people-result" role="status"></p>
           <button type="button" class="btn small ghost push" id="people-refresh">Refresh</button>
         </div>
+        <div id="people-problem" class="problem" role="alert" hidden></div>
         <form id="person-form" class="panel" novalidate hidden>
           <h2 id="person-form-title">Add a person</h2>
           <div class="person-fields">
-            <label class="field"><span class="label">Name</span>
-              <input id="person-name" autocomplete="off" spellcheck="false" autocapitalize="none" placeholder="alex" maxlength="31" aria-describedby="person-name-hint person-result">
-              <span class="hint" id="person-name-hint">For you only. Lowercase letters, digits and dashes.</span></label>
             <label class="field"><span class="label">Their Tailscale login</span>
               <input id="person-login" type="email" autocomplete="off" spellcheck="false" placeholder="alex@example.com" aria-describedby="person-login-hint person-result">
               <span class="hint" id="person-login-hint">The email address they sign in to Tailscale with. Access belongs to this account.</span></label>
+            <label class="field"><span class="label">Name</span>
+              <input id="person-name" autocomplete="off" spellcheck="false" autocapitalize="none" placeholder="alex" maxlength="31" aria-describedby="person-name-hint person-result">
+              <span class="hint" id="person-name-hint">For you only. Lowercase letters, digits and dashes.</span></label>
           </div>
           <fieldset class="group"><legend>What they may open</legend>
+            <label class="filter" id="person-find" hidden><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><span class="sr-only">Find a service by name</span><input id="person-filter" type="search" placeholder="Find by name" autocomplete="off" spellcheck="false"></label>
             <div class="options" id="person-services"></div>
-            <p class="hint">Nothing else on the server opens for them: not this page, not Proxmox, not the other services.</p>
+            <p class="hint">A tick opens that service's port to their devices. It gives no login to the server or its containers, and no root.</p>
           </fieldset>
+          <p class="person-summary" id="person-summary"></p>
+          <div id="person-problem" class="problem" role="alert" hidden></div>
           <div class="row"><button type="submit" class="btn primary" id="person-save">Add</button><button type="button" class="btn ghost" id="person-cancel">Cancel</button><p class="feedback" id="person-result" role="status"></p></div>
         </form>
         <div id="person-invite" class="panel" tabindex="-1" hidden>

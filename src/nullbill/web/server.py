@@ -43,7 +43,7 @@ import yaml
 from nullbill import browserca, custom, direct, hostroot, lan, legacy, llm, names, owner, people, power, tailscale, version
 from nullbill.apply import DISKS_FILE, GUESTS, NTFY, REMOVALS, SPKI, STAGES
 from nullbill.cli import plan_text, reach_target
-from nullbill.errors import NullBillError
+from nullbill.errors import NullBillError, Refused
 from nullbill.model import POWER_DEFAULTS, build_model
 from nullbill.plan import build_plan, guest_storage, planned_services
 from nullbill.probe import ssh_run
@@ -1373,14 +1373,14 @@ class App:
             model, plan, problems = self.planned(candidate)
             new = [m for m in problems if m not in before]
             if new:
-                raise NullBillError(*new)
+                raise Refused("The plan does not hold with this change, so nothing was saved", new) if len(new) > 1 else NullBillError(*new)
             ready = self.tailnet_wait(plan, problems) is None
             if ready:
                 want = json.loads(render_tailnet(plan, model)["policy.json"])
                 try:
                     tailscale.sync_policy(self.tailnet(), want, TAG, model["tailnet"]["free_limits"]["tagged_devices"])
                 except TailscaleError as exc:
-                    raise NullBillError(f"Tailscale did not take it, so nothing changed: {'; '.join(exc.messages)}") from exc
+                    raise Refused("Tailscale did not take it, so nothing changed", exc.reasons) from exc
             saved = path.stat()
             _write_private(path, yaml.safe_dump(candidate, sort_keys=False))
             if ready:
@@ -2021,6 +2021,19 @@ class App:
         }
 
 
+def refusal(exc: NullBillError) -> dict:
+    """A refusal as the page gets it. `error` is all of it in one line, for
+    the line beside a button. With several reasons, `errors` lists them and
+    `headline` says what did not happen, so the page can show a list in
+    place of one long sentence."""
+    headline = getattr(exc, "headline", "")
+    line = "; ".join(exc.messages)
+    body: dict = {"error": f"{headline}: {line}" if headline else line}
+    if len(exc.messages) > 1:
+        body.update(headline=headline or "That did not work", errors=exc.messages)
+    return body
+
+
 def plan_summary(plan: dict) -> dict:
     """The plan's memory and guests, for the page's table."""
     host = plan.get("host") or {}
@@ -2163,12 +2176,12 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 try:
                     return self.json(200, app.own_service(urllib.parse.parse_qs(query).get("name", [""])[0]))
                 except NullBillError as exc:
-                    return self.json(404, {"error": "; ".join(exc.messages)})
+                    return self.json(404, refusal(exc))
             if path == "/api/people":
                 try:
                     return self.json(200, app.people_view(fresh="fresh=1" in query.split("&")))
                 except NullBillError as exc:
-                    return self.json(400, {"error": "; ".join(exc.messages)})
+                    return self.json(400, refusal(exc))
             if path == "/api/chat":
                 return self.json(200, app.chat.view(offset(query, "after")))
             if path == "/api/agent-log":
@@ -2244,7 +2257,7 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 try:
                     return self.json(200, app.job_view(app.start(match[1], stage, client=self.client(), by=agent)))
                 except NullBillError as exc:
-                    return self.json(409, {"error": "; ".join(exc.messages)})
+                    return self.json(409, refusal(exc))
             if self.path == "/api/login":
                 token = app.login(str(body.get("secret", "")))
                 if token is None:
@@ -2349,7 +2362,7 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                     app.logout(self.token())
                     return self.json(200, {"ok": True}, {"Set-Cookie": "nb_session=; Path=/; Secure; HttpOnly; Max-Age=0"})
             except NullBillError as exc:
-                return self.json(400, {"error": "; ".join(exc.messages)})
+                return self.json(400, refusal(exc))
             return self.json(404, {"error": "not found"})
 
     return Handler

@@ -214,6 +214,7 @@ services:
     share:
       title: Forgejo
       what: Git repositories and CI
+      access: They need a Forgejo user that you make. With it they can run CI jobs, which run their code in a throwaway runner VM.
       open: "https://{host}/"
       note: I make your account and send you its sign-in. Git over SSH is git@{host}.
     ports:
@@ -266,6 +267,7 @@ services:
     share:
       title: Jellyfin
       what: Films, series and music
+      access: They need a Jellyfin user that you make. A normal user watches and cannot change the server.
       open: "http://{host}:8096/"
       note: I make your account and send you its sign-in. Jellyfin's apps for phones and TVs take the same address.
     ports:
@@ -293,6 +295,7 @@ services:
     share:
       title: Minecraft
       what: A Minecraft world to play in together
+      access: They join with their own Minecraft account, as a player. Operator commands are only for the admins you name under Setup, What to run.
       open: "{host}:{port}"
       note: "You need Minecraft: Java Edition {version}. Choose Multiplayer, Add Server, and type this as the server address."
     ports:
@@ -308,6 +311,7 @@ services:
     share:
       title: Terraria
       what: A Terraria world to play in together
+      access: They join as a player. Terraria has no admins, so everyone who joins can build and break.
       note: You need Terraria {version} on a computer. Choose Multiplayer, Join via IP, type this address, then the port.
     ports:
       - {port: 7777, proto: tcp, from: ["role:owner", "shared"]}
@@ -324,6 +328,7 @@ services:
     share:
       title: Factorio
       what: A Factorio factory to build together
+      access: They join with their factorio.com account, as a player. Admin commands are only for the admins you name under Setup, What to run.
       open: "{host}:{port}"
       note: You need Factorio {version}, signed in to your factorio.com account. Choose Multiplayer, Connect to address, and type this.
     ports:
@@ -386,6 +391,7 @@ services:
     share:
       title: Local AI model
       what: An OpenAI-compatible API in front of the model on the graphics card
+      access: It answers only with the API key from Services, the same one you use. With it they use the model on your graphics card.
       open: "https://{ip}:4000/v1"
       note: It asks for an API key, which I send you. Ask for the model as local.
     ports:

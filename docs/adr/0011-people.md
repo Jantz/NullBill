@@ -96,6 +96,21 @@ refuses, the page says so and saves nothing.
   the owner sends the browser CA's root along; its name constraints let it
   vouch for this server only.
 
+- **The owner is told what a tick gives** (2026-11-10, after he asked
+  whether sharing Jellyfin or Minecraft gives someone the container or a
+  root in it; it does not). What NullBill opens is the port. What a
+  person can do behind it is the program's business, so each shareable
+  service says it in `share.access` (the account they need, what it may
+  do), and the tick list shows that with the ports once the service is
+  ticked. A service the catalog does not know (one of the owner's own)
+  gets a line that says so, since NullBill cannot know it. The page agent
+  cannot write `access`: it would be the agent vouching for a program it
+  just installed.
+- **A refusal with several reasons is a list.** Tailscale names every
+  failing test; the page shows what did not happen and then one line per
+  reason, where it used to join them into one sentence (`errors.Refused`,
+  `server.refusal`: `headline` and `errors` beside `error`).
+
 ## Considered and dropped
 
 - **A Tailscale group per person or per service.** Three groups in all.

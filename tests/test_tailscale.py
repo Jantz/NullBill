@@ -131,8 +131,11 @@ def test_push_reads_back_and_lists_devices(api):
 def test_failing_tests_and_a_stale_etag_refuse_the_push(api):
     tailnet = Tailnet(*CLIENT, api=api.url)
     api.failing_tests = "address 10.42.1.254:22: want: Drop, got: Accept"
-    with pytest.raises(TailscaleError, match=r"refused the policy: test\(s\) failed \| member@example.internal: address 10.42.1.254:22"):
+    one_line = r"refused the policy: test\(s\) failed \| member@example.internal: address 10.42.1.254:22"
+    with pytest.raises(TailscaleError, match=one_line) as refused:
         tailnet.validate({"tests": []})
+    # For a reader that lists them: each failing test by itself.
+    assert refused.value.reasons == ["a policy test failed for member@example.internal: address 10.42.1.254:22: want: Drop, got: Accept"]
     with pytest.raises(TailscaleError, match="changed while apply pushed it"):
         tailnet.set_policy({}, '"v7"')
     assert api.version == 0

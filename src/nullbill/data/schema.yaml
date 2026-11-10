@@ -110,12 +110,16 @@ $defs:
       # the service's name, or its address while names are off, {ip}
       # always its address, {port} its first shared port and {version} a
       # game server's version. Without `open`, each shared port is listed.
+      # `access` is for the owner alone, beside the tick: what a person can
+      # do behind the port, which is the program's business and not
+      # NullBill's (the account they need, what it may do).
       share:
         type: object
         additionalProperties: false
         properties:
           title: {type: string, minLength: 1, maxLength: 40}
           what: {type: string, minLength: 1, maxLength: 120}
+          access: {type: string, minLength: 1, maxLength: 200}
           open: {type: string, minLength: 1, maxLength: 120}
           note: {type: string, minLength: 1, maxLength: 200}
       floor: {$ref: "#/$defs/size"}
