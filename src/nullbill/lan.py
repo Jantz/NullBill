@@ -15,11 +15,19 @@ open (the default), closing (the timer is armed) or closed. While it is
 closing or closed, the controller reaches the host at its mgmt address,
 which the closed firewall still admits, and the page refuses requests from
 outside the NullBill network once it is closed.
+
+The timer runs on the host and tells nobody: a close that was never
+confirmed stays "closing" in lan.json after the host opened the LAN again.
+Past the deadline the record is therefore only a guess, and whoever reads it
+then (the page, verify, apply's host stage) asks the host whether the timer
+is still there (settle) and writes down what it found, with when the close
+ran out.
 """
 
 import ipaddress
 import json
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 FILE = "lan.json"
@@ -43,8 +51,11 @@ def read(home: Path) -> dict:
     return json.loads(path.read_text())
 
 
-def write(home: Path, state: str, deadline: float | None = None) -> None:
+def write(home: Path, state: str, deadline: float | None = None, lapsed: float | None = None) -> None:
+    """lapsed: when a close that nobody confirmed ran out, kept with the
+    open state it left behind until the next close."""
     data = {"state": state} | ({"deadline": deadline} if deadline is not None else {})
+    data |= {"lapsed": lapsed} if lapsed is not None else {}
     path = home / FILE
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data) + "\n")
@@ -90,6 +101,29 @@ DISARM = f"rm -f {MARKER} && systemctl stop {REVERT_UNIT}.timer"
 
 def deadline(now: float | None = None) -> float:
     return (now if now is not None else time.time()) + REVERT_AFTER_S
+
+
+# The timer fires within seconds of the deadline (AccuracySec=5s in arm_command).
+GRACE_S = 20
+
+
+def overdue(home: Path, now: float | None = None) -> bool:
+    """A close whose deadline has passed: the host has opened the LAN again
+    by now, or should have. Only the host knows which."""
+    found = read(home)
+    at = found.get("deadline")
+    return found["state"] == CLOSING and at is not None and (now if now is not None else time.time()) > at + GRACE_S
+
+
+def settle(home: Path, ask: Callable[[str], str]) -> str:
+    """The state, after asking the host about a close that is overdue: with
+    the timer gone the LAN is open again, and the record says so and since
+    when. `ask` runs a command on the host and returns what it printed."""
+    found = read(home)
+    if overdue(home) and ask(ARMED).strip() == "gone":
+        write(home, OPEN, lapsed=found["deadline"])
+        return OPEN
+    return found["state"]
 
 
 def inside(address: str, base: str) -> bool:

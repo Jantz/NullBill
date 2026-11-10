@@ -1601,9 +1601,19 @@ def test_a_close_nobody_keeps_is_undone_and_the_controller_follows(ctx, tmp_path
     reach = FakeReach()
     apply.stage_host(ctx(reach=reach, close_lan=True, known_hosts=tmp_path / "known_hosts"))
     reach.revert = "gone"  # the host restored the open file by itself
+    deadline = lan.read(tmp_path)["deadline"]
+    # The page counts the time down, and past it asks the host before it says anything.
+    assert not lan.overdue(tmp_path) and lan.overdue(tmp_path, deadline + lan.GRACE_S + 1)
+    assert lan.settle(tmp_path, lambda command: "gone\n") == lan.CLOSING
     with pytest.raises(NullBillError, match="too late"):
         apply.confirm_lan(ctx(reach=reach))
-    assert lan.state(tmp_path) == lan.OPEN
+    # Open again, with the time the close ran out: the page says so until the next close.
+    assert lan.read(tmp_path) == {"state": lan.OPEN, "lapsed": deadline}
+    lan.write(tmp_path, lan.CLOSING, 0)
+    assert lan.settle(tmp_path, lambda command: "armed\n") == lan.CLOSING and lan.settle(tmp_path, lambda command: "") == lan.CLOSING
+    asked = []
+    assert lan.settle(tmp_path, lambda command: asked.append(command) or "gone\n") == lan.OPEN
+    assert asked == [lan.ARMED] and lan.read(tmp_path) == {"state": lan.OPEN, "lapsed": 0}
     c = ctx(reach=reach)
     apply.stage_host(c)
     assert reach.files["/etc/pve/firewall/cluster.fw"] == c.files["firewall/cluster-lan-open.fw"]

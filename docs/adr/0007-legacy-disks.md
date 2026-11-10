@@ -227,7 +227,12 @@ and stays where they put it.
 - The share follows the disk: if the disk is missing at boot, the share is
   empty and read-only, and the LegacyDiskMissing alert fires.
 - The DiskAlmostFull alert leaves read-only filesystems out, so a full
-  read-only disk does not page forever.
+  read-only disk does not page forever. Since 2026-11-10 it leaves kept
+  disks and their copies out altogether (`/mnt/nb-legacy/...` on the host,
+  `/srv/share/...` in the files guest): how full the owner's own disk is
+  is the owner's business, and a 4 TB disk full of his files paged as
+  urgent. `KeptDiskFull` (warn) says once when a writable share has under
+  1 GiB left, since nothing more can be saved to it then.
 - A disk kept read-write and full of writes from the share is still not
   backed up. The page and the runbook (`docs/runbooks/legacy-disk.md`) say
   to copy anything important elsewhere.

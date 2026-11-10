@@ -87,6 +87,23 @@ owner's is the first.
   it against the addresses Tailscale offers for the vpn guest. The page
   shows the outcome as **Path**, with what to do when the port is closed.
   verify reports it as DEGRADED, not FAIL: relays carry everything.
+- Changed on 2026-11-10: what the home router answered is evidence about
+  the port and no more. The owner's home router sits behind a second one,
+  the port forwarded on both by hand, and his phone on mobile data was
+  direct while the page said "Relayed on mobile data" and verify DEGRADED.
+  So the path is measured: tailscaled on the vpn guest says for each device
+  whether its packets go straight (`CurAddr` in `tailscale status --json`),
+  and the vpn guest pings each device that is on the tailnet without a
+  direct path (`tailscale ping`, three tries, at most eight devices at
+  once), which also has both ends look for a direct path, and takes the way
+  the last answer came. A device that does not answer is left out. A direct
+  path from an address that is no home network's is a device away from
+  home: that settles it (PASS), whatever the home router said. A device
+  that answers only through a relay, with none away direct and the port
+  not known open, is DEGRADED. With neither, verify SKIPs and says what it
+  read. The page reads this itself while Access, Tailscale is open
+  (`/api/path`, every half minute) and shows when; only the kind of a
+  device's address is kept, never the address.
 - The home's public address stays on the router (nb-portmap's state file
   and the journal): it goes to neither the page's record nor a run's log.
 
@@ -99,8 +116,8 @@ Not built:
 - Tailscale's peer relays. One needs a device with an open port of its own,
   which is the same problem.
 - A check from outside that a port forwarded by hand works. From in here
-  it looks like a closed one, so with the switch off verify skips the
-  check and the owner looks in the Tailscale app.
+  it looks like a closed one; a device away from home that answers
+  directly is what shows it, and until one does verify skips the check.
 - UPnP's success path in CI: `upnpc` and miniupnpd refuse the documentation
   addresses a check has to use. `tools/guest-check/portmap.sh` covers
   NAT-PMP end to end and UPnP's refusal; `tests/test_portmap.py` reads

@@ -15,6 +15,7 @@ import yaml
 from test_chat import approve, kinds, say, settle, signed_in
 from test_web import OWNER, probed
 
+from nullbill import direct
 from nullbill.web import chat as chat_module
 
 agent = test_chat.agent
@@ -535,6 +536,23 @@ def test_metrics_services_and_the_small_switches(agent):
     view = call(client, "port_mapping", enabled=False)
     assert kinds(view, "ran")[-1]["title"] == "Ask the home router for the port: off" and app.port_mapping() is False
     assert "off already" in result(call(client, "port_mapping", enabled=False))
+    # Without `enabled` it reads how devices reach the server, as the page
+    # measures it: the owner's phone was direct while the agent, with nothing
+    # to read, switched the asking off to change a label.
+    phone = direct.Device("phone", direct.DIRECT, direct.AWAY)
+    direct.record(app.home, direct.Finding(direct.OFF, "the home router is not asked for UDP 41642", devices=(phone,)))
+    app.path = lambda: direct.recorded(app.home) | {"live": True}
+    view = call(client, "port_mapping")
+    read = yaml.safe_load(result(view))
+    assert kinds(view, "tool")[-1]["label"] == "Read how devices reach the server"
+    assert (read["path"], read["devices_measured"], read["read_just_now"]) == ("measured", ["phone: direct, away from home"], True)
+    assert read["means"].startswith("a device away from home is connected directly") and read["port"].startswith(
+        "the home router is not asked"
+    )
+    assert read["asks_home_router_for_the_port"] is False and "never makes a connection direct" in read["the_switch"]
+    assert yaml.safe_load(app.tools.call("status", {})[0])["path_to_the_server"] == read
+    app.path = lambda: None
+    assert "nothing to read yet" in result(call(client, "port_mapping"))
 
     assert "sent a test through ntfy" in result(call(client, "test_alert"))
     assert app.send and app.send[-1][2]["Title"] == "NullBill: test alert"

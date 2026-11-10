@@ -25,6 +25,9 @@ const JOB_NAMES = {
   "close-lan": "Closing the home network", "keep-lan-closed": "Keeping the home network closed",
   "open-lan": "Reopening the home network", "rebake-ci": "CI image rebuild", "remove-guests": "Setup with deletions",
 };
+// A run of one setup stage (the agent's, or `apply --stage`) is not "Setup":
+// it built one thing and checked nothing else.
+function jobName(v) { return v.only ? "Setup stage" : JOB_NAMES[v.action] || (v.progress && v.progress.title) || v.action; }
 const STARTING = {
   probe: "Reading…", apply: "Starting setup…", verify: "Starting the checks…", upgrade: "Starting the update…",
   "close-lan": "Closing…", "keep-lan-closed": "Keeping it closed…", "open-lan": "Opening…", "remove-guests": "Starting setup…",
@@ -76,6 +79,7 @@ let previewTimer = null;
 let previewSeq = 0;
 let statusTimer = null;
 let lastStatus = null;     // the last /api/status
+let pathView = null;       // the last /api/path: how devices reach the server, read on the host just now
 let demand = null;         // the last /api/on-demand: what runs on demand, live from the host
 let job = null;            // the followed run: {id, view, node, offset, timer, watched, feedback}
 let currentView = null;
@@ -111,6 +115,11 @@ function duration(s) {
 }
 function clock(t) { return new Date(t * 1000).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"}); }
 function day(t) { return new Date(t * 1000).toLocaleDateString([], {month: "short", day: "numeric"}); }
+// When something was read: to the second today, with the day before that.
+function readAt(t) {
+  const d = new Date(t * 1000);
+  return d.toDateString() === new Date().toDateString() ? d.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"}) : clock(t);
+}
 function count(n, word) { return `${n} ${word}${n === 1 ? "" : "s"}`; }
 
 function announce(text, urgent) {
@@ -538,7 +547,7 @@ function route(focus) {
     if (detail) {
       openRun(sub, focus);
       heading = null;
-      title = `${job && job.id === sub ? JOB_NAMES[job.view.action] || "Run" : "Run"} · Activity`;
+      title = `${job && job.id === sub ? jobName(job.view) : "Run"} · Activity`;
     }
   }
   if (view === "services" && viewChanged) loadDemand().catch(() => {});
@@ -620,6 +629,7 @@ function showAccessTab(tab) {
   // Five tabs are wider than a small phone: the chosen one scrolls into sight.
   if (phone.matches) $(`tab-${chosen}`).scrollIntoView({block: "nearest", inline: "nearest"});
   if (chosen === "people") loadPeople(false).catch((error) => say("people-result", "error", error.message));
+  if (chosen === "tailscale") loadPath().catch(() => {});
 }
 
 function showPlatform(name) {
@@ -1597,7 +1607,7 @@ function renderFiring() {
     : s.monitoring === "not planned" ? "Monitoring is not in your plan, so nothing can fire."
     : !ok ? (built() ? "Monitoring does not answer. If setup is running or just finished, wait a minute." : "Alerts show here once setup has built monitoring.")
     : "Nothing is firing.";
-  $("firing-meta").textContent = ok ? `${s.targets} systems watched` : "";
+  $("firing-meta").textContent = ok ? `${s.targets} systems watched · read ${readAt(s.at)}` : "";
   const signed = Boolean(state && state.chat && state.chat.signed_in);
   $("firing-rows").replaceChildren(...alerts.map((a) => {
     const ask = signed ? make("button", {type: "button", className: "btn small", textContent: "Ask the agent"}) : null;
@@ -1972,24 +1982,66 @@ function wirePeople() {
 
 // Whether a phone on mobile data reaches the server directly or through
 // Tailscale's relays, as the last setup run or checks found it (direct.py).
+// How devices reach the server (nullbill/direct.py), by what the reading
+// comes to: a path seen in use, the port alone, or neither.
 const PATHS = {
-  direct: ["good", "Direct"],
-  closed: ["warn", "Relayed on mobile data"],
-  shared: ["warn", "Relayed on mobile data"],
-  unseen: ["warn", "Relayed on mobile data"],
-  off: ["", "Home router not asked"],
+  measured: ["good", "Direct"],
+  open: ["good", "Port open"],
+  relayed: ["warn", "Relayed right now"],
+  unmeasured: ["", "Not measured"],
+  waiting: ["", "Not on your tailnet yet"],
   unread: ["", "Not known"],
 };
+// A record kept by a NullBill from before paths were measured.
+const OLD_PATHS = {direct: "open", waiting: "waiting", unread: "unread"};
+const DEVICE_PATHS = {home: "direct, on the home network", away: "direct, away from home", direct: "direct", relayed: "only through a Tailscale relay"};
+
+function pathShown() { return currentView === "access" && !$("sec-tailscale").hidden; }
+function pathNow() { return pathView || (state && state.direct) || null; }
+
+// Read on the host while the tab is open: the path a phone takes changes
+// with the network it is on, and a setup run from days ago cannot know it.
+// The server pings the devices that are on the tailnet and idle, so a
+// reading can take some seconds; the last one shows until then.
+async function loadPath() {
+  if (!state || !built()) return;
+  pathView = (await api("/api/path")).direct;
+  paintStates();
+}
 
 function renderDirect(found) {
-  const path = found && PATHS[found.kind];
+  const verdict = found && (found.verdict || OLD_PATHS[found.kind] || "unmeasured");
+  const path = verdict && PATHS[verdict];
   show("direct-row", Boolean(path));
-  show("direct-help", Boolean(path) && found.kind !== "direct");
-  if (!path) return;
+  if (!path) { show("direct-devices-row", false); show("direct-help", false); return; }
+  const devices = found.devices || [];
+  const names = (list) => andList(list.map((d) => d.name));
+  const away = devices.filter((d) => d.path === "direct" && d.where === "away");
+  const relayed = devices.filter((d) => d.path === "relayed");
+  const sub = {
+    measured: `Measured with ${names(away)}, from outside the home network`,
+    open: `The home router sends UDP ${found.port} here${found.method ? ` (${found.method})` : ""}`,
+    relayed: `Measured with ${names(relayed)}`,
+    unmeasured: "No device away from home answered",
+  }[verdict] || "";
   const [kind, word] = path;
-  $("direct-state").replaceChildren(status(kind, word, found.kind === "direct" ? `UDP ${found.port} (${found.method})` : ""));
-  // What it found, then what to do about it.
-  $("direct-help").textContent = String(found.detail || "").split("; ").map(sentence).join(" ");
+  $("direct-state").replaceChildren(status(kind, word));
+  // What it rests on, when it was read, and the last time a device away
+  // from home was direct.
+  const read = sub ? [sub] : [];
+  if (found.at) read.push(`read ${readAt(found.at)}`);
+  if (found.at && found.live === false) read.push("the server could not be asked just now");
+  if (verdict !== "measured" && found.seen && found.seen.at) read.push(`last direct from away: ${andList(found.seen.names || [])}, ${clock(found.seen.at)}`);
+  $("direct-read").textContent = read.join(" · ");
+  show("direct-devices-row", devices.length > 0);
+  $("direct-devices").replaceChildren(...devices.map((d) => li(`${d.name}: ${DEVICE_PATHS[d.path === "direct" ? d.where || "direct" : "relayed"]}`)));
+  // What the server read about the port and what to do, a line each; with
+  // a direct path seen in use there is nothing to do.
+  const settled = verdict === "measured" || verdict === "open";
+  const notes = settled ? [] : String(found.detail || "").split("; ").filter(Boolean).map(sentence);
+  if (verdict === "unmeasured" && found.kind !== "waiting") notes.unshift("The server asks every device on your tailnet while this tab is open, and a phone that is asleep may not answer. Open this page on the phone, on mobile data, and its path shows here within seconds.");
+  show("direct-help", notes.length > 0);
+  $("direct-help").replaceChildren(...notes.map((t) => li(t)));
 }
 
 // The port and where a forward made by hand goes, wherever the page names them.
@@ -2000,11 +2052,27 @@ function renderPortMapping(asked, found) {
   for (const id of ["direct-where", "portmap-where"]) $(id).textContent = found.address ? ` to ${found.address}` : "";
 }
 
+// The time left to confirm a close, counted from when the server said it.
+function lanLeft() {
+  const lan = state.lan;
+  if (lan.state !== "closing" || lan.left_s === null || lan.left_s === undefined) return null;
+  return Math.max(0, lan.left_s - Math.round(Date.now() / 1000 - state.at_local));
+}
+function lanLeftText() {
+  const left = lanLeft();
+  if (left === null) return `within ${state.lan.minutes} minutes`;
+  return left > 90 ? `within ${Math.ceil(left / 60)} minutes` : left > 0 ? "within a minute" : "now";
+}
+
 function renderLan(lan) {
   const [kind, word, text] = LAN[lan.state];
-  const extra = lan.state === "closing" && !lan.via_vpn ? " This page is not open over Tailscale right now." : "";
-  $("lan-state").replaceChildren(status(kind, word));
-  $("lan-status").textContent = text + extra;
+  const left = lanLeft();
+  const over = left === 0;
+  const extra = lan.state === "closing" && !lan.via_vpn && !over ? " This page is not open over Tailscale right now." : "";
+  $("lan-state").replaceChildren(status(kind, over ? "Ran out" : word, lan.state === "closing" && left ? `${Math.ceil(left / 60)} min left` : ""));
+  $("lan-status").textContent = over ? "The time to press Keep it closed is over, so the server is opening Proxmox to your home network again. This page says so once the server confirms it."
+    : lan.state === "open" && lan.lapsed ? `${text} The last close was not confirmed in time, so the server opened it again at ${clock(lan.lapsed)}.`
+    : text + extra;
   $("lan-minutes").textContent = lan.minutes;
   show("lan-close", lan.state === "open");
   show("lan-keep", lan.state === "closing");
@@ -2066,7 +2134,7 @@ function guideItems(st) {
       : st.tailscale_client ? ["todo", "Add an auth key next."] : ["todo", "Add an OAuth client."]]);
   items.push(["access/lan", "Close Proxmox to the home network",
     st.lan.state === "closed" ? ["done", "Only over Tailscale."]
-      : st.lan.state === "closing" ? ["attention", `Confirm within ${st.lan.minutes} minutes.`] : ["todo", "After Tailscale works."]]);
+      : st.lan.state === "closing" ? ["attention", lanLeft() === 0 ? "The time to confirm ran out." : `Confirm ${lanLeftText()}.`] : ["todo", "After Tailscale works."]]);
   items.push(["access/trust", "Trust this server on your devices",
     !(st.trust && st.trust.ready) ? ["todo", "After setup makes the certificate."]
       : trusted === true ? ["done", "This browser trusts it. Install it on your other devices too."]
@@ -2131,7 +2199,8 @@ function paintStates() {
     if (!note) { note = make("span", {className: "sr-only step-state"}); a.append(note); }
     note.textContent = attention ? ", needs you" : stepDone(s) ? ", done" : "";
   }
-  $("hardware-state").replaceChildren(running === "probe" ? status("run", "Reading") : st.probed ? status("good", "Read") : status("", "Not read yet"));
+  $("hardware-state").replaceChildren(running === "probe" ? status("run", "Reading")
+    : st.probed ? status("good", "Read", st.hardware && st.hardware.read_at ? clock(st.hardware.read_at) : "") : status("", "Not read yet"));
   $("choices-state").replaceChildren(choicesDirty() ? status("warn", "Not saved") : st.choices.owner_login ? status("good", "Saved") : status("", "Not saved yet"));
   $("plan-state").replaceChildren(st.plan.errors.length ? status("bad", "Does not fit") : st.plan.text ? status("good", "Fits") : status("", "No plan yet"));
   const setupLeft = STEPS.slice(0, 3).filter((s) => !stepDone(s)).length;
@@ -2145,14 +2214,19 @@ function paintStates() {
   setNav("alerts", firing ? String(firing) : "", paging ? "bad" : "warn", firing ? `${firing} firing` : "");
   const moreCount = (firing ? 1 : 0) + (st.lan.state === "closing" ? 1 : 0);
   setCount($("tab-more-badge"), moreCount ? String(moreCount) : "", "warn", moreCount ? "something under More needs you" : "");
+  // Connected: Tailscale on the server said so when the path was read, or
+  // this very page came over it.
   const ts = items.find((i) => i.href === "access/tailscale");
-  $("tailscale-state").replaceChildren(ts.kind === "done" ? status("good", "Connected") : st.tailscale_key ? status("warn", "Auth key saved: run setup")
+  const p = pathNow();
+  const onTailnet = Boolean(p && p.kind && !["waiting", "unread"].includes(p.kind));
+  $("tailscale-state").replaceChildren(ts.kind === "done" || onTailnet ? status("good", "Connected") : st.tailscale_key ? status("warn", "Auth key saved: run setup")
     : st.tailscale_client ? status("", "Client saved; add an auth key") : status("", "Not set up"));
   $("ts-dot-client").classList.toggle("done", st.tailscale_client);
-  $("ts-dot-key").classList.toggle("done", ts.kind === "done");
+  $("ts-dot-key").classList.toggle("done", ts.kind === "done" || onTailnet);
   show("tailscale-client-saved", st.tailscale_client);
-  renderDirect(st.direct);
-  renderPortMapping(st.port_mapping, st.direct);
+  renderDirect(pathNow());
+  renderPortMapping(st.port_mapping, pathNow());
+  renderLan(st.lan);
   renderSshKeys(st);
   show("vpn-saved", st.tailscale_key);
   // Run setup is the page's main action only when something waits to be
@@ -2166,7 +2240,8 @@ function paintStates() {
   renderUpdates();
   renderReview();
   renderReady();
-  if (job && job.view && job.view.state !== "running") drawOutcome(job.node, job.view);
+  // What a finished run says changes with the time that has passed since.
+  if (job && job.view && job.view.state !== "running") { drawOutcome(job.node, job.view); paintPill(job.view); }
   renderOverview(items);
   renderRuns();
   renderFiring();
@@ -2489,11 +2564,17 @@ function renderOverview(items) {
     const lan = st.lan.state;
     cell("Home network", lan === "closed" ? "Closed" : lan === "closing" ? "Closing" : "Open", lan === "closed" ? "good" : "warn",
       lan === "closed" ? "Proxmox only over Tailscale" : "Proxmox answers on your LAN", "#access/lan");
-    const verify = st.last_jobs.verify;
-    cell("Checks", !verify ? "Not run" : verify.state === "done" ? "Passed" : verify.state === "running" ? "Running" : "Failed",
-      !verify ? "" : verify.state === "done" ? "good" : verify.state === "running" ? "run" : "bad", verify ? ago(verify.started) : "", verify ? `#activity/${verify.id}` : null);
+    // The checks of the last run that got as far as them: a setup run ends
+    // with them. What they found then, with when; nothing checks in between.
+    const c = st.checks;
+    const checking = runningAction();
+    const n = c ? c.counts : null;
+    const found = !n ? "" : [n.FAIL ? `${n.FAIL} failed` : "", n.DEGRADED ? `${n.DEGRADED} degraded` : "", n.SKIP ? `${n.SKIP} skipped` : ""].filter(Boolean).join(", ");
+    cell("Checks", checking === "verify" ? "Running" : !c ? "Not run" : n.FAIL ? "Failed" : n.DEGRADED ? "Passed, with warnings" : "Passed",
+      checking === "verify" ? "run" : !c ? "" : n.FAIL ? "bad" : n.DEGRADED ? "warn" : "good",
+      c ? [found || `${n.PASS} passed`, `${c.action === "verify" || c.only ? "run" : "in the setup run"} ${ago(c.at)}`].join(" · ") : "", c ? `#activity/${c.id}` : null);
     $("stats").replaceChildren(...stats);
-    $("health-meta").textContent = s && s.monitoring === "ok" ? "From Prometheus, every 30 s" : "";
+    $("health-meta").textContent = s && s.at ? `${s.monitoring === "ok" ? "From Prometheus, read" : "Asked"} ${readAt(s.at)}` : "";
   }
   // Services and recent runs.
   const services = (st.services && st.services.items) || [];
@@ -2519,9 +2600,9 @@ function paintBanner() {
   let text = "";
   let href = "";
   let label = "Open";
-  if (state.lan.state === "closing") {
-    text = state.lan.via_vpn ? `Press Keep it closed within ${state.lan.minutes} minutes, or the home network opens again by itself.`
-      : `Open this page over Tailscale and press Keep it closed within ${state.lan.minutes} minutes.`;
+  if (state.lan.state === "closing" && lanLeft() !== 0) {
+    text = state.lan.via_vpn ? `Press Keep it closed ${lanLeftText()}, or the home network opens again by itself.`
+      : `Open this page over Tailscale and press Keep it closed ${lanLeftText()}.`;
     href = "#access/lan";
   } else if (chat.pending.length && !chatVisible() && currentView !== "overview") {
     text = chat.pending.length > 1 ? `The agent waits for your OK on ${chat.pending.length} requests.` : "The agent waits for your OK.";
@@ -2983,11 +3064,16 @@ async function demandAct(button, feedback, body) {
   });
 }
 
+// The page's regular question, every 30 s and whenever it comes back into
+// sight: health from Prometheus, and the stamp that says whether anything
+// the rest of the page shows has changed on the server since it was asked.
 async function refreshStatus() {
   lastStatus = await api("/api/status");
   paintServices();
   paintStates();
   if (currentView === "services" && !$("confirm").open) loadDemand().catch(() => {});
+  if (pathShown()) loadPath().catch(() => {});
+  if (state && lastStatus.stamp && lastStatus.stamp !== state.stamp) refreshSoon();
 }
 
 async function refresh() {
@@ -3012,6 +3098,7 @@ async function refresh() {
   const disksChanged = !state || JSON.stringify(state.disks.map((d) => d.id)) !== JSON.stringify(st.disks.map((d) => d.id));
   const choicesChanged = !state || JSON.stringify(state.choices) !== JSON.stringify(st.choices);
   const wasBuilt = built();
+  st.at_local = Date.now() / 1000;
   state = st;
   show("gate", false);
   show("app", true);
@@ -3082,7 +3169,7 @@ function runRow(raw) {
   const r = runView(raw);
   const result = r.state === "running" ? status("run", r.stage || "Running") : r.state === "done" ? status("good", "Finished") : r.stopped ? status("", "Stopped by you") : status("bad", "Failed");
   const row = make("tr", {className: `link-row${job && job.id === r.id && currentSub === r.id ? " current" : ""}`},
-    make("td", {className: "name"}, make("a", {href: `#activity/${r.id}`, textContent: JOB_NAMES[r.action] || r.action})),
+    make("td", {className: "name"}, make("a", {href: `#activity/${r.id}`, textContent: jobName(r)}), r.only ? make("span", {className: "sub", textContent: r.only.text}) : null),
     make("td", {}, result, r.state === "failed" && !r.stopped && r.where ? make("span", {className: "sub run-where", textContent: r.where}) : null),
     make("td", {className: "muted"}, make("span", {textContent: clock(r.started), title: ago(r.started)})),
     make("td", {className: "num muted hide-phone", textContent: r.state === "running" ? duration(r.seconds) : duration(r.seconds)}),
@@ -3100,11 +3187,11 @@ function renderRuns() {
 // The run page: the one the address names.
 function focusRun() {
   if (!job || !job.node.isConnected) return;
-  document.title = `${JOB_NAMES[job.view.action] || job.view.progress.title} · Activity · NullBill`;
+  document.title = `${jobName(job.view)} · Activity · NullBill`;
   job.node.querySelector(".job-title").focus({preventScroll: true});
 }
 async function openRun(id, focus) {
-  $("crumb-run").textContent = job && job.id === id ? JOB_NAMES[job.view.action] || job.view.progress.title : "Run";
+  $("crumb-run").textContent = job && job.id === id ? jobName(job.view) : "Run";
   if (job && job.id === id) {
     if (focus) requestAnimationFrame(focusRun);
     return;
@@ -3125,13 +3212,13 @@ async function openRun(id, focus) {
 function placeJob() {
   if (!job) return;
   const onRun = currentView === "activity" && currentSub === job.id;
-  const onBuild = currentView === "setup" && currentStep === "build" && SETUP_RUNS.has(job.view.action);
+  const onBuild = currentView === "setup" && currentStep === "build" && SETUP_RUNS.has(job.view.action) && !job.view.only;
   const target = onRun ? $("job-slot") : onBuild ? $("build-job") : null;
   if (target && job.node.parentElement !== target) {
     for (const slot of [$("job-slot"), $("build-job")]) if (slot !== target && slot.contains(job.node)) slot.replaceChildren();
     target.replaceChildren(job.node);
   }
-  if (onRun) $("crumb-run").textContent = JOB_NAMES[job.view.action] || job.view.progress.title;
+  if (onRun) $("crumb-run").textContent = jobName(job.view);
   show("build-start", !(onBuild && job.view.state === "running"));
 }
 
@@ -3237,18 +3324,21 @@ function paintPill(view) {
   const now = steps.find((s) => s.status === "running" || s.status === "failed");
   pill.dataset.state = view.stopped ? "stopped" : view.state;
   pill.href = `#activity/${view.id}`;
-  const name = JOB_NAMES[view.action] || p.title;
+  const name = jobName(view);
+  // Which stage, for a run of one.
+  const which = view.only ? [view.only.text] : [];
   if (view.state === "running") {
     $("run-title").textContent = `${name}${steps.length ? ` ${Math.min(steps.length, done + 1)}/${steps.length}` : ""}`;
     $("run-sub").textContent = [now ? now.text : "Starting", duration(view.seconds)].filter(Boolean).join(" · ");
     fill.style.width = steps.length ? `${Math.max(2, Math.round((100 * done) / steps.length))}%` : "30%";
   } else if (view.state === "done") {
+    const degraded = p.verify ? p.verify.counts.DEGRADED : 0;
     $("run-title").textContent = `${name} finished`;
-    $("run-sub").textContent = `${ago(view.started + view.seconds)}, took ${duration(view.seconds)}`;
+    $("run-sub").textContent = [...which, `${ago(view.started + view.seconds)}, took ${duration(view.seconds)}${degraded ? `, ${degraded} degraded` : ""}`].join(" · ");
     fill.style.width = "0";
   } else {
     $("run-title").textContent = view.stopped ? `${name} stopped` : `${name} failed`;
-    $("run-sub").textContent = p.error && p.error.stage_text ? `at ${p.error.stage_text}` : ago(view.started + view.seconds);
+    $("run-sub").textContent = p.error && p.error.stage_text ? `at ${p.error.stage_text}` : [...which, ago(view.started + view.seconds)].join(" · ");
     fill.style.width = "0";
   }
 }
@@ -3371,6 +3461,17 @@ function drawJob(current, view) {
           ...String(x.detail || "").split("; ").filter(Boolean).map((d) => make("span", {className: "check-detail", textContent: d}))))));
     }
     list.hidden = !v.problems.length;
+    // A check that did not run is no pass: which, and why not, on request.
+    const skipped = v.skipped || [];
+    const more = box.querySelector(".skipped");
+    more.hidden = !skipped.length;
+    if (more.dataset.key !== JSON.stringify(skipped)) {
+      more.dataset.key = JSON.stringify(skipped);
+      more.querySelector("summary").textContent = `${count(skipped.length, "check")} did not run`;
+      more.querySelector("ul").replaceChildren(...skipped.map((x) => make("li", {},
+        make("div", {className: "check"}, make("span", {className: "check-name", textContent: x.name}),
+          ...String(x.detail || "").split("; ").filter(Boolean).map((d) => make("span", {className: "check-detail", textContent: d}))))));
+    }
   }
   const pre = node.querySelector(".job-log pre");
   const atEnd = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40;
@@ -3398,11 +3499,17 @@ function drawOutcome(node, view) {
     "rebake-ci": ["The CI images are rebuilt.", ""],
     "remove-guests": ["Setup finished.", "The guests you chose to delete are gone; everything else in the plan is in place."],
   }[view.action] || ["Finished.", ""];
+  // One stage is not the server: say which ran, and that nothing else was touched or checked.
+  if (view.only) { text[0] = "This stage finished."; text[1] = `Only "${view.only.text}" ran. The rest of the server was left as it was${view.only.name === "verify" ? "" : ", and the checks did not run"}.`; }
+  // An orange outcome says in words what it is orange for.
   const warned = p.verify && p.verify.counts.DEGRADED ? p.verify.problems.filter((x) => x.status === "DEGRADED").map((x) => x.text) : [];
-  if (warned.length && view.action === "verify") text[1] = `No check failed; ${warned.length === 1 ? "one is degraded" : `${warned.length} are degraded`}, listed below.`;
+  const degraded = `No check failed; ${warned.length === 1 ? "one is degraded" : `${warned.length} are degraded`}, listed below.`;
+  if (warned.length && view.action === "verify") text[1] = degraded;
+  else if (warned.length && view.only) text[1] = `${text[1]} ${degraded}`;
+  else if (warned.length && SETUP_RUNS.has(view.action)) text[1] = `${text[1].split("; ")[0].replace(/\.$/, "")}. ${degraded}`;
   let warn = warned.length > 0;
   if (view.action === "probe") next.append(make("a", {className: "btn small", href: "#setup/choices", textContent: "Choose what to run"}));
-  if (view.action === "apply") next.append(make("a", {className: "btn small", href: "#services", textContent: "Open your services"}));
+  if (view.action === "apply" && !view.only) next.append(make("a", {className: "btn small", href: "#services", textContent: "Open your services"}));
   if (view.action === "upgrade") {
     // Did this run move NullBill, and does the server have to follow?
     const v = state && state.version;
@@ -4524,8 +4631,10 @@ document.addEventListener("DOMContentLoaded", () => {
       if (state) route(false);
     });
   }
+  // Back in sight after minutes or hours in the background, where timers
+  // sleep: everything is asked again at once.
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && state) { refreshSoon(); pollChat(); }
+    if (!document.hidden && state) { refreshSoon(); refreshStatus().catch(() => {}); pollChat(); }
   });
   document.addEventListener("input", (event) => { if (event.target.removeAttribute) event.target.removeAttribute("aria-invalid"); });
   // Buttons that hand a question to the agent.

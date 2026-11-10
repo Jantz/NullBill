@@ -381,11 +381,13 @@ console, and the Tailscale app on the phone or laptop you will use.
 5. With Tailscale on, open the address the vpn stage printed,
    `https://nullbill.nullbill.internal:8443` (its number,
    `https://10.42.1.2:8443`, works too). Sign in with your page password.
-6. On the page's **Access** page, **Tailscale** tab, read **Path**. **Direct**
-   means a phone on mobile data connects to the server without a relay.
-   **Relayed on mobile data** works too, only slower; the line below it
-   says what to change on your home router, and
-   [vpn.md](vpn.md#direct-connections) has each case.
+6. On the page's **Access** page, **Tailscale** tab, read **Path**, which
+   the server measures while the tab is open. **Direct** means a device
+   away from home connects to the server without a relay. **Relayed right
+   now** works too, only slower; the lines below it say what to change on
+   your home router, and [vpn.md](vpn.md#direct-connections) has each
+   case. **Not measured** means no device away from home answered: open
+   the page on your phone, on mobile data.
 
 ## 11. Close Proxmox to the home network
 

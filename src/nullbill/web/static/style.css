@@ -529,6 +529,15 @@ input:not([type=checkbox]):not([type=radio])[readonly] { background: var(--bg-su
 .props dt { color: var(--text-3); }
 .props.compact { border: 0; margin: 0 0 12px; }
 .props.compact > div { padding: 0; border: 0; grid-template-columns: 70px minmax(0, 1fr); }
+.props.compact > div + div { margin-top: 4px; }
+/* When a state was read, under it. */
+.read-at { display: block; color: var(--text-3); font-size: 12px; margin-top: 1px; }
+.read-at:empty { display: none; }
+.props .status { white-space: normal; }
+ul.plain { list-style: none; margin: 0; padding: 0; color: var(--text-2); font-size: 13px; }
+/* What was read and what to do, a line each. */
+ul.notes { list-style: none; margin: 0 0 14px; padding: 0 0 0 12px; border-left: 2px solid var(--line); color: var(--text-2); max-width: 70ch; display: grid; gap: 4px; }
+ul.notes[hidden] { display: none; }
 
 /* Setup */
 .step { padding-bottom: 8px; }
@@ -736,6 +745,9 @@ select:disabled { color: var(--text-3); background: var(--bg-sub); cursor: not-a
 .problems[hidden] { display: none; }
 .problems li { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 2px 12px; align-items: baseline; padding: 8px 12px; border-top: 1px solid var(--line); }
 .problems li:first-child { border-top: 0; }
+.job-verify .skipped { margin-top: 10px; }
+.job-verify .skipped .problems { margin-top: 0; }
+.job-verify .skipped .problems li { grid-template-columns: minmax(0, 1fr); }
 .check { display: grid; gap: 1px; min-width: 0; }
 .check-name { font-weight: 500; overflow-wrap: anywhere; }
 .check-detail { color: var(--text-2); overflow-wrap: anywhere; }

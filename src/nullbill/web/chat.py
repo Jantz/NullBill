@@ -43,7 +43,7 @@ from typing import TYPE_CHECKING
 
 import yaml
 
-from nullbill import custom, people
+from nullbill import custom, direct, people
 from nullbill.errors import NullBillError
 from nullbill.model import build_model
 from nullbill.secretfile import Secrets
@@ -1146,7 +1146,9 @@ def tool_label(name: str, args: dict) -> str:
         "stop_job": f"Stop {args.get('id', 'a run')}",
         "check_updates": "Checked for updates to NullBill",
         "test_alert": "Sent a test alert",
-        "port_mapping": "Ask the home router for the port: " + ("on" if args.get("enabled") else "off"),
+        "port_mapping": "Ask the home router for the port: " + ("on" if args.get("enabled") else "off")
+        if "enabled" in args
+        else "Read how devices reach the server",
         "show_plan": "Updated the plan",
         "start_task": f"Task: {args.get('title', '')}",
         "finish_task": "Finished the task",
@@ -1273,6 +1275,8 @@ class Tools:
             },
             "home_network": st["lan"]["state"],
             "tailscale": {"oauth_client": st["tailscale_client"], "auth_key_waiting": st["tailscale_key"]},
+            # Access, Tailscale, Path: measured now, not remembered from a setup run.
+            "path_to_the_server": self.path_view(),
             "agent_root_on_host": st["agent_powers"],
             "waiting_to_delete": st["removals"],
             "monitoring": self.app.status(),
@@ -1809,7 +1813,43 @@ class Tools:
         title = progress.JOB_TEXT.get(job.action, job.action)
         return self.gated({"act": "stop-job", "id": job.id}, verdict, why, f"Stop the run: {title}")
 
-    def t_port_mapping(self, enabled: bool, why: str = "") -> str:
+    def path_view(self) -> dict | None:
+        """How devices reach the server (Access, Tailscale, Path), as the
+        page has it: read on the host now when it can be."""
+        found = self.app.path()
+        if not found:
+            return None
+        said = found.get("verdict") or ""
+        seen = found.get("seen") or {}
+        return {
+            "path": said,
+            "means": direct.MEANS.get(said, ""),
+            "devices_measured": [
+                f"{d['name']}: "
+                + (
+                    f"direct, {'away from home' if d['where'] == direct.AWAY else 'on the home network'}"
+                    if d["path"] == direct.DIRECT and d["where"]
+                    else "direct"
+                    if d["path"] == direct.DIRECT
+                    else "only through a Tailscale relay"
+                )
+                for d in found.get("devices") or []
+            ],
+            "port": found.get("detail") or f"the home router forwards UDP {found.get('port')} to the server ({found.get('method')})",
+            "read": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(found["at"])) if found.get("at") else None,
+            "read_just_now": bool(found.get("live")),
+            "last_direct_from_away": seen
+            and {"devices": seen.get("names"), "at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(seen.get("at") or 0))},
+            "asks_home_router_for_the_port": self.app.port_mapping(),
+            "the_switch": direct.SWITCH_MEANS,
+        }
+
+    def t_port_mapping(self, enabled: bool | None = None, why: str = "") -> str:
+        if enabled is None:
+            view = self.path_view()
+            if view is None:
+                return "nothing to read yet: the server has no vpn guest, or no setup run has finished"
+            return yaml.safe_dump(view, sort_keys=False, width=200)
         enabled = bool(enabled)
         if self.app.port_mapping() == enabled:
             return f"it is {'on' if enabled else 'off'} already"

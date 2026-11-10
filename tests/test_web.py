@@ -266,6 +266,8 @@ def test_choices_write_config_and_probe_gives_a_plan(site):
     assert done["state"] == "done" and "probe stored" in (app.home / "jobs" / f"{job['id']}.log").read_text()
     state = client.call("/api/state")[1]
     assert state["probed"] and state["plan"]["errors"] == []
+    # The hardware shown is what was read then, and the page says when.
+    assert time.time() - state["hardware"]["read_at"] < 60
     assert "class: small" in state["plan"]["text"] and "status: disabled" in state["plan"]["text"]
     # The policy to paste into Tailscale names the owner and the vpn guest's tag.
     policy = json.loads(state["plan"]["tailnet_policy"])
@@ -689,9 +691,138 @@ def test_the_page_is_told_how_devices_on_mobile_data_reach_the_server(site):
     why = "the home router did not open UDP 41642"
     direct.record(app.home, direct.Finding(direct.CLOSED, why, 41642, "192.168.1.57"))
     found = client.call("/api/state")[1]["direct"]
-    assert found == {"kind": "closed", "detail": why, "port": 41642, "address": "192.168.1.57", "method": None}
+    # With when it was read, and what it comes to: nothing measured is no problem found.
+    assert time.time() - found.pop("at") < 60
+    assert found == {
+        "kind": "closed",
+        "detail": why,
+        "port": 41642,
+        "address": "192.168.1.57",
+        "method": None,
+        "devices": [],
+        "verdict": "unmeasured",
+        "seen": None,
+    }
+    # Nothing built yet: the page gets the last reading and is told it is not a fresh one.
+    assert client.call("/api/path")[1]["direct"]["live"] is False
     direct.record(app.home, None)
-    assert client.call("/api/state")[1]["direct"] is None
+    assert client.call("/api/state")[1]["direct"] is None and client.call("/api/path") == (200, {"direct": None})
+
+
+def on_the_server(app, client, monkeypatch, peers, pongs=None, **state):
+    """A server built from the small plan whose host answers direct.py's
+    commands: (what the host was asked, the plan)."""
+    from conftest import direct_answers, portmap_state
+
+    from nullbill.render import strip_notes
+
+    probed(app, "small")
+    client.call("/api/choices", {"workloads": [], "backups": False, "owner_login": "owner-a@example.internal"})
+    built(app, client)
+    plan = strip_notes(app.saved_plan())
+    answers = direct_answers(plan, portmap_state(**state), peers=peers, pongs=pongs)
+    asked = []
+
+    def host(target, command):
+        asked.append(command)
+        return (0, answers[command], "") if command in answers else (1, "", "unexpected")
+
+    monkeypatch.setattr(app, "host_run", host)
+    return asked, plan
+
+
+def test_the_path_is_measured_on_the_host_while_the_page_asks(site, monkeypatch):
+    from conftest import tailscale_peer
+
+    app, client = site
+    sign_in(app, client)
+    closed = {"method": None, "external": None, "why": {"UPnP": "no answer"}}
+    # A PC at home in use, and a phone on mobile data that is idle until the server pings it.
+    peers = [tailscale_peer("desktop", "192.168.1.30:41641"), tailscale_peer("phone")]
+    asked, plan = on_the_server(app, client, monkeypatch, peers, {"phone": "203.0.113.80:41641"}, **closed)
+    found = client.call("/api/path")[1]["direct"]
+    assert (found["verdict"], found["live"], found["kind"]) == ("measured", True, "closed")
+    assert found["devices"] == [
+        {"name": "desktop", "path": "direct", "where": "home"},
+        {"name": "phone", "path": "direct", "where": "away"},
+    ]
+    assert found["seen"]["names"] == ["phone"] and "203.0.113.80" not in json.dumps(found)
+    assert asked == [direct.vpn_command(plan), direct.ping_command(plan, ["100.64.0.3"]), direct.router_command(plan)]
+    # Kept as apply and verify keep it, and not read again within seconds.
+    assert direct.recorded(app.home)["verdict"] == "measured" and client.call("/api/state")[1]["direct"]["verdict"] == "measured"
+    client.call("/api/path")
+    assert len(asked) == 3
+    # While a job is at work on the host the page shows the last reading.
+    app.path_seen = None
+    slow = app.home.parent / "slow.py"
+    slow.write_text("import time; time.sleep(5)\n")
+    app.command = [sys.executable, str(slow)]
+    job = client.call("/api/jobs", {"action": "verify"})[1]
+    found = client.call("/api/path")[1]["direct"]
+    assert (found["verdict"], found["live"]) == ("measured", False) and len(asked) == 3
+    app.jobs[job["id"]].process.kill()
+
+
+def test_the_page_hears_that_something_changed_on_the_server(site):
+    app, client = site
+    sign_in(app, client)
+    first = client.call("/api/state")[1]
+    assert first["stamp"] == client.call("/api/status")[1]["stamp"] and time.time() - first["at"] < 60
+    # Another device saves choices, a run ends, verify records something: each moves the stamp.
+    client.call("/api/choices", {"workloads": [], "owner_login": "owner-a@example.internal"})
+    saved = client.call("/api/status")[1]["stamp"]
+    assert saved != first["stamp"] and client.call("/api/state")[1]["stamp"] == saved
+    job = client.call("/api/jobs", {"action": "verify"})[1]
+    wait(client, job["id"])
+    ran = client.call("/api/status")[1]["stamp"]
+    assert ran != saved
+    (app.home / "names.json").write_text("{}\n")
+    assert client.call("/api/status")[1]["stamp"] != ran
+    # Reading the path writes its own record, which must not make the page load everything again.
+    now = client.call("/api/status")[1]["stamp"]
+    direct.record(app.home, direct.Finding(direct.WAITING, "the vpn guest is not on the tailnet yet"))
+    assert client.call("/api/status")[1]["stamp"] == now
+
+
+CHECKS = """import sys, time
+print("--- stage verify, " + time.strftime("%Y-%m-%d %H:%M:%S"))
+print("PASS     lan: 8006 closed")
+print("DEGRADED backups: switched off; nothing is backed up")
+print("SKIP     agent: no credential saved")
+print("PASS 1, FAIL 0, SKIP 1, DEGRADED 1")
+"""
+
+
+def test_the_checks_shown_are_the_latest_runs_with_what_did_not_pass(site):
+    app, client = site
+    sign_in(app, client)
+    assert client.call("/api/state")[1]["checks"] is None
+    probed(app, "small")
+    client.call("/api/choices", {"workloads": [], "backups": False, "owner_login": "owner-a@example.internal"})
+    script = app.home.parent / "checks.py"
+    script.write_text(CHECKS)
+    app.command = [sys.executable, str(script)]
+    job = wait(client, setup(client)[1]["id"])
+    # No check failed, and the run still says what is degraded and what did not run.
+    assert job["progress"]["verify"]["skipped"] == [{"name": "agent", "detail": "no credential saved"}]
+    checks = client.call("/api/state")[1]["checks"]
+    assert time.time() - checks.pop("at") < 60
+    assert checks == {
+        "id": job["id"],
+        "action": "apply",
+        "only": False,
+        "counts": {"PASS": 1, "FAIL": 0, "SKIP": 1, "DEGRADED": 1},
+        "degraded": ["backups"],
+    }
+    # A later run of one other stage checked nothing: the setup run's checks stay the latest.
+    script.write_text("print('ran')\n")
+    staged = wait(client, client.call("/api/jobs", {"action": "apply", "stage": "router"})[1]["id"])
+    assert client.call("/api/state")[1]["checks"]["id"] == job["id"]
+    # And that run is told apart from a setup run wherever it is listed.
+    assert staged["only"] == {"name": "router", "text": "Set up the router"} and job["only"] is None
+    assert [s["name"] for s in staged["progress"]["steps"]] == [progress.PREPARE, "router"]
+    runs = client.call("/api/state")[1]["runs"]
+    assert [r["only"] and r["only"]["name"] for r in runs[:2]] == ["router", None]
 
 
 def test_the_owner_switches_off_asking_the_home_router_on_the_page(site):
@@ -751,7 +882,8 @@ def test_alert_settings_wait_for_a_running_job(site, tmp_path):
 def test_status_reads_prometheus_on_the_monitoring_guest(site):
     app, client = site
     sign_in(app, client)
-    assert client.call("/api/status") == (200, {"monitoring": "not planned"})
+    status, data = client.call("/api/status")
+    assert status == 200 and data.pop("stamp") and data == {"monitoring": "not planned"}
     (app.home / "plan.yaml").write_text("guests:\n  monitoring:\n    ip: 10.42.1.14\n")
     asked = []
 
@@ -782,6 +914,8 @@ def test_status_reads_prometheus_on_the_monitoring_guest(site):
 
     app.fetch = fetch
     status, data = client.call("/api/status")
+    # Every answer says when Prometheus was read.
+    assert time.time() - data.pop("at") < 60 and data.pop("stamp")
     assert status == 200 and data == {
         "monitoring": "ok",
         "alerts": [
@@ -803,7 +937,9 @@ def test_status_reads_prometheus_on_the_monitoring_guest(site):
         raise OSError("no route to host")
 
     app.fetch = unreachable
-    assert client.call("/api/status")[1] == {"monitoring": "unreachable", "error": "no route to host"}
+    data = client.call("/api/status")[1]
+    assert time.time() - data.pop("at") < 60 and data.pop("stamp")
+    assert data == {"monitoring": "unreachable", "error": "no route to host"}
     assert Client(client.port, app.home / "web" / "cert.pem").call("/api/status")[0] == 401
 
 
@@ -894,7 +1030,7 @@ def test_closing_the_lan_needs_the_page_over_tailscale_and_then_shuts_the_lan_ou
     vpn = {"address": "10.42.6.11"}
     monkeypatch.setattr(app, "network", lambda: ("10.42.0.0/16", vpn["address"]))
     state = client.call("/api/state")[1]["lan"]
-    assert state == {"state": "open", "via_vpn": False, "minutes": 15}
+    assert state == {"state": "open", "via_vpn": False, "minutes": 15, "left_s": None, "lapsed": None}
     status, job = client.call("/api/jobs", {"action": "close-lan"})
     assert status == 200 and job["args"] == ["apply", "--close-lan"]
     assert wait(client, job["id"])["state"] == "done"
@@ -914,6 +1050,35 @@ def test_closing_the_lan_needs_the_page_over_tailscale_and_then_shuts_the_lan_ou
     assert client.call("/api/login", {"secret": "x"})[0] == 403
     monkeypatch.setattr(app, "network", lambda: ("127.0.0.0/8", "127.0.0.1"))
     assert client.call("/api/state")[1]["lan"]["state"] == "closed"
+
+
+def test_a_close_nobody_confirmed_is_shown_open_again_once_the_host_says_so(site, monkeypatch):
+    from nullbill import lan
+
+    app, client = site
+    sign_in(app, client)
+    (app.home / "config.yaml").write_text("target:\n  ssh: root@192.0.2.10\n")
+    (app.home / "plan.yaml").write_text("zones:\n  mgmt:\n    host_ip: 10.42.1.254\nguests: {}\n")
+    timer = ["armed"]
+    asked = []
+    monkeypatch.setattr(app, "host_run", lambda target, command: asked.append(command) or (0, timer[0] + "\n", ""))
+    # While the time runs the page counts it down and asks nobody.
+    lan.write(app.home, lan.CLOSING, time.time() + 600)
+    view = client.call("/api/state")[1]["lan"]
+    assert view["state"] == "closing" and 590 < view["left_s"] <= 600 and asked == []
+    # Past the deadline only the host knows. Its timer still there: closing, with no time left.
+    ran_out = time.time() - 60
+    lan.write(app.home, lan.CLOSING, ran_out)
+    view = client.call("/api/state")[1]["lan"]
+    assert (view["state"], view["left_s"]) == ("closing", 0) and asked == [lan.ARMED]
+    # Not asked again at every load of the page.
+    client.call("/api/state")
+    assert asked == [lan.ARMED]
+    # The timer ran and is gone: the home network is open again, and the page says since when.
+    timer[0], app.lan_asked = "gone", 0.0
+    view = client.call("/api/state")[1]["lan"]
+    assert (view["state"], view["left_s"], view["lapsed"]) == ("open", None, ran_out)
+    assert lan.read(app.home) == {"state": "open", "lapsed": ran_out}
 
 
 def test_the_ci_images_are_baked_again_each_sunday_night(site, tmp_path):

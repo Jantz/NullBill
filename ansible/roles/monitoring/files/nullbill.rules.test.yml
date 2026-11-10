@@ -13,7 +13,7 @@ tests:
         values: "100x20"
       - series: 'node_filesystem_readonly{instance="pbs:9100",mountpoint="/",fstype="ext4"}'
         values: "0x20"
-      # A disk kept read-only, 95% full: no page. Kept read-write: a page.
+      # A kept disk 95% full of the owner's files, read-only or read-write: no page.
       - series: 'node_filesystem_avail_bytes{instance="pve:9100",mountpoint="/mnt/nb-legacy/data",fstype="fuseblk"}'
         values: "5x20"
       - series: 'node_filesystem_size_bytes{instance="pve:9100",mountpoint="/mnt/nb-legacy/data",fstype="fuseblk"}'
@@ -26,6 +26,24 @@ tests:
         values: "100x20"
       - series: 'node_filesystem_readonly{instance="pve:9100",mountpoint="/mnt/nb-legacy/media",fstype="fuseblk"}'
         values: "0x20"
+      # The same disk as the files guest shares it: 95% full with room left,
+      # and a second share that takes no more.
+      - series: 'node_filesystem_avail_bytes{instance="files:9100",mountpoint="/srv/share/media",fstype="fuseblk"}'
+        values: "200000000000x20"
+      - series: 'node_filesystem_size_bytes{instance="files:9100",mountpoint="/srv/share/media",fstype="fuseblk"}'
+        values: "4000000000000x20"
+      - series: 'node_filesystem_readonly{instance="files:9100",mountpoint="/srv/share/media",fstype="fuseblk"}'
+        values: "0x20"
+      - series: 'node_filesystem_avail_bytes{instance="files:9100",mountpoint="/srv/share/photos",fstype="ext4"}'
+        values: "500000000x20"
+      - series: 'node_filesystem_size_bytes{instance="files:9100",mountpoint="/srv/share/photos",fstype="ext4"}'
+        values: "50000000000x20"
+      - series: 'node_filesystem_readonly{instance="files:9100",mountpoint="/srv/share/photos",fstype="ext4"}'
+        values: "0x20"
+      - series: 'node_filesystem_avail_bytes{instance="files:9100",mountpoint="/srv/share/data",fstype="fuseblk"}'
+        values: "0x20"
+      - series: 'node_filesystem_readonly{instance="files:9100",mountpoint="/srv/share/data",fstype="fuseblk"}'
+        values: "1x20"
       - series: 'nb_legacy_disk_mounted{job="host",instance="pve",name="data",mode="ro"}'
         values: "1x5 0x15"
       - series: 'nb_legacy_disk_mounted{job="host",instance="pve",name="media",mode="rw"}'
@@ -70,8 +88,14 @@ tests:
         exp_alerts:
           - exp_labels: {severity: page, instance: "pbs:9100", mountpoint: /, fstype: ext4}
             exp_annotations: {summary: "pbs:9100 / has under 10% free"}
-          - exp_labels: {severity: page, instance: "pve:9100", mountpoint: /mnt/nb-legacy/media, fstype: fuseblk}
-            exp_annotations: {summary: "pve:9100 /mnt/nb-legacy/media has under 10% free"}
+      - eval_time: 14m
+        alertname: KeptDiskFull
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: KeptDiskFull
+        exp_alerts:
+          - exp_labels: {severity: warn, instance: "files:9100", mountpoint: /srv/share/photos, fstype: ext4}
+            exp_annotations: {summary: "the share /srv/share/photos has under 1 GiB left; nothing more can be saved to it until you delete or move files, and the server itself is not affected"}
       - eval_time: 15m
         alertname: LegacyDiskMissing
         exp_alerts: []

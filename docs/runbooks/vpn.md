@@ -101,10 +101,18 @@ On a device, names need Tailscale's DNS on:
   turned off in the app.
 
 **Run checks** reports `tailnet devices look up server names at the
-router` as DEGRADED while Tailscale sends the domain elsewhere, and
-`browsers trust ... by name` for the page, Proxmox, Forgejo and Grafana.
-`nslookup forgejo.nullbill.internal` on a device should answer with
-Forgejo's address.
+router` as DEGRADED while Tailscale sends the domain elsewhere, asks the
+router for a name from the vpn guest, the way your devices' lookups arrive
+(`the router answers lookups of server names from the vpn guest`), and
+reports `browsers trust ... by name` for the page, Proxmox, Forgejo and
+Grafana. `nslookup forgejo.nullbill.internal` on a device should answer
+with Forgejo's address.
+
+The Tailscale app sometimes shows **DNS unavailable**. That warning is the
+app's own: it appears after any lookup the app passed on got no answer in
+time, from your network's own DNS servers as much as from the server, often
+right after the phone changed networks, and it goes away with the next
+answer. While names open the page it means nothing about the server.
 
 ## Direct connections
 
@@ -124,12 +132,21 @@ yes and you have nothing to do.
 **You need:** the server on Tailscale ([Once](#once)); for anything on
 the home router, its admin page and password.
 
-1. On the page, open **Access**, **Tailscale** tab, and read **Path**:
-   - **Direct**: the home router sends the port to the server. Done.
-   - **Relayed on mobile data**: the line below it says what the home
-     router answered and what to do. The cases are listed under step 3.
-   - **Home router not asked**: **Ask the home router for the port** on
-     the same tab is off.
+1. On the page, open **Access**, **Tailscale** tab, and read **Path**.
+   The server measures it while the tab is open, every half minute: it
+   reads the path Tailscale on the server uses for each of your devices,
+   and pings a device that is idle to find out. **Devices** lists each one
+   that answered, and the small line says when it was read.
+   - **Direct**: a device away from home is connected directly. Done,
+     whatever the home router says about the port.
+   - **Port open**: the home router sends the port to the server and
+     Tailscale offers it; no device away from home answered just now.
+   - **Relayed right now**: a device answers only through a relay. The
+     lines below say what the home router answered and what to do. The
+     cases are listed under step 3.
+   - **Not measured**: no device away from home answered, so the server
+     has nothing to go on; this is not a fault. A phone that is asleep may
+     not answer: open the page on it, on mobile data.
    - No **Path** line: the server is not on Tailscale yet.
 2. Check from the phone: turn Wi-Fi off, open the Tailscale app, tap the
    `nullbill` machine and ping it. The app says **Direct connection** or
@@ -137,8 +154,8 @@ the home router, its admin page and password.
    relayed, so ping a few times. On a computer, `tailscale ping nullbill`
    ends with `via <address>:41642` when direct and `via DERP(...)` when
    relayed.
-3. If it is relayed, do what fits the line under **Path**, then press
-   **Run the checks** (the arrow beside **Run setup**) to read it again:
+3. If it is relayed, do what fits the lines under **Path**; the tab reads
+   it again by itself:
    - **The home router did not open the port, no answer**: UPnP and
      NAT-PMP are off on the home router. Either turn one on (routers
      call it UPnP, NAT-PMP, or port sharing by devices); the server then
@@ -149,10 +166,11 @@ the home router, its admin page and password.
      network, the device with the MAC address `02:4e:42:00:00:01` in the
      home router's device list, not the Proxmox host. Tell the home router
      to always give that device the same address, or the forward points
-     nowhere after the address changes. Then switch off **Ask the home
-     router for the port** and press **Run setup**: the server cannot see a
-     forward it did not ask for, so with the switch on it keeps reporting
-     the port as closed. Step 2 tells you whether your forward works.
+     nowhere after the address changes. The server cannot see a forward
+     it did not ask for; **Path** shows whether it works, as soon as a
+     phone on mobile data answers. You may switch off **Ask the home router
+     for the port** and press **Run setup**, so the server stops asking for
+     what you made by hand; the switch changes nothing about the path.
    - **It does not let this device open ports**: the home router has UPnP
      on but wants each device allowed first. On a FRITZ!Box that is
      **Internet, Permit Access, Port Sharing**: add the device with the
@@ -179,12 +197,16 @@ the home router, its admin page and password.
 
 **Run the checks** reports this as `devices on mobile data reach the vpn
 guest directly`: PASS when the home router sends the port here and
-Tailscale offers it to your devices, DEGRADED with the same line as the
-page otherwise, and SKIP while the switch is off.
+Tailscale offers it to your devices, or when a device away from home is
+connected directly; DEGRADED only when a device answers through a relay
+and none away from home is direct; and SKIP, with what it read, when no
+device away from home answered. A closed port alone is no finding: a port
+forwarded by hand or on a second router looks the same from the server.
 
 To have no port open, switch off **Ask the home router for the port** and
-press **Run setup**. The server gives the port back and devices on mobile
-data use relays.
+press **Run setup**. The server gives the port back. The switch only
+decides who opens the port, the server or you by hand: switching it off
+never makes a connection direct.
 
 ## Close Proxmox to the home network
 

@@ -508,8 +508,10 @@
       </div>
 
       <section class="tabpanel" id="sec-tailscale" role="tabpanel" aria-labelledby="tab-tailscale">
-        <dl class="props compact"><div><dt>Status</dt><dd id="tailscale-state"></dd></div><div id="direct-row" hidden><dt>Path</dt><dd id="direct-state"></dd></div></dl>
-        <p class="help" id="direct-help" hidden></p>
+        <dl class="props compact"><div><dt>Status</dt><dd id="tailscale-state"></dd></div>
+          <div id="direct-row" hidden><dt>Path</dt><dd><span id="direct-state"></span><span class="sub read-at" id="direct-read"></span></dd></div>
+          <div id="direct-devices-row" hidden><dt>Devices</dt><dd><ul class="plain" id="direct-devices" aria-label="Devices whose path to the server was measured"></ul></dd></div></dl>
+        <ul class="notes" id="direct-help" hidden></ul>
         <p class="help">Your server joins your free <a href="https://tailscale.com/" rel="noopener noreferrer" target="_blank">Tailscale</a> network, so this page and your services open from your devices anywhere, and from nothing else.</p>
         <div class="settings">
           <form id="tailscale-client-form" class="setting" novalidate>
@@ -517,8 +519,8 @@
               <p>Each setup run uses it to put your access policy in place. In the Tailscale admin console: <b>Settings, Trust credentials</b>, add an OAuth client with <b>Policy file</b> and <b>DNS</b>, both write. DNS makes names such as forgejo.nullbill.internal work on your devices. With <b>Users</b>, write, too, removing a person under People also removes their Tailscale account.</p>
               <p id="tailscale-client-saved" class="saved" hidden><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg>Saved. Paste a new one to replace it.</p></div>
             <div class="setting-control">
-              <label class="field"><span class="label">Client ID</span><input id="tailscale-client-id" autocomplete="off" spellcheck="false" aria-describedby="tailscale-client-result"></label>
-              <label class="field"><span class="label">Client secret</span><input id="tailscale-client-secret" type="password" autocomplete="off" placeholder="tskey-client-…" aria-describedby="tailscale-client-result"></label>
+              <label class="field"><span class="label">Client ID</span><input id="tailscale-client-id" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="tailscale-client-result"></label>
+              <label class="field"><span class="label">Client secret</span><input id="tailscale-client-secret" type="password" autocomplete="new-password" placeholder="tskey-client-…" aria-describedby="tailscale-client-result"></label>
               <div class="row"><button type="submit" class="btn">Save client</button><p class="feedback" id="tailscale-client-result" role="status"></p></div>
             </div>
           </form>
@@ -527,7 +529,7 @@
               <p>After one setup run with the client: <b>Settings, Keys, Generate auth key</b>, Pre-approved on, tag <code>tag:nb-vpn</code>. Used once, then forgotten; run setup again.</p>
               <p id="vpn-saved" class="saved" hidden><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg>A key waits for the next setup run.</p></div>
             <div class="setting-control">
-              <label class="field"><span class="label">Auth key</span><input id="tailscale-key" type="password" autocomplete="off" placeholder="tskey-auth-…" aria-describedby="vpn-result"></label>
+              <label class="field"><span class="label">Auth key</span><input id="tailscale-key" type="password" autocomplete="new-password" placeholder="tskey-auth-…" aria-describedby="vpn-result"></label>
               <div class="row"><button type="submit" class="btn">Save auth key</button><p class="feedback" id="vpn-result" role="status"></p></div>
             </div>
           </form>
@@ -540,8 +542,10 @@
             </div>
           </div>
         </div>
-        <details class="disclosure"><summary>Names on your devices</summary><p class="help">Names such as <code>forgejo.nullbill.internal</code> work once a setup run had DNS on the client. On Android, set <b>Settings, Private DNS</b> to <b>Automatic</b> if it names a provider; on Linux, run <code>sudo tailscale set --accept-routes --accept-dns</code>. Addresses keep working either way.</p></details>
-        <details class="disclosure"><summary>Direct and relayed connections</summary><p class="help">A device connects to the server directly when it can, and through Tailscale's relays when it cannot. Relays are slower, and video stutters. A phone on mobile data connects directly only when your home router sends UDP port <span id="direct-port">41642</span> to the server. The server asks your home router for that every quarter of an hour, with UPnP or NAT-PMP; a router that has both switched off needs one switched on, or the port forwarded by hand<span id="direct-where"></span>. A router that is itself behind your provider's shared address cannot open a port at all, and such devices stay on relays. The Tailscale app shows which it is: open the server's entry there and look for <b>Direct</b> or <b>Relayed</b>. After a change on the home router, <b>Run the checks</b> in the Run setup menu reads it again.</p></details>
+        <details class="disclosure"><summary>Names on your devices</summary><p class="help">Names such as <code>forgejo.nullbill.internal</code> work once a setup run had DNS on the client. On Android, set <b>Settings, Private DNS</b> to <b>Automatic</b> if it names a provider; on Linux, run <code>sudo tailscale set --accept-routes --accept-dns</code>. Addresses keep working either way.</p>
+          <p class="help">The Tailscale app's warning <b>DNS unavailable</b> comes from the app, not from this server: it shows after any lookup that got no answer in time, often right after the phone changed networks, and goes away with the next answer. While names open this page it is harmless. If it stays and names stop working, run the checks: one of them asks the router for a name the way your devices do.</p></details>
+        <details class="disclosure"><summary>Direct and relayed connections</summary><p class="help">A device connects to the server directly when it can, and through Tailscale's relays when it cannot. Relays are slower, and video stutters. A phone on mobile data connects directly only when your home router sends UDP port <span id="direct-port">41642</span> to the server. The server asks your home router for that every quarter of an hour, with UPnP or NAT-PMP; a router that has both switched off needs one switched on, or the port forwarded by hand<span id="direct-where"></span>. A router that is itself behind another one (your provider's shared address, or a second box at home) cannot open a port the internet reaches; the server cannot see past it, and whether a phone still connects directly then depends on that other router and on the phone's carrier. So <b>Path</b> above shows what the server measures, read again every half minute while this tab is open: for each device on your tailnet, whether its packets come straight or through a relay. The server pings a device that is idle to find out; a phone that is asleep may not answer, and is then left out. The Tailscale app says the same from the phone's side: open the server's entry there and look for <b>Direct</b> or <b>Relayed</b>.</p>
+          <p class="help"><b>Ask the home router for the port</b> only decides who opens the port, the server or you by hand. Switching it off never makes a connection direct, and switching it on does not undo a forward you made yourself.</p></details>
         <details id="tailnet-details" class="disclosure" hidden><summary>The Tailscale policy setup puts in place</summary><pre id="tailnet-policy" aria-label="Tailscale policy"></pre></details>
       </section>
 
@@ -686,7 +690,7 @@
               <p class="status-line" id="signin-state"></p></div>
             <div class="setting-control">
               <label class="field"><span class="label" id="agent-label">API key or subscription token</span>
-                <input id="agent-credential" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…" aria-describedby="agent-result"></label>
+                <input id="agent-credential" type="password" autocomplete="new-password" spellcheck="false" placeholder="sk-ant-…" aria-describedby="agent-result"></label>
               <div class="row"><button type="submit" class="btn">Sign in the agent</button><p class="feedback" id="agent-result" role="status"></p></div>
               <details class="disclosure small"><summary>Where do I get one?</summary>
                 <p><b>Claude Pro or Max:</b> on any computer with Claude Code, run <code>claude setup-token</code> and paste what it prints; it lasts a year. <b>API:</b> make a key at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer">console.anthropic.com</a>; that works from a phone too.</p></details>
@@ -735,7 +739,7 @@
               <p>Optional. A fine-grained GitHub token for NullBill's repository, with Contents and Pull requests read and write, lets the operator agent propose fixes. Run setup after saving.</p>
               <p class="status-line" id="github-state"></p></div>
             <div class="setting-control">
-              <label class="field"><span class="label">GitHub token</span><input id="agent-github-token" type="password" autocomplete="off" spellcheck="false" placeholder="github_pat_…" aria-describedby="agent-github-result"></label>
+              <label class="field"><span class="label">GitHub token</span><input id="agent-github-token" type="password" autocomplete="new-password" spellcheck="false" placeholder="github_pat_…" aria-describedby="agent-github-result"></label>
               <div class="row"><button type="submit" class="btn">Save token</button><button type="button" id="agent-github-remove" class="btn ghost" hidden>Remove</button><p class="feedback" id="agent-github-result" role="status"></p></div>
             </div>
           </form>
@@ -794,7 +798,7 @@
         <h3>Sign in the agent</h3>
         <p class="help">It reads the hardware, explains each step and, when a run fails, finds out why and proposes the fix. You approve what it changes.</p>
         <form id="chat-signin-form" class="form" novalidate>
-          <label class="field"><span class="label">API key or subscription token</span><input id="chat-credential" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…" aria-describedby="chat-signin-result"></label>
+          <label class="field"><span class="label">API key or subscription token</span><input id="chat-credential" type="password" autocomplete="new-password" spellcheck="false" placeholder="sk-ant-…" aria-describedby="chat-signin-result"></label>
           <button type="submit" class="btn primary block">Sign in</button>
           <p class="feedback" id="chat-signin-result" role="status"></p>
           <p class="help">From <code>claude setup-token</code> (Claude Pro or Max) or <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer">console.anthropic.com</a>.</p>
@@ -949,7 +953,7 @@
       </div>
     </div>
     <div class="done-note job-ok" hidden><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg><div><p><b class="job-ok-title"></b> <span class="job-ok-text"></span></p><div class="row job-ok-next"></div></div></div>
-    <div class="job-verify" hidden><p class="counts"></p><ul class="problems"></ul></div>
+    <div class="job-verify" hidden><p class="counts"></p><ul class="problems"></ul><details class="disclosure skipped" hidden><summary></summary><ul class="problems"></ul></details></div>
     <div class="job-cols">
       <section class="job-stages" aria-label="Stages"><h3 class="mini-head">Stages</h3><ol class="stages"></ol></section>
       <section class="job-log" aria-label="Log"><h3 class="mini-head">Log</h3><pre class="log" aria-label="Log"></pre></section>

@@ -256,9 +256,12 @@ TOOLS = [
     },
     {
         "name": "port_mapping",
-        "description": "Whether the router asks the home router to forward Tailscale's port (Access, Tailscale, Path), so "
-        "devices on mobile data connect directly.",
-        "inputSchema": {"type": "object", "properties": {"enabled": {"type": "boolean"}, "why": WHY}, "required": ["enabled"]},
+        "description": "Without `enabled`: how devices reach the server right now (Access, Tailscale, Path), measured on the "
+        "server: each device on the tailnet with its path, direct or through a relay, and what the home router answered about "
+        "Tailscale's port. With `enabled`: whether the router asks the home router to forward that port (UPnP or NAT-PMP). The "
+        "switch only decides who opens the port, the server or the owner by hand. Switching it off never makes a connection "
+        "direct and is no fix for a Path that says relayed or not measured; a port the owner forwarded by hand works with it on or off.",
+        "inputSchema": {"type": "object", "properties": {"enabled": {"type": "boolean"}, "why": WHY}},
     },
     {
         "name": "check_updates",

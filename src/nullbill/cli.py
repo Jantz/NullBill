@@ -124,12 +124,14 @@ def cmd_verify(_args: argparse.Namespace) -> int:
     plan = build_plan(model, json.loads(facts_bytes))
     target = reach_target(home, configured, plan) if configured else None
     lan_host = split_target(configured)[1] if configured else None
+    # A close nobody confirmed in time: the host says whether it is still on.
+    lan_state = lan.settle(home, lambda command: ssh_run(target, command)[1]) if target else lan.state(home)
     results = run_verify(
         plan,
         model,
         target,
         ssh_run,
-        lan_state=lan.state(home),
+        lan_state=lan_state,
         lan_host=lan_host,
         say=lambda r: print(r.line(), flush=True),
         browser_root=home / browserca.DIR / "ca.crt",

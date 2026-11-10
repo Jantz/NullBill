@@ -7,7 +7,7 @@ import threading
 import time
 
 import pytest
-from conftest import backup_host, direct_answers, fixture_config, portmap_state
+from conftest import backup_host, direct_answers, fixture_config, portmap_state, tailscale_peer
 
 from nullbill import direct, verify
 from nullbill.model import build_model
@@ -345,15 +345,26 @@ def test_direct_connections_are_checked_and_the_page_hears_the_outcome(facts, tm
     assert Result("PASS", direct.LABEL) in results
     assert direct.recorded(tmp_path)["kind"] == direct.DIRECT
 
-    # A home router that does not open the port: relays still carry everything.
-    closed = direct_answers(strip_notes(plan), portmap_state(method=None, external=None, why={"UPnP": "no answer"}))
+    # A home router that does not open the port, and no device connected to
+    # show what that means for it: the check has nothing to go on.
+    no_port = portmap_state(method=None, external=None, why={"UPnP": "no answer"})
 
-    def unanswered(target, command):
-        return (0, closed[command], "") if command in closed else run(target, command)
+    def with_devices(peers, pongs=None):
+        closed = direct_answers(strip_notes(plan), no_port, peers=peers, pongs=pongs)
+        return lambda target, command: (0, closed[command], "") if command in closed else run(target, command)
 
-    results = run_verify(plan, model, "root@pve.internal", unanswered, lambda h, p: "timeout", lambda n: PUBLIC)
+    results = run_verify(plan, model, "root@pve.internal", with_devices([]), lambda h, p: "timeout", lambda n: PUBLIC)
     by = statuses(results)
+    assert by["FAIL"] == [] and direct.LABEL in [r.name for r in by["SKIP"]]
+    assert direct.LABEL not in [r.name for r in by["DEGRADED"]]
+    # A device that answers only through a relay is a problem the server did see.
+    relayed = with_devices([tailscale_peer("phone")], {"phone": "DERP(fra)"})
+    by = statuses(run_verify(plan, model, "root@pve.internal", relayed, lambda h, p: "timeout", lambda n: PUBLIC))
     assert by["FAIL"] == [] and direct.LABEL in [r.name for r in by["DEGRADED"]]
+    # And one away from home on a direct path settles it the other way.
+    away = with_devices([tailscale_peer("phone", "203.0.113.80:41641")])
+    by = statuses(run_verify(plan, model, "root@pve.internal", away, lambda h, p: "timeout", lambda n: PUBLIC))
+    assert direct.LABEL in [r.name for r in by["PASS"]]
     # Without a home nothing is written.
     assert direct.recorded(tmp_path)["kind"] == direct.DIRECT
     skipped = run_verify(plan, model, None, run)

@@ -453,7 +453,7 @@ def lan_state(ctx: Context, open_variant: str) -> str:
     state = lan.state(ctx.home)
     if state == lan.CLOSING and host_out(ctx, "host", lan.ARMED).strip() == "gone":
         ctx.say("host: nobody pressed Keep it closed in time, so the host opened the home network again")
-        lan.write(ctx.home, lan.OPEN)
+        lan.write(ctx.home, lan.OPEN, lapsed=lan.read(ctx.home).get("deadline"))
         state = lan.OPEN
     host_out(ctx, "host", f"mkdir -p -m 0700 {lan.SAVED_OPEN.rsplit('/', 1)[0]}")
     host_files(ctx, "host", lan.SAVED_OPEN.rsplit("/", 1)[0], {lan.SAVED_OPEN.rsplit("/", 1)[1]: open_variant})
@@ -478,7 +478,7 @@ def confirm_lan(ctx: Context) -> None:
     if lan.state(ctx.home) != lan.CLOSING:
         raise NullBillError("the home network is not being closed; close it first")
     if host_out(ctx, "confirm", lan.ARMED).strip() == "gone":
-        lan.write(ctx.home, lan.OPEN)
+        lan.write(ctx.home, lan.OPEN, lapsed=lan.read(ctx.home).get("deadline"))
         raise NullBillError("too late: the host already opened the home network again; close it once more")
     host_out(ctx, "confirm", lan.DISARM)
     lan.write(ctx.home, lan.CLOSED)
@@ -2434,7 +2434,7 @@ def stage_verify(ctx: Context) -> None:
         ctx.model,
         ctx.target,
         ctx.run,
-        lan_state=lan.state(ctx.home),
+        lan_state=lan.settle(ctx.home, lambda command: ctx.run(ctx.target, command)[1]),
         lan_host=lan_host,
         say=lambda r: ctx.say(r.line()),
         browser_root=ctx.home / browserca.DIR / "ca.crt",

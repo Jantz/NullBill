@@ -77,6 +77,8 @@ def service_answers(plan: dict, wrong: str = "") -> dict[str, str]:
     if names.nameserver(bare):
         server = "192.0.2.53" if wrong == names.LABEL else names.nameserver(bare)
         answers[names.command(bare)] = dns_status(bare["domain"], server)
+        lookup, name, address = names.lookup(bare)
+        answers[lookup] = "" if wrong == names.ANSWERS else getent(address, name)
     if "vpn" in bare["guests"]:
         # The home router opened the port, unless this is the wrong answer.
         state = portmap_state(method=None, external=None, why={"UPnP": "no answer"}) if wrong == direct.LABEL else None
@@ -112,24 +114,78 @@ def guest_exec(text: str, exitcode: int = 0, err: str = "") -> str:
     return json.dumps(answer, indent=3)
 
 
-def tailscale_status(addrs: list[str] | None = None, backend: str = "Running") -> str:
+def tailscale_peer(name: str, cur_addr: str = "", online: bool = True, relay: str = "fra", peer_relay: str = "") -> dict:
+    """One device in `tailscale status --json`, as far as direct.py reads it
+    (ipn/ipnstate.PeerStatus in Tailscale 1.104): CurAddr only while a
+    direct path is in use, Relay always (the device's home relay), Active
+    while packets went to it in the last minute."""
+    return {
+        "HostName": name,
+        "DNSName": f"{name}.example-tailnet.ts.net.",
+        "OS": "android",
+        "Online": online,
+        "Active": bool(cur_addr or peer_relay),
+        "CurAddr": cur_addr,
+        "Relay": relay,
+        "PeerRelay": peer_relay,
+    }
+
+
+def tailscale_status(addrs: list[str] | None = None, backend: str = "Running", peers: list[dict] | None = None) -> str:
     """`tailscale status --json` on the vpn guest, as far as direct.py reads it."""
     from nullbill.flows import TAILSCALE_PORT
 
     if addrs is None:
         addrs = [f"{HOME_PUBLIC}:{TAILSCALE_PORT}", f"10.42.6.11:{TAILSCALE_PORT}", f"[2001:db8::11]:{TAILSCALE_PORT}"]
-    return json.dumps({"BackendState": backend, "Self": {"DNSName": "nullbill.example-tailnet.ts.net.", "Addrs": addrs}})
+    status = {"BackendState": backend, "Self": {"DNSName": "nullbill.example-tailnet.ts.net.", "Addrs": addrs}}
+    named = [{"TailscaleIPs": [f"100.64.0.{i + 2}", f"fd7a:115c:a1e0::{i + 2}"]} | peer for i, peer in enumerate(peers or [])]
+    return json.dumps(status | {"Peer": {f"nodekey:{i:064x}": peer for i, peer in enumerate(named)}})
 
 
-def direct_answers(plan: dict, state: dict | None = None, addrs: list[str] | None = None, backend: str = "Running") -> dict[str, str]:
-    """The two commands direct.py runs on the host and what they print."""
+def tailscale_pings(asked: dict[str, dict], pongs: dict[str, str]) -> str:
+    """What direct.ping_command prints for the devices it asks (direct.idle):
+    `tailscale ping`'s own lines (cmd/tailscale/cli/ping.go in 1.104), each
+    led by the address. `pongs` names the devices that answer and how their
+    last answer came; a first answer comes through a relay."""
+    from nullbill import direct
+
+    lines = []
+    for address, peer in asked.items():
+        name = peer["HostName"]
+        if name not in pongs:
+            lines += [f'{address} ping "{address}" timed out'] * direct.PINGS + [f"{address} no reply"]
+            continue
+        direct_path = not pongs[name].startswith(("DERP(", "peer-relay("))
+        relayed = [f"{address} pong from {name} ({address}) via DERP(fra) in 38ms"] * (1 if direct_path else direct.PINGS - 1)
+        lines += [*relayed, f"{address} pong from {name} ({address}) via {pongs[name]} in 12ms"]
+        lines += [] if direct_path else [f"{address} direct connection not established"]
+    return "\n".join(lines) + "\n"
+
+
+def direct_answers(
+    plan: dict,
+    state: dict | None = None,
+    addrs: list[str] | None = None,
+    backend: str = "Running",
+    peers: list[dict] | None = None,
+    pongs: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """The commands direct.py runs on the host and what they print. A device
+    without a direct path in use is pinged, and answers as `pongs` has it."""
     from nullbill import direct
 
     state = portmap_state() if state is None else state
+    status = tailscale_status(addrs, backend, peers)
+    asked = direct.idle(json.loads(status))
     return {
-        direct.vpn_command(plan): tailscale_status(addrs, backend),
+        direct.vpn_command(plan): status,
         direct.router_command(plan): guest_exec(f"{json.dumps(state)}\n{ROUTER_CLOCK}\n"),
-    }
+    } | ({direct.ping_command(plan, list(asked)): tailscale_pings(asked, pongs or {})} if asked else {})
+
+
+def getent(address: str, name: str) -> str:
+    """`getent ahostsv4 <name>`: one line per socket type."""
+    return f"{address:<15} STREAM {name}\n{address:<15} DGRAM  \n{address:<15} RAW    \n"
 
 
 def dns_status(domain: str, server: str) -> str:

@@ -27,16 +27,30 @@ groups:
         labels: {severity: page}
         annotations:
           summary: "{{ $labels.job }} target {{ $labels.instance }} is not answering"
-      # Read-only filesystems cannot fill up; a full disk kept read-only
-      # from a previous OS would otherwise page for ever.
+      # The server's own filesystems. Read-only ones cannot fill up. A disk
+      # kept from a previous OS (on the host under /mnt/nb-legacy, in the
+      # files guest under /srv/share, where a copy of one sits too) holds
+      # the owner's files and nothing the server needs: however full the
+      # owner keeps it, nothing here stops working, and this page would
+      # never end. KeptDiskFull below tells them once it takes no more.
       - alert: DiskAlmostFull
         expr: >-
-          node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes < 0.10
+          node_filesystem_avail_bytes{fstype!~"tmpfs|overlay",mountpoint!~"/mnt/nb-legacy/.+|/srv/share/.+"} / node_filesystem_size_bytes < 0.10
           unless on(instance, mountpoint) node_filesystem_readonly == 1
         for: 15m
         labels: {severity: page}
         annotations:
           summary: "{{ $labels.instance }} {{ $labels.mountpoint }} has under 10% free"
+      # A writable share with under 1 GiB left, as the files guest sees it
+      # (the host reports the same disk; one alert is enough).
+      - alert: KeptDiskFull
+        expr: >-
+          node_filesystem_avail_bytes{mountpoint=~"/srv/share/.+"} < 1073741824
+          unless on(instance, mountpoint) node_filesystem_readonly == 1
+        for: 15m
+        labels: {severity: warn}
+        annotations:
+          summary: "the share {{ $labels.mountpoint }} has under 1 GiB left; nothing more can be saved to it until you delete or move files, and the server itself is not affected"
       # The plan counts containers at part of their limit (catalog.yaml,
       # host.container_share_pct); when they all fill up at once the host
       # runs short and starts swapping.

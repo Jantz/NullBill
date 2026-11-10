@@ -3,7 +3,7 @@
 import time
 
 from nullbill.apply import STAGE_MARK, STAGE_TIME, STAGES
-from nullbill.web.progress import PREPARE, advice, sentence, summarize
+from nullbill.web.progress import PREPARE, advice, only, sentence, summarize
 
 T0 = time.mktime(time.strptime("2026-11-07 18:00:00", STAGE_TIME))
 
@@ -261,6 +261,29 @@ def test_failed_checks_are_listed():
         {"status": "FAIL", "text": "lan: 8006 answers from the LAN", "name": "lan", "detail": "8006 answers from the LAN"}
     ]
     assert view["error"]["message"] == "1 check failed."
+
+
+def test_checks_that_did_not_run_are_listed_with_why():
+    log = "PASS     lan: 8006 closed\nSKIP     agent: no credential saved\nSKIP     backups are fresh\nDEGRADED backups: switched off\n"
+    found = summarize("verify", log, "done", times(4, 4))["verify"]
+    # A skip is no pass: the page says what was not checked.
+    assert found["counts"] == {"PASS": 1, "FAIL": 0, "SKIP": 2, "DEGRADED": 1}
+    assert found["skipped"] == [{"name": "agent", "detail": "no credential saved"}, {"name": "backups are fresh", "detail": ""}]
+    assert [x["name"] for x in found["problems"]] == ["backups"]
+
+
+def test_a_run_of_one_stage_lists_that_stage_and_is_not_called_setup():
+    assert only("apply", ["apply", "--stage", "router"]) == {"name": "router", "text": "Set up the router"}
+    # A full run, the weekly image build (its own kind of run) and a flag without a name are none.
+    assert only("apply", ["apply"]) is None and only("apply", ["apply", "--stage"]) is None
+    assert only("rebake-ci", ["apply", "--stage", "ci"]) is None and only("verify", ["verify"]) is None
+    log = mark("router", 2) + "\nrouter: nothing to change\n"
+    view = summarize("apply", log, "done", times(25, 25), "router")
+    assert view["title"] == "Set up the router"
+    # Not 23 stages of which 22 "wait" for ever.
+    assert [(s["name"], s["status"]) for s in view["steps"]] == [(PREPARE, "done"), ("router", "done")]
+    failed = summarize("apply", log + "error: stage router: it broke\n", "failed", times(25, 25), "router")
+    assert [(s["name"], s["status"]) for s in failed["steps"]] == [(PREPARE, "done"), ("router", "failed")]
 
 
 def test_a_job_that_ends_silently_still_says_so():

@@ -124,6 +124,10 @@ shows an empty folder, and the alert **LegacyDiskMissing** reaches ntfy after
 10 minutes. Nothing is written in its place: the empty mount point refuses
 writes. Plug it back in and run setup.
 
+How full the disk is with your own files raises no alert. Only a share you
+can write to with under 1 GiB left does (**KeptDiskFull**, a warning):
+nothing more can be saved to it until you delete or move files.
+
 Each probe reads the disk's SMART health. If the page says the disk is
 failing (the plan shows `health: FAILED`), copy what you need off it soon.
 There is no alert for this between probes yet.

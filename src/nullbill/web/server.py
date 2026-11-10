@@ -164,6 +164,34 @@ POWER_CACHE_S = 5
 # A start waits for the guest to boot, a stop for a clean shutdown: a VM
 # gets three minutes for it (nb-power's stop_guest).
 POWER_TIMEOUT_S = 330
+# The path devices take to the server (nullbill/direct.py) is read on the
+# host while Access, Tailscale is open, at most this often.
+PATH_CACHE_S = 10
+# A close of the home network that ran out is asked of the host this often
+# until the host answers.
+LAN_ASK_S = 30
+# What an open page shows changes when one of these does, under
+# NULLBILL_HOME (App.stamp). Not plan.yaml, which each look at the page
+# writes again, and not direct.json, which the page reads for itself.
+STAMPED = (
+    "config.yaml",
+    "probe/latest/facts.json",
+    "lan.json",
+    "names.json",
+    "guests.json",
+    "removals.json",
+    "disks.json",
+    "secrets.sops.yaml",
+    "browser-ca/ca.crt",
+    "web/owner.json",
+    "web/update-check.json",
+    "web/last-update.json",
+    "web/agent-powers.json",
+    "web/alerts-heard.json",
+    "web/remote-agents.json",
+)
+# The runs that end with the checks, or are the checks.
+CHECKED = ("apply", "remove-guests", "verify")
 SECURITY_HEADERS = {
     "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'",
     "X-Content-Type-Options": "nosniff",
@@ -341,6 +369,10 @@ class App:
     host_act: Callable[[str, str], tuple[int, str, str]] = functools.partial(ssh_run, timeout=POWER_TIMEOUT_S)
     power_seen: tuple[float, dict | None] | None = None
     power_acting: dict[str, str] = field(default_factory=dict)
+    path_seen: tuple[float, dict | None] | None = None
+    lan_asked: float = 0.0
+    # What each finished run's checks came to, read from its log once.
+    checked: dict = field(default_factory=dict, repr=False)
     # Tailscale's API with the owner's OAuth client, for the People tab.
     tailnet_client: Callable[[str, str], Tailnet] = Tailnet
     tailnet_seen: tuple[float, dict] | None = None
@@ -467,6 +499,7 @@ class App:
             asks = query("nb_power_group_idle_seconds and on (group) (nb_power_group_asks == 1)") if on_demand else []
             return {
                 "monitoring": "ok",
+                "at": time.time(),
                 "alerts": sorted(alerts, key=lambda a: (a["severity"] != "page", a["name"])),
                 "targets": sum(1 for name, _ in up if name not in off),
                 "down": sorted(name for name, value in up if value == "0" and name not in off),
@@ -483,7 +516,23 @@ class App:
                 "reboot_waiting": instances("node_reboot_required == 1"),
             }
         except (OSError, ValueError, KeyError) as exc:
-            return {"monitoring": "unreachable", "error": str(exc)[:200]}
+            return {"monitoring": "unreachable", "at": time.time(), "error": str(exc)[:200]}
+
+    def stamp(self) -> str:
+        """Changes whenever what /api/state says may have: a job started or
+        ended, or a file the state is read from was written. Every answer
+        to the page's regular question for its status carries it, so an open
+        page asks for the state again when something happened elsewhere (a
+        run the agent or the weekly job started, a choice saved on another
+        device) and not otherwise."""
+        seen: list[object] = [(job.id, job.state()) for job in sorted(self.jobs.values(), key=lambda j: j.started)[-5:]]
+        for name in STAMPED:
+            try:
+                seen.append((self.home / name).stat().st_mtime_ns)
+            except OSError:
+                seen.append(None)
+        seen.append(lan.overdue(self.home))
+        return hashlib.sha256(json.dumps(seen).encode()).hexdigest()[:16]
 
     # Alerts.
     def alerts(self) -> dict:
@@ -860,6 +909,33 @@ class App:
         build_model(config)
         _write_private(self.home / "config.yaml", yaml.safe_dump(config, sort_keys=False))
         return keys
+
+    def path(self) -> dict | None:
+        """How devices reach the vpn guest right now (direct.py), read on
+        the host at most every PATH_CACHE_S and kept, as apply and verify
+        keep it. `live` is False when the host could not be asked (nothing
+        built, or a job is at work on it): what is shown then is the last
+        reading, which says when it was made."""
+        target = self.host_target() if self.built() else None
+        config = self.config()
+        with self.lock:
+            busy = any(job.state() == "running" for job in self.jobs.values())
+            seen = self.path_seen
+        if target is None or config is None or busy:
+            found = direct.recorded(self.home)
+            return found | {"live": False} if found else None
+        now = time.monotonic()
+        if seen is None or now - seen[0] > PATH_CACHE_S:
+            try:
+                found = direct.find(self.saved_plan(), build_model(config), target, self.host_run)
+            except (NullBillError, KeyError):
+                found = None
+            if found is not None:
+                direct.record(self.home, found)
+            seen = (now, direct.recorded(self.home) if found is not None else None)
+            with self.lock:
+                self.path_seen = seen
+        return seen[1] | {"live": True} if seen[1] else None
 
     def port_mapping(self) -> bool:
         """Whether the router asks the home router for Tailscale's port (direct.py)."""
@@ -1886,10 +1962,12 @@ class App:
         times = {"started": job.started, "now": now, "ended": ended or (None if state == "running" else now)}
         times["output"] = job.log.stat().st_mtime
         times["stopped"] = job.meta().get("stopped")
+        only = progress.only(job.action, job.args)
         return {
             "id": job.id,
             "action": job.action,
             "args": job.args,
+            "only": only,
             "state": state,
             "stopped": state == "failed" and bool(times["stopped"]),
             "rc": job.rc,
@@ -1899,7 +1977,7 @@ class App:
             "seconds": round((times["ended"] or now) - job.started),
             "by": job.by,
             "review": job.meta().get("review"),
-            "progress": progress.summarize(job.action, data.decode(errors="replace"), state, times),
+            "progress": progress.summarize(job.action, data.decode(errors="replace"), state, times, only and only["name"]),
         }
 
     def last_jobs(self) -> dict:
@@ -1927,6 +2005,7 @@ class App:
                 {
                     "id": job.id,
                     "action": job.action,
+                    "only": progress.only(job.action, job.args),
                     "state": state,
                     "stopped": stopped,
                     "started": job.started,
@@ -1948,6 +2027,46 @@ class App:
             where = f'At "{stage}"' if stage else f"{failed} check{'s' if failed > 1 else ''}" if failed else None
             self.failed_stages[job.id] = where
         return self.failed_stages[job.id]
+
+    def checks(self) -> dict | None:
+        """What the checks came to the last time they ran to their end: in
+        a setup run, whose last stage they are, or on their own. None before
+        any did. Overview shows it with the run's time; nothing is checked
+        again in between."""
+        for job in sorted(self.jobs.values(), key=lambda j: j.started, reverse=True):
+            if job.action not in CHECKED or job.state() == "running":
+                continue
+            if job.id not in self.checked:
+                found = self.job_view(job)["progress"].get("verify")
+                ended = job.rc_file.stat().st_mtime if job.rc_file.exists() else job.started
+                degraded = [x["name"] for x in (found or {}).get("problems", []) if x["status"] == "DEGRADED"]
+                kept = {"id": job.id, "action": job.action, "only": bool(progress.only(job.action, job.args)), "at": ended}
+                self.checked[job.id] = kept | {"counts": found["counts"], "degraded": degraded} if found else None
+            if self.checked[job.id]:
+                return self.checked[job.id]
+        return None
+
+    def lan_view(self, client: str) -> dict:
+        """The home network's state for the page. A close past its deadline
+        is settled with the host first (lan.settle): the timer there opens
+        the LAN again without telling the page."""
+        if lan.overdue(self.home) and time.monotonic() - self.lan_asked > LAN_ASK_S:
+            self.lan_asked = time.monotonic()
+            target = self.host_target()
+            with self.lock:
+                busy = any(job.state() == "running" for job in self.jobs.values())
+            if target is not None and not busy:
+                lan.settle(self.home, lambda command: self.host_run(target, command)[1])
+        found = lan.read(self.home)
+        closing = found["state"] == lan.CLOSING and found.get("deadline") is not None
+        return {
+            "state": found["state"],
+            "via_vpn": self.via_vpn(client),
+            "minutes": lan.REVERT_AFTER_S // 60,
+            # Seconds until the host opens the LAN again; 0 once that time has come.
+            "left_s": max(0, round(found["deadline"] - time.time())) if closing else None,
+            "lapsed": found.get("lapsed") if found["state"] == lan.OPEN else None,
+        }
 
     def built(self) -> bool:
         """A setup run has finished at least once: the guests exist, even
@@ -2127,6 +2246,7 @@ class App:
             "gpus": [g.get("name") for g in facts.get("gpus") or [] if not g.get("integrated")],
             "disks": len(facts.get("disks") or []),
             "pve_version": facts.get("pve_version"),
+            "read_at": (self.home / "probe" / "latest" / "facts.json").stat().st_mtime,
         }
 
     def browser_root(self) -> Path | None:
@@ -2182,7 +2302,10 @@ class App:
             "trust": self.trust(),
             "agent_powers": self.agent_powers(),
             "agent_github": self.agent_github(),
-            "lan": {"state": lan.state(self.home), "via_vpn": self.via_vpn(client), "minutes": lan.REVERT_AFTER_S // 60},
+            "lan": self.lan_view(client),
+            "checks": self.checks(),
+            "stamp": self.stamp(),
+            "at": time.time(),
             "chat": self.chat.summary(),
             "job": self.job_view(latest) | {"text": ""} if latest else None,
         }
@@ -2336,7 +2459,9 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
             if not authed:
                 return self.json(401, {"error": "sign in first"})
             if path == "/api/status":
-                return self.json(200, app.status())
+                return self.json(200, app.status() | {"stamp": app.stamp()})
+            if path == "/api/path":
+                return self.json(200, {"direct": app.path()})
             if path == "/api/on-demand":
                 return self.json(200, {"view": app.on_demand()})
             if path == "/api/own-service":

@@ -410,23 +410,38 @@ def _check(text: str) -> dict:
 
 
 def verify_results(lines: list[str]) -> dict | None:
+    """The checks' counts, the ones that found a problem, and the ones that
+    did not run, each with what it said: a skipped check is no pass, and the
+    page says why it did not run."""
     counts = {"PASS": 0, "FAIL": 0, "SKIP": 0, "DEGRADED": 0}
-    problems = []
+    problems, skipped = [], []
     for line in lines:
         if m := VERIFY.match(line):
             counts[m[1]] += 1
             if m[1] in ("FAIL", "DEGRADED"):
                 problems.append({"status": m[1], "text": m[2]} | _check(m[2]))
+            elif m[1] == "SKIP":
+                skipped.append(_check(m[2]))
     if not any(counts.values()):
         return None
-    return {"counts": counts, "problems": problems}
+    return {"counts": counts, "problems": problems, "skipped": skipped}
 
 
-def summarize(action: str, text: str, state: str, times: dict) -> dict:
+def only(action: str, args: list[str]) -> dict | None:
+    """The one stage a setup run was started for (`apply --stage router`),
+    with its text, or None for a full run: such a run is not "setup"."""
+    if action != "apply" or "--stage" not in args[:-1]:
+        return None
+    name = args[args.index("--stage") + 1]
+    return {"name": name, "text": STAGE_TEXT.get(name, name)}
+
+
+def summarize(action: str, text: str, state: str, times: dict, stage: str | None = None) -> dict:
     """The page's view of one job's log. times: started, now, ended (None
-    while running) and output (the log's last write), as Unix times."""
+    while running) and output (the log's last write), as Unix times. stage:
+    the one stage the run was started for, which is then all it lists."""
     lines = text.splitlines()
-    names = JOB_STAGES.get(action)
+    names = [PREPARE, stage] if stage else JOB_STAGES.get(action)
     errors = [line.removeprefix(ERROR_PREFIX) for line in lines if line.startswith(ERROR_PREFIX)]
     # Each stage's lines and start time, in the order they ran.
     sections: dict[str, list[str]] = {PREPARE: []}
@@ -440,7 +455,7 @@ def summarize(action: str, text: str, state: str, times: dict) -> dict:
         elif not line.startswith(ERROR_PREFIX):
             sections[current].append(line)
     results = verify_results(lines if action == "verify" else sections.get("verify", []))
-    out: dict = {"title": JOB_TEXT.get(action, action)}
+    out: dict = {"title": STAGE_TEXT.get(stage, stage) if stage else JOB_TEXT.get(action, action)}
     failed_stage = None
     stopped = state == "failed" and times.get("stopped")
     if stopped:
