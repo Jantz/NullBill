@@ -382,7 +382,8 @@ def test_the_services_page_says_how_to_join_each_server(facts):
     assert entry["addresses"] == ["In the game: 10.42.8.64:25565"]
     assert any("Multiplayer, Add Server" in s["text"] and "Minecraft: Java Edition 26.3" in s["text"] for s in entry["steps"])
     assert any("beside Creative world" in s["text"] and s["done"] for s in entry["steps"])
-    assert any(s.get("code") == "pct exec 2064 -- nb-game console say hello" for s in entry["steps"])
+    # Its worlds and console are asked by its own name, as a Minecraft server.
+    assert entry["game"] == "minecraft" and not any("code" in s for s in entry["steps"])
     factory = items["factorio-2"]
     assert any("Every player needs the Space Age expansion." in s["text"] for s in factory["steps"])
     assert any("games.factorio.space_age" in s["text"] for s in items["factorio"]["steps"])

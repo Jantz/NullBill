@@ -22,6 +22,7 @@ import math
 import os
 import re
 import secrets
+import shlex
 import shutil
 import signal
 import socket
@@ -38,6 +39,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
+from typing import BinaryIO
 
 import yaml
 
@@ -71,7 +73,7 @@ from nullbill.secretfile import Codec, Secrets, Sops
 from nullbill.tailnet import TAG, render_tailnet
 from nullbill.tailscale import MissingScope, Tailnet, TailscaleError
 from nullbill.upgrade import LAST as LAST_UPDATE
-from nullbill.web import backupview, chat, demand, progress, workloads
+from nullbill.web import backupview, chat, demand, gameroom, progress, workloads
 from nullbill.web import review as reviewing
 from nullbill.web.services import PASSWORDS, services, shares
 
@@ -182,6 +184,21 @@ POWER_CACHE_S = 5
 # A start waits for the guest to boot, a stop for a clean shutdown: a VM
 # gets three minutes for it (nb-power's stop_guest).
 POWER_TIMEOUT_S = 330
+# A game server's block on the Services page (web/gameroom.py): its report
+# is asked for at most this often, and a new world may take this long
+# (Terraria's largest, with the wait nb-game itself gives it).
+GAME_CACHE_S = 5
+GAME_TIMEOUT_S = 720
+STREAM_CHUNK = 256 * 1024
+
+
+def ssh_pipe(target: str, command: str) -> subprocess.Popen:
+    """A command on the host with its input and output as they are, for a
+    file on its way to or from a guest."""
+    argv = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", target, command]
+    return subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
 # The path devices take to the server (nullbill/direct.py) is read on the
 # host while Access, Tailscale is open, at most this often.
 PATH_CACHE_S = 10
@@ -388,6 +405,11 @@ class App:
     host_run: Callable[[str, str], tuple[int, str, str]] = ssh_run
     # Starting and stopping what runs on demand, which takes longer.
     host_act: Callable[[str, str], tuple[int, str, str]] = functools.partial(ssh_run, timeout=POWER_TIMEOUT_S)
+    # Worlds: making one takes minutes, and a world file is bytes, not text.
+    host_long: Callable[[str, str], tuple[int, str, str]] = functools.partial(ssh_run, timeout=GAME_TIMEOUT_S)
+    host_pipe: Callable[[str, str], subprocess.Popen] = ssh_pipe
+    game_seen: dict[str, tuple[float, dict]] = field(default_factory=dict)
+    game_acting: dict[str, str] = field(default_factory=dict)
     power_seen: tuple[float, dict | None] | None = None
     power_acting: dict[str, str] = field(default_factory=dict)
     path_seen: tuple[float, dict | None] | None = None
@@ -1392,6 +1414,149 @@ class App:
             self._save_config(new)
             self.plan()
         return title
+
+    # A game server as it runs (web/gameroom.py): the Services page's block
+    # for it, and the agent's game_server and game_world. The guest's
+    # nb-game holds the worlds and does every change; the page only asks.
+    def _game_guest(self, name: str) -> tuple[dict, dict, str]:
+        """(model, plan, where the host is) for a game server that a setup
+        run has made."""
+        model, plan = build_model(self.config() or {}), self.saved_plan()
+        target = self.host_target() if self.built() else None
+        if name not in model["games"] or name not in (plan.get("guests") or {}) or name not in (plan.get("games") or {}):
+            raise NullBillError(f"no game server {name[:40]!r} is planned; Setup, What to run, lists them")
+        if target is None or name not in (self.existing_guests() or set()):
+            raise NullBillError(f"{model['games'][name]['title']} is not on the server yet: run setup")
+        return model, plan, target
+
+    def _game_off(self, name: str) -> bool:
+        """Whether the server's guest is off because it runs on demand."""
+        for group in (self.on_demand() or {}).get("groups", []):
+            if any(m["name"] == name and m.get("state") not in (None, "running") for m in group["guests"]):
+                return True
+        return False
+
+    def game_view(self, name: str, fresh: bool = False) -> dict:
+        model, plan, target = self._game_guest(name)
+        now = time.monotonic()
+        with self.lock:
+            seen, acting = self.game_seen.get(name), self.game_acting.get(name)
+        if fresh or seen is None or now - seen[0] > GAME_CACHE_S:
+            rc, out, err = self.host_run(target, games.guest_command(plan, name, "report"))
+            try:
+                report = json.loads(out) if rc == 0 else None
+            except ValueError:
+                report = None
+            if isinstance(report, dict):
+                view = gameroom.view(model, name, report)
+            elif self._game_off(name):
+                view = gameroom.view(model, name, None, "It is off. Start it to see its worlds.", off=True)
+            else:
+                said = err.strip().splitlines()[-1][:200] if err.strip() else f"exit {rc}"
+                view = gameroom.view(model, name, None, f"The server's guest did not answer ({said}). Run setup if it was just updated.")
+            view["at"] = time.time()
+            with self.lock:
+                self.game_seen[name] = (now, view)
+        else:
+            view = seen[1]
+        return view | ({"acting": acting} if acting else {})
+
+    def game_act(self, name: str, body: dict, by: str = "the page") -> dict:
+        """Restart a game server, type on its console, or change its
+        worlds. A change that would disconnect players changes nothing and
+        says how many, until it comes again with `kick`."""
+        model, plan, target = self._game_guest(name)
+        argv, doing, slow = gameroom.arguments(model, name, body)
+        title = model["games"][name]["title"]
+        with self.lock:
+            if name in self.game_acting:
+                raise NullBillError(f"{title} is busy {self.game_acting[name]}; wait for it")
+            if slow:
+                self.game_acting[name] = doing
+        # The console line may be a password or a name: the log gets the action, not the text.
+        print(f"nullbill-web: game {name}: {body.get('action')} by {by}", file=sys.stderr, flush=True)
+        try:
+            rc, out, err = (self.host_long if slow else self.host_run)(target, games.guest_command(plan, name, *argv))
+        finally:
+            with self.lock:
+                self.game_acting.pop(name, None)
+                self.game_seen.pop(name, None)
+        if argv[0] != "world":
+            if rc != 0:
+                raise NullBillError((err.strip().removeprefix("nb-game: ") or f"exit {rc}")[:300])
+            return {"ok": True, "view": self.game_view(name, fresh=True)}
+        found = gameroom.answer(out, err, rc)
+        if not found["ok"] and found.get("players"):
+            return {"ok": False, "players": found["players"], "title": title}
+        if not found["ok"]:
+            said, last = str(found.get("error") or "the game server refused"), [str(line) for line in found.get("log") or []]
+            # With the server's last lines: what did not happen, then what it said.
+            raise Refused(said, last) if last else NullBillError(said)
+        return {"ok": True, "id": found.get("id"), "deleted": found.get("deleted"), "view": self.game_view(name, fresh=True)}
+
+    def world_download(self, name: str, ident: str) -> tuple[str, int, subprocess.Popen, Callable[[], None]]:
+        """(file name, bytes, the stream, what to call when done) for one
+        of a server's worlds: the guest writes it out as one file, which
+        then comes through the host as it is."""
+        model, plan, target = self._game_guest(name)
+        rc, out, err = self.host_long(target, games.guest_command(plan, name, "world", "export", gameroom.world_id(ident)))
+        found = gameroom.answer(out, err, rc)
+        if not found["ok"]:
+            raise NullBillError(str(found.get("error")))
+        path = str(found["file"])
+        if not re.fullmatch(r"/var/lib/nullbill/world-transfer/[0-9a-f]{16}\.(zip|wld)", path):
+            raise NullBillError("the game server named a file that is not a world's")
+        vmid = str(plan["guests"][name]["vmid"])
+        stream = self.host_pipe(target, shlex.join(["pct", "exec", vmid, "--", "cat", path]))
+        if stream.stdin:
+            stream.stdin.close()
+        print(f"nullbill-web: game {name}: download of world {ident}", file=sys.stderr, flush=True)
+
+        def done() -> None:
+            stream.kill()
+            stream.wait()
+            self.host_run(target, games.guest_command(plan, name, "world", "sent", path))
+
+        safe = re.sub(r"[^A-Za-z0-9._-]", "-", str(found.get("name") or "world"))
+        return f"{name}-{safe}", int(found["bytes"]), stream, done
+
+    def world_upload(self, name: str, title: str, length: int, source: BinaryIO) -> tuple[dict, bool]:
+        """A world file from the owner's browser, passed on as it comes to
+        the guest, which checks it and keeps it beside the server's other
+        worlds. Returns the answer and whether all of the request was read."""
+        model, plan, target = self._game_guest(name)
+        made = games.read_world_title(title)
+        if not 0 < length <= games.MAX_WORLD_BYTES:
+            raise NullBillError(f"a world file is at most {games.MAX_WORLD_BYTES // 1024**3} GiB")
+        with self.lock:
+            if name in self.game_acting:
+                raise NullBillError(f"{model['games'][name]['title']} is busy {self.game_acting[name]}; wait for it")
+            self.game_acting[name] = "taking in an upload"
+        print(f"nullbill-web: game {name}: upload of {length} bytes", file=sys.stderr, flush=True)
+        left = length
+        try:
+            stream = self.host_pipe(target, games.guest_command(plan, name, "world", "receive", str(length), made))
+            try:
+                while left:
+                    chunk = source.read(min(STREAM_CHUNK, left))
+                    if not chunk:
+                        break
+                    left -= len(chunk)
+                    stream.stdin.write(chunk)
+                stream.stdin.close()
+            except (BrokenPipeError, OSError):
+                # The guest stopped reading: it says why below.
+                pass
+            out, err = stream.stdout.read().decode(errors="replace"), stream.stderr.read().decode(errors="replace")
+            rc = stream.wait()
+        finally:
+            with self.lock:
+                self.game_acting.pop(name, None)
+                self.game_seen.pop(name, None)
+        found = gameroom.answer(out, err, rc)
+        if not found["ok"]:
+            raise NullBillError(str(found.get("error") or "the game server refused the file"))
+        return {"ok": True, "id": found.get("id"), "view": self.game_view(name, fresh=True)}, left == 0
 
     @staticmethod
     def _games_config(config: dict, form: object) -> None:
@@ -2630,6 +2795,14 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                     return self.json(404, refusal(exc))
                 disposition = {"Content-Disposition": f'attachment; filename="{backupview.KEY_FILE}"'}
                 return self.send(200, key.encode() + b"\n", "application/json", disposition)
+            if path == "/api/game":
+                asked = urllib.parse.parse_qs(query)
+                try:
+                    return self.json(200, {"view": app.game_view(asked.get("name", [""])[0], fresh="fresh" in asked)})
+                except NullBillError as exc:
+                    return self.json(404, refusal(exc))
+            if path == "/api/game/world":
+                return self.world_download(urllib.parse.parse_qs(query))
             if path == "/api/own-service":
                 try:
                     return self.json(200, app.own_service(urllib.parse.parse_qs(query).get("name", [""])[0]))
@@ -2668,6 +2841,55 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 return self.json(200, app.job_view(app.jobs[match[1]], offset(query)))
             return self.json(404, {"error": "not found"})
 
+        def world_download(self, asked: dict) -> None:
+            """One of a game server's worlds as a file. Sent with its length:
+            a stream that ends short closes the connection, so the browser
+            says the download failed instead of keeping half a world."""
+            try:
+                name, size, stream, done = app.world_download(asked.get("name", [""])[0], asked.get("id", [""])[0])
+            except NullBillError as exc:
+                return self.json(400, refusal(exc))
+            try:
+                self.send_response(200)
+                kind = "application/zip" if name.endswith(".zip") else "application/octet-stream"
+                fixed = SECURITY_HEADERS | {SHELL_HEADER: shell(), "Content-Type": kind, "Content-Length": str(size)}
+                for header, value in (fixed | {"Content-Disposition": f'attachment; filename="{name}"'}).items():
+                    self.send_header(header, value)
+                self.end_headers()
+                left = size
+                while left and (chunk := stream.stdout.read(min(STREAM_CHUNK, left))):
+                    self.wfile.write(chunk)
+                    left -= len(chunk)
+                if left:
+                    self.close_connection = True
+            except OSError:
+                self.close_connection = True
+            finally:
+                done()
+
+        def world_upload(self) -> None:
+            """A world file as the request's body. Who sends it is checked
+            before a byte of it is read; a refusal closes the connection
+            instead of reading gigabytes to throw away."""
+            self.close_connection = True
+            if self.closed():
+                return None
+            if self.headers.get("X-NullBill") != "1":
+                return self.json(403, {"error": "missing X-NullBill header"})
+            if not app.valid(self.token()):
+                return self.json(401, {"error": "sign in first"})
+            asked = urllib.parse.parse_qs(self.path.partition("?")[2])
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = 0
+            try:
+                answer, whole = app.world_upload(asked.get("name", [""])[0], asked.get("title", [""])[0], length, self.rfile)
+            except NullBillError as exc:
+                return self.json(400, refusal(exc))
+            self.close_connection = not whole
+            return self.json(200, answer)
+
         def agent_authed(self) -> str | None:
             """The agent's name, logged with the request, or None after a 401."""
             agent = app.agent(self.headers.get("Authorization"), self.client())
@@ -2690,6 +2912,8 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
             return self.json(404, {"error": "not found"})
 
         def do_POST(self) -> None:  # noqa: N802
+            if self.path.partition("?")[0] == "/api/game/world":
+                return self.world_upload()
             # The body is read before any answer: on a kept-alive
             # connection, unread bytes would be taken for the next request.
             try:
@@ -2754,6 +2978,8 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                     return self.json(200, {"ok": True, "removed": app.forget_game(str(body.get("name", "")))})
                 if self.path == "/api/on-demand":
                     return self.json(200, app.power_act(body))
+                if self.path == "/api/game":
+                    return self.json(200, app.game_act(str(body.get("name", "")), body))
                 if self.path == "/api/alerts":
                     app.save_alerts(body)
                     return self.json(200, {"ok": True, "alerts": app.alerts()})

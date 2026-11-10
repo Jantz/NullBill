@@ -353,15 +353,12 @@ def _entries(plan: dict, guests: dict, by_name: bool, forgejo_user: str | None, 
                     else f"It runs the base game, so nobody needs the Space Age expansion (games.{name}.space_age in config.yaml)."
                 )
             )
-        steps.append(
-            step(
-                f"The server takes its own commands on its console. {shell}",
-                code=f"pct exec {vmid(name)} -- nb-game console {games.SAY[of]}",
-            )
-        )
         out.append(
             {
                 "name": name,
+                # The page asks for this server's worlds, players, log and
+                # console when the row is opened (/api/game).
+                "game": of,
                 "title": game["title"],
                 "what": f"A {games.TITLE[of]} server for you and the people you let in. Players need {client}.",
                 "addresses": [f"In the game: {where}", *([f"By address: {ip(name)}:{number}"] if by_name else [])],

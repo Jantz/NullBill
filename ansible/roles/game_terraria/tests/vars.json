@@ -14,5 +14,10 @@
     "banlist": "/var/lib/terraria/banlist.txt",
     "port": 7777,
     "upnp": 0
+  },
+  "game_terraria_new_world": {
+    "autocreate": "2",
+    "difficulty": "0",
+    "seed": ""
   }
 }

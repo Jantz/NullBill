@@ -351,7 +351,8 @@ def test_services_show_each_game_with_its_address_and_how_to_join(site):
     assert "Multiplayer, Add Server" in steps[0]["text"]
     assert (steps[1]["href"], steps[1]["link"]) == ("#access/people", "Access, People")
     assert steps[2]["done"] is True and steps[2]["href"] == "#setup/choices"
-    assert steps[-1]["code"] == "pct exec 2025 -- nb-game console say hello"
+    # The console and the worlds are the page's own block for a game, not a shell line.
+    assert minecraft["game"] == "minecraft" and not any("code" in step for step in steps)
     assert not any(st.get("href") == "#setup/choices" for st in items["terraria"]["steps"])
     assert items["factorio"]["addresses"] == ["In the game: 10.42.8.27:34197"]
     assert any("nobody needs the Space Age expansion" in st["text"] for st in items["factorio"]["steps"])

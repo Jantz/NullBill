@@ -2877,9 +2877,261 @@ function serviceDetail(s, feedback) {
     s.what ? make("p", {className: "svc-note", textContent: s.what, style: "margin-top:0;margin-bottom:10px"}) : null,
     rows.length ? make("dl", {className: "kv"}, ...rows) : null,
     s.password_note ? make("p", {className: "svc-note", textContent: s.password_note}) : null,
+    s.game ? gameRoom(s) : null,
     serviceSteps(s, feedback),
     feedback,
   ];
+}
+
+// A game server as it runs: who plays, its worlds, its console. Asked of
+// the server when its row is opened, and again after every change.
+const gameViews = new Map();   // name -> the last /api/game view
+function bytes(n) {
+  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1)} GB`;
+  if (n >= 1024 ** 2) return `${Math.round(n / 1024 ** 2)} MB`;
+  return `${Math.max(1, Math.round(n / 1024))} KB`;
+}
+
+function gameRoom(s) {
+  const room = make("div", {className: "game-room"});
+  room.dataset.game = s.name;
+  const view = gameViews.get(s.name);
+  if (view) paintGameRoom(room, view);
+  else room.append(make("p", {className: "svc-note", textContent: built() ? "Asking the server…" : "Its worlds show here once setup has made the server."}));
+  // The server's guest is asked only for a row that is open.
+  if (built() && expanded.has(s.name)) loadGameRoom(s.name);
+  return room;
+}
+
+async function loadGameRoom(name, fresh) {
+  let view;
+  try {
+    view = (await api(`/api/game?name=${encodeURIComponent(name)}${fresh ? "&fresh=1" : ""}`)).view;
+  } catch (error) {
+    view = {name, live: false, why: error.message, new_world: []};
+  }
+  setGameRoom(view);
+}
+
+function setGameRoom(view) {
+  gameViews.set(view.name, view);
+  const room = document.querySelector(`.game-room[data-game="${view.name}"]`);
+  // An open form keeps what was typed: only the lists are painted anew.
+  if (room) paintGameRoom(room, view);
+}
+
+function gameAct(button, feedback, name, body, busy, done) {
+  return press(button, feedback, busy, async () => {
+    let answer = await api("/api/game", {name, ...body});
+    if (!answer.ok && answer.players) {
+      const n = answer.players;
+      const ok = await confirmDialog({title: `Disconnect ${n} ${n === 1 ? "player" : "players"}?`,
+        text: `${n === 1 ? "A player is" : `${n} players are`} in ${answer.title}. The server stops for this and they are disconnected. Their progress is saved first.`,
+        yes: "Disconnect and go on"});
+      if (!ok) return "";
+      answer = await api("/api/game", {name, ...body, kick: true});
+      if (!answer.ok) throw new ApiError("Someone joined meanwhile. Try again.", 409);
+    }
+    setGameRoom(answer.view);
+    return typeof done === "function" ? done(answer) : done;
+  });
+}
+
+function paintGameRoom(room, v) {
+  const word = v.word || "world";
+  const Word = word[0].toUpperCase() + word.slice(1);
+  if (!v.live) {
+    room.replaceChildren(make("p", {className: "svc-note", textContent: v.why || "The server does not answer."}));
+    return;
+  }
+  // Built once per row, then repainted, so forms and focus survive.
+  if (!room.querySelector(".game-head")) {
+    const said = make("p", {className: "feedback game-said"});
+    said.setAttribute("role", "status");
+    const restart = make("button", {type: "button", className: "btn small"}, icon("refresh"), "Restart", make("span", {className: "sr-only", textContent: ` ${v.title}`}));
+    restart.addEventListener("click", () => gameAct(restart, said, v.name, {action: "restart"}, "Restarting…", "Restarted."));
+    const fresh = make("button", {type: "button", className: "icon-btn", title: "Ask the server again", ariaLabel: `Ask ${v.title} again`}, icon("refresh"));
+    fresh.addEventListener("click", () => press(fresh, said, "Asking…", async () => { await loadGameRoom(v.name, true); return ""; }));
+    const add = make("button", {type: "button", className: "btn small"}, icon("plus"), `New ${word}`);
+    const upload = make("button", {type: "button", className: "btn small"}, icon("upload"), `Upload a ${word}`);
+    const forms = make("div", {className: "game-forms"});
+    add.addEventListener("click", () => forms.replaceChildren(newWorldForm(room, forms)));
+    upload.addEventListener("click", () => forms.replaceChildren(uploadWorldForm(room, forms)));
+    const line = make("input", {type: "text", maxLength: 200, autocomplete: "off", spellcheck: false, className: "console-line", ariaLabel: `A line for ${v.title}'s console`});
+    const send = make("button", {type: "submit", className: "btn small"}, "Send");
+    const consoleSaid = make("p", {className: "feedback"});
+    consoleSaid.setAttribute("role", "status");
+    const form = make("form", {className: "console-form"}, line, send);
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      gameAct(send, consoleSaid, v.name, {action: "console", line: line.value}, "Sending…", () => {
+        line.value = "";
+        // The server answers in its log a moment later.
+        setTimeout(() => loadGameRoom(v.name, true), 1500);
+        return "Sent. Its answer shows in the log.";
+      });
+    });
+    room.replaceChildren(
+      make("div", {className: "game-head"}, make("span", {className: "game-state"}), make("span", {className: "row"}, fresh, restart)),
+      said,
+      make("h3", {textContent: `${Word}s`}),
+      make("ul", {className: "world-list"}),
+      make("div", {className: "row game-buttons"}, add, upload, make("span", {className: "hint game-room-left"})),
+      forms,
+      make("h3", {textContent: "Console"}),
+      make("pre", {className: "game-log", tabIndex: 0, ariaLabel: `${v.title}'s log`}),
+      form, consoleSaid);
+  }
+  const who = v.names && v.names.length ? `: ${v.names.join(", ")}${v.names.length < v.players ? " and others" : ""}` : "";
+  const state = v.acting ? status("run", sentence(v.acting))
+    : v.running ? status("good", "Running", `${v.players} ${v.players === 1 ? "player" : "players"}${who}`)
+    : status(v.active ? "warn" : "bad", v.active ? "Starting" : "Stopped", v.active ? "It does not answer yet." : "Restart starts it.");
+  room.querySelector(".game-state").replaceChildren(state);
+  const said = room.querySelector(".game-said");
+  const list = room.querySelector(".world-list");
+  list.replaceChildren(...(v.worlds || []).map((w) => worldRow(v, w, said)));
+  const full = (v.worlds || []).length >= v.most;
+  room.querySelector(".game-room-left").textContent = full ? `The server keeps at most ${v.most}. Delete one to add another.` : `${bytes(v.free_bytes)} free on its disk`;
+  for (const b of room.querySelectorAll(".game-buttons .btn")) {
+    if (full) { b.setAttribute("aria-disabled", "true"); b.dataset.why = `Delete a ${word} first.`; }
+    else { b.removeAttribute("aria-disabled"); delete b.dataset.why; }
+  }
+  const log = room.querySelector(".game-log");
+  const text = (v.log || []).join("\n") || "Nothing in its log yet.";
+  if (log.textContent !== text) {
+    log.textContent = text;
+    log.scrollTop = log.scrollHeight;
+  }
+  room.querySelector(".console-line").placeholder = v.say;
+}
+
+function worldRow(v, w, said) {
+  const facts = [bytes(w.bytes), w.origin + (w.made ? ` ${clock(w.made)}` : ""), ...w.options].filter(Boolean).join(" · ");
+  const name = make("div", {className: "world-name"}, make("span", {className: "name", textContent: w.title}),
+    w.active ? make("span", {className: "badge good", textContent: "Runs now"}) : null,
+    make("span", {className: "sub", textContent: facts}));
+  const button = (text, cls, onClick, glyph) => {
+    const b = make("button", {type: "button", className: `btn small ${cls || ""}`.trim()}, glyph ? icon(glyph) : null, text, make("span", {className: "sr-only", textContent: ` ${w.title}`}));
+    b.addEventListener("click", () => onClick(b));
+    return b;
+  };
+  const actions = make("span", {className: "row world-actions"});
+  if (!w.active) {
+    actions.append(button("Run this one", "", (b) => gameAct(b, said, v.name, {action: "use", id: w.id}, `Starting ${w.title}…`, `${w.title} runs now.`)));
+  }
+  const get = make("a", {className: "btn small", href: `/api/game/world?name=${encodeURIComponent(v.name)}&id=${w.id}`, download: ""}, icon("download"), "Download", make("span", {className: "sr-only", textContent: ` ${w.title}`}));
+  actions.append(get, button("Rename", "ghost", () => {
+    const input = make("input", {type: "text", maxLength: 40, value: w.title, autocomplete: "off", ariaLabel: `New name for ${w.title}`});
+    const save = make("button", {type: "submit", className: "btn small primary"}, "Save");
+    const cancel = make("button", {type: "button", className: "btn small ghost"}, "Cancel");
+    const form = make("form", {className: "row world-rename"}, input, save, cancel);
+    cancel.addEventListener("click", () => setGameRoom(gameViews.get(v.name)));
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      gameAct(save, said, v.name, {action: "rename", id: w.id, title: input.value}, "Renaming…", "Renamed.");
+    });
+    name.replaceChildren(form);
+    input.focus();
+    input.select();
+  }));
+  if (!w.active) {
+    actions.append(button("Delete", "ghost danger", async (b) => {
+      const ok = await confirmDialog({title: `Delete ${w.title}?`, text: `The ${v.word} and everything built in it is gone for good. Download it first if you may want it back.`, yes: "Delete it"});
+      if (ok) gameAct(b, said, v.name, {action: "delete", id: w.id}, "Deleting…", `Deleted ${w.title}.`);
+    }));
+  }
+  return make("li", {className: w.active ? "active" : ""}, name, actions);
+}
+
+function worldOptionFields(v) {
+  return v.new_world.map((o) => {
+    let control;
+    if (o.type === "choice") control = make("select", {}, ...o.choices.map(([value, label]) => make("option", {value: String(value), textContent: label})));
+    else if (o.type === "switch") control = make("input", {type: "checkbox"});
+    else if (o.type === "number") control = make("input", {type: "number", min: String(o.min), max: String(o.max), step: "1", inputMode: "numeric"});
+    else control = make("input", {type: "text", maxLength: 100, autocomplete: "off", spellcheck: false});
+    control.dataset.key = o.key;
+    if (control.type === "checkbox") control.checked = Boolean(o.value); else control.value = String(o.value);
+    const text = make("span", {className: "label", textContent: o.label});
+    return make("label", {className: `game-field ${o.type === "switch" ? "check" : ""}`.trim()}, ...(o.type === "switch" ? [control, text] : [text, control]));
+  });
+}
+
+function newWorldForm(room, forms) {
+  const v = gameViews.get(room.dataset.game);
+  const running = (v.worlds || []).find((w) => w.active);
+  const title = make("input", {type: "text", maxLength: 40, autocomplete: "off", required: true});
+  const go = make("button", {type: "submit", className: "btn small primary"}, `Make it and run it`);
+  const cancel = make("button", {type: "button", className: "btn small ghost"}, "Cancel");
+  const said = make("p", {className: "feedback"});
+  said.setAttribute("role", "status");
+  const fields = make("div", {className: "game-fields"}, make("label", {className: "game-field"}, make("span", {className: "label", textContent: "Name"}), title), ...worldOptionFields(v));
+  const form = make("form", {className: "game-form"},
+    make("p", {className: "help", textContent: `The server stops for a moment and starts with the new ${v.word}.${running ? ` ${running.title} is kept in the list, not deleted.` : ""}`}),
+    fields, make("div", {className: "row"}, go, cancel), said);
+  cancel.addEventListener("click", () => forms.replaceChildren());
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const options = {};
+    for (const control of fields.querySelectorAll("[data-key]")) options[control.dataset.key] = control.type === "checkbox" ? control.checked : control.value;
+    gameAct(go, said, v.name, {action: "new", title: title.value, options}, `Making it. A large ${v.word} can take a few minutes…`, () => {
+      forms.replaceChildren();
+      say(room.querySelector(".game-said"), "ok", `${title.value.trim()} runs now.`);
+      return "";
+    });
+  });
+  setTimeout(() => title.focus());
+  return form;
+}
+
+// A world file goes up as the request's body, with its progress shown.
+function uploadWorldForm(room, forms) {
+  const v = gameViews.get(room.dataset.game);
+  const title = make("input", {type: "text", maxLength: 40, autocomplete: "off", required: true});
+  const file = make("input", {type: "file", required: true, accept: v.kind === "terraria" ? ".wld" : ".zip"});
+  const go = make("button", {type: "submit", className: "btn small primary"}, "Upload");
+  const cancel = make("button", {type: "button", className: "btn small ghost"}, "Cancel");
+  const said = make("p", {className: "feedback"});
+  said.setAttribute("role", "status");
+  const form = make("form", {className: "game-form"},
+    make("p", {className: "help", textContent: `Choose ${v.upload}. It joins the list; the ${v.word} that runs stays until you press Run this one.`}),
+    make("div", {className: "game-fields"},
+      make("label", {className: "game-field"}, make("span", {className: "label", textContent: "File"}), file),
+      make("label", {className: "game-field"}, make("span", {className: "label", textContent: "Name"}), title)),
+    make("div", {className: "row"}, go, cancel), said);
+  file.addEventListener("change", () => {
+    if (file.files[0] && !title.value) title.value = file.files[0].name.replace(/\.(zip|wld)$/i, "").slice(0, 40);
+  });
+  let request = null;
+  cancel.addEventListener("click", () => { if (request) request.abort(); forms.replaceChildren(); });
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const chosen = file.files[0];
+    press(go, said, "Uploading…", () => new Promise((resolve, reject) => {
+      if (!chosen) return reject(new ApiError("Choose a file first.", 400));
+      if (chosen.size > v.max_upload) return reject(new ApiError(`The file is ${bytes(chosen.size)}; the page takes at most ${bytes(v.max_upload)}.`, 400));
+      request = new XMLHttpRequest();
+      request.open("POST", `/api/game/world?name=${encodeURIComponent(v.name)}&title=${encodeURIComponent(title.value)}`);
+      request.setRequestHeader("X-NullBill", "1");
+      request.setRequestHeader("Content-Type", "application/octet-stream");
+      request.upload.addEventListener("progress", (e) => {
+        if (e.lengthComputable) say(said, "busy", e.loaded < e.total ? `Uploading… ${Math.floor((100 * e.loaded) / e.total)}% of ${bytes(e.total)}` : "The server is checking the file…");
+      });
+      request.addEventListener("load", () => {
+        let data = {};
+        try { data = JSON.parse(request.responseText); } catch { /* not JSON */ }
+        if (request.status !== 200) return reject(new ApiError(sentence(data.error || `The server answered ${request.status}`), request.status));
+        setGameRoom(data.view);
+        forms.replaceChildren();
+        say(room.querySelector(".game-said"), "ok", `${title.value.trim()} is in the list. Press Run this one to play it.`);
+        resolve("");
+      });
+      request.addEventListener("error", () => reject(new ApiError("The upload broke off. Try again.", 0)));
+      request.addEventListener("abort", () => reject(new ApiError("Upload cancelled.", 0)));
+      request.send(chosen);
+    }));
+  });
+  return form;
 }
 
 // What to do to set a service up, in order; a step the page can tell is
@@ -2935,6 +3187,7 @@ function renderServices(st) {
       toggle.setAttribute("aria-expanded", on ? "true" : "false");
       detail.hidden = !on;
       if (on) expanded.add(s.name); else expanded.delete(s.name);
+      if (on && s.game && built()) loadGameRoom(s.name);
     };
     toggle.addEventListener("click", (event) => { event.stopPropagation(); flip(); });
     row.addEventListener("click", (event) => { if (!event.target.closest("a, button")) flip(); });

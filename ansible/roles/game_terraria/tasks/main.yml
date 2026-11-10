@@ -90,7 +90,9 @@
     mode: "0644"
     content: >-
       {{ {"name": "terraria", "title": "Terraria", "version": game_terraria_version, "port": game_terraria_port | int,
-      "console": "/run/terraria/console", "players": {"how": "connections"}, "stop": "exit"} | to_nice_json }}
+      "console": "/run/terraria/console", "players": {"how": "connections"}, "stop": "exit", "unit": "terraria",
+      "world": {"how": "terraria", "home": "/var/lib/terraria", "dir": "worlds", "options": game_terraria_new_world,
+      "config": "/etc/terraria/serverconfig.txt", "new_config": "/etc/terraria/new-world.txt"}} | to_nice_json }}
 
 - name: Server unit
   ansible.builtin.template:

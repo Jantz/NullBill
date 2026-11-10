@@ -21,7 +21,7 @@ import re
 import shlex
 
 from nullbill import custom, power
-from nullbill.errors import NullBillError
+from nullbill.errors import NullBillError, Refused
 from nullbill.model import NODE_EXPORTER
 from nullbill.probe import Runner
 from nullbill.proxy import PROXY, allows, proxy_port
@@ -111,6 +111,69 @@ OPTIONS = {
         {"key": "afk_autokick_interval", "label": "Idle minutes before a player is kicked (0: never)", "min": 0, "max": 1440, "default": 0},
     ),
 }
+# What a server takes when it makes a world: the page's New world asks
+# these, and `nb-game world new` in the guest gives them to the server for
+# that one world (docs/adr/0019-game-worlds.md). Same shape as OPTIONS;
+# every one has a default, the server's own.
+NEW_WORLD = {
+    "minecraft": (
+        {"key": "level-seed", "label": "Seed (empty: a random world)", "default": ""},
+        {
+            "key": "level-type",
+            "label": "World type",
+            "choices": (
+                ("minecraft:normal", "Normal"),
+                ("minecraft:flat", "Flat"),
+                ("minecraft:large_biomes", "Large biomes"),
+                ("minecraft:amplified", "Amplified"),
+            ),
+            "default": "minecraft:normal",
+        },
+        {"key": "hardcore", "label": "Hardcore: one life each", "default": False},
+        {"key": "generate-structures", "label": "Villages, temples and other structures", "default": True},
+    ),
+    "terraria": (
+        {"key": "autocreate", "label": "World size", "choices": ((1, "Small"), (2, "Medium"), (3, "Large")), "default": 2},
+        {
+            "key": "difficulty",
+            "label": "Difficulty",
+            "choices": ((0, "Classic"), (1, "Expert"), (2, "Master"), (3, "Journey")),
+            "default": 0,
+        },
+        {"key": "seed", "label": "Seed (empty: a random world)", "default": ""},
+    ),
+    "factorio": (
+        {"key": "seed", "label": "Seed (empty: a random map)", "min": 0, "max": 4294967295, "default": "", "optional": True},
+        {
+            "key": "preset",
+            "label": "Map preset",
+            "choices": (
+                ("", "Default"),
+                ("rich-resources", "Rich resources"),
+                ("marathon", "Marathon"),
+                ("death-world", "Death world"),
+                ("death-world-marathon", "Death world marathon"),
+                ("rail-world", "Rail world"),
+                ("ribbon-world", "Ribbon world"),
+                ("island", "Island"),
+            ),
+            "default": "",
+        },
+    ),
+}
+# What a world is called in each game, for the page.
+WORLD = {"minecraft": "world", "terraria": "world", "factorio": "map"}
+# The file the owner uploads, and what a download is.
+WORLD_FILE = {
+    "minecraft": "a .zip of the world's folder, the one that holds level.dat (from .minecraft/saves, or another server)",
+    "terraria": "the world's .wld file, from Documents/My Games/Terraria/Worlds",
+    "factorio": "a save .zip as it is, from Factorio's saves folder",
+}
+MAX_WORLD_TITLE = 40
+# The largest world file the page takes; the guest's free disk may say less.
+MAX_WORLD_BYTES = 8 * 1024**3
+WORLD_ID = re.compile(r"w[0-9]{1,6}")
+MAX_CONSOLE = 200
 SETTING = re.compile(r"[A-Za-z][A-Za-z0-9._-]{0,60}")
 MAX_SETTINGS = 60
 MAX_VALUE = 200
@@ -260,6 +323,10 @@ def variables(plan: dict, model: dict, name: str) -> dict:
     proxy = f"{plan['guests'][PROXY]['ip']}:{proxy_port(model)}"
     prefix = f"game_{of}_"
     out = {"version": game["version"], "url": game["url"], "sha256": game["sha256"], "port": number, "settings": settings(model, name)}
+    # Minecraft reads its world options from the file its settings are in,
+    # so the role needs all of them; the others only what New world asks.
+    # What a new world takes, each with the game's own start, as the server reads it.
+    out["new_world"] = {o["key"]: str(o["default"]).lower() if isinstance(o["default"], bool) else str(o["default"]) for o in NEW_WORLD[of]}
     if of == "minecraft":
         out |= {f"java_{k}": game["java"][k] for k in ("version", "url", "sha256")}
         out |= {"heap_mib": plan["games"][name]["heap_mib"], "eula": game["eula"], "proxy": proxy, "services": list(MOJANG)}
@@ -338,26 +405,92 @@ def check(plan_with_notes: dict, model: dict, target: str, run: Runner) -> list[
 # settings, and which further servers there are.
 
 
+def _field(option: dict, default: object, value: object) -> dict:
+    """An option as the page's form takes it."""
+    how = "choice" if "choices" in option else "switch" if isinstance(default, bool) else "number" if "min" in option else "text"
+    return {
+        "key": option["key"],
+        "label": option["label"],
+        "type": how,
+        "value": value,
+        "default": default,
+        "new_world": option.get("new_world", False),
+        **({"choices": [list(c) for c in option["choices"]]} if how == "choice" else {}),
+        **({"min": option["min"], "max": option["max"]} if how == "number" else {}),
+        **({"optional": True} if option.get("optional") else {}),
+    }
+
+
 def options(model: dict, name: str) -> list[dict]:
     """A server's OPTIONS for the page, each with its value now."""
     have, start = model["games"][name]["settings"], defaults(model, name)
     out = []
     for option in OPTIONS[kind(model, name)]:
         default = start.get(option["key"], option.get("default"))
-        how = "choice" if "choices" in option else "switch" if isinstance(default, bool) else "number" if "min" in option else "text"
-        out.append(
-            {
-                "key": option["key"],
-                "label": option["label"],
-                "type": how,
-                "value": have.get(option["key"], default),
-                "default": default,
-                "new_world": option.get("new_world", False),
-                **({"choices": [list(c) for c in option["choices"]]} if how == "choice" else {}),
-                **({"min": option["min"], "max": option["max"]} if how == "number" else {}),
-            }
-        )
+        out.append(_field(option, default, have.get(option["key"], default)))
     return out
+
+
+def new_world_keys(game: str) -> list[str]:
+    """Every setting that counts only when a world is made: what New world
+    asks, and what the settings say of the server's first world."""
+    return list(dict.fromkeys([o["key"] for o in NEW_WORLD[game]] + [o["key"] for o in OPTIONS[game] if o.get("new_world")]))
+
+
+def new_world_options(model: dict, name: str) -> list[dict]:
+    """What the page's New world asks for a server, each starting at the
+    game's own default: a new world is not the first one over again."""
+    return [_field(option, option["default"], option["default"]) for option in NEW_WORLD[kind(model, name)]]
+
+
+def read_world_title(value: object) -> str:
+    title = " ".join(str(value or "").split())
+    if not 1 <= len(title) <= MAX_WORLD_TITLE or re.search(r"[\x00-\x1f\x7f]", title):
+        raise NullBillError(f"give the world a name of 1 to {MAX_WORLD_TITLE} characters")
+    return title
+
+
+def read_new_world(model: dict, name: str, chosen: object) -> list[str]:
+    """New world's form as `nb-game world new` takes it: KEY=VALUE for
+    each option that differs from the game's default. Raises everything
+    wrong with it together."""
+    if chosen is not None and not isinstance(chosen, dict):
+        raise NullBillError("options are the new world's own, by name")
+    known = {o["key"]: o for o in new_world_options(model, name)}
+    problems, out = [], []
+    for key, value in (chosen or {}).items():
+        if key not in known:
+            problems.append(f"{str(key)[:40]!r} is not something a new {TITLE[kind(model, name)]} world takes; it takes {', '.join(known)}")
+            continue
+        option = known[key]
+        if option.get("optional") and str(value).strip() == "":
+            continue
+        try:
+            value = _option_value(option, value)
+        except ValueError as exc:
+            problems.append(f"{option['label']} is {exc}")
+            continue
+        text = str(value).lower() if isinstance(value, bool) else str(value)
+        if len(text) > MAX_VALUE or re.search(r"[\x00-\x1f\x7f]", text):
+            problems.append(f"{option['label']} is one line of at most {MAX_VALUE} characters")
+        elif value != option["default"]:
+            out.append(f"{key}={text}")
+    if problems:
+        raise Refused(f"The new {WORLD[kind(model, name)]} was not made", problems)
+    return out
+
+
+def guest_command(plan: dict, name: str, *args: str) -> str:
+    """nb-game in a game server's guest, as the host runs it."""
+    return shlex.join(["pct", "exec", str(plan["guests"][name]["vmid"]), "--", NB_GAME, *args])
+
+
+def read_console(value: object) -> str:
+    """One line for a server's console."""
+    line = str(value or "").strip()
+    if not line or len(line) > MAX_CONSOLE or re.search(r"[\x00-\x1f\x7f]", line):
+        raise NullBillError(f"a console line is one line of at most {MAX_CONSOLE} characters")
+    return line
 
 
 def other_settings(model: dict, name: str) -> str:

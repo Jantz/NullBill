@@ -441,6 +441,57 @@ TOOLS = [
         },
     },
     {
+        "name": "game_server",
+        "description": "A game server as it runs, asked of the server now: whether it answers, how many play (and who, "
+        "where the game says), the end of its log, and its worlds (Factorio: maps) by id, with which one runs. A server "
+        "runs one world and keeps the others beside it.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"name": {"type": "string", "description": "The server's name, as what_to_run lists it."}},
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "game_world",
+        "description": "Change a game server's worlds. new: the world that runs is set aside (kept, never deleted) and the "
+        "server makes a new one with these options and runs it; this is how the owner gets, say, an expert Terraria "
+        "world or another seed. use: run a kept world instead. rename. delete: a kept world, for good (risky, a typed "
+        "word). The server stops for a moment; with players connected nothing changes until the owner agreed and kick is "
+        "true. Uploading and downloading a world file is the owner's, on the Services page.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "The server's name."},
+                "action": {"enum": ["new", "use", "rename", "delete"]},
+                "id": {"type": "string", "description": "The world, by its id from game_server (use, rename, delete)."},
+                "title": {"type": "string", "description": "The world's name (new, rename), 1 to 40 characters."},
+                "options": {
+                    "type": "object",
+                    "description": "For new: what the game takes when it makes a world, by the names game_server lists under "
+                    "new_world_takes, such as {difficulty: 1, autocreate: 3} for a large expert Terraria world.",
+                },
+                "kick": {"type": "boolean", "description": "Go ahead although players are connected, once the owner agreed."},
+                "why": WHY,
+            },
+            "required": ["name", "action"],
+        },
+    },
+    {
+        "name": "game_command",
+        "description": "Restart a game server, or type one line on its console as its admin (such as say, kick, whitelist "
+        "add; Factorio's begin with /). The answer to a console line is in the server's log, which comes back with it.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "The server's name."},
+                "action": {"enum": ["restart", "console"]},
+                "line": {"type": "string", "description": "With console: the line, at most 200 characters."},
+                "why": WHY,
+            },
+            "required": ["name", "action"],
+        },
+    },
+    {
         "name": "remove_game_server",
         "description": "Forget a further game server: only one that is turned off (set_choices) and whose guest a setup "
         "run has deleted, which asks the owner first. A game's first server is turned off, never removed.",

@@ -13,6 +13,12 @@
     "enable-rcon": false,
     "enable-query": false
   },
+  "game_minecraft_new_world": {
+    "level-seed": "",
+    "level-type": "minecraft:normal",
+    "hardcore": "false",
+    "generate-structures": "true"
+  },
   "game_minecraft_java_version": "25.0.5+8",
   "game_minecraft_java_url": "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.5%2B8/OpenJDK25U-jre_x64_linux_hotspot_25.0.5_8.tar.gz",
   "game_minecraft_java_sha256": "6fac98f0c8202efc3135a9e9e42aa61963ec42d1c5cbb40caf231e7b14a24ef6",

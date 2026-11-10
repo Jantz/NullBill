@@ -10,19 +10,41 @@ its own systemd units and the owner on its console.
     nb-game admins            the players who are admins, one name a line
     nb-game busy              why this guest is in use, or nothing when it is not
     nb-game metrics           write node_exporter's textfile metrics
+    nb-game report            one JSON line for the page: the server, who plays, its log, its worlds
+    nb-game service start|stop|restart
+    nb-game world list
+    nb-game world new TITLE [KEY=VALUE...]   set the world aside and make a new one
+    nb-game world use ID [--kick]            set the world aside and run a kept one
+    nb-game world rename ID TITLE
+    nb-game world delete ID                  a kept world, for good
+    nb-game world export ID                  a file to download: its path, size and name
+    nb-game world sent FILE                  remove that file
+    nb-game world receive SIZE TITLE         a world file on standard input, kept beside the others
 
 /etc/nullbill/game.json, written by the game's role, says which game this
-is and how to ask it who is connected.
+is, how to ask it who is connected, and where its world is.
+
+A server runs one world. The others are kept beside it, out of the server's
+reach, and `world use` swaps them: stop, move, start, and back again if the
+server does not answer with the new one. Nothing but `world delete` removes
+a world. The world commands print one JSON line, {"ok": true, ...} or
+{"ok": false, "error": ...}.
 """
 
+import fcntl
+import gzip
 import json
 import os
 import re
+import secrets
+import shutil
 import socket
 import struct
+import subprocess
 import sys
 import tempfile
 import time
+import zipfile
 from pathlib import Path
 
 CONFIG = Path("/etc/nullbill/game.json")
@@ -32,10 +54,40 @@ ACTIVE = Path("/var/lib/nullbill/game-last-active")
 # The kernel's TCP sockets, IPv4 and IPv6.
 TABLES = ("/proc/net/tcp", "/proc/net/tcp6")
 TIMEOUT_S = 5
+# Which world runs and which are kept, by id.
+WORLDS = Path("/var/lib/nullbill/worlds.json")
+# Files on their way to or from the page.
+TRANSFER = Path("/var/lib/nullbill/world-transfer")
+TRANSFER_KEPT_S = 3600
+LOCK = Path("/run/nb-game-world.lock")
+# Kept worlds, in the server's own directory (one filesystem, so a swap is
+# a rename) but root's, so the server reads only the one it runs.
+KEPT = "kept-worlds"
+MAX_WORLDS = 24
+MAX_TITLE = 40
+MAX_OPTION = 200
+MAX_FILES = 200_000
+# Left free on the disk after a world comes in.
+SPARE_BYTES = 512 * 1024 * 1024
+CHUNK = 1024 * 1024
+# A new world may take long to make (Terraria's largest); a kept one loads.
+NEW_WAIT_S = 600
+USE_WAIT_S = 300
+FLUSH_WAIT_S = 30
+LOG_LINES = 60
 
 
 class NotAnswering(Exception):
     pass
+
+
+class Refused(Exception):
+    """A world command that changes nothing, with why; `more` joins the
+    JSON answer (how many players a swap would disconnect)."""
+
+    def __init__(self, message: str, **more: object):
+        super().__init__(message)
+        self.more = more
 
 
 def varint(value: int) -> bytes:
@@ -67,7 +119,7 @@ def recv(sock: socket.socket, count: int) -> bytes:
     return data
 
 
-def minecraft(game: dict) -> int:
+def minecraft_status(game: dict) -> dict:
     """Minecraft's server list ping, which any client's server list sends:
     a handshake asking for status, then the status request."""
     with socket.create_connection(("127.0.0.1", game["port"]), TIMEOUT_S) as sock:
@@ -78,8 +130,11 @@ def minecraft(game: dict) -> int:
         read_varint(sock)  # the packet's length
         if read_varint(sock) != 0:
             raise NotAnswering("not a status answer")
-        status = json.loads(recv(sock, read_varint(sock)))
-    return int(status["players"]["online"])
+        return json.loads(recv(sock, read_varint(sock)))
+
+
+def minecraft(game: dict) -> int:
+    return int(minecraft_status(game)["players"]["online"])
 
 
 def connections(game: dict) -> int:
@@ -104,9 +159,9 @@ def connections(game: dict) -> int:
     return count
 
 
-def rcon(game: dict) -> int:
+def rcon_ask(game: dict, command: str) -> str:
     """Source RCON on the loopback address: sign in, run one command and
-    read the number out of its answer."""
+    give its answer."""
     ask = game["players"]
     password = Path(ask["password_file"]).read_text().strip()
     with socket.create_connection(("127.0.0.1", ask["port"]), TIMEOUT_S) as sock:
@@ -124,8 +179,14 @@ def rcon(game: dict) -> int:
         send(1, 3, password)
         if answer()[0] != 1:
             raise NotAnswering("the server refused the RCON password")
-        send(2, 2, ask["command"])
-        text = answer()[1]
+        send(2, 2, command)
+        return answer()[1]
+
+
+def rcon(game: dict) -> int:
+    """The number of players, out of the server's answer on RCON."""
+    ask = game["players"]
+    text = rcon_ask(game, ask["command"])
     found = re.search(ask["pattern"], text)
     if not found:
         raise NotAnswering(f"no player count in {text.strip()[:80]!r}")
@@ -229,12 +290,673 @@ def metrics(game: dict) -> None:
     os.replace(tmp.name, TEXTFILES / "nullbill-game.prom")
 
 
+def names(game: dict) -> list[str] | None:
+    """The players connected, by name, where the server says: Minecraft's
+    status answer carries a sample of them (at most 12, none when the
+    server hides them), Factorio lists them on RCON. None where it cannot
+    be asked (Terraria)."""
+    how = game["players"]["how"]
+    try:
+        if how == "minecraft":
+            return sorted(str(p["name"]) for p in minecraft_status(game)["players"].get("sample", []))
+        if how == "rcon" and game["players"].get("names"):
+            return sorted(re.findall(game["players"]["names_pattern"], rcon_ask(game, game["players"]["names"]), re.M))
+    except (OSError, ValueError, KeyError, TypeError, struct.error):
+        return None
+    return None
+
+
+# The server's unit, started and stopped as systemd does it.
+
+
+def systemctl(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["systemctl", *args], capture_output=True, text=True, check=False)
+
+
+def unit_active(game: dict) -> bool:
+    return systemctl("is-active", "--quiet", game["unit"]).returncode == 0
+
+
+def service(game: dict, action: str) -> None:
+    done = systemctl(action, game["unit"])
+    if done.returncode != 0:
+        raise NotAnswering(f"systemctl {action} {game['unit']}: {done.stderr.strip() or done.returncode}")
+
+
+def log(game: dict, lines: int = LOG_LINES) -> list[str]:
+    """The server's last lines in the journal, where its unit's output
+    goes. A run of progress lines (Terraria counts a world's making in
+    percent) is its last one."""
+    found = subprocess.run(
+        ["journalctl", "-u", game["unit"], "-n", str(lines * 4), "--no-pager", "-o", "cat"], capture_output=True, text=True, check=False
+    )
+    out: list[str] = []
+    # What the server writes about nb-game's own questions (Factorio: each RCON connection).
+    skip = game.get("log_skip")
+    for line in found.stdout.splitlines() if found.returncode == 0 else []:
+        step = re.fullmatch(r"(.*?)[0-9.]+%", line)
+        if step and out and re.fullmatch(re.escape(step[1]) + r"[0-9.]+%", out[-1]):
+            out[-1] = line[:400]
+        elif line.strip() and not (skip and re.search(skip, line)):
+            out.append(line[:400])
+    return out[-lines:]
+
+
+# Worlds. One runs, in the server's own place for it (world["dir"] under
+# world["home"]); the rest are kept under KEPT by id.
+
+
+def world_place(game: dict) -> Path:
+    return Path(game["world"]["home"]) / game["world"]["dir"]
+
+
+def kept_place(game: dict, ident: str) -> Path:
+    return Path(game["world"]["home"]) / KEPT / ident
+
+
+def world_files(game: dict, place: Path) -> list[Path]:
+    """The files that make a world of this game in `place`, newest first:
+    Minecraft's level.dat, Terraria's .wld, Factorio's saves."""
+    pattern = {"minecraft": "level.dat", "terraria": "*.wld", "factorio": "*.zip"}[game["world"]["how"]]
+    try:
+        return sorted(place.glob(pattern), key=lambda f: f.stat().st_mtime, reverse=True)
+    except OSError:
+        return []
+
+
+def size_of(place: Path) -> int:
+    total = 0
+    for root, _, files in os.walk(place):
+        for name in files:
+            try:
+                total += os.lstat(os.path.join(root, name)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def save_worlds(state: dict) -> None:
+    WORLDS.parent.mkdir(parents=True, exist_ok=True)
+    tmp = WORLDS.with_name(WORLDS.name + ".new")
+    tmp.write_text(json.dumps(state, indent=1) + "\n")
+    os.replace(tmp, WORLDS)
+
+
+def worlds(game: dict) -> dict:
+    """{"active": id or None, "next": n, "worlds": {id: {...}}}. A world the
+    server made before this record existed is taken in as the first."""
+    try:
+        state = json.loads(WORLDS.read_text())
+    except (OSError, ValueError):
+        state = {"active": None, "next": 1, "worlds": {}}
+    if state["active"] is None and world_files(game, world_place(game)):
+        made = int(min(f.stat().st_mtime for f in world_files(game, world_place(game))))
+        # More than one only after a swap that was cut short.
+        title = "First world" if not state["worlds"] else f"World found on the server ({state['next']})"
+        state["active"] = add_world(state, title, "setup", made=made)
+        save_worlds(state)
+    return state
+
+
+def add_world(state: dict, title: str, origin: str, made: int | None = None, options: dict | None = None) -> str:
+    ident = f"w{state['next']}"
+    state["next"] += 1
+    state["worlds"][ident] = {
+        "title": title,
+        "made": made or int(time.time()),
+        "origin": origin,
+        **({"options": options} if options else {}),
+    }
+    return ident
+
+
+def world_list(game: dict, state: dict | None = None) -> dict:
+    state = state or worlds(game)
+    out = []
+    for ident, world in state["worlds"].items():
+        active = ident == state["active"]
+        place = world_place(game) if active else kept_place(game, ident)
+        out.append({"id": ident, "active": active, "bytes": size_of(place), **world})
+    usage = shutil.disk_usage(game["world"]["home"])
+    return {"worlds": out, "free_bytes": usage.free, "most": MAX_WORLDS, "options": list(game["world"].get("options", {}))}
+
+
+def title_of(text: str, state: dict, but: str | None = None) -> str:
+    title = " ".join(text.split())
+    if not 1 <= len(title) <= MAX_TITLE or re.search(r"[\x00-\x1f\x7f]", title):
+        raise Refused(f"a world's name is 1 to {MAX_TITLE} characters")
+    if any(ident != but and world["title"].lower() == title.lower() for ident, world in state["worlds"].items()):
+        raise Refused(f"another world of this server is called {title} already")
+    return title
+
+
+def known(state: dict, ident: str) -> dict:
+    if ident not in state["worlds"]:
+        raise Refused(f"this server has no world {ident[:20]!r}")
+    return state["worlds"][ident]
+
+
+def own(game: dict, place: Path) -> None:
+    """Everything in a world is the server's user's, and nobody else's."""
+    user = game["world"].get("user", "game")
+    for root, dirs, files in os.walk(place):
+        for name in dirs:
+            shutil.chown(os.path.join(root, name), user, user)
+            os.chmod(os.path.join(root, name), 0o750)
+        for name in files:
+            shutil.chown(os.path.join(root, name), user, user)
+            os.chmod(os.path.join(root, name), 0o640)
+    shutil.chown(place, user, user)
+    os.chmod(place, 0o750)
+
+
+def kept_root(game: dict) -> Path:
+    root = Path(game["world"]["home"]) / KEPT
+    root.mkdir(mode=0o700, exist_ok=True)
+    os.chown(root, 0, 0)
+    os.chmod(root, 0o700)
+    return root
+
+
+def set_aside(game: dict, state: dict) -> None:
+    """The running world, if there is one, moves to the kept ones."""
+    kept_root(game)
+    place = world_place(game)
+    if state["active"] is not None and place.exists():
+        os.rename(place, kept_place(game, state["active"]))
+    elif place.exists():
+        # Not a world: an empty directory the role made.
+        shutil.rmtree(place)
+    state["active"] = None
+
+
+def bring(game: dict, state: dict, ident: str) -> None:
+    os.rename(kept_place(game, ident), world_place(game))
+    own(game, world_place(game))
+    state["active"] = ident
+
+
+def restarts(game: dict) -> int:
+    shown = systemctl("show", "-p", "NRestarts", "--value", game["unit"]).stdout.strip()
+    return int(shown) if shown.isdigit() else 0
+
+
+def start_and_wait(game: dict, seconds: int) -> None:
+    """Start the server and wait until it answers. One that systemd had to
+    start again twice is not going to."""
+    before = restarts(game)
+    service(game, "start")
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            players(game)
+            return
+        except NotAnswering as err:
+            if restarts(game) - before >= 2:
+                raise NotAnswering(f"{game['title']} stopped again each time it was started") from err
+            if time.monotonic() > deadline:
+                raise NotAnswering(f"{game['title']} did not answer within {seconds} s") from err
+            time.sleep(2)
+
+
+def in_the_way(game: dict, kick: bool) -> None:
+    """A swap disconnects whoever plays: only when the caller says so."""
+    try:
+        count = players(game)
+    except NotAnswering:
+        return
+    if count and not kick:
+        raise Refused(f"{count} {'player is' if count == 1 else 'players are'} in {game['title']} and would be disconnected", players=count)
+
+
+def swap(game: dict, state: dict, make, seconds: int) -> None:
+    """Stop the server, set its world aside, let `make` put another in its
+    place, start it and wait for its answer. If that fails in any way the
+    earlier world runs again and what `make` made is removed."""
+    before = dict(state, worlds=dict(state["worlds"]))
+    was = state["active"]
+    service(game, "stop")
+    aside = False
+    try:
+        set_aside(game, state)
+        # Recorded at once: a swap cut short leaves the world it set aside
+        # among the kept ones, by its name.
+        save_worlds(state)
+        aside = True
+        make()
+        start_and_wait(game, seconds)
+    except (NotAnswering, Refused, OSError, subprocess.SubprocessError) as err:
+        if not aside:
+            systemctl("start", game["unit"])
+            raise Refused(f"{err}; nothing was changed") from err
+        last = [line for line in log(game, 12) if line.strip()][-4:]
+        systemctl("stop", game["unit"])
+        made = state["active"]
+        if made is not None and made in before["worlds"] and world_place(game).exists():
+            # A kept world that did not load goes back to where it was.
+            os.rename(world_place(game), kept_place(game, made))
+        elif world_place(game).exists():
+            shutil.rmtree(world_place(game))
+        state.clear()
+        state.update(before)
+        state["active"] = None
+        if was is not None:
+            bring(game, state, was)
+        else:
+            world_place(game).mkdir(mode=0o750)
+            own(game, world_place(game))
+        save_worlds(state)
+        back = f"{before['worlds'][was]['title']} runs again" if was else "the server is as it was"
+        try:
+            start_and_wait(game, USE_WAIT_S)
+        except NotAnswering:
+            back = (
+                f"{before['worlds'][was]['title']} is back in its place, but the server does not answer"
+                if was
+                else "the server does not answer"
+            )
+        raise Refused(f"{err}; {back}", log=last) from err
+    save_worlds(state)
+
+
+def set_option_lines(text: str, values: dict) -> str:
+    """key=value lines (Terraria's config) with these keys set; one set to
+    nothing is left out."""
+    lines = [line for line in text.splitlines() if line.split("=", 1)[0].strip() not in values]
+    return "\n".join([*lines, *(f"{key}={value}" for key, value in values.items() if value != "")]) + "\n"
+
+
+def read_options(game: dict, pairs: list[str]) -> dict:
+    """KEY=VALUE arguments, only for what this game takes when it makes a
+    world (world["options"]: each with the game's own start)."""
+    allowed, out = game["world"].get("options", {}), {}
+    for pair in pairs:
+        key, equals, value = pair.partition("=")
+        if not equals or key not in allowed:
+            raise Refused(f"{key[:40]!r} is not something a new world of this game takes; it takes {', '.join(allowed) or 'nothing'}")
+        if len(value) > MAX_OPTION or re.search(r"[\x00-\x1f\x7f]", value):
+            raise Refused(f"{key} is one line of at most {MAX_OPTION} characters")
+        out[key] = value
+    return out
+
+
+def world_new(game: dict, title: str, pairs: list[str], kick: bool) -> dict:
+    state = worlds(game)
+    title = title_of(title, state)
+    options = read_options(game, pairs)
+    if len(state["worlds"]) >= MAX_WORLDS:
+        raise Refused(f"this server keeps at most {MAX_WORLDS} worlds; delete one you no longer want")
+    in_the_way(game, kick)
+    world, how = game["world"], game["world"]["how"]
+    user = world.get("user", "game")
+    # What was not asked for is the game's own start, not what the server's
+    # settings or the world before left behind.
+    full = {**world.get("options", {}), **options}
+
+    def make() -> None:
+        place = world_place(game)
+        place.mkdir(mode=0o750)
+        own(game, place)
+        if how == "minecraft":
+            # The server reads these from its own file when it makes a world.
+            done = subprocess.run(
+                [world["set_properties"], world["properties"]], input=json.dumps(full), capture_output=True, text=True, check=False
+            )
+            if done.returncode != 0:
+                raise Refused(f"could not set the new world's options: {done.stderr.strip()[:200]}")
+            place.rmdir()
+        elif how == "terraria":
+            # A config of its own for this one start: the server's, with the
+            # new world's options. The start script prefers it while it is there.
+            text = set_option_lines(Path(world["config"]).read_text(), {**full, "worldname": title})
+            fd = os.open(world["new_config"], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
+            with os.fdopen(fd, "w") as config:
+                config.write(text)
+            shutil.chown(world["new_config"], "root", user)
+        elif how == "factorio":
+            argv = ["runuser", "-u", user, "--", world["binary"], "--config", world["config"], "--create", str(place / "world.zip")]
+            if full.get("seed"):
+                argv += ["--map-gen-seed", full["seed"]]
+            if full.get("preset"):
+                argv += ["--preset", full["preset"]]
+            done = subprocess.run(argv, cwd=world["home"], capture_output=True, text=True, check=False)
+            if done.returncode != 0 or not (place / "world.zip").exists():
+                lines = (done.stdout + done.stderr).splitlines()
+                said = [re.sub(r"^\s*[0-9.]+ Error \S+ ", "", line) for line in lines if " Error " in line]
+                raise Refused(f"Factorio did not make the map{': ' + said[-1][-200:] if said else ''}")
+        state["active"] = add_world(state, title, "new", options=options)
+
+    try:
+        swap(game, state, make, NEW_WAIT_S)
+    finally:
+        if how == "terraria":
+            Path(world["new_config"]).unlink(missing_ok=True)
+    return {"id": state["active"], **world_list(game, state)}
+
+
+def world_use(game: dict, ident: str, kick: bool) -> dict:
+    state = worlds(game)
+    world = known(state, ident)
+    if ident == state["active"]:
+        raise Refused(f"{world['title']} is the world that runs")
+    in_the_way(game, kick)
+    swap(game, state, lambda: bring(game, state, ident), USE_WAIT_S)
+    return {"id": ident, **world_list(game, state)}
+
+
+def world_rename(game: dict, ident: str, title: str) -> dict:
+    state = worlds(game)
+    known(state, ident)["title"] = title_of(title, state, but=ident)
+    save_worlds(state)
+    return world_list(game, state)
+
+
+def world_delete(game: dict, ident: str) -> dict:
+    state = worlds(game)
+    world = known(state, ident)
+    if ident == state["active"]:
+        raise Refused(f"{world['title']} is the world that runs; run another before you delete it")
+    place = kept_place(game, ident)
+    if place.exists():
+        shutil.rmtree(place)
+    del state["worlds"][ident]
+    save_worlds(state)
+    return {"deleted": world["title"], **world_list(game, state)}
+
+
+def transfer_dir() -> Path:
+    """Where files wait for the page, root's alone; what a broken transfer
+    left is removed after an hour."""
+    TRANSFER.mkdir(parents=True, mode=0o700, exist_ok=True)
+    os.chmod(TRANSFER, 0o700)
+    for old in TRANSFER.iterdir():
+        if time.time() - old.stat().st_mtime > TRANSFER_KEPT_S:
+            old.unlink(missing_ok=True)
+    return TRANSFER
+
+
+def slug(title: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "-", title).strip("-")[:40] or "world"
+
+
+def flush(game: dict, place: Path) -> bool:
+    """Have a running server write its world out, and wait until it has.
+    True when Minecraft's saving is paused and must be turned on again."""
+    how = game["world"]["how"]
+    try:
+        players(game)
+    except NotAnswering:
+        return False
+    deadline = time.monotonic() + FLUSH_WAIT_S
+    if how == "minecraft":
+        logfile = Path(game["world"]["log"])
+        offset = logfile.stat().st_size if logfile.exists() else 0
+        console(game, "save-off")
+        console(game, "save-all flush")
+        while time.monotonic() < deadline:
+            if logfile.exists():
+                with logfile.open("rb") as text:
+                    text.seek(offset if logfile.stat().st_size >= offset else 0)
+                    if b"Saved the game" in text.read():
+                        break
+            time.sleep(0.5)
+        return True
+    before = max((f.stat().st_mtime for f in world_files(game, place)), default=0)
+    if how == "terraria":
+        console(game, "save")
+    else:
+        rcon_ask(game, "/server-save")
+    while time.monotonic() < deadline and max((f.stat().st_mtime for f in world_files(game, place)), default=0) <= before:
+        time.sleep(0.5)
+    # The file's time moves when the write begins; let it end.
+    time.sleep(1)
+    return False
+
+
+def world_export(game: dict, ident: str) -> dict:
+    state = worlds(game)
+    world = known(state, ident)
+    active = ident == state["active"]
+    place = world_place(game) if active else kept_place(game, ident)
+    how = game["world"]["how"]
+    out = transfer_dir() / f"{secrets.token_hex(8)}{'.wld' if how == 'terraria' else '.zip'}"
+    if shutil.disk_usage(TRANSFER).free < size_of(place) + SPARE_BYTES:
+        raise Refused("the server's disk has no room for a copy of this world to send")
+    paused = flush(game, place) if active else False
+    try:
+        fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as target:
+            if how == "minecraft":
+                top = slug(world["title"])
+                with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
+                    for root, _, files in os.walk(place):
+                        for name in sorted(files):
+                            full = Path(root) / name
+                            # The running server's lock is no part of the world.
+                            if name != "session.lock" and full.is_file() and not full.is_symlink():
+                                archive.write(full, f"{top}/{full.relative_to(place)}")
+            else:
+                found = world_files(game, place)
+                if not found:
+                    raise Refused(f"{world['title']} has no {'world file' if how == 'terraria' else 'save'} yet")
+                with found[0].open("rb") as source:
+                    shutil.copyfileobj(source, target, CHUNK)
+    except BaseException:
+        out.unlink(missing_ok=True)
+        raise
+    finally:
+        if paused:
+            console(game, "save-on")
+    return {"file": str(out), "bytes": out.stat().st_size, "name": f"{slug(world['title'])}{out.suffix}"}
+
+
+def world_sent(name: str) -> dict:
+    path = Path(name)
+    if path.parent == TRANSFER and re.fullmatch(r"[0-9a-f]{16}\.(zip|wld|upload)", path.name):
+        path.unlink(missing_ok=True)
+    return {}
+
+
+def safe_members(archive: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
+    """An archive's files, refused unless every name stays inside the
+    place it is unpacked to and none is a link or encrypted."""
+    infos = archive.infolist()
+    if len(infos) > MAX_FILES:
+        raise Refused(f"the file holds more than {MAX_FILES} files")
+    for info in infos:
+        name = info.filename
+        parts = name.rstrip("/").split("/")
+        if name.startswith("/") or "\\" in name or "\x00" in name or any(part in ("", ".", "..") for part in parts):
+            raise Refused("the file holds a path that leaves its own folder")
+        if (info.external_attr >> 16) & 0o170000 == 0o120000:
+            raise Refused("the file holds a link, which a world has no use for")
+        if info.flag_bits & 0x1:
+            raise Refused("the file is encrypted")
+    return infos
+
+
+def nbt_number(data: bytes, name: bytes) -> int | None:
+    """An int tag by name, wherever it is in the data."""
+    at = data.find(b"\x03" + struct.pack(">H", len(name)) + name)
+    return struct.unpack(">i", data[at + 3 + len(name) : at + 7 + len(name)])[0] if at >= 0 else None
+
+
+def take_minecraft(game: dict, upload: Path, place: Path) -> None:
+    """A zip of a Java Edition world: level.dat at its top or one folder
+    down, last played in this server's Minecraft or an older one."""
+    try:
+        archive = zipfile.ZipFile(upload)
+    except (zipfile.BadZipFile, OSError) as err:
+        raise Refused("that is not a zip file; zip the world's folder (the one that holds level.dat)") from err
+    with archive:
+        infos = safe_members(archive)
+        levels = [i for i in infos if re.fullmatch(r"(?:[^/]+/)?level\.dat", i.filename)]
+        if len(levels) != 1:
+            raise Refused(
+                "the zip holds no Minecraft world: level.dat is not at its top or one folder down"
+                if not levels
+                else "the zip holds more than one world; zip one world's folder"
+            )
+        prefix = levels[0].filename[: -len("level.dat")]
+        if levels[0].file_size > 64 * CHUNK:
+            raise Refused("its level.dat is not a world's")
+        try:
+            level = gzip.decompress(archive.read(levels[0]))
+        except (OSError, EOFError, zipfile.BadZipFile) as err:
+            raise Refused("its level.dat is not a Java Edition world's (a Bedrock world does not run on this server)") from err
+        made_with = nbt_number(level, b"DataVersion")
+        with zipfile.ZipFile(game["world"]["jar"]) as jar:
+            ours = json.loads(jar.read("version.json"))
+        if made_with is None:
+            raise Refused("its level.dat does not say which Minecraft it is from")
+        if made_with > ours["world_version"]:
+            raise Refused(
+                f"the world was last played in a newer Minecraft than this server's {ours['name']}, which cannot open it "
+                f"(its data version is {made_with}, the server's {ours['world_version']})"
+            )
+        members = [i for i in infos if i.filename.startswith(prefix) and not i.is_dir() and not i.filename.endswith("session.lock")]
+        total = sum(i.file_size for i in members)
+        if shutil.disk_usage(place.parent).free < total + SPARE_BYTES:
+            raise Refused(f"the world unpacks to {total // CHUNK} MiB, more than the server's disk has room for")
+        written = 0
+        for info in members:
+            target = place / info.filename[len(prefix) :]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(info) as source, target.open("wb") as out:
+                while chunk := source.read(CHUNK):
+                    written += len(chunk)
+                    # More than the archive declared: not a world, a trap.
+                    if written > total:
+                        raise Refused("the zip unpacks to more than it says")
+                    out.write(chunk)
+
+
+def take_terraria(upload: Path, place: Path) -> None:
+    """A .wld file: Re-Logic's header says so (version, "relogic", type 2)."""
+    with upload.open("rb") as file:
+        header = file.read(12)
+    if len(header) < 12 or header[4:11] != b"relogic" or header[11] != 2:
+        raise Refused("that is not a Terraria world: upload the .wld file from your Worlds folder")
+    place.mkdir(parents=True)
+    shutil.copyfile(upload, place / "world.wld")
+
+
+def take_factorio(upload: Path, place: Path, title: str) -> None:
+    """A save as Factorio writes it: a zip of one folder with the level in it."""
+    try:
+        archive = zipfile.ZipFile(upload)
+    except (zipfile.BadZipFile, OSError) as err:
+        raise Refused("that is not a Factorio save: upload the .zip from your saves folder as it is") from err
+    with archive:
+        infos = safe_members(archive)
+        if not any(re.fullmatch(r"[^/]+/level(?:-init)?\.dat[0-9]*", i.filename) for i in infos):
+            raise Refused("that zip is not a Factorio save: upload the .zip from your saves folder as it is")
+    place.mkdir(parents=True)
+    shutil.copyfile(upload, place / f"{slug(title)}.zip")
+
+
+def world_receive(game: dict, size: int, title: str) -> dict:
+    """A world from the owner's computer, on standard input, joins the kept
+    ones. It runs only once `world use` says so."""
+    state = worlds(game)
+    title = title_of(title, state)
+    if len(state["worlds"]) >= MAX_WORLDS:
+        raise Refused(f"this server keeps at most {MAX_WORLDS} worlds; delete one you no longer want")
+    if size <= 0 or shutil.disk_usage(transfer_dir()).free < size + SPARE_BYTES:
+        raise Refused("the server's disk has no room for this file")
+    upload = TRANSFER / f"{secrets.token_hex(8)}.upload"
+    ident = add_world(state, title, "upload")
+    place = kept_root(game) / ident
+    try:
+        fd = os.open(upload, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        left = size
+        with os.fdopen(fd, "wb") as out:
+            while left and (chunk := sys.stdin.buffer.read(min(CHUNK, left))):
+                out.write(chunk)
+                left -= len(chunk)
+        if left or sys.stdin.buffer.read(1):
+            raise Refused("the file did not arrive whole; send it again")
+        how = game["world"]["how"]
+        if how == "minecraft":
+            take_minecraft(game, upload, place)
+        elif how == "terraria":
+            take_terraria(upload, place)
+        else:
+            take_factorio(upload, place, title)
+        own(game, place)
+    except BaseException:
+        if place.exists():
+            shutil.rmtree(place)
+        raise
+    finally:
+        upload.unlink(missing_ok=True)
+    save_worlds(state)
+    return {"id": ident, **world_list(game, state)}
+
+
+def world(game: dict, args: list[str]) -> dict:
+    if "world" not in game or not args:
+        raise Refused("nb-game world: list, new, use, rename, delete, export, sent or receive")
+    command, rest = args[0], args[1:]
+    kick = "--kick" in rest
+    rest = [a for a in rest if a != "--kick"]
+    if command == "sent" and len(rest) == 1:
+        return world_sent(rest[0])
+    LOCK.touch()
+    with LOCK.open() as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as err:
+            raise Refused("another change to this server's worlds is still running; wait for it") from err
+        if command == "list" and not rest:
+            return world_list(game)
+        if command == "new" and rest:
+            return world_new(game, rest[0], rest[1:], kick)
+        if command == "use" and len(rest) == 1:
+            return world_use(game, rest[0], kick)
+        if command == "rename" and len(rest) == 2:
+            return world_rename(game, rest[0], rest[1])
+        if command == "delete" and len(rest) == 1:
+            return world_delete(game, rest[0])
+        if command == "export" and len(rest) == 1:
+            return world_export(game, rest[0])
+        if command == "receive" and len(rest) == 2 and rest[0].isdigit():
+            return world_receive(game, int(rest[0]), rest[1])
+    raise Refused("nb-game world: list, new, use, rename, delete, export, sent or receive")
+
+
+def report(game: dict) -> dict:
+    """What the page shows of this server, in one answer."""
+    try:
+        status = {"running": True, "players": players(game), "names": names(game)}
+    except NotAnswering as err:
+        status = {"running": False, "players": 0, "names": None, "why": str(err)}
+    out = {"game": game["name"], "version": game["version"], **status, "active": unit_active(game), "log": log(game)}
+    if "world" in game:
+        try:
+            out |= world_list(game)
+        except OSError as err:
+            out["worlds_error"] = str(err)
+    return out
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) < 2 or argv[1] not in ("status", "players", "wait", "console", "stop", "admins", "busy", "metrics"):
+    commands = ("status", "players", "wait", "console", "stop", "admins", "busy", "metrics", "report", "service", "world")
+    if len(argv) < 2 or argv[1] not in commands:
         print(__doc__.split("\n\n")[1], file=sys.stderr)
         return 2
     game = json.loads(CONFIG.read_text())
     command, args = argv[1], argv[2:]
+    if command == "world":
+        # One JSON line either way: the page reads it, not a person.
+        try:
+            print(json.dumps({"ok": True, **world(game, args)}))
+            return 0
+        except Refused as err:
+            print(json.dumps({"ok": False, "error": str(err), **err.more}))
+        except (NotAnswering, OSError) as err:
+            print(json.dumps({"ok": False, "error": str(err)}))
+        return 1
     try:
         if command == "players":
             print(players(game))
@@ -252,6 +974,12 @@ def main(argv: list[str]) -> int:
             sys.stdout.write("".join(line + "\n" for line in busy(game)))
         elif command == "metrics":
             metrics(game)
+        elif command == "report":
+            print(json.dumps(report(game)))
+        elif command == "service":
+            if args not in (["start"], ["stop"], ["restart"]):
+                raise NotAnswering("nb-game service: start, stop or restart")
+            service(game, args[0])
         else:
             try:
                 status = {"running": True, "players": players(game)}

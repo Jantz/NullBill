@@ -859,6 +859,32 @@ tr.detail > td { background: var(--bg-sub); padding: 14px 16px 16px 56px; }
 .kv .icon-btn { width: 28px; height: 28px; }
 .kv code.masked { letter-spacing: 2px; color: var(--text-3); }
 .svc-note { margin-top: 10px; color: var(--text-2); font-size: 12px; max-width: 80ch; }
+/* A game server as it runs: state, worlds, console. */
+.game-room { margin-top: 14px; max-width: 88ch; display: grid; gap: 8px; }
+.game-room h3 { margin: 8px 0 0; font-size: 12px; font-weight: 600; color: var(--text-2); }
+.game-room .feedback:empty { display: none; }
+.game-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.game-head .status { white-space: normal; }
+.world-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: var(--radius); }
+.world-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; padding: 8px 12px; }
+.world-list li + li { border-top: 1px solid var(--line); }
+.world-list li.active { background: var(--bg-sub); }
+.world-name { display: flex; align-items: baseline; gap: 4px 8px; flex-wrap: wrap; min-width: 0; flex: 1 1 220px; }
+.world-name .name { font-weight: 500; overflow-wrap: anywhere; }
+.world-name .sub { flex-basis: 100%; color: var(--text-3); font-size: 12px; }
+.world-name .badge { padding: 0 7px; border: 1px solid var(--line); border-radius: 9px; color: var(--good); font-size: 11px; font-weight: 500; line-height: 18px; white-space: nowrap; }
+.world-actions { flex-wrap: wrap; }
+.world-rename { flex: 1 1 100%; }
+.world-rename input { flex: 1 1 160px; max-width: 320px; }
+.btn.ghost.danger { background: transparent; border-color: transparent; color: var(--bad); }
+.btn.ghost.danger:hover { background: var(--bg-hover); filter: none; }
+.game-buttons { flex-wrap: wrap; }
+.game-form { padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-sub); display: grid; gap: 10px; }
+.game-form .help { margin: 0; }
+.game-form input[type=file] { max-width: 100%; font-size: 12px; }
+.game-log { margin: 0; max-height: 180px; overflow: auto; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg-sub); font-size: 12px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.console-form { display: flex; gap: 8px; }
+.console-form input { flex: 1 1 auto; min-width: 0; font-family: var(--mono, ui-monospace, monospace); font-size: 12px; }
 .svc-steps { margin-top: 14px; max-width: 88ch; }
 .svc-steps h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--text-2); }
 .steps-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; font-size: 13px; }

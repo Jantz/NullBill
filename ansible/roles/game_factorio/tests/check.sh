@@ -107,3 +107,60 @@ ansible-playbook -i localhost, -c local -e "@$tests/vars.json" -e "$here" -e '{"
   || { cat /tmp/space.log; fail "run with space_age"; }
 [ "$(mods)" = "base elevated-rails quality recycler space-age" ] || { cat /var/lib/factorio/mods/mod-list.json; fail "space_age true turns the expansion's mods on"; }
 pass "space_age true: the expansion's mods are on"
+
+# Worlds (docs/adr/0019-game-worlds.md), with a stand-in for systemctl
+# that starts and stops the real server as its unit does. What New map
+# takes (games.py's NEW_WORLD; a test keeps these lists equal to it), and
+# Wube's own list of presets names each the page offers:
+new_world="seed preset"
+presets="rich-resources marathon death-world death-world-marathon rail-world ribbon-world island"
+for preset in $presets; do
+  grep -Fq "[\"$preset\"] =" /opt/factorio/*/data/base/prototypes/map-gen-presets.lua || fail "the server has no map preset $preset"
+done
+pass "the server knows every map preset the page offers"
+ansible-playbook -i localhost, -c local -e "@$tests/vars.json" -e "$here" /ansible/game-factorio.yml >/tmp/base.log 2>&1 || { cat /tmp/base.log; fail "run without space_age"; }
+fake_systemctl factorio
+systemctl start factorio
+nb-game wait 120 || fail "the server answers again"
+world list
+world_is "[(x['id'], x['title'], x['active'], x['origin']) for x in w['worlds']] == [('w1', 'First world', True, 'setup')] and sorted(w['options']) == sorted('$new_world'.split())" \
+  || fail "the map the role made is the first"
+
+world new "Rails" seed=123456 preset=rail-world || { cat /tmp/world.json; tail -20 /tmp/factorio.log; fail "a new map"; }
+world_is "w['id'] == 'w2' and [(x['title'], x['active']) for x in w['worlds']] == [('First world', False), ('Rails', True)]" || fail "the new map runs"
+grep -q "Loading map /var/lib/factorio/saves/world.zip" /tmp/factorio.log || fail "the server loaded the new map"
+nb-game console "/seed"
+game_says factorio '^123456$' 15 || fail "the new map has the seed asked for"
+test -s /var/lib/factorio/kept-worlds/w1/nullbill.zip || fail "the first map is kept"
+if runuser -u game -- ls /var/lib/factorio/kept-worlds >/dev/null 2>&1; then fail "the server reads the maps that do not run"; fi
+pass "nb-game world new: the real server makes a map with the seed and preset asked for; the first map is kept, out of the server's reach"
+
+# A map Factorio cannot make: the one that ran runs again.
+if world new "Lava" preset=lava; then fail "made a map from a preset that does not exist"; fi
+world_is "'Rails runs again' in w['error'] and 'lava' in w['error']" || fail "says what Factorio said, and what runs"
+[ "$(nb-game players)" = 0 ] || fail "the server answers after a map that was not made"
+world list
+world_is "[(x['title'], x['active']) for x in w['worlds']] == [('First world', False), ('Rails', True)]" || fail "nothing is left of the map that was not made"
+pass "a map the server cannot make changes nothing: the earlier one runs again"
+
+# Out and in again: the running map is saved first, and what comes back is the file that went out.
+world export w2 || { cat /tmp/world.json; fail "export of the running map"; }
+out=$(python3 -c 'import json; print(json.load(open("/tmp/world.json"))["file"])')
+world_is "w['name'] == 'Rails.zip'" || fail "the export's name"
+python3 -c 'import sys, zipfile; assert "world/level.dat0" in zipfile.ZipFile(sys.argv[1]).namelist()' "$out" || fail "the export is a whole save"
+size=$(stat -c %s "$out")
+world receive "$size" "Came back" <"$out" || { cat /tmp/world.json; fail "upload of a save"; }
+world_is "w['id'] == 'w3' and w['worlds'][2]['origin'] == 'upload'" || fail "an upload joins the kept maps"
+cmp "$out" /var/lib/factorio/kept-worlds/w3/Came-back.zip || fail "the upload is kept as it came"
+world sent "$out"
+if head -c 4096 /dev/urandom | world receive 4096 "Not a save"; then fail "took noise for a save"; fi
+world use w3 || { cat /tmp/world.json; tail -20 /tmp/factorio.log; fail "running an uploaded map"; }
+grep -q "Loading map /var/lib/factorio/saves/Came-back.zip" /tmp/factorio.log || fail "the server loaded the uploaded map"
+world use w1 || fail "back to the first map"
+world delete w3 || fail "delete"
+pass "a map goes out as a file and comes back as it went; noise is refused; an uploaded map runs"
+
+ansible-playbook -i localhost, -c local -e "@$tests/vars.json" -e "$here" /ansible/game-factorio.yml >/tmp/fourth.log 2>&1 || { cat /tmp/fourth.log; fail "fourth run"; }
+grep -Eq 'localhost +: ok=[0-9]+ +changed=0 ' /tmp/fourth.log || { grep -B3 changed: /tmp/fourth.log; fail "the role changed something after the maps changed"; }
+systemctl stop factorio
+pass "the role leaves the maps alone"

@@ -14,6 +14,10 @@
     },
     "require_user_verification": true
   },
+  "game_factorio_new_world": {
+    "seed": "",
+    "preset": ""
+  },
   "game_factorio_space_age": false,
   "game_factorio_proxy": "http://10.42.2.10:3128",
   "game_factorio_rcon_port": 27015

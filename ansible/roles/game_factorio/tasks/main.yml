@@ -97,6 +97,15 @@
   changed_when: game_factorio_mods.stdout == "changed"
   notify: Restart factorio
 
+# Only for a server without a save: the server loads the newest file, and
+# a map made here later would take the place of the one the owner runs
+# (a save they uploaded has a name of its own).
+- name: Saves there are
+  ansible.builtin.find:
+    paths: /var/lib/factorio/saves
+    patterns: ["*.zip"]
+  register: game_factorio_saves
+
 - name: A first map
   ansible.builtin.command:
     argv:
@@ -110,7 +119,7 @@
       - --create
       - /var/lib/factorio/saves/nullbill.zip
     chdir: /var/lib/factorio
-    creates: /var/lib/factorio/saves/nullbill.zip
+  when: game_factorio_saves.matched == 0
 
 - name: Start script
   ansible.builtin.template:
@@ -127,7 +136,10 @@
       {{ {"name": "factorio", "title": "Factorio", "version": game_factorio_version, "port": game_factorio_port | int,
       "console": "/run/factorio/console", "admins": "/var/lib/factorio/server-adminlist.json",
       "players": {"how": "rcon", "port": game_factorio_rcon_port | int, "password_file": "/etc/factorio/rcon-password",
-      "command": "/players online count", "pattern": "players [(]([0-9]+)[)]"}} | to_nice_json }}
+      "command": "/players online count", "pattern": "players [(]([0-9]+)[)]",
+      "names": "/players online", "names_pattern": "^ +(.+) [(]online[)]$"}, "unit": "factorio", "log_skip": "New RCON connection",
+      "world": {"how": "factorio", "home": "/var/lib/factorio", "dir": "saves", "options": game_factorio_new_world,
+      "binary": "/opt/factorio/" ~ game_factorio_version ~ "/bin/x64/factorio", "config": "/etc/factorio/config.ini"}} | to_nice_json }}
 
 - name: Server unit
   ansible.builtin.template:

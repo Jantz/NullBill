@@ -129,8 +129,8 @@ TEXT = {
             "Its memory is for a small world and a few players; Memory in its settings gives it more."
         ),
         "off": (
-            "Deletes the server with its world, every player's inventory and its settings. "
-            "docs/runbooks/games.md says how to copy the world out first."
+            "Deletes the server with every world in its list, every player's inventory and its settings. "
+            "Download a world first from the server's row on the Services page."
         ),
     },
     "terraria": {
@@ -142,8 +142,8 @@ TEXT = {
             "The address is on the Services page; under Access, People, tick it for each friend who may join."
         ),
         "off": (
-            "Deletes the server with its world. Characters stay with their players. "
-            "docs/runbooks/games.md says how to copy the world out first."
+            "Deletes the server with every world in its list. Characters stay with their players. "
+            "Download a world first from the server's row on the Services page."
         ),
     },
     "factorio": {
@@ -154,7 +154,7 @@ TEXT = {
             "Setup installs Wube's own server in a container of its own and makes a new map of the base game. "
             "The address is on the Services page; under Access, People, tick it for each friend who may join."
         ),
-        "off": "Deletes the server with its map and every save. docs/runbooks/games.md says how to copy the saves out first.",
+        "off": "Deletes the server with every map in its list. Download a map first from the server's row on the Services page.",
     },
     BACKUPS: {
         "title": "Nightly backups",

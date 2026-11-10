@@ -92,3 +92,108 @@ test ! -e "/proc/$pid" || fail "the server is still running after nb-game stop"
 nb-game metrics
 grep -qx 'nb_game_up{game="terraria"} 0' /var/lib/prometheus/node-exporter/nullbill-game.prom || fail "nb_game_up 0 once stopped"
 pass "nb-game stop has the server save its world and exit; metrics then say it is down"
+
+# Worlds (docs/adr/0019-game-worlds.md), with a stand-in for systemctl
+# that starts and stops the real server as its unit does. What New world
+# takes (games.py's NEW_WORLD; a test keeps this list equal to it):
+new_world="autocreate difficulty seed"
+fake_systemctl terraria
+systemctl start terraria
+nb-game wait 300 || fail "the server answers again"
+world list
+world_is "[(x['id'], x['title'], x['active'], x['origin']) for x in w['worlds']] == [('w1', 'First world', True, 'setup')] and sorted(w['options']) == sorted('$new_world'.split())" \
+  || fail "the world the role's server made is the first"
+
+# What a .wld says of itself: its name, seed, width and mode.
+wld() {
+  python3 - "$1" <<'PY'
+import struct
+import sys
+
+data = open(sys.argv[1], "rb").read()
+at = struct.unpack_from("<i", data, 26)[0]
+
+
+def text():
+    global at
+    size = shift = 0
+    while True:
+        byte = data[at]
+        at += 1
+        size |= (byte & 0x7F) << shift
+        shift += 7
+        if not byte & 0x80:
+            break
+    at += size
+    return data[at - size : at].decode()
+
+
+name, seed = text(), text()
+at += 8 + 16 + 4 + 16
+height, width, mode = struct.unpack_from("<iii", data, at)
+print(f"{name}|{seed}|{width}|{mode}")
+PY
+}
+# The first world: small and Classic, as tests/vars.json's settings say, with a seed of the server's own.
+first_says=$(wld /var/lib/terraria/worlds/world.wld)
+[[ $first_says == "Fixture|"*"|4200|0" ]] || { echo "$first_says"; fail "reading the first world's header"; }
+
+world new "Expert run" difficulty=1 seed=nullbill autocreate=1 || { cat /tmp/world.json; tail -20 /tmp/terraria.log; fail "a new world"; }
+world_is "w['id'] == 'w2' and [(x['title'], x['active']) for x in w['worlds']] == [('First world', False), ('Expert run', True)]" || fail "the new world runs"
+[ "$(nb-game players)" = 0 ] || fail "the server answers with the new world"
+[ "$(wld /var/lib/terraria/worlds/world.wld)" = "Expert run|nullbill|4200|1" ] || { wld /var/lib/terraria/worlds/world.wld; fail "the new world has the name, seed, size and difficulty asked for"; }
+# The server saved it once more as it stopped; it is the same world.
+[ "$(wld /var/lib/terraria/kept-worlds/w1/world.wld)" = "$first_says" ] || fail "the first world is kept"
+test ! -e /etc/terraria/new-world.txt || fail "the new world's config is gone once it is made"
+[ "$(stat -c '%U:%G %a' /var/lib/terraria/kept-worlds)" = "root:root 700" ] || fail "kept worlds are root's"
+if runuser -u game -- ls /var/lib/terraria/kept-worlds >/dev/null 2>&1; then fail "the server reads the worlds that do not run"; fi
+pass "nb-game world new: the real server makes an Expert world with the seed asked for; the first world is kept, out of the server's reach"
+
+if world new "Sideways" worldpath=/etc; then fail "an option the game does not take"; fi
+world_is "not w['ok'] and 'is not something a new world of this game takes' in w['error']" || fail "says which options it takes"
+if world delete w2; then fail "deleted the world that runs"; fi
+[ "$(pidof TerrariaServer.bin.x86_64)" ] || fail "a refusal leaves the server running"
+pass "what is asked wrongly is refused, and the server keeps running"
+
+# A player in the game: nothing changes unless the caller says to disconnect them.
+python3 -c 'import socket, time; s = socket.create_connection(("127.0.0.1", 7777)); time.sleep(6)' &
+player=$!
+sleep 2
+if world use w1; then fail "changed the world under a player"; fi
+world_is "w == {'ok': False, 'error': '1 player is in Terraria and would be disconnected', 'players': 1}" || fail "says who is in the way"
+wait "$player"
+sleep 1
+world use w1 || { cat /tmp/world.json; fail "back to the first world"; }
+world_is "[x['active'] for x in w['worlds']] == [True, False]" || fail "the first world runs again"
+[ "$(wld /var/lib/terraria/worlds/world.wld)" = "$first_says" ] || fail "the first world is the one that was set aside"
+pass "a player in the game stops a change; once they left, the first world runs again"
+
+# Out and in again: the running world is saved first, and what comes back is the file that went out.
+world export w1 || { cat /tmp/world.json; fail "export of the running world"; }
+out=$(python3 -c 'import json; print(json.load(open("/tmp/world.json"))["file"])')
+world_is "w['name'] == 'First-world.wld' and w['bytes'] > 1000000" || fail "the export's name and size"
+[ "$(stat -c '%U %a' "$out")" = "root 600" ] || fail "the file waiting for the page is root's alone"
+size=$(stat -c %s "$out")
+world receive "$size" "Came back" <"$out" || { cat /tmp/world.json; fail "upload of a world"; }
+world_is "w['id'] == 'w3' and w['worlds'][2]['origin'] == 'upload' and not w['worlds'][2]['active']" || fail "an upload joins the kept worlds"
+cmp "$out" /var/lib/terraria/kept-worlds/w3/world.wld || fail "the upload is kept as it came"
+world sent "$out"
+test ! -e "$out" || fail "the sent file is removed"
+if head -c 4096 /dev/urandom | world receive 4096 "Not a world"; then fail "took noise for a world"; fi
+world_is "'that is not a Terraria world' in w['error']" || fail "says what a world file is"
+world use w3 || { cat /tmp/world.json; fail "running an uploaded world"; }
+[ "$(nb-game players)" = 0 ] || fail "the server answers with the uploaded world"
+world use w1 || fail "and back"
+world rename w3 "Renamed" || fail "rename"
+world delete w3 || fail "delete"
+world_is "w['deleted'] == 'Renamed' and [x['id'] for x in w['worlds']] == ['w1', 'w2']" || fail "deleted one world"
+test ! -e /var/lib/terraria/kept-worlds/w3 || fail "the deleted world's files are gone"
+pass "a world goes out as a file and comes back as it went; noise is refused; an uploaded world runs"
+
+nb-game report >/tmp/world.json
+world_is "w['running'] and w['active'] and w['players'] == 0 and len(w['worlds']) == 2 and any('Server started' in line for line in w['log'])" \
+  || fail "nb-game report"
+ansible-playbook -i localhost, -c local -e "@$tests/vars.json" -e "$here" /ansible/game-terraria.yml >/tmp/fourth.log 2>&1 || { cat /tmp/fourth.log; fail "fourth run"; }
+grep -Eq 'localhost +: ok=[0-9]+ +changed=0 ' /tmp/fourth.log || { grep -B3 changed: /tmp/fourth.log; fail "the role changed something after the worlds changed"; }
+systemctl stop terraria
+pass "nb-game report says what the page shows; the role leaves the worlds alone"

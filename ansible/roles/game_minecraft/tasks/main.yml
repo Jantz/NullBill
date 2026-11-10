@@ -84,10 +84,20 @@
     dest: /usr/local/sbin/nb-properties
     mode: "0755"
 
+# What shapes a world (its seed, hardcore) is the world's once it is made:
+# the page's New world sets those for the world it makes (nb-game world
+# new), and config.yaml's count only while the server has no world yet.
+- name: Whether the server has a world
+  ansible.builtin.stat:
+    path: /var/lib/minecraft/world/level.dat
+  register: game_minecraft_world
+
 - name: Settings
   ansible.builtin.command:
     cmd: /usr/local/sbin/nb-properties /var/lib/minecraft/server.properties
-    stdin: "{{ game_minecraft_settings | to_json }}"
+    stdin: >-
+      {{ (game_minecraft_settings | dict2items | rejectattr('key', 'in', game_minecraft_new_world if game_minecraft_world.stat.exists else [])
+      | items2dict) | to_json }}
   register: game_minecraft_properties
   changed_when: game_minecraft_properties.stdout == "changed"
   notify: Restart minecraft
@@ -132,7 +142,10 @@
     content: >-
       {{ {"name": "minecraft", "title": "Minecraft", "version": game_minecraft_version, "port": game_minecraft_port | int,
       "console": "/run/minecraft/console", "players": {"how": "minecraft"}, "stop": "stop",
-      "admins": "/var/lib/minecraft/ops.json"} | to_nice_json }}
+      "admins": "/var/lib/minecraft/ops.json", "unit": "minecraft",
+      "world": {"how": "minecraft", "home": "/var/lib/minecraft", "dir": "world", "options": game_minecraft_new_world,
+      "properties": "/var/lib/minecraft/server.properties", "set_properties": "/usr/local/sbin/nb-properties",
+      "jar": "/opt/minecraft/server-" ~ game_minecraft_version ~ ".jar", "log": "/var/lib/minecraft/logs/latest.log"}} | to_nice_json }}
 
 - name: Tunnel unit
   ansible.builtin.template:

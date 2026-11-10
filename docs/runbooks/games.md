@@ -178,106 +178,84 @@ power:
   minecraft-creative-world: {run: on-demand}
 ```
 
-## 5. The server's console
+## 5. Who plays, the log and the console
 
-Each server takes its own commands on its console. In Proxmox, select the
-node, open **Shell**, and type the line after `nb-game console`:
-
-```
-pct exec 2025 -- nb-game console say Back in ten minutes
-pct exec 2025 -- nb-game console whitelist add SomePlayer
-pct exec 2026 -- nb-game console kick SomePlayer
-pct exec 2027 -- nb-game console /ban SomePlayer
-```
-
-The answer is in the server's log:
+Open the game's row on the **Services** page. It shows whether the server
+answers, how many play (by name for Minecraft and Factorio), the end of
+the server's log, and a box that types one line on its console:
 
 ```
-pct exec 2025 -- journalctl -u minecraft -n 30
+say Back in ten minutes
+whitelist add SomePlayer
+kick SomePlayer
+/ban SomePlayer
 ```
 
-(`-u terraria` in 2026, `-u factorio` in 2027. A further server of a game
-has a number of its own, shown with its console line on the **Services**
-page, and the game's unit name.) Two more questions the
-same tool answers: `pct exec 2025 -- nb-game status` (version, whether it
-answers, how many players) and `nb-game admins`.
+The server's answer shows in the log above the box. **Restart** stops the
+server, which saves first, and starts it again; players are disconnected
+for a moment.
 
 Admins you name on the page are added at each setup run. NullBill never
 takes one away; do that on the console (`deop NAME`, `/demote NAME`).
 
-## 6. Worlds: where they are, copying them out and in
+A server that is **Off, on demand** shows nothing here until you press
+**Start** on its row.
 
-Every world is in its container, which the nightly backup covers once you
-have a backup disk ([restore-guest.md](restore-guest.md) brings a whole
-guest back). **Unticking a game deletes its container and its world** with
-the next setup run; the page asks first. To keep a world, copy it out
-before.
+## 6. Worlds
 
-| Game | The world, in its guest |
-|---|---|
-| Minecraft | the folder `/var/lib/minecraft/world` |
-| Terraria | the file `/var/lib/terraria/worlds/world.wld` |
-| Factorio | the newest `.zip` in `/var/lib/factorio/saves` (the server autosaves there) |
+A server keeps a list of worlds (Factorio: maps) and runs one of them.
+The list is in the game's row on the **Services** page. Why it works this
+way: [ADR 0019](../adr/0019-game-worlds.md).
 
-**Copy a world out** (Proxmox **Shell**; Minecraft shown). Stopping the
-server saves the world first.
+- **New world** asks for a name and what the game takes when it makes
+  one, then makes it and runs it:
 
-```
-pct exec 2025 -- systemctl stop minecraft
-pct exec 2025 -- tar -C /var/lib/minecraft -czf /root/world.tar.gz world
-pct pull 2025 /root/world.tar.gz /root/minecraft-world.tar.gz
-pct exec 2025 -- systemctl start minecraft
-```
+  | Game | What you choose |
+  |---|---|
+  | Minecraft | seed, world type (normal, flat, large biomes, amplified), hardcore, structures |
+  | Terraria | size, difficulty (Classic, Expert, Master, Journey), seed |
+  | Factorio | seed, map preset (rich resources, marathon, death world, rail world, ribbon world, island) |
 
-The file is then on the Proxmox host; fetch it to your computer with
-`scp root@pve.nullbill.internal:/root/minecraft-world.tar.gz .` For
-Terraria pull `/var/lib/terraria/worlds/world.wld` from 2026 the same way,
-for Factorio a save from `/var/lib/factorio/saves` in 2027, each with its
-server stopped (`systemctl stop terraria`, `factorio`).
+  The world that ran is kept in the list. A large Terraria world takes a
+  few minutes to make.
+- **Run this one** stops the server, sets the running world aside and
+  starts the server with the one you picked.
+- **Download** gives you the world as a file: Minecraft a `.zip` of the
+  world's folder, Terraria the `.wld`, Factorio the save `.zip`. A running
+  server writes its world out first.
+- **Upload a world** takes the same kinds of file from your computer: a
+  `.zip` of a Minecraft world's folder (the one that holds `level.dat`,
+  from `.minecraft/saves` or another server), a Terraria `.wld` (from
+  `Documents/My Games/Terraria/Worlds`), a Factorio save `.zip` as it is.
+  It joins the list and runs once you press **Run this one**. The server
+  checks the file first; a Minecraft world from a newer Minecraft than
+  the server's is refused, an older one is upgraded when it runs. A
+  Factorio save made with Space Age needs `space_age` on (section 3).
+- **Rename** changes the name in the list. **Delete** removes a world
+  that does not run, for good, after asking. Nothing else removes one.
 
-**Put a world in.** A world from another server or from your own game
-works if it is of the same or an older version of the game. Copy it to the
-Proxmox host first (`scp`), then:
+If someone is playing, anything that stops the server asks first and says
+how many would be disconnected. If the server does not come up with the
+world you picked, the one that ran before runs again and the page shows
+the server's last lines.
 
-- Minecraft, from a `world.tar.gz` that holds one folder named `world`:
+Worlds that do not run use the server's disk; the row says how much is
+free. A server keeps at most 24.
 
-  ```
-  pct push 2025 /root/world.tar.gz /root/world.tar.gz
-  pct exec 2025 -- systemctl stop minecraft
-  pct exec 2025 -- sh -c 'rm -rf /var/lib/minecraft/world && tar -C /var/lib/minecraft -xzf /root/world.tar.gz && chown -R game:game /var/lib/minecraft/world'
-  pct exec 2025 -- systemctl start minecraft
-  ```
+The settings that only count when a world is made (Terraria's world
+name, size, difficulty and seed; Minecraft's seed and hardcore, section
+3) shape the server's first world. For any later one, use **New world**.
 
-- Terraria, from a `.wld` file:
+Every world, kept ones included, is in the server's container, which the
+nightly backup covers once you have a backup disk
+([restore-guest.md](restore-guest.md) brings a whole guest back).
+**Unticking a game deletes its container with every world in the list**
+at the next setup run; the page asks first. Download what you want to
+keep before.
 
-  ```
-  pct exec 2026 -- systemctl stop terraria
-  pct push 2026 /root/MyWorld.wld /var/lib/terraria/worlds/world.wld
-  pct exec 2026 -- chown game:game /var/lib/terraria/worlds/world.wld
-  pct exec 2026 -- systemctl start terraria
-  ```
-
-- Factorio, from a save `.zip` (the server loads the newest file, so this
-  one must be the newest; set `space_age` to match the save first):
-
-  ```
-  pct exec 2027 -- systemctl stop factorio
-  pct push 2027 /root/MyFactory.zip /var/lib/factorio/saves/MyFactory.zip
-  pct exec 2027 -- sh -c 'chown game:game /var/lib/factorio/saves/MyFactory.zip && touch /var/lib/factorio/saves/MyFactory.zip'
-  pct exec 2027 -- systemctl start factorio
-  ```
-
-**Start over with a new world.** Stop the server, remove the world, start
-it: Minecraft and Terraria make a new one at the start.
-
-```
-pct exec 2025 -- systemctl stop minecraft
-pct exec 2025 -- rm -rf /var/lib/minecraft/world
-pct exec 2025 -- systemctl start minecraft
-```
-
-For Factorio, make the map you want in your own game (its map generator
-has every option) and put that save in, as above.
+The agent on the page does the same when asked ("make a new Expert world
+on Terraria"): it asks you before it changes worlds, and asks for a typed
+word before it deletes one or disconnects players.
 
 ## When a game updates
 
@@ -319,15 +297,18 @@ out first if you are not sure.
   tick **I agree to the Minecraft EULA** beside Minecraft, or untick
   Minecraft.
 - **"did not answer within 600 s"**: the server was installed but did not
-  come up. Its log says why: `pct exec 2025 -- journalctl -u minecraft -n
-  50`. Run setup again afterwards.
+  come up. The end of its log, in its row on the **Services** page, says
+  why (`pct exec 2025 -- journalctl -u minecraft -n 50` in Proxmox's
+  shell shows more). Run setup again afterwards.
 - **"did not make NAME an admin"**: the name is not a player the game's
   maker knows. Spell it as the game shows it.
 - **A friend cannot connect.** Check, in this order: that the game is not
   **Off, on demand** on the **Services** page (press **Start**); their
   game's version against that page; that their Tailscale is on and
   **People** shows their device connected; that the game is ticked for
-  them. Then `pct exec 2025 -- nb-game status` on the server.
+  them. Then the game's row on **Services**: whether it says **Running**.
+- **A game's row says the guest did not answer**, right after **Update
+  NullBill**: the server still has the tools from before. Run setup.
 - **Minecraft turns everyone away as they join**, you included: the
   server cannot ask Mojang who they are. **Run the checks** names which of
   Mojang's services does not answer through the proxy.

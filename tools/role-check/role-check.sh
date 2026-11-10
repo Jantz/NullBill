@@ -68,6 +68,49 @@ start_game() {
     HOME="/var/lib/$name" "/opt/$name/start" >>"/tmp/$name.log" 2>&1 &)
 }
 
+# No systemd in the container: a systemctl for a game's unit ($1) that
+# starts the server as start_game does and stops it as the unit's ExecStop
+# or SIGTERM would, so nb-game's world commands run the real server. The
+# server's output stays in /tmp/$1.log, and journalctl prints its end.
+fake_systemctl() {
+  local name=$1
+  cat >/usr/local/sbin/systemctl <<FAKE
+#!/usr/bin/env bash
+source /usr/local/lib/role-check.sh
+unit=\${!#}
+[ "\$unit" = $name ] || { echo "systemctl stand-in: only $name, not \$unit" >&2; exit 1; }
+pid=\$(pidof -s java TerrariaServer.bin.x86_64 factorio || true)
+case \$1 in
+  # exec: nothing of the server holds on to the caller's output.
+  start) [ -n "\$pid" ] || { exec >/dev/null 2>&1 </dev/null; start_game $name; } ;;
+  stop)
+    [ -n "\$pid" ] || exit 0
+    if grep -q '"stop"' /etc/nullbill/game.json; then nb-game stop "\$pid"; else kill -TERM "\$pid"; fi
+    for _ in \$(seq 120); do [ -e "/proc/\$pid" ] || exit 0; sleep 0.5; done
+    kill -KILL "\$pid" ;;
+  restart) "\$0" stop $name && "\$0" start $name ;;
+  is-active) [ -n "\$pid" ] ;;
+  show) echo 0 ;;
+  *) exit 1 ;;
+esac
+FAKE
+  cat >/usr/local/sbin/journalctl <<FAKE
+#!/bin/sh
+tail -n 240 /tmp/$name.log
+FAKE
+  chmod 0755 /usr/local/sbin/systemctl /usr/local/sbin/journalctl
+}
+
+# `nb-game world ...`: its one line of JSON is kept in /tmp/world.json, and
+# world_is holds a Python expression about it (w).
+world() {
+  nb-game world "$@" >/tmp/world.json
+}
+
+world_is() {
+  python3 -c 'import json, sys; w = json.load(open("/tmp/world.json")); sys.exit(0 if eval(sys.argv[1]) else repr(w))' "$1"
+}
+
 # The line $2 in a game's output, within $3 seconds (default 60).
 game_says() {
   local name=$1 line=$2

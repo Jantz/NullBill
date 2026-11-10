@@ -198,6 +198,12 @@ answered items move to the decisions list at the bottom.
   game server's settings are on the page (owner asked, 2026-11-10: "multiple
   Minecraft servers with customizations"; design by Claude,
   docs/adr/0016-more-game-servers.md). Not built: mods and plugin servers.
+- Worlds per game server: a list on the Services page, new world with
+  the game's own options, run a kept one, upload, download, rename,
+  delete; console, log and who plays in the same row; the agent has tools
+  for it (owner asked, 2026-11-10: "a game server save/world feature";
+  design by Claude, docs/adr/0019-game-worlds.md). Not tried on real
+  hardware: large files through `pct exec`.
 - Direct connections from mobile data: built, on by default, with a
   switch on the page (owner asked, 2026-11-09; design by Claude,
   docs/adr/0014-direct-connections.md; question 16 stays open for the

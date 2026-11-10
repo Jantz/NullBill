@@ -168,6 +168,10 @@ Rules:
   owner's to agree to, once: beside Minecraft under Setup, What to run, or on the card set_choices makes for it.
   remove_game_server forgets a further server that is off and whose guest setup has deleted. Never write a game
   NullBill has built in as a service of the owner's own.
+- A game server runs one world (Factorio: map) and keeps others beside it. game_server shows them; game_world makes a
+  new one with the game's own options (difficulty, size, seed), runs a kept one, renames or deletes one. A new world
+  never needs the server unticked or a file removed by hand, and nothing but delete removes a world. game_command
+  restarts a server or types on its console. Use these, not pct exec. World files go up and down on the Services page.
 - A guest that runs on demand and is off (status, on_demand) is off on purpose, not broken. Start and stop one with
   the on_demand tool, never with pct or qm: nb-power counts the memory. Whether it runs on demand at all is the
   owner's choice, under Setup, What to run (set_choices, power).
@@ -1156,6 +1160,9 @@ def tool_label(name: str, args: dict) -> str:
         "read_service": f"Read your own service {args.get('name', '')}",
         "add_service": f"Your own service {args.get('name', '')}: add or change",
         "remove_service": f"Your own service {args.get('name', '')}: remove",
+        "game_server": f"Looked at the game server {args.get('name', '')}",
+        "game_world": f"World of {args.get('name', '')}: {args.get('action', '')} {args.get('title') or args.get('id') or ''}",
+        "game_command": f"{args.get('name', '')}: {args.get('action', '')} {args.get('line', '')}",
         "add_game_server": f"Add the game server {args.get('title', '')}",
         "remove_game_server": f"Remove the game server {args.get('name', '')}",
         "ask_owner": "Asked you a question",
@@ -2043,6 +2050,85 @@ class Tools:
         self.chat.ask(str(question)[:1500], options)
         return "The owner sees your question. End your turn now; their answer arrives as your next message."
 
+    def t_game_server(self, name: str) -> str:
+        """A game server as it runs: players, log, worlds."""
+        view = self.app.game_view(str(name), fresh=True)
+        keys = ("name", "title", "kind", "running", "players", "names", "why", "acting", "worlds", "free_bytes")
+        out = {k: view[k] for k in keys if view.get(k) is not None}
+        out["new_world_takes"] = [
+            {"option": o["key"], "what": o["label"], **({"one_of": [c[0] for c in o["choices"]]} if "choices" in o else {})}
+            for o in view["new_world"]
+        ]
+        out["log"] = (view.get("log") or [])[-30:]
+        return yaml.safe_dump(out, sort_keys=False, width=200, allow_unicode=True)
+
+    def t_game_world(
+        self, name: str, action: str, id: str = "", title: str = "", options: dict | None = None, kick: bool = False, why: str = ""
+    ) -> str:
+        """Make a new world on a game server, run a kept one, rename or
+        delete one. Nothing but delete removes a world."""
+        from nullbill.web import gameroom
+
+        name, action = str(name), str(action)
+        if action not in ("new", "use", "rename", "delete"):
+            raise NullBillError("action is new, use, rename or delete")
+        body = {"action": action, "id": str(id), "title": str(title), "options": options, "kick": bool(kick)}
+        view = self.app.game_view(name, fresh=True)
+        if not view["live"]:
+            raise NullBillError(f"{view['title']} does not answer: {view['why']}")
+        model = build_model(self.app.config() or {})
+        gameroom.arguments(model, name, body)
+        worlds = {w["id"]: w for w in view["worlds"]}
+        if action != "new" and body["id"] not in worlds:
+            raise NullBillError(f"{view['title']} has no {view['word']} {body['id']!r}; game_server lists them by id")
+        running = next((w["title"] for w in view["worlds"] if w["active"]), None)
+        named = body["title"] if action == "new" else worlds[body["id"]]["title"]
+        lines, verdict = [], gate.change(f"changes which {view['word']} a game server runs; none is deleted")
+        if action in ("new", "use"):
+            lines.append(f"{view['title']} stops for a moment and starts with {named}")
+            if running:
+                lines.append(f"{running} is kept in the server's list, not deleted")
+            if action == "new" and options:
+                lines.append("Options: " + ", ".join(f"{k} {v}" for k, v in options.items()))
+            if kick:
+                lines.append("Players who are connected are disconnected")
+                verdict = gate.risky("disconnects the players who are in the game", "disconnect")
+        if action == "rename":
+            lines.append(f"{named} is called {body['title']} from now on")
+            verdict = gate.change("renames a world in the server's list")
+        if action == "delete":
+            lines.append(f"{named} and everything built in it is gone for good; the page's Download saves a copy first")
+            verdict = gate.risky(f"deletes a {view['word']} for good", "delete")
+        titles = {
+            "new": f"New {view['word']} {named} on",
+            "use": f"Run {named} on",
+            "rename": f"Rename {named} on",
+            "delete": f"Delete {named} from",
+        }
+        return self.gated(
+            {"act": "game_act", "server": name, "body": body, "lines": lines}, verdict, why, f"{titles[action]} {view['title']}"
+        )
+
+    def t_game_command(self, name: str, action: str, line: str = "", why: str = "") -> str:
+        """Restart a game server, or type a line on its console."""
+        from nullbill.web import gameroom
+
+        name, action = str(name), str(action)
+        if action not in ("restart", "console"):
+            raise NullBillError("action is restart or console")
+        body = {"action": action, "line": str(line)}
+        model = build_model(self.app.config() or {})
+        if name not in model["games"]:
+            raise NullBillError(f"no game server {name[:40]!r}; what_to_run names them")
+        gameroom.arguments(model, name, body)
+        title = model["games"][name]["title"]
+        if action == "restart":
+            verdict = gate.change("restarts a game server; players are disconnected for a moment")
+            return self.gated({"act": "game_act", "server": name, "body": body, "lines": []}, verdict, why, f"Restart {title}")
+        verdict = gate.change("types a command on a game server's console, as its admin")
+        action_ = {"act": "game_act", "server": name, "body": body, "lines": [f"On {title}'s console: {body['line'].strip()}"]}
+        return self.gated(action_, verdict, why, f"Type on {title}'s console")
+
     def gated(self, action: dict, verdict: gate.Verdict, why: str, title: str) -> str:
         mode = self.chat.settings()["mode"]
         record = {"what": title, "tier": verdict.tier, "mode": mode} | {
@@ -2085,6 +2171,8 @@ class Tools:
             return action["service"] in guests
         if kind == "power":
             return action["name"] in guests
+        if kind == "game_act":
+            return action["server"] in guests
         return False
 
     def execute(self, action: dict, by: str) -> str:
@@ -2166,6 +2254,8 @@ class Tools:
             return f"removed {self.app.forget_game(action['server'])} from the choices"
         if kind == "power":
             return self.power(action["body"])
+        if kind == "game_act":
+            return self.game_act(action["server"], action["body"])
         if kind == "person":
             saved = self.app.save_person(action["body"])
             invite = "Access, People has the words to send them; the invitation itself is the owner's to send from Tailscale."
@@ -2225,6 +2315,25 @@ class Tools:
             "one short sentence that says so. You may work inside the guest without asking until the task ends.",
             "The setup run has started. The agent goes on when it ends.",
         )
+
+    def game_act(self, name: str, body: dict) -> str:
+        """A change to a game server; one that would disconnect players
+        changes nothing unless it came with kick."""
+        result = self.app.game_act(name, body, by="the agent")
+        if not result["ok"]:
+            count = result["players"]
+            said = f"{count} {'player is' if count == 1 else 'players are'} in {result['title']}, so nothing changed."
+            return Told(f"{said} Ask the owner (ask_owner); with their yes, send it again with kick=true.", said)
+        view = result["view"]
+        if body["action"] == "console":
+            # The server answers in its log a moment later.
+            time.sleep(1.5)
+            log = self.app.game_view(name, fresh=True).get("log") or []
+            return Told("typed it; the end of the server's log:\n" + "\n".join(log[-8:]), "Typed.")
+        if body["action"] == "restart":
+            return f"restarted {view['title']}; running: {view.get('running')}"
+        worlds = ", ".join(f"{w['title']} ({w['id']}{', runs now' if w['active'] else ''})" for w in view.get("worlds") or [])
+        return f"done; {view['title']} now has: {worlds}"
 
     def power(self, body: dict) -> str:
         """Start, stop or keep on; a start that does not fit and a stop of
