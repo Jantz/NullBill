@@ -251,6 +251,46 @@ tests:
         exp_alerts:
           - exp_labels: {severity: page, instance: "pve:9100", pool: linux-runner}
             exp_annotations: {summary: "the linux-runner CI image is over 14 days old and its re-bake keeps failing; run setup and read the ci stage"}
+  # The download client: a restart is not down, a pause and a lost tunnel
+  # warn, and a nearly full kept disk at /downloads is the owner's
+  # business, as it is at the file share.
+  - interval: 1m
+    input_series:
+      - series: 'nb_torrents_up{job="node",instance="qbittorrent:9100"}'
+        values: "1x5 0x8 1x5 0x30"
+      - series: 'nb_torrents_paused_for_space{job="node",instance="qbittorrent:9100"}'
+        values: "0x10 1x40"
+      - series: 'nb_torrents_tunnel_up{job="node",instance="qbittorrent:9100"}'
+        values: "1x10 0x40"
+      - series: 'node_filesystem_avail_bytes{instance="qbittorrent:9100",mountpoint="/downloads",fstype="fuseblk"}'
+        values: "5x50"
+      - series: 'node_filesystem_size_bytes{instance="qbittorrent:9100",mountpoint="/downloads",fstype="fuseblk"}'
+        values: "100x50"
+    alert_rule_test:
+      - eval_time: 13m
+        alertname: DownloadClientDown
+        exp_alerts: []
+      - eval_time: 32m
+        alertname: DownloadClientDown
+        exp_alerts:
+          - exp_labels: {severity: page, job: node, instance: "qbittorrent:9100"}
+            exp_annotations: {summary: "the download client on qbittorrent:9100 does not answer; read journalctl -u qbittorrent in that guest, and nb-torrents tunnel status when downloads go through a VPN"}
+      - eval_time: 20m
+        alertname: DownloadsPausedDiskFull
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: DownloadsPausedDiskFull
+        exp_alerts:
+          - exp_labels: {severity: warn, job: node, instance: "qbittorrent:9100"}
+            exp_annotations: {summary: "downloads are paused, because the kept disk has less room than you keep free; delete or move files, or lower the room to keep free under Setup, What to run, and they go on by themselves"}
+      - eval_time: 30m
+        alertname: DownloadTunnelDown
+        exp_alerts:
+          - exp_labels: {severity: warn, job: node, instance: "qbittorrent:9100"}
+            exp_annotations: {summary: "the download client's VPN does not answer, so it sends and downloads nothing; check your VPN account, or paste a new WireGuard file under Setup, What to run"}
+      - eval_time: 40m
+        alertname: DiskAlmostFull
+        exp_alerts: []
   # A server that is starting (a new world takes minutes) is not down yet.
   - interval: 1m
     input_series:

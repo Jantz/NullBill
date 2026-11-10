@@ -30,6 +30,7 @@ STAGES = [
     "inference",
     "files",
     "media",
+    "torrents",
     "games",
     "ci",
     "agents",
@@ -526,6 +527,13 @@ TOOLS = [
                     "type": "object",
                     "description": "When a workload runs, by its name: run (always or on-demand), stop (auto, ask or "
                     "manual) and idle_minutes (5 to 10080).",
+                },
+                "torrents": {
+                    "type": "object",
+                    "description": "The download client (workload torrents): share (the kept disk downloads go to), folder, "
+                    "keep_free_gib (downloads pause below it) and route (vpn or home: whose address others in a download "
+                    "see, so it always waits for the owner; never choose it for them). The VPN's WireGuard file holds a "
+                    "key and is pasted by the owner on the page, never given here.",
                 },
                 "why": WHY,
             },

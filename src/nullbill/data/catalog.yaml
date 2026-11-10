@@ -84,6 +84,15 @@ zones:
     index: 9
     description: Services of the owner's own, which NullBill has no role for.
     egress: proxy
+  # The download client's swarm traffic cannot go through a proxy that
+  # lists names: it talks to whoever else holds a file, on any port. With
+  # torrents.route: home the zone goes out directly, like services; with
+  # vpn the plan closes it to everything but the owner's VPN server
+  # (docs/adr/0017-download-client.md).
+  torrents:
+    index: 10
+    description: The download client, alone, with one folder of a kept disk.
+    egress: direct
 
 roles:
   owner:
@@ -147,7 +156,8 @@ services:
     workload: core
     floor: {cores: 1, memory_mib: 512, disk_gib: 4}
     ports:
-      - {port: 3128, proto: tcp, from: ["zone:mgmt", "zone:build", "zone:inference", "zone:windows", "zone:media", "zone:games", "zone:apps"]}
+      # torrents: behind a VPN its guest has no other way to Debian's mirrors.
+      - {port: 3128, proto: tcp, from: ["zone:mgmt", "zone:build", "zone:inference", "zone:windows", "zone:media", "zone:games", "zone:apps", "zone:torrents"]}
   vpn:
     id: 11
     kind: lxc
@@ -272,6 +282,26 @@ services:
       note: I make your account and send you its sign-in. Jellyfin's apps for phones and TVs take the same address.
     ports:
       - {port: 8096, proto: tcp, from: ["role:owner", "shared"]}
+  # The download client (the torrents section below,
+  # docs/adr/0017-download-client.md). Its page has one password and no
+  # accounts: whoever signs in adds and removes downloads and changes every
+  # setting, which is why `access` says so.
+  qbittorrent:
+    id: 28
+    kind: lxc
+    zone: torrents
+    workload: torrents
+    description: qBittorrent, which downloads into one folder of a kept disk, where Jellyfin and the file share see the files. Not agent-managed.
+    # libtorrent's buffers and the page; a choice, not a measurement.
+    floor: {cores: 1, memory_mib: 768, disk_gib: 4}
+    share:
+      title: Downloads
+      what: The download client's page, to add and watch downloads
+      access: They need its one password, which is yours. With it they download in your name and can change every setting, which includes running programs in its container.
+      open: "http://{host}:{port}/"
+      note: I send you its sign-in. What you add downloads to my server, in my name.
+    ports:
+      - {port: 8080, proto: tcp, from: ["role:owner", "shared"]}
   # Game servers (the games table below, docs/adr/0012-game-servers.md).
   # Each has one port for its players and no other. Memory is the server's
   # with a small world and a few players, a choice, not a measurement:
@@ -466,6 +496,12 @@ power:
     # Open programs and unsaved files: only the owner knows when it is done.
     stop: ask
     idle_minutes: 240
+  # In use while anything downloads or seeds, or its page is open.
+  torrents:
+    title: Downloads
+    run: always
+    stop: auto
+    idle_minutes: 30
   # A game server is in use while someone plays or it does not answer
   # (nb-game busy). It saves its world when it stops.
   minecraft:
@@ -600,6 +636,16 @@ games:
     space_age: false
     admins: []
     settings: {}
+
+# The download client (docs/adr/0017-download-client.md). route has no
+# default: config.yaml says vpn (the owner's own WireGuard VPN, whose file
+# is a secret and whose server is torrents.vpn.endpoint) or home (others in
+# each download see the home's public address). Downloads go into `folder`
+# of the kept disk `share` names (one that is editable; the only such one
+# when left out), and pause while that disk has under keep_free_gib free.
+torrents:
+  folder: Downloads
+  keep_free_gib: 25
 
 # Domains egress-proxy forwards to, for zones with egress: proxy. A leading
 # dot also matches subdomains. Only HTTPS CONNECT and plain HTTP to these

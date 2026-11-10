@@ -591,6 +591,20 @@ ul.notes[hidden] { display: none; }
 .opt-asks[hidden] { display: none; }
 .opt-ask.check { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; color: var(--text-2); }
 .opt-ask.field input { max-width: 44ch; }
+/* The download client's questions (app.js torrentAsks). */
+.ways { display: grid; gap: 8px; border: 0; padding: 0; margin: 0; min-width: 0; }
+.ways > legend { padding: 0; margin-bottom: 6px; }
+.way { display: grid; gap: 2px; min-width: 0; }
+.way-title { color: var(--text); font-weight: 500; }
+.torrents-vpn { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); min-width: 0; }
+.torrents-vpn[hidden] { display: none; }
+.torrents-vpn .game-field.wide { margin-top: 0; }
+.torrents-vpn textarea { min-height: 120px; }
+.torrents-vpn > * { min-width: 0; }
+.torrents-vpn .status { white-space: normal; align-items: baseline; }
+.torrents-vpn textarea { width: 100%; max-width: 100%; box-sizing: border-box; }
+.torrents-vpn .hint { overflow-wrap: anywhere; }
+.opt-asks > .opt-note { margin: 0; }
 /* A game server's settings (app.js gameSettings) and Add a game server. */
 .game-settings > summary { cursor: pointer; width: fit-content; color: var(--text-2); font-weight: 500; }
 .game-settings > summary:hover { color: var(--text); }

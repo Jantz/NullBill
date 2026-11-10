@@ -8,6 +8,8 @@ from nullbill.probe import COMMANDS
 
 FIXTURES = Path(__file__).parent / "fixtures"
 CLASSES = ["small", "mid", "large"]
+# The VPN provider's server in the download client's fixtures (RFC 5737).
+VPN_SERVER = "203.0.113.44:51820"
 
 
 def write_raw(raw: Path, fixture: str) -> Path:
@@ -31,6 +33,17 @@ def legacy_config() -> dict:
     config = fixture_config("large")
     workloads = [*config["intent"]["workloads"], "media"]
     return {**config, "intent": {**config["intent"], "workloads": workloads}, "disks": {"ata-SYNTHETIC_HDD_0002": {"use": "legacy"}}}
+
+
+def torrents_config(route: str = "vpn") -> dict:
+    """The large class with its old NTFS disk kept and editable, Jellyfin,
+    and the download client, behind a VPN (a documentation address stands
+    for its server) or on the home connection."""
+    config = legacy_config()
+    workloads = [*config["intent"]["workloads"], "torrents"]
+    chosen = {"route": route} | ({"vpn": {"endpoint": VPN_SERVER}} if route == "vpn" else {})
+    disks = {"ata-SYNTHETIC_HDD_0002": {"use": "legacy", "mode": "rw"}}
+    return {**config, "intent": {**config["intent"], "workloads": workloads}, "disks": disks, "torrents": chosen}
 
 
 def games_config() -> dict:

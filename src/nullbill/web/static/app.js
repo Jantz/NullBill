@@ -756,7 +756,7 @@ function optionRow(item) {
     disk,
     make("span", {className: "opt-state", id: `${id}-state`}),
     make("p", {className: "opt-note", id: `${id}-note`, hidden: true}),
-    item.game ? gameAsks(item) : null,
+    item.game ? gameAsks(item) : item.torrents ? torrentAsks(item) : null,
     make("p", {className: "opt-change", role: "status", hidden: true}),
     make("details", {className: "opt-details"}, make("summary", {textContent: "What it makes, needs and deletes"}), make("dl", {className: "opt-facts"}),
       item.own ? ownTools(item) : null,
@@ -807,6 +807,107 @@ function ownTools(item) {
     });
   });
   return make("div", {className: "own-tools"}, make("div", {className: "row"}, showScript, remove, said), scripts);
+}
+
+// What the download client asks beside its tick (web/workloads.py's
+// `torrents`): the way downloads go, which has no default and is the
+// owner's own choice, the VPN's WireGuard file, and where downloads land.
+// The file holds a key: it goes up with Save and never comes back.
+function torrentAsks(item) {
+  const t = item.torrents;
+  const id = `opt-${item.name}`;
+  const way = (value, title, hint) => {
+    const input = make("input", {type: "radio", name: `${id}-route`, value});
+    input.dataset.role = "route";
+    return make("label", {className: "opt-ask check"}, input,
+      make("span", {className: "way"}, make("span", {className: "way-title", textContent: title}), make("span", {className: "hint", textContent: hint})));
+  };
+  const routes = make("fieldset", {className: "ways"}, make("legend", {className: "label", textContent: "Which way downloads go. Nothing is chosen for you."}),
+    way("vpn", "Through a VPN of my own", t.vpn), way("home", "From my home connection, without a VPN", t.home));
+  const conf = make("textarea", {id: `${id}-conf`, rows: 6, spellcheck: false, autocomplete: "off", autocapitalize: "off",
+    placeholder: "[Interface]\nPrivateKey = …\nAddress = …\nDNS = …\n\n[Peer]\nPublicKey = …\nAllowedIPs = 0.0.0.0/0\nEndpoint = …"});
+  conf.dataset.role = "conf";
+  conf.setAttribute("aria-describedby", `${id}-conf-hint`);
+  const said = make("span", {className: "feedback"});
+  said.setAttribute("role", "status");
+  const forget = make("button", {type: "button", className: "btn small"}, "Forget the saved file");
+  forget.dataset.role = "forget";
+  forget.addEventListener("click", async () => {
+    const ok = await confirmDialog({title: "Forget the saved WireGuard file?",
+      text: "NullBill drops the file and its key. While downloads are set to go through a VPN, setup then waits for a new file.", yes: "Forget it", danger: true});
+    if (!ok) return;
+    press(forget, said, "Forgetting…", async () => {
+      await api("/api/torrents/forget-vpn", {});
+      await refresh();
+      if (choicesDirty()) previewChoices();
+      return "Forgotten.";
+    });
+  });
+  const vpn = make("div", {className: "torrents-vpn", hidden: true},
+    make("p", {className: "vpn-state"}),
+    make("label", {className: "game-field wide"}, make("span", {className: "label", textContent: "Your VPN's WireGuard file"}), conf,
+      make("span", {className: "hint", id: `${id}-conf-hint`,
+        textContent: "Your VPN provider's site makes one (a WireGuard configuration, a .conf file): paste all of it. It holds a key, so it is saved with NullBill's secrets when you save, and never shown again."})),
+    make("div", {className: "row"}, forget, said));
+  const field = (label, control, hint) => {
+    control.id = `${id}-${control.dataset.role}`;
+    const note = make("span", {className: "hint", id: `${control.id}-hint`, textContent: hint});
+    control.setAttribute("aria-describedby", note.id);
+    return make("label", {className: "game-field"}, make("span", {className: "label", textContent: label}), control, note);
+  };
+  const share = make("select", {});
+  share.dataset.role = "share";
+  const folder = make("input", {type: "text", maxLength: 40, autocomplete: "off", spellcheck: false});
+  folder.dataset.role = "folder";
+  const room = make("input", {type: "number", min: "1", step: "1", inputMode: "numeric"});
+  room.dataset.role = "room";
+  const where = make("div", {className: "game-fields"},
+    field("Kept disk", share, "Downloads go to a kept disk you may change files on. Jellyfin and the file share see them there."),
+    field("Folder on it", folder, "Made if it is not there. The client sees this folder and nothing else of the disk."),
+    field("Room to keep free, in GiB", room, "Downloads pause while the disk has less free, and go on once it has more."));
+  return make("div", {className: "opt-asks", hidden: true},
+    make("p", {className: "opt-ask", textContent: t.notice}), routes, vpn,
+    make("p", {className: "opt-note why no-disk", hidden: true}), where);
+}
+
+// The saved choices, into the controls.
+function paintTorrents(item) {
+  const row = $("pick").querySelector(`.opt[data-name="${item.name}"]`);
+  const t = item.torrents;
+  for (const input of row.querySelectorAll("[data-role=route]")) input.checked = input.value === t.route;
+  row.querySelector("[data-role=conf]").value = "";
+  row.querySelector("[data-role=folder]").value = t.folder;
+  row.querySelector("[data-role=room]").value = String(t.keep_free_gib);
+  const share = row.querySelector("[data-role=share]");
+  share.dataset.want = t.share || "";
+  share.replaceChildren();
+}
+
+// What follows from the form as it stands (a preview too): the disks that
+// can take downloads, and what is known of the VPN.
+function paintTorrentsView(item, row) {
+  const t = item.torrents;
+  const share = row.querySelector("[data-role=share]");
+  const want = share.options.length ? share.value : share.dataset.want;
+  const names = t.shares.includes(want) || !want ? t.shares : [...t.shares, want];
+  if ([...share.options].map((o) => o.value).join("\n") !== names.join("\n")) {
+    share.replaceChildren(...names.map((n) => make("option", {value: n, textContent: t.shares.includes(n) ? n : `${n} (cannot be changed now)`})));
+    if (names.includes(want)) share.value = want;
+  }
+  share.disabled = names.length === 0;
+  const none = row.querySelector(".no-disk");
+  none.hidden = t.shares.length > 0;
+  none.textContent = t.read_only.length
+    ? `No kept disk can be changed yet: ${andList(t.read_only)} ${t.read_only.length === 1 ? "is" : "are"} read-only. Under Other disks below, tick Let me change files on it.`
+    : "No disk is kept yet. Under Other disks below, keep the disk downloads should go to and tick Let me change files on it.";
+  const chosen = row.querySelector("[data-role=route]:checked");
+  row.querySelector(".torrents-vpn").hidden = !chosen || chosen.value !== "vpn";
+  const pasted = row.querySelector("[data-role=conf]").value.trim() !== "";
+  row.querySelector(".vpn-state").replaceChildren(status(t.endpoint ? "good" : "warn",
+    t.endpoint ? `${pasted ? "The file below, once saved" : "A file is saved"}: the firewall lets the client reach its server ${t.endpoint} and nothing else outside.`
+      : pasted ? "This file cannot be read yet; saving says what is wrong with it." : "No file saved yet. Downloads wait for it."));
+  row.querySelector(".game-field.wide .label").textContent = t.endpoint && !pasted ? "Replace it with another WireGuard file" : "Your VPN's WireGuard file";
+  row.querySelector("[data-role=forget]").hidden = !(state.options.items.find((i) => i.name === item.name) || item).torrents.endpoint;
 }
 
 // What a game server asks beside its tick (web/workloads.py's `game`): the
@@ -1049,6 +1150,7 @@ function renderOptions(st) {
     // What cannot work here can still be turned off, never on.
     input.disabled = Boolean(item.blocked) && !item.chosen;
     if (item.game) paintGame(item);
+    if (item.torrents) paintTorrents(item);
   }
   optionsView = st.options;
   paintWhen(st.options, true);
@@ -1176,6 +1278,7 @@ function paintOptions() {
     row.querySelector(".opt-state").replaceChildren(status(st.dot, st.text));
     const asks = row.querySelector(".opt-asks");
     if (asks) asks.hidden = !checked;
+    if (item.torrents) paintTorrentsView(item, row);
     const note = row.querySelector(".opt-note");
     const noteText = item.blocked || (checked ? item.note : "");
     note.hidden = !noteText;
@@ -1445,9 +1548,27 @@ function choicesBody() {
       other: row.querySelector("[data-role=other]").value,
     };
   }
+  const client = $("pick").querySelector(".opt .torrents-vpn");
+  let torrents;
+  if (client) {
+    const row = client.closest(".opt");
+    const way = row.querySelector("[data-role=route]:checked");
+    const share = row.querySelector("[data-role=share]");
+    const room = row.querySelector("[data-role=room]").value.trim();
+    const conf = row.querySelector("[data-role=conf]").value;
+    torrents = {
+      route: way ? way.value : "",
+      share: share.options.length ? share.value : share.dataset.want,
+      folder: row.querySelector("[data-role=folder]").value,
+      keep_free_gib: /^\d+$/.test(room) ? Number(room) : room,
+      // Only with the VPN chosen, and only a file that was pasted.
+      ...(way && way.value === "vpn" && conf.trim() ? {conf} : {}),
+    };
+  }
   return {
     workloads: [...$("pick").querySelectorAll(".opt-main input:checked")].filter((i) => !i.closest("#extra-rows")).map((i) => i.value),
     games,
+    ...(torrents ? {torrents} : {}),
     backups: Boolean($("opt-backups") && $("opt-backups").checked),
     console: Boolean($("opt-console") && $("opt-console").checked),
     owner_login: $("owner-login").value.trim(),

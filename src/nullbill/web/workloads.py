@@ -24,14 +24,14 @@ always runs and shows what runs on demand as sharing what that leaves.
 
 from pathlib import Path
 
-from nullbill import backups, custom, games, power
+from nullbill import backups, custom, games, power, torrents
 from nullbill import model as modelling
 from nullbill import plan as planning
 from nullbill.errors import NullBillError
 from nullbill.render import strip_notes
 
 # NullBill's own, in the page's order; the owner's follow (custom.workloads).
-WORKLOADS = ["agents", "linux-ci", "inference", "media", "windows-ci", "windows-dev", "minecraft", "terraria", "factorio"]
+WORKLOADS = ["agents", "linux-ci", "inference", "media", "torrents", "windows-ci", "windows-dev", "minecraft", "terraria", "factorio"]
 BACKUPS, CONSOLE = "backups", "console"
 PBS = "pbs"
 # apply makes these guests but nothing in them yet (README, Not done yet).
@@ -95,6 +95,22 @@ TEXT = {
             "Jellyfin can only read the kept disks."
         ),
         "off": ("Deletes Jellyfin with its libraries, users, watch history and artwork. The files on your kept disks are not touched."),
+    },
+    "torrents": {
+        "title": "Downloads (qBittorrent)",
+        "what": "A BitTorrent client whose finished downloads land on a kept disk, where Jellyfin and the file share see them.",
+        "needs": [
+            "A kept disk you may change files on (Setup, Hardware, Other disks): downloads go into one folder of it.",
+            "Your choice of the way downloads go, beside this tick: through a WireGuard VPN of your own, or from your home connection.",
+        ],
+        "on": (
+            "Setup installs qBittorrent in a container of its own, which sees one folder of the kept disk and nothing else of yours. "
+            "Its page and sign-in are on the Services page. Downloads pause by themselves before the disk is full."
+        ),
+        "off": (
+            "Deletes the client with its list of downloads and its settings. "
+            "The downloaded files stay on the kept disk, and so does a saved VPN file."
+        ),
     },
     "windows-ci": {
         "title": "Windows CI runners",
@@ -269,6 +285,10 @@ def _note(name: str, plan: dict | None) -> str | None:
         on_gpu = isinstance(plan["media"]["transcode"], dict)
         how = "Transcodes on the processor's graphics." if on_gpu else "Transcodes on the processor: no integrated Intel graphics found."
         return how if plan["media"]["library"] else f"No kept disk yet, so its library starts empty. {how}"
+    if name == torrents.WORKLOAD and plan["torrents"]:
+        found = plan["torrents"]
+        way = torrents.WHAT_VPN if found["route"] == torrents.VPN else f"From your home connection. {torrents.WHAT_HOME}"
+        return f"Downloads land in {found['store']['folder']} on the kept disk {found['store']['share']}. {way}"
     if name in plan["games"]:
         game = plan["games"][name]
         note = f"Players need {games.CLIENT[game.get('game', name)]} {game['version']}, the same version as the server."
@@ -317,6 +337,27 @@ def _game(model: dict, name: str) -> dict | None:
     if "admins" in game:
         out["admins"] = game["admins"]
     return out
+
+
+def _torrents(model: dict, facts: dict | None) -> dict:
+    """What the page asks beside the download client's tick: which way its
+    traffic goes (no default), the VPN's server once a file is saved (the
+    file itself is a secret), and where downloads land."""
+    chosen = model["torrents"]
+    shares = torrents.kept(model, facts)
+    can = torrents.writable(shares)
+    return {
+        "route": chosen.get("route"),
+        "endpoint": (chosen.get("vpn") or {}).get("endpoint"),
+        "notice": torrents.NOTICE,
+        "vpn": f"{torrents.WHAT_VPN} The firewall lets its container reach the VPN's server and nothing else outside.",
+        "home": f"{torrents.WHAT_HOME} The checks then report it as degraded.",
+        "shares": can,
+        "read_only": [m["share"] for m in shares if m["share"] not in can],
+        "share": chosen.get("share") or (can[0] if len(can) == 1 else None),
+        "folder": chosen["folder"],
+        "keep_free_gib": chosen["keep_free_gib"],
+    }
 
 
 def _when(model: dict, planned: dict, counted_for: dict[str, int]) -> list[dict]:
@@ -414,6 +455,7 @@ def options(model: dict, facts: dict | None, existing: set[str] | None, home: Pa
                 "group": "extras" if name in (BACKUPS, CONSOLE) else "own" if name in own else "games" if game else "workloads",
                 "extra": name in (BACKUPS, CONSOLE),
                 "game": game,
+                "torrents": _torrents(model, facts) if name == torrents.WORKLOAD else None,
                 "own": _own(model, members, home) | {"removable": not chosen and not here} if name in own else None,
                 **_text(model, name),
                 "chosen": chosen,

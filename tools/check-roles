@@ -44,9 +44,12 @@ fi
 # takes the host's FQDN as CN, limited to 64 bytes, so give the container a
 # short name and drop the runner's DNS search domain.
 # nft -c needs CAP_NET_ADMIN, in the container's own network namespace.
+# /downloads stands in for the kept disk's folder in the download client's
+# guest (qbittorrent): a mount with a few GiB free, which takes no memory
+# until something is written.
 for role in "${roles[@]}"; do
   image=nullbill-role-check
   [[ $trixie_roles == *" $role "* ]] && image+=:trixie
   echo "$role ($image):"
-  docker run --rm --cap-add NET_ADMIN --hostname role-check --dns-search . --tmpfs /run/proxmox-backup -v "$PWD/ansible:/ansible:ro" "$image" bash "/ansible/roles/$role/tests/check.sh"
+  docker run --rm --cap-add NET_ADMIN --hostname role-check --dns-search . --tmpfs /run/proxmox-backup --tmpfs /downloads:size=4g -v "$PWD/ansible:/ansible:ro" "$image" bash "/ansible/roles/$role/tests/check.sh"
 done

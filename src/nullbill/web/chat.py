@@ -95,7 +95,7 @@ MAX_FILE = 200_000
 BACKGROUND_DIR = "/var/log/nb-agent"
 # Jobs the agent may start, and their tier. probe and verify only read.
 JOB_TIERS = {"probe": gate.READ, "verify": gate.READ, "apply": gate.CHANGE, "upgrade": gate.CHANGE}
-CHOICE_KEYS = {"workloads", "backups", "console", "owner_login", "gpus", "games", "power"}
+CHOICE_KEYS = {"workloads", "backups", "console", "owner_login", "gpus", "games", "power", "torrents"}
 # What add_game_server takes for the new server, as the page's form does.
 GAME_KEYS = {"settings", "admins", "memory_mib"}
 # Credentials the CLI reads from its environment.
@@ -140,6 +140,10 @@ Bigger jobs, done in one go:
 - Several changes inside the same guests: start_task names those guests. Once the owner approves it, changes inside
   them and setup runs go ahead without a card each; risky ones still ask and blocked ones stay blocked. Call
   finish_task when the job is done, with what you checked.
+- The download client (workload torrents): you may tick it and set its folder, kept disk and room to keep free
+  (set_choices, torrents). Which way downloads go, through the owner's VPN or from their home connection, decides
+  whose address others see: tell the owner both and let them choose on the page; never pick one for them, and never
+  ask for, read or repeat their VPN's WireGuard file, which holds a key.
 - A program NullBill has no built-in support for can still run here, as a service of the owner's own (status,
   what_to_run, lists what there is; a built-in one that fits comes first, with set_choices). Read
   docs/runbooks/custom-services.md, then add_service with build=true: its definition (a guest of its own, the ports
@@ -1773,7 +1777,13 @@ class Tools:
         after = before | changes
         lines = [x for x in gate.summarize_choices(before, after) if x != "No change"]
         verdict = gate.change("changes what the server runs; the next setup run builds it")
-        if {"games", "power"} & set(changes):
+        asked = changes.get("torrents")
+        if isinstance(asked, dict) and "conf" in asked:
+            # A private key has no business in a conversation or its log.
+            raise NullBillError(
+                "the VPN's WireGuard file holds a key: the owner pastes it on the page (Setup, What to run, Downloads), never here"
+            )
+        if {"games", "power", "torrents"} & set(changes):
             # What the form comes to in config.yaml, with nothing saved.
             old = self.app.config() or {}
             new = self.app._choices_config(after | {"disks": {}})  # noqa: SLF001 - the page's own form reader
@@ -1789,6 +1799,11 @@ class Tools:
                     verdict = gate.risky("agrees to a game's licence (EULA) in your name", "agree")
             for name in sorted({*old.get("power", {}), *new.get("power", {})}):
                 lines += changed_lines(f"When {name} runs", old.get("power", {}).get(name) or {}, new.get("power", {}).get(name) or {})
+            was, now_ = old.get("torrents") or {}, new.get("torrents") or {}
+            lines += changed_lines("Downloads", was, now_)
+            if now_.get("route") and now_.get("route") != was.get("route"):
+                # The owner's answer to the client's notice, and whose address a download shows.
+                verdict = gate.risky("chooses in your name the way downloads leave your home", "route")
         return self.gated({"act": "choices", "changes": changes, "lines": lines or ["No change"]}, verdict, why, "Change what to run")
 
     def t_on_demand(

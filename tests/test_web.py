@@ -367,6 +367,50 @@ ED25519 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOwnerKeyForTestsOnlyNotARealKey0
 RSA = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCownerkeyfortestsonlynotarealkey0000000000"
 
 
+WG_KEY, WG_PEER = "A" * 43 + "=", "B" * 43 + "="
+WG_FILE = f"[Interface]\nPrivateKey = {WG_KEY}\nAddress = 10.2.0.2/32\nDNS = 10.2.0.1\n\n[Peer]\nPublicKey = {WG_PEER}\n"
+WG_FILE += "AllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = 203.0.113.44:51820\n"
+
+
+def test_the_download_clients_way_out_and_vpn_file_are_saved_with_the_choices(site):
+    app, client = site
+    sign_in(app, client)
+    saved = lambda: yaml.safe_load((app.home / "config.yaml").read_text())  # noqa: E731
+    secrets = lambda: web.Secrets(app.codec(app.home)).data  # noqa: E731
+    choices = {"workloads": ["agents", "torrents"], "owner_login": "owner-a@example.internal"}
+    row = lambda data: next(i for i in data["items"] if i["name"] == "torrents")["torrents"]  # noqa: E731
+    # Ticked and nothing chosen: saved, and no way out is picked for the owner.
+    form = {"route": "", "share": "", "folder": "Downloads", "keep_free_gib": 25}
+    assert client.call("/api/choices", {**choices, "torrents": form})[0] == 200
+    assert "torrents" not in saved() and row(client.call("/api/state")[1]["options"])["route"] is None
+    # A pasted file counts in the preview, and nothing is written by it.
+    preview = client.call("/api/choices/preview", {**choices, "torrents": {**form, "route": "vpn", "conf": WG_FILE}})[1]
+    assert row(preview)["endpoint"] == "203.0.113.44:51820" and "torrents" not in saved() and "torrents_vpn_conf" not in secrets()
+    # A file that cannot be used: every reason, and nothing saved.
+    bad = WG_FILE.replace(f"PrivateKey = {WG_KEY}\n", "").replace("DNS = 10.2.0.1\n", "")
+    status, data = client.call("/api/choices", {**choices, "torrents": {**form, "route": "vpn", "conf": bad}})
+    assert status == 400 and data["headline"] == "This WireGuard file cannot be used" and len(data["errors"]) == 2
+    assert "torrents" not in saved() and "torrents_vpn_conf" not in secrets()
+    # Saved: the file with the secrets, reduced to what NullBill uses; its server in config.yaml.
+    status, data = client.call("/api/choices", {**choices, "torrents": {**form, "route": "vpn", "conf": WG_FILE, "keep_free_gib": 40}})
+    assert status == 200
+    assert saved()["torrents"] == {"route": "vpn", "keep_free_gib": 40, "vpn": {"endpoint": "203.0.113.44:51820"}}
+    kept = secrets()["torrents_vpn_conf"]
+    assert f"PrivateKey = {WG_KEY}" in kept and "::/0" not in kept
+    state = client.call("/api/state")[1]
+    assert row(state["options"])["endpoint"] == "203.0.113.44:51820"
+    # The key never comes back to the page, and it is no password the page reveals.
+    assert WG_KEY not in json.dumps(state) and client.call("/api/password-reveal", {"name": "torrents_vpn_conf"})[0] == 400
+    # Saving again without a file keeps the one there is; settings are refused together.
+    assert client.call("/api/choices", {**choices, "torrents": {**form, "route": "home"}})[0] == 200
+    assert saved()["torrents"] == {"route": "home", "vpn": {"endpoint": "203.0.113.44:51820"}} and "torrents_vpn_conf" in secrets()
+    status, data = client.call("/api/choices", {**choices, "torrents": {"route": "tor", "folder": "../etc", "keep_free_gib": 0}})
+    assert status == 400 and len(data["errors"]) == 3 and saved()["torrents"]["route"] == "home"
+    # Forgotten: the file and the server the firewall would open to.
+    assert client.call("/api/torrents/forget-vpn", {})[0] == 200
+    assert saved()["torrents"] == {"route": "home"} and "torrents_vpn_conf" not in secrets()
+
+
 def test_ssh_keys_go_into_the_owners_person_and_survive_saving_choices(site):
     app, client = site
     sign_in(app, client)

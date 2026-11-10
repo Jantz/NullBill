@@ -35,7 +35,7 @@ groups:
       # never end. KeptDiskFull below tells them once it takes no more.
       - alert: DiskAlmostFull
         expr: >-
-          node_filesystem_avail_bytes{fstype!~"tmpfs|overlay",mountpoint!~"/mnt/nb-legacy/.+|/srv/share/.+"} / node_filesystem_size_bytes < 0.10
+          node_filesystem_avail_bytes{fstype!~"tmpfs|overlay",mountpoint!~"/mnt/nb-legacy/.+|/srv/share/.+|/downloads"} / node_filesystem_size_bytes < 0.10
           unless on(instance, mountpoint) node_filesystem_readonly == 1
         for: 15m
         labels: {severity: page}
@@ -225,6 +225,31 @@ groups:
         labels: {severity: page}
         annotations:
           summary: "the {{ $labels.pool }} CI image is over 14 days old and its re-bake keeps failing; run setup and read the ci stage"
+  # The download client: nb-torrents' metrics from inside its guest
+  # (ansible/roles/qbittorrent), which sees one folder of a kept disk at
+  # /downloads. A guest that is stopped has no such metric. Neither a
+  # pause nor a tunnel that is down harms anything: nothing is sent
+  # outside the tunnel, so both only warn.
+  - name: nullbill-torrents
+    rules:
+      - alert: DownloadClientDown
+        expr: nb_torrents_up == 0
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: "the download client on {{ $labels.instance }} does not answer; read journalctl -u qbittorrent in that guest, and nb-torrents tunnel status when downloads go through a VPN"
+      - alert: DownloadsPausedDiskFull
+        expr: nb_torrents_paused_for_space == 1
+        for: 15m
+        labels: {severity: warn}
+        annotations:
+          summary: "downloads are paused, because the kept disk has less room than you keep free; delete or move files, or lower the room to keep free under Setup, What to run, and they go on by themselves"
+      - alert: DownloadTunnelDown
+        expr: nb_torrents_tunnel_up == 0
+        for: 15m
+        labels: {severity: warn}
+        annotations:
+          summary: "the download client's VPN does not answer, so it sends and downloads nothing; check your VPN account, or paste a new WireGuard file under Setup, What to run"
   # Game servers: nb-game's metrics from inside each game's guest
   # (ansible/roles/game_server). A guest that is stopped has no such metric.
   - name: nullbill-games

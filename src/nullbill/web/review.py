@@ -26,6 +26,7 @@ SECTIONS = {
     "inference": "the local AI model",
     "media": "the media server",
     "games": "game servers",
+    "torrents": "the download client",
     "backups": "backups",
     "flows": "firewall rules",
     "people": "people and what each may open",

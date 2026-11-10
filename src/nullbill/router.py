@@ -10,6 +10,7 @@ Tailscale's port here (direct.py), and nftables passes it to the vpn guest.
 
 import json
 
+from nullbill import torrents
 from nullbill.flows import HOST, PRIVATE, SSDP_REPLY_PORT, TAILSCALE_PORT, mac, resolve_flows
 from nullbill.render import strip_notes
 
@@ -86,6 +87,10 @@ def _nftables(plan: dict, model: dict) -> str:
     for zone, z in zones.items():
         if z["egress"] == "direct":
             lines.append(f'        iifname "{_iface(zone)}" oifname "{UPLINK}" ip daddr != @private accept # direct egress\n')
+        elif z["egress"] == torrents.TUNNEL and torrents.endpoint(plan):
+            address, port = torrents.endpoint(plan)
+            rule = f'iifname "{_iface(zone)}" oifname "{UPLINK}" ip daddr {address} udp dport {port} accept'
+            lines.append(f"        {rule} # WireGuard to the owner's VPN, the zone's only way out\n")
     lines.append("    }\n}\n\ntable ip nullbill-nat {\n")
     if vpn:
         # What the home router forwards for Tailscale's port, by hand or

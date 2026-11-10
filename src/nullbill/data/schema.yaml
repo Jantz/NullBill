@@ -46,7 +46,8 @@ $defs:
       index: {type: integer, minimum: 1, maximum: 254}
       description: {type: string}
       # direct: internet through the router; proxy: only via egress-proxy;
-      # none: no internet. Omitted means none.
+      # none: no internet. Omitted means none. (The plan knows a fourth,
+      # tunnel, for the torrents zone behind the owner's VPN: torrents.py.)
       egress: {enum: [direct, proxy, none]}
 
   role:
@@ -297,6 +298,29 @@ $defs:
       properties:
         allow: {type: array, uniqueItems: true, items: {$ref: "#/$defs/domain_pattern"}}
     power: {type: object, propertyNames: {$ref: "#/$defs/name"}, additionalProperties: {$ref: "#/$defs/power"}}
+    # The download client (torrents.py).
+    torrents:
+      type: object
+      additionalProperties: false
+      properties:
+        # vpn: everything it sends leaves through the owner's WireGuard VPN.
+        # home: from the home connection, whose address others then see.
+        route: {enum: [vpn, home]}
+        vpn:
+          type: object
+          additionalProperties: false
+          required: [endpoint]
+          properties:
+            # The VPN server's address and UDP port, as the firewall needs
+            # them; the page writes it from the WireGuard file, which is a
+            # secret and not kept here.
+            endpoint: {type: string, pattern: "^[0-9]{1,3}(\\.[0-9]{1,3}){3}:[0-9]{1,5}$"}
+        # The kept disk's share name the downloads go to.
+        share: {$ref: "#/$defs/name"}
+        # The folder on it; made if missing.
+        folder: {type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$"}
+        # Downloads pause while the disk has less than this free.
+        keep_free_gib: {type: integer, minimum: 1, maximum: 100000}
 
   # A local model llama.cpp serves (catalog.yaml's models).
   llm:
@@ -451,6 +475,7 @@ $defs:
       power: {$ref: "#/$defs/common/power"}
       models: {$ref: "#/$defs/common/models"}
       games: {$ref: "#/$defs/common/games"}
+      torrents: {$ref: "#/$defs/common/torrents"}
       gpus:
         # Keyed by PCI address as the probe reports it.
         type: object
@@ -490,7 +515,7 @@ $defs:
 
   model:
     type: object
-    required: [network, host, zones, roles, services, people, engines, models, games, proxy, tailnet, images, verify, updates, power]
+    required: [network, host, zones, roles, services, people, engines, models, games, torrents, proxy, tailnet, images, verify, updates, power]
     properties:
       network: {$ref: "#/$defs/common/network", required: [base, domain, vmid_base]}
       host:
@@ -532,6 +557,8 @@ $defs:
                   java: {required: [version, url, sha256]}
               terraria: {required: [title, version, url, sha256, settings]}
               factorio: {required: [title, version, url, sha256, settings, space_age, admins]}
+      torrents:
+        allOf: [{$ref: "#/$defs/common/torrents"}, {required: [folder, keep_free_gib]}]
       power:
         type: object
         propertyNames: {$ref: "#/$defs/name"}

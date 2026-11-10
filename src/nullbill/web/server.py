@@ -59,6 +59,7 @@ from nullbill import (
     power,
     preview,
     tailscale,
+    torrents,
     version,
 )
 from nullbill.apply import DISKS_FILE, FULL_NEXT, GUESTS, NTFY, REMOVALS, SPKI, STAGES, Context, split_target
@@ -1251,7 +1252,100 @@ class App:
             _write_private(path, json.dumps({"guests": names, "gone": sorted({*gone, *planned})}, indent=2) + "\n")
 
     def save_choices(self, body: dict) -> None:
-        self._save_config(self._choices_config(body))
+        config = self._choices_config(body)
+        pasted = self._pasted_vpn(config, body.get("torrents"), socket.gethostbyname)
+        if pasted is None:
+            return self._save_config(config)
+        # The file first: a server the firewall opens to without its file
+        # would stop the next setup run, a file without that does nothing.
+        build_model(config)
+        with self.lock:
+            if any(job.state() == "running" for job in self.jobs.values()):
+                raise NullBillError(
+                    "a WireGuard file is saved with NullBill's secrets, which the running job holds; wait until it finishes"
+                )
+            Secrets(self.codec(self.home)).set(torrents.VPN_SECRET, pasted)
+        self._save_config(config)
+
+    def forget_torrents_vpn(self) -> None:
+        """Drop the saved WireGuard file and the server the firewall opens
+        to. Downloads set to go through the VPN then wait for a new file."""
+        config = self.config()
+        with self.lock:
+            if any(job.state() == "running" for job in self.jobs.values()):
+                raise NullBillError("wait until the running job finishes")
+            store = Secrets(self.codec(self.home))
+            if torrents.VPN_SECRET in store.data:
+                del store.data[torrents.VPN_SECRET]
+                store.codec.save(store.data)
+        if config and "vpn" in (config.get("torrents") or {}):
+            del config["torrents"]["vpn"]
+            if not config["torrents"]:
+                del config["torrents"]
+            self._save_config(config)
+
+    @staticmethod
+    def _pasted_vpn(config: dict, form: object, resolve: Callable | None) -> str | None:
+        """The WireGuard file the form brings, checked and reduced to what
+        NullBill keeps of it; its server goes into `config`, where the
+        firewall is made from. None without a file. resolve: looks up a
+        server given by name (only a save does)."""
+        text = form.get("conf") if isinstance(form, dict) else None
+        if not isinstance(text, str) or not text.strip():
+            return None
+        conf = torrents.read_conf(text, build_model({k: v for k, v in config.items() if k == "network"})["network"]["base"], resolve)
+        config["torrents"] = {**(config.get("torrents") or {}), "vpn": {"endpoint": conf["endpoint"]}}
+        return torrents.saved_conf(conf)
+
+    @staticmethod
+    def _torrents_config(config: dict, form: object) -> None:
+        """What the page asks beside the download client's tick, put into
+        config.yaml: the way downloads go (the owner's choice, and their
+        answer to the client's notice; none is no choice yet), the kept disk
+        and folder they land in, and how much room stays free. A key the
+        form leaves out stays as it is; what equals the catalog is not
+        written down. Every problem is raised together."""
+        if not isinstance(form, dict):
+            return
+        chosen = dict(config.get("torrents") or {})
+        start = build_model({})["torrents"]
+        problems: list[str] = []
+        if "route" in form:
+            if form["route"] in (torrents.VPN, torrents.HOME):
+                chosen["route"] = form["route"]
+            elif form["route"] in ("", None):
+                chosen.pop("route", None)
+            else:
+                problems.append("Downloads: the way they go is through your VPN or from your home connection")
+        if "share" in form:
+            share = str(form["share"] or "").strip()
+            chosen = {k: v for k, v in chosen.items() if k != "share"} | ({"share": share} if share else {})
+        if "folder" in form:
+            folder = str(form["folder"] or "").strip() or start["folder"]
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}", folder):
+                problems.append(
+                    "Downloads: the folder is one name of up to 40 letters, digits, spaces, dots and dashes, such as Downloads; "
+                    "it is made on the kept disk if it is not there"
+                )
+            chosen["folder"] = folder
+        if "keep_free_gib" in form:
+            room = form["keep_free_gib"]
+            if room in ("", None):
+                room = start["keep_free_gib"]
+            if isinstance(room, bool) or not isinstance(room, int) or not 1 <= room <= 100000:
+                problems.append("Downloads: the room to keep free is a whole number of GiB, 1 or more")
+            chosen["keep_free_gib"] = room
+        if problems:
+            raise (
+                Refused("The download client's settings cannot be used, so nothing was saved", problems)
+                if len(problems) > 1
+                else NullBillError(*problems)
+            )
+        chosen = {key: value for key, value in chosen.items() if value != start.get(key)}
+        if chosen:
+            config["torrents"] = chosen
+        else:
+            config.pop("torrents", None)
 
     def _save_config(self, config: dict) -> None:
         """Write config.yaml, once it passes the schema, and before that
@@ -1654,6 +1748,14 @@ class App:
         keys = owner.keys(config)
         config["people"] = {"owner": {"role": "owner", "login": login} | ({"ssh_keys": keys} if keys else {}), **people}
         self._games_config(config, body.get("games"))
+        self._torrents_config(config, body.get("torrents"))
+        if not saving:
+            # A pasted WireGuard file counts in the preview once it reads;
+            # until then the plan says that the VPN is still missing.
+            try:
+                self._pasted_vpn(config, body.get("torrents"), None)
+            except NullBillError:
+                pass
         services = config.setdefault("services", {})
         if body.get("backups", True):
             services.get("pbs", {}).pop("enabled", None)
@@ -3043,6 +3145,9 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                     app.save_backups(body)
                     plan = app.plan()
                     return self.json(200, {"ok": True, "plan": plan, "backups": app.backups_view(plan)})
+                if self.path == "/api/torrents/forget-vpn":
+                    app.forget_torrents_vpn()
+                    return self.json(200, {"ok": True})
                 if self.path == "/api/port-mapping":
                     return self.json(200, {"ok": True, "port_mapping": app.save_port_mapping(body)})
                 if self.path == "/api/password-reveal":

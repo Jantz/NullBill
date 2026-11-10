@@ -45,7 +45,7 @@ jobs:
             roles: monitoring operator model_gateway downloads custom_service
           - name: roles (log_shipper, runner_dispatcher, pbs, forgejo, tls_cert)
             parts: roles
-            roles: log_shipper runner_dispatcher pbs forgejo tls_cert
+            roles: log_shipper runner_dispatcher pbs forgejo tls_cert qbittorrent
           - name: roles (game_minecraft, game_terraria, game_factorio)
             parts: roles
             roles: game_minecraft game_terraria game_factorio

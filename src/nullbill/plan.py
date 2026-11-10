@@ -7,7 +7,7 @@ of them, so the owner sees every problem in one run.
 import ipaddress
 from typing import Any
 
-from nullbill import backups, ci, custom, games, legacy, media, power
+from nullbill import backups, ci, custom, games, legacy, media, power, torrents
 from nullbill.errors import NullBillError
 from nullbill.flows import SHARED
 from nullbill.proxy import allows
@@ -637,13 +637,18 @@ def build_plan(model: dict, facts: dict) -> dict:
     errors.raise_if_any()
 
     console = _console(model, facts, gpu_section, errors)
-    shares = [m["share"] for m in legacy.shares(strip_notes({"disks": disk_section}))]
+    kept = legacy.shares(strip_notes({"disks": disk_section}))
+    shares = [m["share"] for m in kept]
     media_section = media.plan_section(model, facts, planned, shares, errors)
+    torrents_section = torrents.plan_section(model, planned, kept, media.JELLYFIN in planned, errors)
     games_section = games.plan_section(model, planned, sizes, errors)
     custom_section = custom.plan_section(model, planned)
     errors.raise_if_any()
 
     zones = _zones(model, planned)
+    if strip_notes(torrents_section).get("route") == torrents.VPN:
+        # Out to the VPN's server alone, not to the internet (torrents.py).
+        zones[torrents.ZONE]["egress"] = torrents.TUNNEL
     guests = {}
     vmid_base = model["network"]["vmid_base"]
     for name, svc in planned.items():
@@ -694,6 +699,7 @@ def build_plan(model: dict, facts: dict) -> dict:
         else Note({}, "Not planned."),
         "media": media_section,
         "games": games_section,
+        "torrents": torrents_section,
         **({"custom": custom_section} if custom_section else {}),
         **({"power": demand} if demand else {}),
         "disks": disk_section,

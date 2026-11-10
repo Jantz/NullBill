@@ -304,6 +304,8 @@ games:
     space_age: false
     admins:
       - owner_a
+# Not planned.
+torrents: {}
 disks:
   # Carries signatures; only an explicit pin with wipe: true changes that.
   ata-SYNTHETIC_HDD_0002:

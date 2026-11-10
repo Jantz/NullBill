@@ -8,7 +8,7 @@ fallback. Passwords are the secrets apply keeps, revealed on request only.
 so the page can say whether it answers.
 """
 
-from nullbill import games, legacy, media
+from nullbill import games, legacy, media, torrents
 
 
 def shares(plan: dict) -> list[str]:
@@ -25,6 +25,7 @@ PASSWORDS = {
     "files": "files_share_password",
     "model-gateway": "model_gateway_key",
     "jellyfin": "jellyfin_admin_password",
+    torrents.QBITTORRENT: torrents.PASSWORD_SECRET,
 }
 
 # Guests that run on their own and have nothing for the owner to open.
@@ -212,6 +213,45 @@ def _entries(plan: dict, guests: dict, by_name: bool, forgejo_user: str | None, 
                     step(f"On a phone with Tailscale on, install Jellyfin's app and add the server {url.rstrip('/')}."),
                 ],
                 "watch": media.JELLYFIN,
+            }
+        )
+    if ip(torrents.QBITTORRENT):
+        found = plan.get("torrents") or {}
+        url = f"http://{at(torrents.QBITTORRENT)}:{torrents.PORT}/"
+        where = found.get("store")
+        behind = found.get("route") == torrents.VPN
+        out.append(
+            {
+                "name": torrents.QBITTORRENT,
+                "title": "Downloads",
+                "what": (
+                    f"qBittorrent. {torrents.WHAT_VPN}" if behind else f"qBittorrent, from your home connection. {torrents.WHAT_HOME}"
+                ),
+                "url": url,
+                "addresses": fallback(torrents.QBITTORRENT, url),
+                "user": torrents.ADMIN_USER,
+                "password": torrents.QBITTORRENT,
+                "steps": [
+                    step(f"Sign in as {torrents.ADMIN_USER} with the password above."),
+                    step(
+                        f"Add a torrent file or a magnet link. It downloads into {where['folder']} on the kept disk {where['share']}"
+                        + (
+                            f", which Jellyfin shows under {media.MEDIA_ROOT}/{where['share']}/{where['folder']}."
+                            if ip(media.JELLYFIN)
+                            else "."
+                        )
+                        if where
+                        else "Add a torrent file or a magnet link."
+                    ),
+                    step(
+                        f"Downloads pause while the disk has under {found.get('keep_free_gib')} GiB free "
+                        "and go on by themselves once it has more. "
+                        "Change that, the folder or the way downloads go here:",
+                        href="#setup/choices",
+                        link="Setup, What to run",
+                    ),
+                ],
+                "watch": torrents.QBITTORRENT,
             }
         )
     if ip("workspace"):

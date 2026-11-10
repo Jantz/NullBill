@@ -1,0 +1,24 @@
+# qBittorrent as Debian packages it (qbittorrent-nox), so Debian's security
+# updates reach it through unattended-upgrades like the rest of the guest.
+# uid and gid 1000, which own the kept disks' files in an unprivileged
+# container (nb-legacy-disk mounts them so).
+qbittorrent_uid: 1000
+qbittorrent_port: 8080
+qbittorrent_username: nullbill-admin
+# The password of its page; apply makes it and the Services page shows it.
+qbittorrent_password: ""
+# Where the kept disk's downloads folder is bind-mounted.
+qbittorrent_store: /downloads
+# Downloads pause while the disk has less than this free.
+qbittorrent_keep_free_gib: 25
+# vpn: everything the client's user sends leaves through the WireGuard
+# tunnel below. home: through the guest's own route.
+qbittorrent_route: home
+# NullBill's own network, which stays on the guest's ordinary routes.
+qbittorrent_base: 10.42.0.0/16
+# With route vpn (nullbill/torrents.py's variables): interface, address,
+# dns, mtu, endpoint, handshake_s; and the file `wg setconf` reads.
+qbittorrent_tunnel: {}
+qbittorrent_wg_conf: ""
+# Start and restart the units. Only the container check turns this off.
+qbittorrent_manage_services: true

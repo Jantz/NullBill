@@ -399,6 +399,26 @@ def test_check_service_says_what_is_left_to_fix(agent):
 
 
 # The page's other features.
+def test_the_way_downloads_go_waits_for_the_owner_and_a_vpn_file_is_never_the_agents(agent):
+    app, client, _ = chosen(agent, "auto")
+    workloads = [*OWNER["workloads"], "torrents"]
+    # Where downloads land and how much room stays free are changes like any other.
+    view = call(client, "set_choices", workloads=workloads, torrents={"keep_free_gib": 50})
+    assert "Downloads: keep_free_gib: 50 (was the default)" in kinds(view, "ran")[-1]["lines"]
+    assert saved(app)["torrents"] == {"keep_free_gib": 50}
+    # Whose address a download shows is the owner's to say, in every mode.
+    view = call(client, "set_choices", torrents={"route": "home"})
+    proposal = kinds(view, "proposal")[-1]
+    assert (proposal["tier"], proposal["word"]) == ("risky", "route")
+    assert "Downloads: route: home (was the default)" in proposal["lines"]
+    assert "route" not in saved(app)["torrents"]
+    approved(client, proposal["id"], typed="route")
+    assert saved(app)["torrents"] == {"keep_free_gib": 50, "route": "home"}
+    # A file with a private key has no place in a conversation.
+    said = result(call(client, "set_choices", torrents={"route": "vpn", "conf": "[Interface]\nPrivateKey = x"}))
+    assert "the owner pastes it on the page" in said and saved(app)["torrents"]["route"] == "home"
+
+
 def test_game_settings_and_when_things_run_are_choices_and_an_agreement_is_the_owners(agent):
     app, client, _ = chosen(agent, "auto")
     workloads = [*OWNER["workloads"], "minecraft"]

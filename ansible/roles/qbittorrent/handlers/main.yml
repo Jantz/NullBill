@@ -1,0 +1,8 @@
+# The tunnel first: the client's unit needs it, and restarts with it.
+- name: Restart the tunnel
+  ansible.builtin.systemd_service: {name: nb-tunnel, state: restarted, daemon_reload: true}
+  when: qbittorrent_manage_services | bool and qbittorrent_route == "vpn"
+
+- name: Restart qbittorrent
+  ansible.builtin.systemd_service: {name: qbittorrent, state: restarted, daemon_reload: true}
+  when: qbittorrent_manage_services | bool

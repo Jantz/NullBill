@@ -19,7 +19,7 @@ def built(facts, config: dict | None = None) -> tuple[dict, dict]:
 def test_only_services_with_a_shared_port_can_be_ticked(facts):
     model, plan = built(facts)
     listed = {s["name"]: s for s in people.shareable(model, plan)}
-    assert list(listed) == ["forgejo", "jellyfin", "minecraft", "terraria", "factorio", "model-gateway"]
+    assert list(listed) == ["forgejo", "jellyfin", "qbittorrent", "minecraft", "terraria", "factorio", "model-gateway"]
     assert listed["forgejo"] == {
         "name": "forgejo",
         "title": "Forgejo",
@@ -36,6 +36,7 @@ def test_only_services_with_a_shared_port_can_be_ticked(facts):
     assert {s["name"]: s["planned"] for s in people.shareable(model, plan)} == {
         "forgejo": True,
         "jellyfin": False,
+        "qbittorrent": False,
         **games,
         "model-gateway": False,
     }

@@ -30,6 +30,11 @@ is that first run.
 - **Jellyfin**, optional: the films, series and music on a disk you kept,
   on your phone, TV app or browser
   ([media.md](docs/runbooks/media.md)).
+- **Downloads**, optional: qBittorrent, whose finished downloads land on
+  the kept disk where Jellyfin sees them. You choose whether it sends
+  through a WireGuard VPN of your own, which the firewall and the checks
+  then hold it to, or from your home connection
+  ([downloads.md](docs/runbooks/downloads.md)).
 - **Game servers**, optional: Minecraft, Terraria and Factorio, each the
   maker's own server in a container of its own, for you and the friends
   you tick it for. Add as many servers of a game as you like, each with

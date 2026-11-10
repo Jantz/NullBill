@@ -4,10 +4,11 @@ plan allows pass and everything else is refused.
 Checks are built from the plan, so a service added by YAML is verified the
 same way as the catalog's. They run over SSH as `pct exec` in one container
 per zone; backups.py adds backup age and a restore test, llm.py the local
-model through the model gateway, media.py Jellyfin, games.py each game
-server, custom.py each service of the owner's own. A check that cannot run reports SKIP, never PASS: so does every
-check of a guest that runs on demand and is off (power.py), which verify
-never starts.
+model through the model gateway, media.py Jellyfin, torrents.py the
+download client and its VPN, games.py each game server, custom.py each
+service of the owner's own. A check that cannot run reports SKIP, never
+PASS: so does every check of a guest that runs on demand and is off
+(power.py), which verify never starts.
 
 People are not probed from inside: every person arrives as the vpn guest.
 What holds each of them to their own services is the tailnet policy, so
@@ -24,9 +25,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from nullbill import agent, backups, browserca, ci, custom, direct, forge, games, hostroot, lan, legacy, llm, media, names, power
+from nullbill import agent, backups, browserca, ci, custom, direct, forge, games, hostroot, lan, legacy, llm, media, names, power, torrents
 from nullbill.errors import NullBillError
-from nullbill.flows import HOST, HOST_PORTS, resolve_flows
+from nullbill.flows import HOST, HOST_PORTS, PROXIED, resolve_flows
 from nullbill.probe import Runner
 from nullbill.render import strip_notes
 from nullbill.results import Result
@@ -124,7 +125,7 @@ def probes(plan_with_notes: dict, model: dict, public_ip: str, off: dict[str, st
         direct = egress == "direct"
         verb = "reaches" if direct else "is refused"
         out.append(Probe(f"{rep} ({zone}) {verb} {public_name} directly by IP", vmid, _tcp(public_ip, 443), "open" if direct else "closed"))
-        if egress == "proxy" and proxy and proxy_port:
+        if egress in PROXIED and proxy and proxy_port:
             via = any(rep in f.sources and f.dest == "egress-proxy" for f in flows)
             if via:
                 cmd = _connect_via(proxy["ip"], proxy_port, public_name)
@@ -323,6 +324,7 @@ def run_verify(
             *llm.skipped(plan, reason),
             *legacy.skipped(plan, reason),
             *media.skipped(plan, reason),
+            *torrents.skipped(plan, reason),
             *games.skipped(plan, model, reason),
             *custom.skipped(plan, model, home, reason),
             *names.skipped(plan, reason),
@@ -391,6 +393,7 @@ def run_verify(
     # These two reach more than one workload and skip check by check.
     add(*legacy.check(plan, target, awake))
     add(*unless_off(lambda r: media.check(plan, target, r), media.skipped))
+    add(*torrents.check(plan, target, awake, public_ip))
     add(*games.check(plan, model, target, awake))
     add(*custom.check(plan, model, target, run, home, off))
     add(*names.check(plan, target, run))

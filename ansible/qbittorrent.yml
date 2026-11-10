@@ -1,0 +1,8 @@
+# qBittorrent in the download client's container, with one folder of a kept
+# disk at /downloads (docs/adr/0017-download-client.md). apply's torrents
+# stage runs this, then has nb-torrents set what NullBill decides.
+- name: Download client
+  hosts: all
+  become: false
+  roles:
+    - qbittorrent

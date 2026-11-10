@@ -244,6 +244,8 @@ inference:
 media: {}
 # Not planned.
 games: {}
+# Not planned.
+torrents: {}
 disks:
   # Blank, so it becomes the PBS datastore.
   ata-SYNTHETIC_HDD_0002:

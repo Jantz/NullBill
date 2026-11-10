@@ -45,10 +45,11 @@ from nullbill import (
     owner,
     power,
     tailscale,
+    torrents,
 )
 from nullbill.artifacts import write_build
 from nullbill.errors import NullBillError
-from nullbill.flows import TAILSCALE_PORT, mac
+from nullbill.flows import PROXIED, TAILSCALE_PORT, mac
 from nullbill.home import REPO_ROOT
 from nullbill.model import NODE_EXPORTER, node_exporter_guest
 from nullbill.probe import NTFS_CHECK, Runner, ntfs_state
@@ -113,6 +114,7 @@ class Context:
     log: list[str] = field(default_factory=list)
     files_stopped: bool = False  # apply stopped the files guest for a disk change
     media_stopped: bool = False  # likewise the Jellyfin guest
+    torrents_stopped: bool = False  # and the download client's
     legacy_mounted: bool = False  # a kept disk was mounted in this run
     kept_before: set[str] | None = None  # disks disks.json protects, as this run found it
     full: bool = False  # run every playbook, even where its inputs are unchanged (applied.py)
@@ -1042,6 +1044,7 @@ def resume_guests(ctx: Context) -> None:
     for name, stopped, exists, running, vmid in (
         (FILES, ctx.files_stopped, files_mount_points, files_running, files_vmid),
         (media.JELLYFIN, ctx.media_stopped, media_mount_points, media_running, media_vmid),
+        (torrents.QBITTORRENT, ctx.torrents_stopped, torrents_mount_points, torrents_running, torrents_vmid),
     ):
         # One that runs on demand and was off before the run stays off.
         was_off = name in power.on_demand(ctx.bare) and name not in ctx.shut_down
@@ -1065,9 +1068,11 @@ def legacy_disks(ctx: Context) -> None:
             check_writable(ctx, m)
     detach_stale(ctx)
     detach_media(ctx)
+    detach_torrents(ctx)
     if gone or changed:
         stop_files(ctx)
         stop_media(ctx)
+        stop_torrents(ctx)
     for name in gone:
         host_out(ctx, "tofu", shlex.join([LEGACY, "unmount", name]))
         ctx.say(f"tofu: stopped keeping {legacy.LEGACY_ROOT}/{name}; its disk is left as it is")
@@ -1191,6 +1196,99 @@ def attach_media(ctx: Context) -> None:
     ctx.media_stopped = False
 
 
+def torrents_vmid(ctx: Context) -> int:
+    return ctx.model["network"]["vmid_base"] + ctx.model["services"][torrents.QBITTORRENT]["id"]
+
+
+def torrents_mount_points(ctx: Context) -> tuple["MountPoints", set[int]] | None:
+    """The download client's guest: its bind mount points of kept disks
+    (host path -> index, value) and every mpN index in use; None while no
+    such guest of NullBill's exists."""
+    rc, config, _ = ctx.reach.host(f"pct config {torrents_vmid(ctx)}")
+    if rc != 0 or f"hostname: {torrents.QBITTORRENT}" not in config.splitlines():
+        return None
+    current, used = {}, set()
+    for line in config.splitlines():
+        key, _, value = line.partition(": ")
+        if key.startswith("mp") and key[2:].isdigit():
+            used.add(int(key[2:]))
+            if value.startswith(legacy.LEGACY_ROOT + "/"):
+                current[value.split(",", 1)[0]] = (int(key[2:]), value)
+    return current, used
+
+
+def torrents_running(ctx: Context) -> bool:
+    rc, out, _ = ctx.reach.host(f"pct status {torrents_vmid(ctx)}")
+    return rc == 0 and "running" in out
+
+
+def stop_torrents(ctx: Context) -> None:
+    """Like stop_files, for the download client, which writes to a folder
+    of a kept disk."""
+    if ctx.torrents_stopped:
+        return
+    found = torrents_mount_points(ctx)
+    if found is None or not found[0]:
+        return
+    if torrents_running(ctx):
+        # qBittorrent writes what it holds in memory before it ends.
+        shut_down(ctx, "tofu", torrents.QBITTORRENT, torrents_vmid(ctx), timeout=120)
+        ctx.say("tofu: stopped the download client's guest while its disk changes")
+    ctx.torrents_stopped = True
+
+
+def detach_torrents(ctx: Context) -> None:
+    """Before the host unmounts anything or OpenTofu removes the guest: take
+    off the downloads folder when the plan puts it elsewhere or nowhere."""
+    found = torrents_mount_points(ctx)
+    if found is None:
+        return
+    current, _ = found
+    want = torrents.store(ctx.bare) if torrents.enabled(ctx.bare) else None
+    stale = [f"mp{current[path][0]}" for path in sorted(current) if want is None or path != want["path"]]
+    if stale:
+        stop_torrents(ctx)
+        host_out(ctx, "tofu", f"pct set {torrents_vmid(ctx)} --delete {','.join(stale)}")
+        ctx.say("tofu: took the downloads folder off the download client's guest")
+
+
+def attach_torrents(ctx: Context) -> None:
+    """The downloads folder of the kept disk, made if it is missing, as the
+    one bind mount point of the download client's guest, read-write."""
+    want = torrents.store(ctx.bare) if torrents.enabled(ctx.bare) else None
+    if want is None:
+        return
+    vmid = torrents_vmid(ctx)
+    found = torrents_mount_points(ctx)
+    if found is None:
+        raise ApplyError("tofu", f"container {vmid} is not NullBill's download client")
+    current, used = found
+    # On the kept disk itself, never under an empty mount point: the host
+    # script leaves that immutable while the disk is away.
+    made = f"findmnt -rno TARGET --mountpoint {shlex.quote(want['mount'])} >/dev/null && mkdir -p {shlex.quote(want['path'])}"
+    rc, _, err = ctx.reach.host(made)
+    if rc != 0:
+        raise ApplyError(
+            "tofu", f"could not make {want['path']} on the kept disk {want['share']}: {(err.strip() or 'it is not mounted')[:200]}"
+        )
+    line = torrents.mount_point(want)
+    index, value = current.get(want["path"], (None, ""))
+    if index is None:
+        index = min(i for i in range(256) if i not in used)
+    if not value or _mp_fields(value) != _mp_fields(line):
+        if not ctx.torrents_stopped and torrents_running(ctx):
+            shut_down(ctx, "tofu", torrents.QBITTORRENT, vmid, timeout=120)
+        ctx.torrents_stopped = True
+        host_out(ctx, "tofu", f"pct set {vmid} --mp{index} {shlex.quote(line)}")
+        ctx.say(f"tofu: gave the download client the folder {want['folder']} of the kept disk {want['share']}")
+    # A disk mounted on the host after the guest started shows up in it only
+    # once the guest starts again.
+    if not ctx.torrents_stopped and not ctx.legacy_mounted:
+        return
+    see_changes(ctx, "tofu", torrents.QBITTORRENT, 120, wake=False)
+    ctx.torrents_stopped = False
+
+
 def mount_point(m: dict) -> str:
     ro = "1" if m["mode"] == "ro" else "0"
     # backup=0 says so in the config; PVE never backs up a bind mount anyway.
@@ -1304,7 +1402,7 @@ def stage_tofu(ctx: Context) -> None:
     work.mkdir(mode=0o700, exist_ok=True)
     (work / "main.tf.json").write_text(ctx.files["tofu/main.tf.json"])
     windows_iso(ctx, "tofu", say=True)
-    ctx.legacy_mounted = ctx.files_stopped = False
+    ctx.legacy_mounted = ctx.files_stopped = ctx.torrents_stopped = False
     ctx.kept_before = kept_disks(ctx)
     copy_disks(ctx)
     legacy_disks(ctx)
@@ -1316,6 +1414,7 @@ def stage_tofu(ctx: Context) -> None:
     move_copies(ctx)
     attach_shares(ctx)
     attach_media(ctx)
+    attach_torrents(ctx)
     # The host reaches the zones through the router, not its LAN gateway.
     host_files(ctx, "tofu", "/etc/systemd/system", {ROUTES_UNIT: routes_unit(ctx)})
     host_out(ctx, "tofu", f"systemctl daemon-reload && systemctl enable -q {ROUTES_UNIT} && systemctl restart {ROUTES_UNIT}")
@@ -1385,7 +1484,7 @@ def update_guests(ctx: Context) -> dict[str | None, dict]:
             continue
         # The router has its own uplink; other guests in a proxied zone
         # reach the mirrors through the proxy only.
-        proxied = name != "router" and ctx.bare["zones"][guest["zone"]]["egress"] == "proxy"
+        proxied = name != "router" and ctx.bare["zones"][guest["zone"]]["egress"] in PROXIED
         guests[name] = {
             "updates_apt_proxy": proxy if proxied else "",
             "updates_auto_reboot": name not in owner_reboots,
@@ -1876,6 +1975,40 @@ def stage_media(ctx: Context) -> None:
     ctx.say(f"media: from your devices on the tailnet Jellyfin is {url}; sign in as {media.ADMIN_USER}, the page shows the password")
 
 
+def stage_torrents(ctx: Context) -> None:
+    """The download client in its guest. Behind a VPN, first the host loads
+    WireGuard's module, which a container cannot; then the role, with the
+    owner's WireGuard file from the secrets; then nb-torrents waits for the
+    client and sets what NullBill decides (where files go, that it sends
+    through the tunnel only, its page's sign-in)."""
+    if not torrents.enabled(ctx.bare):
+        return
+    name = torrents.QBITTORRENT
+    way = torrents.route(ctx.bare)
+    if way == torrents.VPN:
+        host_files(ctx, "torrents", "/etc/modules-load.d", {torrents.MODULE_FILE: f"# Generated by nullbill.\n{torrents.MODULE}\n"})
+        rc, _, err = ctx.reach.host(f"modprobe {torrents.MODULE}")
+        if rc != 0:
+            raise ApplyError("torrents", f"the host cannot load WireGuard, which the VPN needs: {(err.strip() or f'exit {rc}')[:200]}")
+    password = ctx.secrets.ensure(torrents.PASSWORD_SECRET, lambda: secrets.token_urlsafe(18))
+    try:
+        variables = torrents.variables(ctx.bare, ctx.model, password, ctx.secrets.data.get(torrents.VPN_SECRET))
+    except NullBillError as exc:
+        raise ApplyError("torrents", "; ".join(exc.messages)) from exc
+    run_playbook(ctx, "torrents", torrents.PLAYBOOK, name, variables)
+    guest_out(ctx, "torrents", name, [torrents.NB_TORRENTS, "wait"])
+    if guest_out(ctx, "torrents", name, [torrents.NB_TORRENTS, "settings"]).strip() == "changed":
+        ctx.say("torrents: set where qBittorrent saves, how it sends and its sign-in")
+    found = torrents.store(ctx.bare)
+    how = "through your VPN only" if way == torrents.VPN else "from the home connection, whose address others in a download see"
+    ctx.say(f"torrents: downloads go to {found['folder']} on the kept disk {found['share']}, {how}")
+    url = f"http://{ctx.bare['guests'][name]['ip']}:{torrents.PORT}"
+    ctx.say(
+        f"torrents: from your devices on the tailnet the download client is {url}; "
+        f"sign in as {torrents.ADMIN_USER}, the page shows the password"
+    )
+
+
 def ssh_user_ca(ctx: Context, stage: str) -> str:
     return guest_out(ctx, stage, "step-ca", ["cat", f"{STEP}/certs/ssh_user_ca_key.pub"]).strip()
 
@@ -2184,7 +2317,7 @@ def stage_ci(ctx: Context) -> None:
 def proxy_url(ctx: Context, name: str) -> str:
     """The egress proxy for a guest in a proxied zone, or "" where egress is
     direct. The router, which is the zones' way out, has its own uplink."""
-    if name == "router" or ctx.bare["zones"][ctx.bare["guests"][name]["zone"]]["egress"] != "proxy":
+    if name == "router" or ctx.bare["zones"][ctx.bare["guests"][name]["zone"]]["egress"] not in PROXIED:
         return ""
     return f"http://{ctx.bare['guests'][PROXY]['ip']}:{proxy_port(ctx.model)}"
 
@@ -2822,6 +2955,7 @@ STAGES: list[Stage] = [
     ("inference", stage_inference),
     ("files", stage_files),
     ("media", stage_media),
+    ("torrents", stage_torrents),
     ("games", stage_games),
     ("ci", stage_ci),
     ("agents", stage_agents),

@@ -33,6 +33,7 @@ STAGE_TEXT = {
     "inference": "Set up the local AI model and its gateway",
     "files": "Share your kept disks",
     "media": "Set up Jellyfin",
+    "torrents": "Set up the download client",
     "games": "Set up the game servers",
     "ci": "Build the CI runner images",
     "agents": "Set up the coding agent",

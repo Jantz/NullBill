@@ -32,6 +32,10 @@ SSDP_REPLY_PORT = 1901
 # service. Like a role, they arrive through the vpn guest, so the firewall
 # opens the port to it and the tailnet policy decides who gets through.
 SHARED = "shared"
+# A zone's egress in the plan, where its guests install packages through
+# the egress proxy: proxy, and tunnel (the torrents zone behind the owner's
+# VPN, torrents.py), whose only other way out is that VPN's server.
+PROXIED = ("proxy", "tunnel")
 
 
 @dataclass(frozen=True)

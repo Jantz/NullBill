@@ -9,7 +9,7 @@ variables and environment, never part of the rendered files.
 
 import json
 
-from nullbill import agent, backups, ci, legacy, media, power
+from nullbill import agent, backups, ci, legacy, media, power, torrents
 from nullbill.flows import mac
 from nullbill.render import strip_notes
 
@@ -168,6 +168,9 @@ def _container(name: str, guest: dict, plan: dict, model: dict, storage: str) ->
         # apply sets the kept disks' bind mounts and the integrated GPU's
         # render node as root, as for the files guest and inference.
         container["lifecycle"] = {"ignore_changes": ["mount_point", "device_passthrough"]}
+    if name == torrents.QBITTORRENT:
+        # apply sets its downloads folder, a bind mount, as root likewise.
+        container["lifecycle"] = {"ignore_changes": ["mount_point"]}
     return _in_agent_pool(_on_demand(container, guest, "start_on_boot"), guest)
 
 

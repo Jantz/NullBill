@@ -8,6 +8,7 @@ router forwards. The router itself is left open on its vNICs; its own
 nftables rules are its guard.
 """
 
+from nullbill import torrents
 from nullbill.flows import HOST, HOST_SET, PRIVATE, TAILSCALE_PORT, addresses, from_people, resolve_flows, svc_set
 from nullbill.render import strip_notes
 
@@ -79,7 +80,7 @@ def _cluster(plan: dict, lan_open: bool) -> str:
     return HEADER + note + "[OPTIONS]\nenable: 1\npolicy_in: DROP\npolicy_out: ACCEPT\n\n" + aliases + "".join(sets)
 
 
-def _guest_rules(name: str, rules_by_guest: _Rules, egress: str) -> list[str]:
+def _guest_rules(name: str, rules_by_guest: _Rules, egress: str, vpn_server: tuple[str, int] | None = None) -> list[str]:
     rules = rules_by_guest.inbound[name] + rules_by_guest.outbound[name]
     if name == "vpn":
         # Tailscale's direct paths. In: whatever the router passes on for
@@ -96,6 +97,11 @@ def _guest_rules(name: str, rules_by_guest: _Rules, egress: str) -> list[str]:
         ]
     if egress == "direct":
         rules += ["OUT DROP -dest +nb-private # no LAN or other private ranges", "OUT ACCEPT # internet via the router"]
+    if egress == torrents.TUNNEL and vpn_server:
+        # The download client behind the owner's VPN: WireGuard's packets
+        # to that VPN's server, and nothing else outside NullBill.
+        address, port = vpn_server
+        rules.append(f"OUT ACCEPT -dest {address} -p udp -dport {port} # WireGuard to the owner's VPN, the only way out")
     return rules
 
 
@@ -128,7 +134,7 @@ def render_firewall(plan_with_notes: dict, model: dict) -> dict[str, str]:
     }
     groups = []
     for name, guest in plan["guests"].items():
-        rules = _guest_rules(name, by_guest, plan["zones"][guest["zone"]]["egress"])
+        rules = _guest_rules(name, by_guest, plan["zones"][guest["zone"]]["egress"], torrents.endpoint(plan))
         if guest["kind"] == "vm-pool":
             # Clones copy the template's firewall file, which points at this group.
             group = _group(guest)

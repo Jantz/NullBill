@@ -198,6 +198,8 @@ media:
   library: []
 # Not planned.
 games: {}
+# Not planned.
+torrents: {}
 disks:
   # Holds PVE; never touched.
   ata-SYNTHETIC_SSD_0001:
