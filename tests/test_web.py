@@ -1352,6 +1352,20 @@ def test_the_app_files_are_served_with_their_types(site):
     assert "/api/" not in sw.split("SHELL = ")[1].split("\n")[0]
 
 
+def test_the_page_holds_every_element_and_icon_its_script_asks_for():
+    """A control taken off the page while the script still reaches for it
+    stops the whole page at load, and no other check opens a browser."""
+    static = Path(web.__file__).parent / "static"
+    page, script = (static / "index.html").read_text(), (static / "app.js").read_text()
+    ids = set(re.findall(r'\bid="([^"]+)"', page))
+    # The rows of What to run are made by the script (`opt-<name>`).
+    asked = {i for i in re.findall(r'\$\("([^"]+)"\)', script) if not i.startswith("opt-")}
+    assert asked - ids == set()
+    icons = {i for i in ids if i.startswith("i-")}
+    used = set(re.findall(r'href="#(i-[a-z-]+)"', page)) | {f"i-{n}" for n in re.findall(r'\bicon(?:\(|: )"([a-z-]+)"', script)}
+    assert used - icons == set()
+
+
 def test_connections_stay_open_and_close_without_a_reset(site):
     """Phones on mobile data reach the page through Tailscale's userspace
     stack, which turns a reset into a lost page: one connection carries

@@ -1244,11 +1244,11 @@ function renderAgentSignin(st) {
 function renderMode(settings) {
   for (const button of document.querySelectorAll("#modes .choice")) button.setAttribute("aria-pressed", button.dataset.mode === settings.mode ? "true" : "false");
   $("auto-fix").checked = settings.auto_fix;
-  const pill = $("chat-mode");
-  pill.firstChild.textContent = MODE_NAMES[settings.mode];
-  pill.dataset.mode = settings.mode;
-  pill.title = `Access mode: ${MODE_NAMES[settings.mode]}. ${MODE_DESC[settings.mode]}`;
-  pill.setAttribute("aria-label", `Access mode: ${MODE_NAMES[settings.mode]}. Change`);
+  for (const button of $("chat-modes").children) {
+    button.setAttribute("aria-pressed", button.dataset.mode === settings.mode ? "true" : "false");
+    button.title = MODE_DESC[button.dataset.mode];
+  }
+  $("chat-modes").dataset.mode = settings.mode;
 }
 
 function renderAgentPowers(on) {
@@ -2918,10 +2918,13 @@ function paintChatBadge() {
   setNav("agent", waiting ? String(waiting) : "", "warn", label);
 }
 
+// An empty conversation: what the agent is for, and where to start.
 function chatEmpty() {
   return make("div", {className: "chat-empty"},
-    make("b", {textContent: "Ask about your server."}),
-    make("span", {textContent: "The agent reads logs and runs checks by itself. It asks before it changes anything your access mode keeps for you."}));
+    make("span", {className: "chat-empty-mark", ariaHidden: "true"}, icon("agent")),
+    make("b", {textContent: "Ask about your server"}),
+    make("span", {textContent: "The agent reads logs and runs checks by itself, and asks before any change your access mode keeps for you."}),
+    make("div", {className: "starters", role: "group", ariaLabel: "Suggestions"}));
 }
 
 function paintChatShell() {
@@ -2931,20 +2934,20 @@ function paintChatShell() {
   show("chat-signin", !signed);
   show("chat-log", signed);
   $("composer").hidden = !signed;
-  show("chat-chips", signed);
+  show("chat-new", signed);
+  show("chat-copy", signed);
+  const missing = signed && c.installed === false;
+  show("chat-notice", missing);
+  if (missing) $("chat-notice").textContent = "The agent's program is not on the server yet. Press Update NullBill in the menu beside Run setup, then ask again.";
   const log = $("chat-log");
   const empty = log.querySelector(".chat-empty");
   const hasMessages = [...log.children].some((n) => !n.classList.contains("chat-empty") && !n.classList.contains("typing"));
   if (signed && !hasMessages && !empty) log.prepend(chatEmpty());
   if (hasMessages && empty) empty.remove();
+  $("chat").classList.toggle("blank", signed && !hasMessages);
+  paintChips();
   $("chat").classList.toggle("working", chat.busy);
   $("chat").classList.toggle("asking", chat.pending.length > 0);
-  $("chat-status").textContent = !signed ? "Not signed in"
-    : c.installed === false ? "Not installed: press Update NullBill"
-    : chat.busy && chat.queued ? `Working, then ${chat.queued} more message${chat.queued === 1 ? "" : "s"}`
-    : chat.busy ? "Working"
-    : chat.pending.length ? "Needs your answer"
-    : "";
   show("chat-stop", chat.busy);
 }
 
@@ -2952,9 +2955,10 @@ function paintTyping() {
   const log = $("chat-log");
   if (chat.busy) {
     if (!chat.typing) {
-      chat.typing = make("div", {className: "typing"}, make("i"), make("i"), make("i"), make("span", {textContent: "Working"}));
+      chat.typing = make("div", {className: "typing"}, make("i"), make("i"), make("i"), make("span"));
       chat.typing.setAttribute("aria-hidden", "true");
     }
+    chat.typing.lastChild.textContent = chat.queued ? `Working, then ${chat.queued} more message${chat.queued === 1 ? "" : "s"} of yours` : "Working";
     log.append(chat.typing);
   } else if (chat.typing) {
     chat.typing.remove();
@@ -3001,7 +3005,8 @@ function renderEvent(e) {
       addToLog(make("div", {className: "msg assistant"}, ...markdown(e.text)));
       break;
     case "system":
-      addToLog(make("div", {className: "msg system", textContent: e.text}));
+      // A new conversation shows as the empty one it is.
+      if (!e.reset) addToLog(make("div", {className: "msg system", textContent: e.text}));
       break;
     case "error":
       addToLog(make("div", {className: "msg error", textContent: e.text}));
@@ -3064,7 +3069,7 @@ function renderEvent(e) {
         make("div", {className: "card-body"},
           make("span", {textContent: e.title}),
           e.command ? make("div", {className: "cmd", textContent: e.command}) : null,
-          make("span", {className: "why", textContent: `Refused in every mode: this ${e.why}.`}))));
+          make("span", {className: "why", textContent: `Refused in every mode: ${e.why}.`}))));
       break;
     case "job":
       addToLog(make("div", {className: "msg system"}, `Started: ${e.title || JOB_NAMES[e.action] || e.action}. `, make("a", {href: e.id ? `#activity/${e.id}` : "#activity", textContent: "Follow it"})));
@@ -3099,7 +3104,7 @@ function requestCard(e) {
   if (e.act === "write" && e.diff) body.append(diffView(e.diff));
   if (e.lines && e.lines.length) body.append(make("ul", {className: "says"}, ...e.lines.map((l) => li(l))));
   if (e.why) body.append(make("p", {className: "says", textContent: e.why}));
-  body.append(make("p", {className: "why", textContent: `Waits for you because this ${e.reason}.`}));
+  body.append(make("p", {className: "why", textContent: `Asked because of: ${e.reason}.`}));
   const approve = make("button", {type: "button", className: `btn ${e.tier === "risky" ? "danger" : "primary"} small`, textContent: "Approve"});
   approve.setAttribute("aria-keyshortcuts", "Alt+Y");
   const decline = make("button", {type: "button", className: "btn small", textContent: "Decline"});
@@ -3239,17 +3244,26 @@ function suggestions() {
   if (built() && state.lan.state === "open") out.push(["Close the home network", "Walk me through reaching NullBill over Tailscale and closing Proxmox to the home network."]);
   if (built()) out.push(["Anything to update?", "Are there updates waiting for Proxmox, the guests or NullBill itself?"]);
   out.push(["What next?", "What should I do next?"]);
-  return out.slice(0, 3);
+  return out.slice(0, 4);
 }
 
+// An empty conversation lists them in full, where there is room for each; a
+// conversation under way keeps a few above the box, wrapped, never cut off.
 function paintChips() {
-  const items = suggestions();
-  const box = $("chat-chips");
-  const key = JSON.stringify(items);
+  const signed = Boolean(state && state.chat && state.chat.signed_in);
+  const starters = $("chat-log").querySelector(".starters");
+  const items = signed ? suggestions() : [];
+  const box = starters || $("chat-chips");
+  show("chat-chips", signed && !starters && items.length > 0);
+  if (starters) $("chat-chips").dataset.key = "";
+  const shown = starters ? items : items.slice(0, 2);
+  const key = JSON.stringify(shown);
   if (box.dataset.key === key) return;
   box.dataset.key = key;
-  box.replaceChildren(...items.map(([label, text]) => {
-    const chip = make("button", {type: "button", className: "chip", textContent: label});
+  box.replaceChildren(...shown.map(([label, text]) => {
+    const chip = starters
+      ? make("button", {type: "button", className: "starter"}, make("span", {textContent: label}), icon("arrow"))
+      : make("button", {type: "button", className: "chip", textContent: label});
     chip.addEventListener("click", () => askAgent(text));
     return chip;
   }));
@@ -3275,7 +3289,7 @@ async function setMode(mode, feedback, focusAfter) {
   try {
     say(feedback, "busy", "Saving…");
     await saveSettings({mode});
-    say(feedback, "ok", `${MODE_NAMES[mode]}. The agent knows from its next step.`);
+    say(feedback, "ok", `${MODE_NAMES[mode]}: ${MODE_DESC[mode].replace(/\.$/, "").replace(/^./, (c) => c.toLowerCase())}, from the agent's next step.`);
     announce(`Access mode: ${MODE_NAMES[mode]}.`);
   } catch (error) {
     renderMode(state.chat);
@@ -3308,28 +3322,16 @@ function accountMenu() {
   items.push({sep: true}, {label: "Sign out", icon: "logout", run: logout});
   openMenu($("account"), items, "left");
 }
-function modeMenu() {
-  const button = $("chat-mode");
-  openMenu(button, [
-    ...Object.keys(MODE_NAMES).map((m) => ({label: MODE_NAMES[m], desc: MODE_DESC[m], checked: state.chat.mode === m, run: () => setMode(m, "composer-result", button)})),
-    {sep: true},
-    {label: "Agent settings", icon: "cog", run: () => go("agent/settings")},
-  ]);
-}
-function chatMenu() {
-  openMenu($("chat-more"), [
-    {label: "New conversation", icon: "plus", run: newConversation},
-    {label: "Copy the conversation", icon: "copy", run: () => copyConversation($("chat-more"))},
-    {sep: true},
-    {label: "What the agent did", icon: "activity", run: () => go("agent/log")},
-    {label: "Agent settings", icon: "cog", run: () => go("agent/settings")},
-  ]);
-}
+// One press on the panel's button: asked first whenever there is something
+// to lose, since an earlier conversation cannot be opened again.
 async function newConversation() {
-  if (chat.busy || chat.pending.length) {
-    const ok = await confirmDialog({title: "Start a new conversation?", text: "The agent stops what it is doing, and waiting requests expire.", yes: "Start over", danger: false});
-    if (!ok) return;
-  }
+  if (!(state.chat && state.chat.signed_in) || $("chat").classList.contains("blank")) { openAgent(true); return; }
+  openAgent(false);
+  const text = chat.busy || chat.pending.length
+    ? "The agent stops what it is doing, and waiting requests expire. This conversation leaves the page."
+    : "This conversation leaves the page and the agent starts without it. What it did stays under Agent, Log.";
+  const ok = await confirmDialog({title: "Start a new conversation?", text, yes: "Start over", danger: false});
+  if (!ok) { $("chat-new").focus(); return; }
   try {
     await api("/api/chat/new", {});
     pollChat();
@@ -3347,11 +3349,11 @@ function commands() {
     {label: "Update NullBill", kind: "Run", icon: "update", run: () => startJob("upgrade", $("run-setup"), $("actions-result"))},
     {label: "Read the hardware", kind: "Run", icon: "chip", run: () => { go("setup/hardware"); $("probe-button").click(); }},
     {label: "Open the agent", kind: "Agent", icon: "agent", run: () => openAgent(true)},
-    {label: "New conversation with the agent", kind: "Agent", icon: "plus", run: newConversation},
+    {label: "New conversation with the agent", kind: "Agent", icon: "new-chat", run: newConversation},
     {label: "Copy the conversation", kind: "Agent", icon: "copy", run: () => copyConversation()},
     {label: "Stop the agent", kind: "Agent", icon: "stop", run: () => api("/api/chat/stop", {}).then(pollChat).catch((e) => toast(e.message))},
     {label: "Access mode", kind: "Agent", icon: "shield", run: () => { go("agent/settings"); setTimeout(() => document.querySelector('#modes [aria-pressed="true"]').focus(), 30); }},
-    {label: "What the agent did", kind: "Agent", icon: "activity", run: () => go("agent/log")},
+    {label: "What the agent did", kind: "Agent", icon: "history", run: () => go("agent/log")},
     {label: "Setup guide", kind: "Help", icon: "check", run: openGuide},
     {label: "Tailscale", kind: "Access", icon: "access", run: () => go("access/tailscale")},
     {label: "People and what each may open", kind: "Access", icon: "access", run: () => go("access/people")},
@@ -3665,8 +3667,12 @@ document.addEventListener("DOMContentLoaded", () => {
   $("account").addEventListener("click", accountMenu);
   $("run-menu").addEventListener("click", runMenu);
   $("guide-btn").addEventListener("click", openGuide);
-  $("chat-mode").addEventListener("click", modeMenu);
-  $("chat-more").addEventListener("click", chatMenu);
+  $("chat-new").addEventListener("click", newConversation);
+  $("chat-copy").addEventListener("click", () => copyConversation($("chat-copy")));
+  $("chat-modes").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-mode]");
+    if (button) setMode(button.dataset.mode, "composer-result", button);
+  });
   $("install-app-2").addEventListener("click", install);
   const paintThemePick = () => {
     for (const b of document.querySelectorAll("[data-theme-pick]")) b.setAttribute("aria-checked", b.dataset.themePick === themeName() ? "true" : "false");
