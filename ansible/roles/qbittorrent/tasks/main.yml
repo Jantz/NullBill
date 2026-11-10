@@ -68,6 +68,7 @@
         "store": qbittorrent_store,
         "keep_free_gib": qbittorrent_keep_free_gib,
         "route": qbittorrent_route,
+        "listen_port": qbittorrent_listen_port,
         "base": qbittorrent_base,
         "tunnel": qbittorrent_tunnel,
       } | to_json }}

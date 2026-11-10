@@ -96,10 +96,9 @@ answered items move to the decisions list at the bottom.
     router for the port** on the page's **Access** page.
 
 17. **The download client** (docs/adr/0017-download-client.md), four
-    things left out on purpose. (a) A VPN provider's port forwarding, so
-    others can connect to the client and seeding is faster: it differs per
-    provider. Recommendation: say which provider you use, and I build
-    that one. (b) A place for downloads other than a kept disk.
+    things left out on purpose. (a) A VPN provider's port forwarding (from home the port is
+    open already): it differs per provider. Recommendation: not until you
+    use a VPN for downloads; then say which provider. (b) A place for downloads other than a kept disk.
     Recommendation: not until someone has no kept disk. (c) Sonarr,
     Radarr and Prowlarr beside it. Recommendation: as services of your
     own first (ADR 0015), built in once you use them. (d) HTTPS for its

@@ -5,7 +5,8 @@ old disk kept, shared (the files guest) and played (Jellyfin) into
 OUT/large-legacy, with every game server and a friend given two of them
 into OUT/large-games, with two services of the owner's own (a container
 and a VM, custom.py) into OUT/large-custom, with the download client behind
-a VPN (torrents.py) into OUT/large-torrents, and the mid class with every workload that can run on
+a VPN (torrents.py) into OUT/large-torrents and on the home connection into
+OUT/large-torrents-home, and the mid class with every workload that can run on
 demand doing so into OUT/mid-on-demand.
 
 Used by the container checks, which parse the rendered files with the real
@@ -30,6 +31,7 @@ variants.append(("large-legacy", "large", legacy_config()))
 variants.append(("large-games", "large", games_config()))
 variants.append(("large-custom", "large", custom_config()))
 variants.append(("large-torrents", "large", torrents_config()))
+variants.append(("large-torrents-home", "large", torrents_config("home")))
 on_demand = dict.fromkeys(["agents", "linux-ci", "inference", "windows-dev"], {"run": "on-demand"})
 variants.append(("mid-on-demand", "mid", {**fixture_config("mid"), "power": on_demand}))
 for name, cls, config in variants:

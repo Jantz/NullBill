@@ -26,7 +26,9 @@ does anyone who watches that download. NullBill does not choose for you:
   account with a provider that offers WireGuard.
 - **From my home connection, without a VPN.** Others see your home's
   public address. The checks then report **downloads leave through a VPN**
-  as degraded, for as long as it stays that way.
+  as degraded, for as long as it stays that way. The server asks your home
+  router to open one port (TCP and UDP 41643) so that others can connect
+  to you, which seeding and private trackers need; part 5 has the rest.
 
 ## 2. Turn it on
 
@@ -89,15 +91,40 @@ itself. Three things to know:
 - The tracker sees the address the client sends from: your VPN's, or your
   home's. Check that your tracker allows VPN addresses, and pick one
   server and stay on it if the tracker ties your account to an address.
-- No incoming port is open, with or without a VPN. You download at full
-  speed and seed to everyone who is reachable themselves, but two people
-  who are both unreachable cannot connect, so your ratio grows more slowly.
-  Opening a port depends on the VPN provider and is not built yet.
+- From home, the open port (part 5) makes you reachable, which is what
+  trackers mean by "connectable". Behind a VPN no port is open: you
+  download at full speed and seed to everyone who is reachable themselves,
+  but your ratio grows more slowly. A VPN provider's port forwarding is
+  not built.
 - A feed address or a passkey in a torrent is a secret of yours. It is
   kept in qBittorrent's own files in its container, which is in the
   nightly backups.
 
-## 5. When the disk fills up
+## 5. The open port, from home
+
+**You need:** nothing, if your home router has UPnP or NAT-PMP on, as most
+do.
+
+With **From my home connection** chosen and **Ask my home router to open
+port 41643 for it** ticked (it is, unless you untick it), the server asks
+your home router for TCP and UDP 41643 every 15 minutes and passes that
+port on to the download client. It is the same request the server makes
+for Tailscale's port. Only the download client answers on it.
+
+After setup, **Run the checks** shows **the home router sends the download
+client's port to it**:
+
+| It says | Meaning | What to do |
+|---|---|---|
+| passed | Your home router opened the port. | Nothing. The connection icon at the bottom of qBittorrent's page turns green once peers connect. |
+| degraded, with what the home router answered | It did not open the port. Downloads work; others cannot connect to you. | On the home router turn on UPnP or NAT-PMP. Or forward TCP and UDP 41643 to the address the check names (the NullBill router on your home network) and untick the box. |
+| degraded: it has no public address of its own | Your provider shares one address between customers, or there is a second router in front. | No port can be opened from in here. Ask the provider for a public address, or use the VPN way. |
+| skipped | You unticked the box. A port forwarded by hand cannot be seen from the server. | Look at that connection icon, or your tracker's "connectable" mark. |
+
+Do not change the listening port in qBittorrent's options: setup sets it
+back to 41643, the only port the firewall passes on.
+
+## 6. When the disk fills up
 
 Downloads pause by themselves while the disk has less free than **Room to
 keep free** (25 GiB unless you changed it), and go on once it has that and
@@ -105,7 +132,7 @@ a tenth more. Finished files keep seeding. The alert **downloads are
 paused** tells you; delete or move files, or lower the number under
 **Setup**, **What to run**.
 
-## 6. When something is wrong
+## 7. When something is wrong
 
 | What you see | What it means | What to do |
 |---|---|---|
@@ -115,7 +142,7 @@ paused** tells you; delete or move files, or lower the number under
 | Plan: downloads go to a kept disk that can be written to | No kept disk has **Let me change files on it**. | Tick it under **Other disks**; [legacy-disk.md](legacy-disk.md) says what Windows must have done first. |
 | Nothing downloads, the page works | Paused for room, or the tunnel is down. | In the Proxmox shell: `pct exec 2028 -- nb-torrents space` and `pct exec 2028 -- nb-torrents tunnel status`. |
 
-## 7. Turning it off
+## 8. Turning it off
 
 Unticking it deletes the client with its list of downloads and its
 settings at the next setup run, which asks first. The downloaded files
@@ -124,12 +151,15 @@ the saved file**.
 
 ## What is not built
 
-- A VPN provider's port forwarding: others cannot open connections to the
-  client, so seeding to people behind routers of their own is slower.
+- A VPN provider's port forwarding: behind a VPN others cannot open
+  connections to the client, so seeding is slower there. From home the
+  port is open (part 5).
 - A place for downloads other than a kept disk.
 - HTTPS for the client's page; it is reached over Tailscale only, as
   Jellyfin is.
 
 Not yet tried on real hardware: all of it. The path through a WireGuard
 tunnel and both firewall layers is tested in containers and network
-namespaces; Proxmox itself, a real provider and a real kept disk are not.
+namespaces, and so is the open port, against a stand-in home router;
+Proxmox itself, your home router, a real provider and a real kept disk
+are not.

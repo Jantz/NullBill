@@ -168,6 +168,69 @@ portmap /tmp/off.json
 [[ $(field method) == null && $(field held) == '[]' && $(probe "$port") == none ]] || fail "the mapping stayed after tailnet.port_mapping: false"
 ok "switched off, nb-portmap gives the port back"
 
+# The download client's port, when it sends from the home connection
+# (nullbill/torrents.py): the large class's render with that choice, a
+# client guest behind the router, and the same nb-portmap asking for the
+# port in TCP and UDP besides Tailscale's.
+home_build=/build/large-torrents-home/router/etc
+peers=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["more"]["torrents"]["port"])' "$home_build/nullbill/portmap.json")
+client_ip=$(sed -n "s/.* tcp dport $peers dnat to \([0-9.]*\):.*/\1/p" "$home_build/nftables.conf")
+[[ -n $client_ip ]] || fail "the render with downloads from home sends no port to the client"
+ip netns add client
+ns client ip link set lo up
+link router nb-torrents client eth0
+ns router ip addr add "${client_ip%.*}.1/24" dev nb-torrents
+ns client ip addr add "$client_ip/24" dev eth0
+ns client ip route add default via "${client_ip%.*}.1"
+ns router nft -f "$home_build/nftables.conf"
+# qBittorrent's stand-in: it tells each peer the address it came from, over
+# TCP as over UDP, and on the port next door, which must stay shut.
+cat >/tmp/peers.py <<'PY'
+import socket, sys, threading
+
+def serve(port):
+    server = socket.create_server(("0.0.0.0", port))
+    while True:
+        conn, peer = server.accept()
+        conn.sendall(peer[0].encode())
+        conn.close()
+
+for port in sys.argv[1:]:
+    threading.Thread(target=serve, args=(int(port),), daemon=True).start()
+threading.Event().wait()
+PY
+ns client python3 /tmp/peers.py "$peers" "$((peers + 1))" &
+ns client python3 /tmp/listen.py "$peers" &
+sleep 0.5
+tcp_probe() {
+  ns out python3 - "$public" "$1" <<'PY'
+import socket, sys
+
+try:
+    with socket.create_connection((sys.argv[1], int(sys.argv[2])), 2) as conn:
+        print(conn.recv(64).decode())
+except OSError:
+    print("none")
+PY
+}
+more() { python3 -c 'import json, sys; print(json.dumps(json.load(open(sys.argv[1]))["more"]["torrents"][sys.argv[2]], sort_keys=True))' "$state" "$1"; }
+[[ $(tcp_probe "$peers") == none && $(probe "$peers") == none ]] || fail "port $peers reached the download client before the home router forwards it"
+portmap "$home_build/nullbill/portmap.json"
+[[ $(more open) == "{\"tcp\": \"$public:$peers\", \"udp\": \"$public:$peers\"}" ]] || fail "no mapping for the client's port: $(more why)"
+[[ $(tcp_probe "$peers") == "$device" ]] || fail "TCP $peers did not reach the download client from the sender's address"
+[[ $(probe "$peers") == "$device" ]] || fail "UDP $peers did not reach the download client from the sender's address"
+[[ $(field method) == '"NAT-PMP"' && $(probe "$port") == "$device" ]] || fail "Tailscale's port was lost beside the client's"
+ok "the home router opens TCP and UDP $peers for nb-portmap too, and a peer on the internet reaches the download client at them"
+ns home nft add rule ip portmap prerouting iifname wan tcp dport "$((peers + 1))" dnat to "$uplink:$((peers + 1))"
+[[ $(tcp_probe "$((peers + 1))") == none ]] || fail "TCP $((peers + 1)) reached the download client"
+python3 -c 'import json, sys; s = json.load(open(sys.argv[1])); s["more"]["torrents"]["enabled"] = False; print(json.dumps(s))' "$home_build/nullbill/portmap.json" >/tmp/peers-off.json
+portmap /tmp/peers-off.json
+[[ $(more held) == '[]' && $(tcp_probe "$peers") == none && $(probe "$peers") == none ]] || fail "the client's port stayed open after torrents.port_mapping: false"
+[[ $(probe "$port") == "$device" ]] || fail "Tailscale's port went with the client's"
+ok "another port never reaches the client; switched off, its port is given back and Tailscale's stays"
+ns router nft -f "$build/nftables.conf"
+portmap /tmp/off.json
+
 # A home router whose own address is the provider's shared one: miniupnpd,
 # as on OpenWrt and many others, says so over both protocols.
 ns home ip addr flush dev wan

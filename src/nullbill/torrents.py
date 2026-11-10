@@ -21,9 +21,9 @@ import ipaddress
 import re
 import shlex
 
-from nullbill import legacy, power
+from nullbill import direct, legacy, power
 from nullbill.errors import NullBillError, Refused
-from nullbill.flows import PRIVATE
+from nullbill.flows import PRIVATE, TORRENTS_PORT
 from nullbill.probe import Runner
 from nullbill.render import Note, strip_notes
 from nullbill.results import Result
@@ -84,6 +84,22 @@ def endpoint(plan: dict) -> tuple[str, int] | None:
         return None
     host, _, port = found["endpoint"].rpartition(":")
     return host, int(port)
+
+
+def peer_port(plan: dict) -> int | None:
+    """The port others reach the client on, TCP and UDP, when it sends from
+    the home connection: the router passes it on from the uplink. None
+    behind a VPN, where nothing at home is open for it."""
+    return (plan.get("torrents") or {}).get("port")
+
+
+def port_request(plan: dict) -> dict | None:
+    """What nb-portmap on the router asks the home router for besides
+    Tailscale's port (its settings' "more"); None without such a port."""
+    port = peer_port(plan)
+    if port is None:
+        return None
+    return {"enabled": bool(plan["torrents"]["port_mapping"]), "port": port, "protos": ["tcp", "udp"]}
 
 
 def store(plan: dict) -> dict | None:
@@ -153,6 +169,18 @@ def plan_section(model: dict, planned: dict, mounts: list[dict], media_planned: 
             section["endpoint"] = server
     else:
         section["route"] = Note(HOME, f"From the home connection, without a VPN. {WHAT_HOME} verify reports it as DEGRADED.")
+        section["port"] = Note(
+            TORRENTS_PORT,
+            "Others connect to the client here, TCP and UDP: the router passes it on from the home network, "
+            "once the home router forwards it.",
+        )
+        asks = chosen["port_mapping"]
+        section["port_mapping"] = Note(
+            asks,
+            "The router asks the home router for that port every 15 minutes (NAT-PMP, then UPnP)."
+            if asks
+            else "Nobody asks the home router: forward the port to the router's address on the home network yourself, or leave it shut.",
+        )
     can = writable(mounts)
     names = [m["share"] for m in mounts]
     share = chosen.get("share")
@@ -350,6 +378,8 @@ def variables(plan: dict, model: dict, password: str, vpn_conf: str | None) -> d
         "qbittorrent_store": STORE,
         "qbittorrent_keep_free_gib": found["keep_free_gib"],
         "qbittorrent_route": found["route"],
+        # Fixed either way; only from home is it reachable from outside.
+        "qbittorrent_listen_port": TORRENTS_PORT,
         "qbittorrent_base": model["network"]["base"],
         "qbittorrent_tunnel": {},
         "qbittorrent_wg_conf": "",
@@ -383,6 +413,7 @@ TUNNEL_LABEL = "the download client's tunnel to the VPN is up"
 THROUGH_LABEL = "the download client sends through the tunnel, and its guest reaches nothing outside by itself"
 DROP_LABEL = "a dropped tunnel stops the download client's traffic"
 SPACE_LABEL = "downloads are not paused for lack of room"
+PORT_LABEL = "the home router sends the download client's port to it"
 
 
 def _labels(plan: dict) -> list[str]:
@@ -391,13 +422,43 @@ def _labels(plan: dict) -> list[str]:
     if found:
         labels.append(f"the download client writes to {found['folder']} on the kept disk {found['share']}")
         labels.append(SPACE_LABEL)
-    labels += [HOME_LABEL] if route(plan) == HOME else [TUNNEL_LABEL, THROUGH_LABEL, DROP_LABEL]
+    labels += [HOME_LABEL, PORT_LABEL] if route(plan) == HOME else [TUNNEL_LABEL, THROUGH_LABEL, DROP_LABEL]
     return labels
 
 
 def skipped(plan_with_notes: dict, reason: str) -> list[Result]:
     plan = strip_notes(plan_with_notes)
     return [Result("SKIP", label, reason) for label in _labels(plan)] if enabled(plan) else []
+
+
+def port_result(plan: dict, rc: int, out: str, err: str) -> Result:
+    """Whether others can connect to the client, as far as the server sees
+    it: what the home router answered nb-portmap about the client's port.
+    A port forwarded by hand cannot be seen from in here, so that is SKIP,
+    never PASS; a port the home router did not open is DEGRADED, since
+    downloads work without it and only seeding to others suffers."""
+    port = peer_port(plan)
+    what = f"TCP and UDP {port}"
+    if not plan["torrents"]["port_mapping"]:
+        return Result("SKIP", PORT_LABEL, f"the server does not ask; a forward of {what} made by hand cannot be seen from here")
+    state, _, why = direct.router_state(rc, out, err)
+    if state is None:
+        return Result("SKIP", PORT_LABEL, why)
+    entry = (state.get("more") or {}).get(WORKLOAD)
+    if not isinstance(entry, dict) or entry.get("port") != port or not entry.get("enabled"):
+        return Result("SKIP", PORT_LABEL, "the router has not asked the home router yet; it does within a quarter of an hour of setup")
+    shut = [proto for proto in ("tcp", "udp") if not (entry.get("open") or {}).get(proto)]
+    if not shut:
+        return Result("PASS", PORT_LABEL)
+    said = (entry.get("why") or {}).get(shut[0]) or {}
+    heard = "; ".join(f"{method}: {reason}" for method, reason in said.items()) or "no answer"
+    to = state.get("address") or "the NullBill router"
+    return Result(
+        "DEGRADED",
+        PORT_LABEL,
+        f"it did not open {' and '.join(p.upper() for p in shut)} {port} ({heard}). Downloads work; others cannot connect to you. "
+        f"On the home router turn on UPnP or NAT-PMP, or forward {what} to {to} yourself",
+    )
 
 
 def check(plan_with_notes: dict, target: str, run: Runner, public_ip: str) -> list[Result]:
@@ -441,6 +502,7 @@ def check(plan_with_notes: dict, target: str, run: Runner, public_ip: str) -> li
                 results.append(Result("DEGRADED", SPACE_LABEL, out.strip()[:160]))
         if route(plan) == HOME:
             results.append(Result("DEGRADED", HOME_LABEL, f"they leave from the home connection, as chosen. {WHAT_HOME}"))
+            results.append(port_result(plan, *run(target, direct.router_command(plan))))
             return results
         up = judge(TUNNEL_LABEL, f"{NB_TORRENTS} tunnel status", "up")
         if not up:

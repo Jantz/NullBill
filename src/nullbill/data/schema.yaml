@@ -321,6 +321,9 @@ $defs:
         folder: {type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$"}
         # Downloads pause while the disk has less than this free.
         keep_free_gib: {type: integer, minimum: 1, maximum: 100000}
+        # route home only: ask the home router to forward the client's port
+        # (NAT-PMP, UPnP). false for an owner who forwards it by hand.
+        port_mapping: {type: boolean}
 
   # A local model llama.cpp serves (catalog.yaml's models).
   llm:

@@ -40,6 +40,12 @@ What was checked before deciding (2026-11-10):
   deleted the router still lets nothing but the tunnel pass; with the
   tunnel down, its interface down or the VPN's server gone, nothing gets
   out, and it carries again once the server is back.
+- The port from home, in network namespaces with the rendered ruleset, the
+  role's `nb-portmap` and a stand-in home router
+  (`tools/guest-check/portmap.sh`): after `nb-portmap` asked, a peer on the
+  "internet" reaches the client's guest on TCP and UDP 41643 from its own
+  address; the port next door does not; switched off, the port is given
+  back and Tailscale's stays.
 - The page in Chromium at desktop and phone width: ticking it, choosing a
   way, pasting a file, a refused file, saving, forgetting the file.
 
@@ -89,8 +95,25 @@ point), and a real VPN provider's file and server.
 - **`home`: said plainly.** The zone goes out directly, like `services`.
   The page, the plan and the Services page say that everyone else in a
   download sees the home's public address, and `verify` reports
-  `downloads leave through a VPN` as DEGRADED for as long as it is so. UPnP
-  in the client is off either way: no port is opened on the home router.
+  `downloads leave through a VPN` as DEGRADED for as long as it is so.
+- **From home, one port in, asked for like Tailscale's** (the owner,
+  2026-11-10: "No VPN is needed. I need an open port forwarded from the
+  home router to the torrent client", like the direct connection setup).
+  qBittorrent listens for other peers on TCP and UDP 41643
+  (`flows.TORRENTS_PORT`; not one of BitTorrent's well-known ports, which
+  some trackers refuse). With `route: home` the router's nftables sends
+  that port from the uplink on to the client's guest with the sender's
+  address kept, and the guest's pve-firewall file accepts it. The router's
+  `nb-portmap` (ADR 0014) asks the home router for it every 15 minutes,
+  NAT-PMP then UPnP, in both protocols, as a further port beside
+  Tailscale's (`more` in its settings and state); `torrents.port_mapping:
+  false` (the row's tick) makes it give the port back, for an owner who
+  forwards it by hand or wants it shut. `verify` says what the home router
+  answered: PASS when it opened both, DEGRADED with its reasons when not
+  (downloads still work), SKIP when the owner forwards by hand, which
+  cannot be seen from the server. qBittorrent's own UPnP stays off: its
+  container cannot reach the home router, and one program asks for
+  NullBill's ports. Behind a VPN no port is open at home.
 - **Downloads land on a kept disk.** `torrents.folder` (default
   `Downloads`) of a kept disk the owner made editable (`disks.<id>.mode:
   rw`; `torrents.share` names it when there are several) is the guest's
@@ -140,9 +163,17 @@ point), and a real VPN provider's file and server.
   with that reason and the owner puts the address in. A provider that
   moves its server needs the file pasted again; `DownloadTunnelDown`
   (warn) says when the tunnel stopped answering.
-- The provider's port forwarding is not used, so others cannot open
-  connections to the client. Downloads work; seeding to people behind
-  routers of their own is slower. Open question in `OPEN_QUESTIONS.md`.
+- The download client's port is the second NullBill opens to the
+  internet, after Tailscale's, and the first with a program behind it
+  that answers strangers: libtorrent, in a container that sees one folder
+  and holds nothing else. Debian's security updates are its patches.
+- Behind a VPN the provider's port forwarding is not used, so others
+  cannot open connections to the client there. Downloads work; seeding to
+  people behind routers of their own is slower. Open question in
+  `OPEN_QUESTIONS.md`.
+- A home router without a public address of its own (a provider's shared
+  address, a second router) cannot open the port; `verify` says so with
+  the home router's words.
 - WireGuard's module is loaded on the Proxmox host
   (`/etc/modules-load.d/nullbill-wireguard.conf`), only with `route: vpn`.
 - While the tunnel is down the client sends nothing and its page still

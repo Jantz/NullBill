@@ -1335,6 +1335,8 @@ class App:
             if isinstance(room, bool) or not isinstance(room, int) or not 1 <= room <= 100000:
                 problems.append("Downloads: the room to keep free is a whole number of GiB, 1 or more")
             chosen["keep_free_gib"] = room
+        if "port_mapping" in form:
+            chosen["port_mapping"] = bool(form["port_mapping"])
         if problems:
             raise (
                 Refused("The download client's settings cannot be used, so nothing was saved", problems)

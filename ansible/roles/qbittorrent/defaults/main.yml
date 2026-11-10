@@ -14,6 +14,9 @@ qbittorrent_keep_free_gib: 25
 # vpn: everything the client's user sends leaves through the WireGuard
 # tunnel below. home: through the guest's own route.
 qbittorrent_route: home
+# Where it listens for other peers, TCP and UDP (flows.TORRENTS_PORT). From
+# home the router passes that port on; behind a VPN nothing reaches it.
+qbittorrent_listen_port: 41643
 # NullBill's own network, which stays on the guest's ordinary routes.
 qbittorrent_base: 10.42.0.0/16
 # With route vpn (nullbill/torrents.py's variables): interface, address,

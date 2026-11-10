@@ -132,6 +132,7 @@ def first_config(cfg: dict) -> int:
         f"Session\\DefaultSavePath={store}",
         f"Session\\TempPath={store}/incomplete",
         "Session\\TempPathEnabled=true",
+        f"Session\\Port={cfg['listen_port']}",
         *([f"Session\\Interface={interface(cfg)}", f"Session\\InterfaceName={interface(cfg)}"] if interface(cfg) else []),
         "",
         "[LegalNotice]",
@@ -186,6 +187,9 @@ def settings(cfg: dict) -> int:
         "temp_path_enabled": True,
         # Nothing here answers UPnP, and behind a VPN nothing may be asked.
         "upnp": False,
+        # The one port both firewall layers pass on from home.
+        "listen_port": cfg["listen_port"],
+        "random_port": False,
         "web_ui_upnp": False,
         "current_network_interface": interface(cfg),
         "current_interface_address": "",

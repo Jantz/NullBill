@@ -19,6 +19,11 @@ made and not given back since, which a restart of this router must not
 forget: some home routers keep a UPnP mapping until told otherwise. It
 exits 0 whatever the answer: a home router without UPnP is not a failed
 unit.
+
+"more" in the settings names further ports asked for in the same way, each
+with its protocols: the download client's, when it sends from the home
+connection (nullbill/torrents.py). What the home router said of each is
+under "more" in the state, by name and protocol, with a "held" of its own.
 """
 
 import ipaddress
@@ -39,10 +44,10 @@ NATPMP, UPNP = "NAT-PMP", "UPnP"
 
 PMP_ADDRESS = re.compile(r"^Public IP address : (\S+)$", re.M)
 # natpmpc spells it "liftime".
-PMP_MAPPED = re.compile(r"^Mapped public port (\d+) protocol UDP to local port (\d+) lif\w*time (\d+)$", re.M)
+PMP_MAPPED = re.compile(r"^Mapped public port (\d+) protocol (?:UDP|TCP) to local port (\d+) lif\w*time (\d+)$", re.M)
 PMP_FAILED = re.compile(r"^readnatpmpresponseorretry\(\) failed : (.+)$", re.M)
 # upnpc prints this line from what the router reads back, not from its own request.
-UPNP_MAPPED = re.compile(r"^external (\S*):(\d+) UDP is redirected to internal (\S+):(\d+)", re.M)
+UPNP_MAPPED = re.compile(r"^external (\S*):(\d+) (?:UDP|TCP) is redirected to internal (\S+):(\d+)", re.M)
 UPNP_FAILED = re.compile(r"AddPortMapping\(.*\) failed with code (-?\d+) \((.*)\)")
 NO_PUBLIC_ADDRESS = "it has no public address of its own"
 # Nothing to set against what Tailscale offers: such a mapping is given back.
@@ -87,38 +92,39 @@ def ipv4(text: str) -> str | None:
         return None
 
 
-def natpmp(gateway: str, port: int, lease: int) -> tuple[str | None, str]:
+def natpmp(gateway: str, port: int, lease: int, proto: str = "udp") -> tuple[str | None, str]:
     """(external address:port, "") once the gateway maps the port, else (None, why not)."""
     ask = ["natpmpc", "-g", gateway, "-a"]
-    out = run([*ask, str(port), str(port), "udp", str(lease)], NATPMP_WAIT_S)
+    out = run([*ask, str(port), str(port), proto, str(lease)], NATPMP_WAIT_S)
     address, mapped = PMP_ADDRESS.search(out), PMP_MAPPED.search(out)
     if mapped and int(mapped[2]) == port and int(mapped[3]) > 0:
         if int(mapped[1]) != port:
             # The port is another device's; Tailscale would not know this one.
-            run([*ask, "0", str(port), "udp", "0"], NATPMP_WAIT_S)
+            run([*ask, "0", str(port), proto, "0"], NATPMP_WAIT_S)
             return None, f"it offered port {mapped[1]}: {port} goes to another device"
         if address and ipv4(address[1]):
             return f"{ipv4(address[1])}:{port}", ""
-        run([*ask, str(port), str(port), "udp", "0"], NATPMP_WAIT_S)
+        run([*ask, str(port), str(port), proto, "0"], NATPMP_WAIT_S)
         return None, UNNAMED
     failed = PMP_FAILED.search(out)
     return None, PMP_REASONS.get(failed[1], f"it answered: {failed[1][:60]}") if failed else "no answer"
 
 
-def upnp(settings: dict, address: str, lease: int) -> tuple[str | None, str]:
-    port = str(settings["port"])
+def upnp(settings: dict, address: str, lease: int, port: int | None = None, proto: str = "udp") -> tuple[str | None, str]:
+    port = str(port or settings["port"])
+    kind = proto.upper()
     base = ["upnpc", "-m", settings["uplink"], "-z", str(settings["ssdp_port"]), "-e", "nullbill"]
-    out = run([*base, "-a", address, port, port, "UDP", str(lease)], UPNP_WAIT_S)
+    out = run([*base, "-a", address, port, port, kind, str(lease)], UPNP_WAIT_S)
     failed = UPNP_FAILED.search(out)
     if failed and failed[1] == "725":
         # OnlyPermanentLeasesSupported: such a router keeps it until told otherwise.
-        out = run([*base, "-a", address, port, port, "UDP"], UPNP_WAIT_S)
+        out = run([*base, "-a", address, port, port, kind], UPNP_WAIT_S)
         failed = UPNP_FAILED.search(out)
     mapped = UPNP_MAPPED.search(out)
     if mapped and (mapped[2], mapped[3], mapped[4]) == (port, address, port):
         if ipv4(mapped[1]):
             return f"{ipv4(mapped[1])}:{port}", ""
-        run([*base, "-d", port, "UDP"], UPNP_WAIT_S)
+        run([*base, "-d", port, kind], UPNP_WAIT_S)
         return None, UNNAMED
     if failed:
         return None, UPNP_CODES.get(failed[1], f"it answered error {failed[1]} ({failed[2][:60]})")
@@ -131,14 +137,14 @@ def upnp(settings: dict, address: str, lease: int) -> tuple[str | None, str]:
     return None, "no answer"
 
 
-def release(settings: dict, gateway: str, method: str) -> bool:
+def release(settings: dict, gateway: str, method: str, port: int | None = None, proto: str = "udp") -> bool:
     """True once the home router answered: it holds the mapping no longer, or
     never did. Without an answer the mapping may still be there."""
-    port = str(settings["port"])
+    port = str(port or settings["port"])
     if method == NATPMP:
-        out = run(["natpmpc", "-g", gateway, "-a", port, port, "udp", "0"], NATPMP_WAIT_S)
+        out = run(["natpmpc", "-g", gateway, "-a", port, port, proto, "0"], NATPMP_WAIT_S)
         return bool(PMP_MAPPED.search(out) or PMP_FAILED.search(out))
-    out = run(["upnpc", "-m", settings["uplink"], "-z", str(settings["ssdp_port"]), "-d", port, "UDP"], UPNP_WAIT_S)
+    out = run(["upnpc", "-m", settings["uplink"], "-z", str(settings["ssdp_port"]), "-d", port, proto.upper()], UPNP_WAIT_S)
     return "UPNP_DeletePortMapping()" in out
 
 
@@ -150,7 +156,51 @@ def read(path: Path) -> dict:
     return found if isinstance(found, dict) else {}
 
 
+def further(settings: dict, before: dict, address: str | None, gateway: str | None) -> dict:
+    """The further ports ("more"): for each name, per protocol, where the
+    home router opened it ("open": address:port or None), how, and why not;
+    "held" lists "METHOD protocol" for every mapping not given back yet. A
+    port no longer asked for is given back like one switched off."""
+    wanted = settings.get("more") or {}
+    known = before.get("more") if isinstance(before.get("more"), dict) else {}
+    out = {}
+    for name in sorted({*wanted, *known}):
+        ask = wanted.get(name) or {**known[name], "enabled": False}
+        was = known.get(name) if isinstance(known.get(name), dict) else {}
+        port, protos = int(ask["port"]), [p for p in ask.get("protos", []) if p in ("tcp", "udp")]
+        held = [h for h in was.get("held", []) if isinstance(h, str)] if was.get("port") == port else []
+        entry = {"enabled": bool(ask.get("enabled")), "port": port, "protos": protos, "open": {}, "method": {}, "why": {}, "held": held}
+        if not address or not gateway:
+            lost = f"{settings['uplink']} has no address or no default route"
+            entry["why"] = {proto: dict.fromkeys((NATPMP, UPNP), lost) for proto in protos}
+        elif not entry["enabled"]:
+            entry["held"] = [h for h in held if not release(settings, gateway, h.split()[0], port, h.split()[1])]
+        else:
+            for proto in protos:
+                entry["open"][proto], entry["method"][proto], entry["why"][proto] = None, None, {}
+                for method in (NATPMP, UPNP):
+                    if method == NATPMP:
+                        external, why = natpmp(gateway, port, LEASE_S, proto)
+                    else:
+                        external, why = upnp(settings, address, LEASE_S, port, proto)
+                    if external:
+                        entry["open"][proto], entry["method"][proto] = external, method
+                        entry["held"] = sorted({*entry["held"], f"{method} {proto}"})
+                        break
+                    entry["why"][proto][method] = why
+        # One that is off and holds nothing any more is forgotten.
+        if name in wanted or entry["held"]:
+            out[name] = entry
+    return out
+
+
 def once(settings: dict, before: dict) -> dict:
+    state = first(settings, before)
+    more = further(settings, before, state["address"], state["gateway"])
+    return state | ({"more": more} if more else {})
+
+
+def first(settings: dict, before: dict) -> dict:
     address, gateway = uplink(settings["uplink"])
     held = before.get("held")
     state = {
@@ -197,6 +247,13 @@ def main() -> int:
         print(f"not asking the home router for UDP {port} (tailnet.port_mapping is off){waits}")
     else:
         print(f"the home router did not open UDP {port}: " + "; ".join(f"{m}: {w}" for m, w in state["why"].items()))
+    for name, entry in state.get("more", {}).items():
+        for proto in entry["protos"] if entry["enabled"] else []:
+            what = f"{proto.upper()} {entry['port']} for {name}"
+            if entry["open"].get(proto):
+                print(f"the home router sends {what} here ({entry['method'][proto]}, {entry['open'][proto]})")
+            else:
+                print(f"the home router did not open {what}: " + "; ".join(f"{m}: {w}" for m, w in entry["why"].get(proto, {}).items()))
     return 0
 
 

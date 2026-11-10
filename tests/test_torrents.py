@@ -109,6 +109,67 @@ def test_from_home_the_zone_goes_out_directly_and_the_plan_says_what_that_shows(
     assert "WireGuard to the owner's VPN" not in nft
 
 
+def test_from_home_one_port_reaches_the_client_and_the_router_asks_the_home_router_for_it(facts):
+    plan, model = planned(facts, torrents_config("home"))
+    assert (plan["torrents"]["port"], plan["torrents"]["port_mapping"]) == (41643, True)
+    assert torrents.peer_port(plan) == 41643
+    files = render_all(build_plan(model, facts("large")), model)
+    nft = files["router/etc/nftables.conf"]
+    assert 'iifname "nb-uplink" ip daddr 10.42.10.28 meta l4proto { tcp, udp } th dport 41643 accept # BitTorrent, from other peers' in nft
+    assert 'iifname "nb-uplink" tcp dport 41643 dnat to 10.42.10.28:41643' in nft
+    assert 'iifname "nb-uplink" udp dport 41643 dnat to 10.42.10.28:41643' in nft
+    # Tailscale's port keeps its own way in, in the same chain.
+    assert nft.count("chain prerouting") == 1 and "udp dport 41642 dnat to" in nft
+    guest_fw = files["firewall/2028.fw"]
+    assert "IN ACCEPT -p tcp -dport 41643 # BitTorrent, from other peers" in guest_fw
+    assert "IN ACCEPT -p udp -dport 41643 # BitTorrent, from other peers" in guest_fw
+    asked = json.loads(files["router/etc/nullbill/portmap.json"])
+    assert asked["more"] == {"torrents": {"enabled": True, "port": 41643, "protos": ["tcp", "udp"]}}
+    assert torrents.variables(plan, model, "pw", None)["qbittorrent_listen_port"] == 41643
+    # The owner forwards it by hand: the way in stays, nobody asks.
+    config = torrents_config("home")
+    config["torrents"]["port_mapping"] = False
+    plan, model = planned(facts, config)
+    files = render_all(build_plan(model, facts("large")), model)
+    assert json.loads(files["router/etc/nullbill/portmap.json"])["more"]["torrents"]["enabled"] is False
+    assert "tcp dport 41643 dnat to" in files["router/etc/nftables.conf"]
+
+
+def test_behind_a_vpn_no_port_is_open_at_home(facts):
+    plan, model = planned(facts)
+    assert "port" not in plan["torrents"] and torrents.peer_port(plan) is None and torrents.port_request(plan) is None
+    files = render_all(build_plan(model, facts("large")), model)
+    assert "41643" not in files["router/etc/nftables.conf"] and "41643" not in files["firewall/2028.fw"]
+    assert "more" not in json.loads(files["router/etc/nullbill/portmap.json"])
+
+
+def router_says(more=None, exitcode=0):
+    """`qm guest exec` on the router: nb-portmap's state and the clock."""
+    state = {"at": 1000, "enabled": True, "port": 41642, "address": "192.168.1.57", "gateway": "192.168.1.1", "held": []}
+    state |= {"more": more} if more is not None else {}
+    return 0, json.dumps({"exited": 1, "exitcode": exitcode, "out-data": json.dumps(state) + "\n1010\n"}), ""
+
+
+def test_verify_says_whether_the_home_router_opened_the_port(facts):
+    plan, _ = planned(facts, torrents_config("home"))
+    both = {"tcp": "203.0.113.7:41643", "udp": "203.0.113.7:41643"}
+    entry = {"enabled": True, "port": 41643, "protos": ["tcp", "udp"], "open": both, "method": {}, "why": {}, "held": []}
+    assert torrents.port_result(plan, *router_says({"torrents": entry})) == Result("PASS", torrents.PORT_LABEL)
+    shut = entry | {"open": {"tcp": None, "udp": None}, "why": {"tcp": {"NAT-PMP": "not offered", "UPnP": "no answer"}}}
+    found = torrents.port_result(plan, *router_says({"torrents": shut}))
+    assert found.status == "DEGRADED" and "it did not open TCP and UDP 41643 (NAT-PMP: not offered; UPnP: no answer)" in found.detail
+    assert "forward TCP and UDP 41643 to 192.168.1.57 yourself" in found.detail
+    # Not asked yet, or nothing to read: no finding either way.
+    assert torrents.port_result(plan, *router_says()).status == "SKIP"
+    assert torrents.port_result(plan, 255, "", "VM 2001 is not running").status == "SKIP"
+    # Forwarded by hand cannot be seen from the server, so it is never called open.
+    config = torrents_config("home")
+    config["torrents"]["port_mapping"] = False
+    plan, _ = planned(facts, config)
+    found = torrents.port_result(plan, *router_says({"torrents": entry}))
+    assert found.status == "SKIP" and "made by hand cannot be seen from here" in found.detail
+
+
 def test_the_way_downloads_go_is_never_chosen_for_the_owner(facts):
     config = torrents_config()
     del config["torrents"]
@@ -370,8 +431,8 @@ def test_a_tunnel_that_is_down_is_a_failure_and_the_rest_cannot_be_judged(facts)
 def test_downloads_from_home_are_degraded_and_say_what_others_see(facts):
     plan, _ = planned(facts, torrents_config("home"))
     results = torrents.check(plan, "t", answers(), "198.51.100.80")
-    assert [r.status for r in results] == ["PASS", "PASS", "PASS", "DEGRADED"]
-    assert "sees your home's public address" in results[-1].detail
+    assert [r.status for r in results] == ["PASS", "PASS", "PASS", "DEGRADED", "SKIP"]
+    assert "sees your home's public address" in results[3].detail and results[4].name == torrents.PORT_LABEL
 
 
 def test_paused_for_room_is_degraded_and_a_guest_that_is_off_is_skipped(facts):

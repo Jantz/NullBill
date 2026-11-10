@@ -80,8 +80,19 @@ def _cluster(plan: dict, lan_open: bool) -> str:
     return HEADER + note + "[OPTIONS]\nenable: 1\npolicy_in: DROP\npolicy_out: ACCEPT\n\n" + aliases + "".join(sets)
 
 
-def _guest_rules(name: str, rules_by_guest: _Rules, egress: str, vpn_server: tuple[str, int] | None = None) -> list[str]:
+def _guest_rules(
+    name: str, rules_by_guest: _Rules, egress: str, vpn_server: tuple[str, int] | None = None, peer_port: int | None = None
+) -> list[str]:
     rules = rules_by_guest.inbound[name] + rules_by_guest.outbound[name]
+    if name == torrents.QBITTORRENT and peer_port:
+        # From home, other peers connect to the client: whatever the router
+        # passes on for its port, as for Tailscale's on the vpn guest.
+        rules = [
+            *rules_by_guest.inbound[name],
+            f"IN ACCEPT -p tcp -dport {peer_port} # BitTorrent, from other peers",
+            f"IN ACCEPT -p udp -dport {peer_port} # BitTorrent, from other peers",
+            *rules_by_guest.outbound[name],
+        ]
     if name == "vpn":
         # Tailscale's direct paths. In: whatever the router passes on for
         # tailscaled's port, from the home network or forwarded by the home
@@ -134,7 +145,7 @@ def render_firewall(plan_with_notes: dict, model: dict) -> dict[str, str]:
     }
     groups = []
     for name, guest in plan["guests"].items():
-        rules = _guest_rules(name, by_guest, plan["zones"][guest["zone"]]["egress"], torrents.endpoint(plan))
+        rules = _guest_rules(name, by_guest, plan["zones"][guest["zone"]]["egress"], torrents.endpoint(plan), torrents.peer_port(plan))
         if guest["kind"] == "vm-pool":
             # Clones copy the template's firewall file, which points at this group.
             group = _group(guest)

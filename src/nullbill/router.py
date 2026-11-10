@@ -84,6 +84,11 @@ def _nftables(plan: dict, model: dict) -> str:
             f'        ip saddr {vpn} oifname "{UPLINK}" udp sport {TAILSCALE_PORT} accept # Tailscale, direct to devices at home\n',
             f'        iifname "{UPLINK}" ip daddr {vpn} udp dport {TAILSCALE_PORT} accept # Tailscale, direct from devices anywhere\n',
         ]
+    peers = torrents.peer_port(plan)
+    client = plan["guests"][torrents.QBITTORRENT]["ip"] if peers else None
+    if peers:
+        rule = f'iifname "{UPLINK}" ip daddr {client} meta l4proto {{ tcp, udp }} th dport {peers} accept'
+        lines.append(f"        {rule} # BitTorrent, from other peers\n")
     for zone, z in zones.items():
         if z["egress"] == "direct":
             lines.append(f'        iifname "{_iface(zone)}" oifname "{UPLINK}" ip daddr != @private accept # direct egress\n')
@@ -92,14 +97,18 @@ def _nftables(plan: dict, model: dict) -> str:
             rule = f'iifname "{_iface(zone)}" oifname "{UPLINK}" ip daddr {address} udp dport {port} accept'
             lines.append(f"        {rule} # WireGuard to the owner's VPN, the zone's only way out\n")
     lines.append("    }\n}\n\ntable ip nullbill-nat {\n")
+    if vpn or peers:
+        lines.append("    chain prerouting {\n        type nat hook prerouting priority dstnat; policy accept;\n")
     if vpn:
         # What the home router forwards for Tailscale's port, by hand or
         # because nb-portmap asked, goes on to the vpn guest; the sender's
         # address stays, as Tailscale answers there.
-        lines += [
-            "    chain prerouting {\n        type nat hook prerouting priority dstnat; policy accept;\n",
-            f'        iifname "{UPLINK}" udp dport {TAILSCALE_PORT} dnat to {vpn}:{TAILSCALE_PORT}\n    }}\n\n',
-        ]
+        lines.append(f'        iifname "{UPLINK}" udp dport {TAILSCALE_PORT} dnat to {vpn}:{TAILSCALE_PORT}\n')
+    if peers:
+        # The same for the download client's port, when it sends from home.
+        lines += [f'        iifname "{UPLINK}" {proto} dport {peers} dnat to {client}:{peers}\n' for proto in ("tcp", "udp")]
+    if vpn or peers:
+        lines.append("    }\n\n")
     lines += [
         "    chain postrouting {\n        type nat hook postrouting priority srcnat; policy accept;\n",
         f'        oifname "{UPLINK}" masquerade\n    }}\n}}\n',
@@ -224,6 +233,9 @@ def render_router(plan_with_notes: dict, model: dict) -> dict[str, str]:
     }
     if "vpn" in plan["guests"]:
         settings = {"enabled": model["tailnet"]["port_mapping"], "port": TAILSCALE_PORT, "ssdp_port": SSDP_REPLY_PORT, "uplink": UPLINK}
+        more = torrents.port_request(plan)
+        if more:
+            settings["more"] = {torrents.WORKLOAD: more}
         files[PORTMAP.removeprefix("/")] = json.dumps(settings) + "\n"
         files |= _portmap_units(model["network"]["base"])
     return files

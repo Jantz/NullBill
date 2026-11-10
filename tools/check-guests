@@ -17,7 +17,7 @@ docker build -q -t nullbill-guest-check "$out/context" >/dev/null
 tools/render-fixtures "$out/build" >/dev/null
 # nft -c needs CAP_NET_ADMIN; the container's own network namespace is the
 # only one it can touch, and -c changes nothing.
-docker run --rm --cap-add NET_ADMIN -v "$out/build:/build:ro" nullbill-guest-check small mid large large-legacy large-games large-custom large-torrents
+docker run --rm --cap-add NET_ADMIN -v "$out/build:/build:ro" nullbill-guest-check small mid large large-legacy large-games large-custom large-torrents large-torrents-home
 # Network namespaces need a privileged container; this one has no network.
 docker run --rm --privileged --network none --entrypoint bash -v "$out/build:/build:ro" \
   -v "$PWD/ansible/roles/router/files/nb-portmap:/usr/local/sbin/nb-portmap:ro" nullbill-guest-check /usr/local/bin/portmap.sh

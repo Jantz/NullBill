@@ -52,6 +52,8 @@ pref() { curl -sS http://127.0.0.1:8080/api/v2/app/preferences | python3 -c 'imp
 [ "$(pref temp_path)" = /downloads/incomplete ] || fail "unfinished downloads wait in /downloads/incomplete"
 [ "$(pref temp_path_enabled)" = True ] || fail "unfinished downloads are kept apart"
 [ "$(pref upnp)" = False ] || fail "UPnP is off"
+[ "$(pref listen_port)" = 41643 ] || fail "it listens for peers on the port the firewall passes on (it is $(pref listen_port))"
+ss -Hltn | grep -q ':41643 ' || fail "the peer port is open in the guest"
 [ "$(pref current_network_interface)" = "" ] || fail "no interface is forced without a VPN"
 [ "$(stat -c '%U' /downloads/incomplete/.ignore)" = qbt ] || fail "Jellyfin is told to pass over unfinished downloads"
 curl -sS -o /dev/null http://127.0.0.1:8080/api/v2/app/setPreferences --data-urlencode 'json={"save_path": "/tmp", "upnp": true}'

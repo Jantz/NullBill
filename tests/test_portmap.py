@@ -294,3 +294,68 @@ def test_its_words_are_the_ones_direct_py_reads(portmap):
     assert portmap.NO_PUBLIC_ADDRESS == direct.NO_PUBLIC_ADDRESS
     assert portmap.REFUSED == direct.REFUSED
     assert direct.OTHER_DEVICE in portmap.TAKEN
+
+
+# A further port (the download client's, nullbill/torrents.py): TCP and UDP.
+MORE_PORT = 41643
+MORE = SETTINGS | {"more": {"torrents": {"enabled": True, "port": MORE_PORT, "protos": ["tcp", "udp"]}}}
+
+
+def pmp_by_port(argv):
+    """natpmpc as a gateway that maps whatever is asked for."""
+    public, local, proto, lifetime = argv[4], argv[5], argv[6], argv[7]
+    return pmp_mapped(int(public), int(lifetime)).replace(
+        f"protocol UDP to local port {PORT}", f"protocol {proto.upper()} to local port {local}"
+    )
+
+
+def test_a_further_port_is_asked_for_in_each_of_its_protocols(portmap, monkeypatch):
+    tools = Tools(natpmpc=pmp_by_port)
+    state = ask(portmap, monkeypatch, tools, MORE)
+    port = str(MORE_PORT)
+    assert tools.calls == [
+        ["natpmpc", "-g", GATEWAY, "-a", PORT, PORT, "udp", "3600"],
+        ["natpmpc", "-g", GATEWAY, "-a", port, port, "tcp", "3600"],
+        ["natpmpc", "-g", GATEWAY, "-a", port, port, "udp", "3600"],
+    ]
+    # Tailscale's port is told as before, for direct.py.
+    assert (state["method"], state["external"]) == ("NAT-PMP", f"{PUBLIC}:{PORT}")
+    assert state["more"] == {
+        "torrents": {
+            "enabled": True,
+            "port": MORE_PORT,
+            "protos": ["tcp", "udp"],
+            "open": {"tcp": f"{PUBLIC}:{port}", "udp": f"{PUBLIC}:{port}"},
+            "method": {"tcp": "NAT-PMP", "udp": "NAT-PMP"},
+            "why": {"tcp": {}, "udp": {}},
+            "held": ["NAT-PMP tcp", "NAT-PMP udp"],
+        }
+    }
+    # Without one, the state is what it always was.
+    assert "more" not in ask(portmap, monkeypatch, Tools(natpmpc=pmp_mapped()))
+
+
+def test_a_further_port_the_home_router_does_not_open_says_why_per_protocol(portmap, monkeypatch):
+    tools = Tools(natpmpc=pmp_failed("the gateway does not support nat-pmp", -7))
+    entry = ask(portmap, monkeypatch, tools, MORE)["more"]["torrents"]
+    assert entry["open"] == {"tcp": None, "udp": None} and entry["held"] == []
+    assert entry["why"]["tcp"] == {"NAT-PMP": "not offered", "UPnP": "no answer"}
+    assert ["upnpc", "-m", "nb-uplink", "-z", "1901", "-e", "nullbill", "-a", ADDRESS, "41643", "41643", "TCP", "3600"] in tools.calls
+
+
+def test_a_further_port_switched_off_or_no_longer_wanted_is_given_back_and_forgotten(portmap, monkeypatch):
+    held = ask(portmap, monkeypatch, Tools(natpmpc=pmp_by_port), MORE)
+    off = MORE | {"more": {"torrents": MORE["more"]["torrents"] | {"enabled": False}}}
+    tools = Tools(natpmpc=pmp_by_port)
+    state = ask(portmap, monkeypatch, tools, off, held)
+    port = str(MORE_PORT)
+    assert ["natpmpc", "-g", GATEWAY, "-a", port, port, "tcp", "0"] in tools.calls
+    assert ["natpmpc", "-g", GATEWAY, "-a", port, port, "udp", "0"] in tools.calls
+    assert state["more"]["torrents"]["held"] == [] and state["more"]["torrents"]["open"] == {}
+    # Gone from the settings (the client now sends through a VPN): given back, then forgotten.
+    tools = Tools(natpmpc=pmp_by_port)
+    state = ask(portmap, monkeypatch, tools, SETTINGS, held)
+    assert ["natpmpc", "-g", GATEWAY, "-a", port, port, "tcp", "0"] in tools.calls and "more" not in state
+    # A home router that does not answer keeps it on the record.
+    state = ask(portmap, monkeypatch, Tools(natpmpc=lambda argv: pmp_mapped() if argv[4] == PORT else ""), SETTINGS, held)
+    assert state["more"]["torrents"]["held"] == ["NAT-PMP tcp", "NAT-PMP udp"] and state["more"]["torrents"]["enabled"] is False

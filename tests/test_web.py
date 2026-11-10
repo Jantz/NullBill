@@ -404,6 +404,11 @@ def test_the_download_clients_way_out_and_vpn_file_are_saved_with_the_choices(si
     # Saving again without a file keeps the one there is; settings are refused together.
     assert client.call("/api/choices", {**choices, "torrents": {**form, "route": "home"}})[0] == 200
     assert saved()["torrents"] == {"route": "home", "vpn": {"endpoint": "203.0.113.44:51820"}} and "torrents_vpn_conf" in secrets()
+    # From home the server asks the home router for the client's port unless the owner unticks it.
+    assert row(client.call("/api/state")[1]["options"])["port_mapping"] is True
+    assert client.call("/api/choices", {**choices, "torrents": {**form, "route": "home", "port_mapping": False}})[0] == 200
+    assert saved()["torrents"]["port_mapping"] is False and row(client.call("/api/state")[1]["options"])["port"] == 41643
+    assert client.call("/api/choices", {**choices, "torrents": {**form, "route": "home", "port_mapping": True}})[0] == 200
     status, data = client.call("/api/choices", {**choices, "torrents": {"route": "tor", "folder": "../etc", "keep_free_gib": 0}})
     assert status == 400 and len(data["errors"]) == 3 and saved()["torrents"]["route"] == "home"
     # Forgotten: the file and the server the firewall would open to.

@@ -125,7 +125,7 @@ ns vpn ip link set wgvpn up
 useradd -u 1000 -U -M -s /usr/sbin/nologin qbt
 mkdir -p /etc/nullbill
 cat >/etc/nullbill/torrents.json <<JSON
-{"user": "qbt", "port": 8080, "username": "nullbill-admin", "store": "/downloads", "keep_free_gib": 25, "route": "vpn",
+{"user": "qbt", "port": 8080, "username": "nullbill-admin", "store": "/downloads", "keep_free_gib": 25, "route": "vpn", "listen_port": 41643,
  "base": "${zone%.*}.0.0/16",
  "tunnel": {"interface": "wg0", "address": "$inside/32", "dns": ["$inside_gw"], "mtu": 1420, "endpoint": "$server:$port", "handshake_s": 180}}
 JSON

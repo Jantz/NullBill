@@ -643,9 +643,14 @@ games:
 # each download see the home's public address). Downloads go into `folder`
 # of the kept disk `share` names (one that is editable; the only such one
 # when left out), and pause while that disk has under keep_free_gib free.
+# From the home connection, others reach the client on one port (TCP and
+# UDP 41643, flows.TORRENTS_PORT), which the router passes on; port_mapping
+# has nb-portmap ask the home router for it, as tailnet.port_mapping does
+# for Tailscale's. Behind a VPN no port is open at home.
 torrents:
   folder: Downloads
   keep_free_gib: 25
+  port_mapping: true
 
 # Domains egress-proxy forwards to, for zones with egress: proxy. A leading
 # dot also matches subdomains. Only HTTPS CONNECT and plain HTTP to these

@@ -849,6 +849,12 @@ function torrentAsks(item) {
       make("span", {className: "hint", id: `${id}-conf-hint`,
         textContent: "Your VPN provider's site makes one (a WireGuard configuration, a .conf file): paste all of it. It holds a key, so it is saved with NullBill's secrets when you save, and never shown again."})),
     make("div", {className: "row"}, forget, said));
+  const ask = make("input", {type: "checkbox", id: `${id}-port`});
+  ask.dataset.role = "port";
+  const port = make("div", {className: "torrents-vpn torrents-port", hidden: true},
+    make("label", {className: "opt-ask check"}, ask, make("span", {className: "way"},
+      make("span", {className: "way-title", textContent: `Ask my home router to open port ${t.port} for it`}),
+      make("span", {className: "hint", textContent: `So that others can connect to you, which seeding and private trackers need. The server asks every 15 minutes (UPnP or NAT-PMP), as it does for Tailscale, and only the download client answers on that port. Without the tick, forward TCP and UDP ${t.port} to the server yourself, or leave it shut: downloads work either way. The checks say whether the home router opened it.`}))));
   const field = (label, control, hint) => {
     control.id = `${id}-${control.dataset.role}`;
     const note = make("span", {className: "hint", id: `${control.id}-hint`, textContent: hint});
@@ -866,7 +872,7 @@ function torrentAsks(item) {
     field("Folder on it", folder, "Made if it is not there. The client sees this folder and nothing else of the disk."),
     field("Room to keep free, in GiB", room, "Downloads pause while the disk has less free, and go on once it has more."));
   return make("div", {className: "opt-asks", hidden: true},
-    make("p", {className: "opt-ask", textContent: t.notice}), routes, vpn,
+    make("p", {className: "opt-ask", textContent: t.notice}), routes, vpn, port,
     make("p", {className: "opt-note why no-disk", hidden: true}), where);
 }
 
@@ -876,6 +882,7 @@ function paintTorrents(item) {
   const t = item.torrents;
   for (const input of row.querySelectorAll("[data-role=route]")) input.checked = input.value === t.route;
   row.querySelector("[data-role=conf]").value = "";
+  row.querySelector("[data-role=port]").checked = t.port_mapping;
   row.querySelector("[data-role=folder]").value = t.folder;
   row.querySelector("[data-role=room]").value = String(t.keep_free_gib);
   const share = row.querySelector("[data-role=share]");
@@ -902,6 +909,7 @@ function paintTorrentsView(item, row) {
     : "No disk is kept yet. Under Other disks below, keep the disk downloads should go to and tick Let me change files on it.";
   const chosen = row.querySelector("[data-role=route]:checked");
   row.querySelector(".torrents-vpn").hidden = !chosen || chosen.value !== "vpn";
+  row.querySelector(".torrents-port").hidden = !chosen || chosen.value !== "home";
   const pasted = row.querySelector("[data-role=conf]").value.trim() !== "";
   row.querySelector(".vpn-state").replaceChildren(status(t.endpoint ? "good" : "warn",
     t.endpoint ? `${pasted ? "The file below, once saved" : "A file is saved"}: the firewall lets the client reach its server ${t.endpoint} and nothing else outside.`
@@ -1561,6 +1569,7 @@ function choicesBody() {
       share: share.options.length ? share.value : share.dataset.want,
       folder: row.querySelector("[data-role=folder]").value,
       keep_free_gib: /^\d+$/.test(room) ? Number(room) : room,
+      port_mapping: row.querySelector("[data-role=port]").checked,
       // Only with the VPN chosen, and only a file that was pasted.
       ...(way && way.value === "vpn" && conf.trim() ? {conf} : {}),
     };

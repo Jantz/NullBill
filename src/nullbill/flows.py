@@ -28,6 +28,11 @@ TAILSCALE_PORT = 41642
 # the answer is a new packet from the home router, not a reply to the
 # multicast search, so the router's input chain names the port.
 SSDP_REPLY_PORT = 1901
+# Where the download client listens for other peers when it sends from the
+# home connection (torrents.py): TCP and UDP, forwarded by the home router
+# like Tailscale's port. Not one of BitTorrent's well-known ports, which
+# some trackers refuse.
+TORRENTS_PORT = 41643
 # In a port's `from`: the people whose own `services` list names the port's
 # service. Like a role, they arrive through the vpn guest, so the firewall
 # opens the port to it and the tailnet policy decides who gets through.

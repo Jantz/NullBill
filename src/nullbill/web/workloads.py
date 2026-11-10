@@ -28,6 +28,7 @@ from nullbill import backups, custom, games, power, torrents
 from nullbill import model as modelling
 from nullbill import plan as planning
 from nullbill.errors import NullBillError
+from nullbill.flows import TORRENTS_PORT
 from nullbill.render import strip_notes
 
 # NullBill's own, in the page's order; the owner's follow (custom.workloads).
@@ -288,6 +289,12 @@ def _note(name: str, plan: dict | None) -> str | None:
     if name == torrents.WORKLOAD and plan["torrents"]:
         found = plan["torrents"]
         way = torrents.WHAT_VPN if found["route"] == torrents.VPN else f"From your home connection. {torrents.WHAT_HOME}"
+        if "port" in found:
+            way += (
+                f" The server asks your home router to open port {found['port']} for it."
+                if found["port_mapping"]
+                else f" Forward port {found['port']} (TCP and UDP) on your home router yourself, or others cannot connect to it."
+            )
         return f"Downloads land in {found['store']['folder']} on the kept disk {found['store']['share']}. {way}"
     if name in plan["games"]:
         game = plan["games"][name]
@@ -357,6 +364,10 @@ def _torrents(model: dict, facts: dict | None) -> dict:
         "share": chosen.get("share") or (can[0] if len(can) == 1 else None),
         "folder": chosen["folder"],
         "keep_free_gib": chosen["keep_free_gib"],
+        # From home only: the port others connect to, and whether the
+        # server asks the home router for it.
+        "port": TORRENTS_PORT,
+        "port_mapping": chosen["port_mapping"],
     }
 
 
