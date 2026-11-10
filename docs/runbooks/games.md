@@ -102,6 +102,11 @@ saves first; players are disconnected for a moment.
 - **Memory.** The defaults suit a small world and a few players. Raise
   `overrides.<name>.memory_mib` when the server lags or its log says it
   ran out of memory; the **Plan** then shows whether that fits.
+- **Only while someone plays.** Under **When it runs**, set a game to
+  **On demand** and it holds no memory while off. You start it on the
+  **Services** page; it stops by itself once nobody has played for 30
+  minutes, saving its world. A friend cannot start it, so start it before
+  they join ([on demand](on-demand.md)).
 
 ## 4. The server's console
 
@@ -245,8 +250,9 @@ out first if you are not sure.
   50`. Run setup again afterwards.
 - **"did not make NAME an admin"**: the name is not a player the game's
   maker knows. Spell it as the game shows it.
-- **A friend cannot connect.** Check, in this order: their game's version
-  against the **Services** page; that their Tailscale is on and
+- **A friend cannot connect.** Check, in this order: that the game is not
+  **Off, on demand** on the **Services** page (press **Start**); their
+  game's version against that page; that their Tailscale is on and
   **People** shows their device connected; that the game is ticked for
   them. Then `pct exec 2025 -- nb-game status` on the server.
 - **Minecraft turns everyone away as they join**, you included: the

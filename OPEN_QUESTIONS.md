@@ -65,6 +65,27 @@ answered items move to the decisions list at the bottom.
     device on that network reach Jellyfin's sign-in. Recommendation: use
     Jellyfin's app with Tailscale where the TV has it (Android TV, Fire TV,
     Apple TV); ask for the forward only for a TV that cannot.
+12. **Start on first use** (docs/adr/0013-on-demand.md). A workload that
+    runs on demand starts when you press Start on the page. It could also
+    start when something first connects to it, but then something has to
+    listen in its place and the client has to wait out the start: an
+    OpenAI client and a queued CI job can, an SMB or Remote Desktop client
+    gives up. Recommendation: build it for the local models and CI first,
+    once you have used Start for a while and know where it is in the way.
+13. **A schedule for what runs on demand.** "The desktop on weekdays 9 to
+    17" or "everything off at night" is a timer running `nb-power start`
+    and `stop`. Recommendation: add it to the page only if the rules
+    (stops by itself, or reminds you) turn out not to be enough.
+14. **The backup server on demand.** It takes 2 GiB and is needed for the
+    nightly backup and its own clean-up jobs. It could run only around
+    those. Recommendation: not yet; a backup that silently does not run is
+    worse than 2 GiB.
+15. **Stopping a Windows desktop by itself.** A VM does not tell NullBill
+    whether someone uses it; only its CPU shows, and a stop closes open
+    programs. The page therefore offers the reminder only, and
+    `power.windows-dev.busy.cpu_pct` in `config.yaml` for those who accept
+    that. Recommendation: keep it that way until Windows work starts; a
+    small agent in Windows could then report the signed-in session.
 
 ## Defaults picked for cosmetic choices
 

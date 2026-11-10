@@ -111,6 +111,15 @@ no longer works.
   (`{job="commands"}` for every agent command, `{job="auth"}` for SSH
   sign-ins).
 
+## Free memory without deleting anything
+
+A workload you use now and then can run **on demand**: it stays installed,
+is off until you press **Start** on the **Services** page, and stops again
+by the rule you give it (by itself when unused, or only when you say).
+What is off holds no memory, so more fits on the server than runs at once.
+Choose it under **Setup**, **What to run**, **When it runs**;
+[on-demand.md](on-demand.md) has each step.
+
 ## Remove a workload
 
 On the **Setup** page, untick it under **What to run**. Its row turns red

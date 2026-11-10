@@ -33,6 +33,10 @@ is that first run.
 - **Game servers**, optional: Minecraft, Terraria and Factorio, each the
   maker's own server in a container of its own, for you and the friends
   you tick it for ([games.md](docs/runbooks/games.md)).
+- **On demand**: what you use now and then stays installed and runs only
+  while you use it, so a small server holds more than it can run at once.
+  Some stop by themselves when unused, others only when you say
+  ([on-demand.md](docs/runbooks/on-demand.md)).
 
 ## How it works, in short
 
@@ -146,7 +150,8 @@ It runs these stages in order and stops at the first one that fails.
   shows how to start it, read what it did, and cut it off.
 - **More step-by-step guides** are in [`docs/runbooks/`](docs/runbooks/):
   adding a person, CI runners, restoring a guest, keeping a disk from your
-  old PC, and keeping the keys you must not lose.
+  old PC, running something only on demand, and keeping the keys you must
+  not lose.
 
 ## Not done yet
 
