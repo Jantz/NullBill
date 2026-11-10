@@ -33,19 +33,29 @@ program.
      and to whom**, and **which names it may fetch from**;
    - below is the **whole setup script**. It runs as root inside the new
      guest, nowhere else.
+   - **If you approve, in one go** says what the approval starts.
 3. Type the word the card asks for and press **Approve**, or **Decline**
    and say what to change. This waits for you in every mode but YOLO.
-4. The service is now a row under **Your own services**, ticked. Press
-   **Run setup** (the agent may ask to start it). The stage **Set up your
-   own services** makes the guest and runs the script.
-5. Open it from the **Services** page. To let someone else use it, tick it
+4. The service is now a row under **Your own services**, ticked, and a
+   setup run starts by itself. The stage **Set up your own services**
+   makes the guest and runs the script. Above the chat a strip says
+   **Task: Set up <name>**: until the agent is done, it may run commands
+   inside that one guest, correct its script and run setup again without
+   asking each time. Each such step shows in the chat as **Ran for the
+   task**, a changed script with what changed. Anything risky, and
+   anything outside that guest, still asks. **End task** stops that at
+   once.
+5. When the run ends the agent checks the service (did the script run to
+   its end, did a unit fail, does it listen on its port), fixes what is
+   off and tells you where to open it. Open it from the **Services** page. To let someone else use it, tick it
    for them under **Access, People**; that works only for a port the card
    listed as open to "the people you tick it for".
 
 If the script fails, the rest of setup still finishes, and the checks at
 the end say `<name>: its setup script ran as it is now` failed. The run's
-log has the script's output under **Set up your own services**; the agent
-reads it and proposes a changed script, which you approve like the first.
+log has the script's output under **Set up your own services**. While
+its task is on, the agent reads it and corrects the script by itself;
+later, a changed script is a card you approve like the first.
 
 ## 2. Look at one, turn it off, remove it
 

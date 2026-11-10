@@ -1139,6 +1139,7 @@ class App:
             "lines": custom.describe(new_model, name, text),
             "diff": diff,
             "risky": opens or text != before,
+            "opens": opens,
             "same": new == config and text == before,
         }
 
@@ -2363,6 +2364,14 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                     return self.json(404, {"error": exc.messages[0]})
             if path == "/api/chat/transcript":
                 return self.json(200, {"text": app.chat.transcript()})
+            if path == "/api/chat/image":
+                # A picture the owner attached. Its type was checked by its
+                # bytes when it was kept, and the page's headers hold the browser to it.
+                try:
+                    kind, data = app.chat.image(dict(p.split("=", 1) for p in query.split("&") if "=" in p).get("id", ""))
+                except NullBillError as exc:
+                    return self.json(404, {"error": exc.messages[0]})
+                return self.send(200, data, kind, {"Cache-Control": "private, max-age=86400"})
             match = re.fullmatch(r"/api/jobs/([0-9T]+-[a-z-]+)", path)
             if match and match[1] in app.jobs:
                 return self.json(200, app.job_view(app.jobs[match[1]], offset(query)))
@@ -2396,7 +2405,11 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 length = int(self.headers.get("Content-Length") or 0)
             except ValueError:
                 length = -1
-            if not 0 <= length <= 64 * 1024:
+            # Only a signed-in owner's message to the agent may be large: it carries pictures.
+            limit = 64 * 1024
+            if self.path == "/api/chat" and app.valid(self.token()):
+                limit += chat.MAX_IMAGES * (chat.MAX_IMAGE_BYTES * 4 // 3 + 1024)
+            if not 0 <= length <= limit:
                 self.close_connection = True
                 return self.json(413, {"error": "request too large"})
             raw = self.rfile.read(length)
@@ -2458,8 +2471,12 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                     app.chat.welcome()
                     return self.json(200, {"ok": True, "agent_credential": app.agent_credential(), "chat": app.chat.summary()})
                 if self.path == "/api/chat":
-                    app.chat.say(str(body.get("text", "")))
+                    app.chat.say(str(body.get("text", "")), images=body.get("images"))
                     return self.json(200, app.chat.view(int(body.get("after") or 0)))
+                if self.path == "/api/chat/task":
+                    if app.chat.end_task("owner", "You ended it.") is None:
+                        raise NullBillError("no task is on")
+                    return self.json(200, {"ok": True})
                 if self.path == "/api/chat/stop":
                     app.chat.stop()
                     return self.json(200, {"ok": True})

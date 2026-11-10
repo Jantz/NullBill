@@ -87,3 +87,58 @@ browsers allow that once they trust NullBill's root certificate.
   in `/var/log/nb-agent/<id>.log`, read with `read_run`), `update_packages`
   (simulated first; removing packages is risky), `watch_job`, `check_reach`
   and `remember` (notes the owner reads and edits on the Agent page).
+
+## The whole platform, bigger jobs, model and pictures (2026-11-10)
+
+The agent could run commands but not use what the page itself offers, and
+a job of many steps asked for a card at every step in Manual. Now:
+
+- **Every feature of the page has a tool**, each through the same gate:
+  `services` (the Services page and every guest), `metrics` (one Prometheus
+  query), `on_demand` (start, stop, keep on), `people`, `set_person`,
+  `remove_person`, `port_mapping`, `check_updates`, `test_alert`,
+  `stop_job`, `check_service`, and `set_choices` now takes `games` and
+  `power`. `docs/runbooks/agent-services.md` tells it how to work inside
+  each built-in service without guessing. Kept from the agent on purpose:
+  disks, SSH keys, passwords, Tailscale's keys, and its own access mode and
+  root switch. Giving a person more than they had is risky (word `share`)
+  and the card says what sharing means: that service's own ports over
+  Tailscale, no shell or root in its guest, nothing else on the server.
+- **A task** is a job the owner approves once (`start_task`, a change-tier
+  card that lists the plan and the guests). Until it ends (`finish_task`,
+  **End task** above the chat, a new conversation, or six hours) a
+  change-tier action inside the guests it names runs without a card, and so
+  do setup runs when the task says so. Each still shows in the chat as
+  "Ran for the task" and in the audit log with the task's id. Risky stays
+  risky and blocked stays blocked. A task cannot name the Proxmox host, the
+  NullBill container or a guest of the `core` workload.
+- **A service of the owner's own in one go.** `add_service` with
+  `build: true` puts on its one risky card what approving it does: saves
+  the service, starts the setup run and starts a task for the new guest.
+  The agent is told when the run ends, reads `check_service`, and may
+  correct its own script inside that task (the chat shows the diff). A
+  change to what the service opens, its zone, kind or allow-list is risky
+  as before. The reasoning: the owner already approved a script that runs
+  as root in that guest, and the task gives no more than that.
+- **Plan.** `show_plan` keeps one checklist card in the chat, updated in
+  place, so a long job reads as progress and not as a column of tool lines.
+- **Model and thinking level** are the owner's choice (under the message
+  box and on the Agent page), passed to the CLI as `--model` and
+  `--effort`; "Default" passes neither. Each answer names the model that
+  gave it. A turn may now take up to 200 steps and an hour.
+- **Pictures.** The owner attaches up to four (button, paste or drop); the
+  browser scales them to 1568 px, the server checks the type by the file's
+  first bytes, keeps them in `$NULLBILL_HOME/agent/images` (the newest 200)
+  and hands them to the CLI as image blocks over `--input-format
+  stream-json`. A picture goes to the model as it is: the page cannot take
+  a secret out of an image as it does out of text, and says so beside the
+  button.
+- **Not built: the agent taking screenshots itself.** The NullBill
+  container has no browser and reaches only the host and Prometheus; a
+  headless browser there, with a route to every service's web page, is a
+  tool change and a wider network for the container that holds the secrets.
+  It waits for the owner's decision.
+- **What the owner reads.** A card's result is a sentence in the owner's
+  words (`chat.Told`); the advice on what to do next goes to the agent
+  only. Tables the agent writes render as tables, and its rules ask for
+  short answers with one fact a line.

@@ -24,9 +24,17 @@ FAKE_AGENT = r"""
 import json, subprocess, sys
 args = sys.argv[1:]
 config = json.load(open(args[args.index("--mcp-config") + 1]))["mcpServers"]["nullbill"]
-prompt = sys.stdin.read()
+# The message arrives as one line of stream-json; its text blocks are the prompt.
+assert args[args.index("--input-format") + 1] == "stream-json"
+content = json.loads(sys.stdin.readline())["message"]["content"]
+prompt = "\n".join(b["text"] for b in content if b["type"] == "text")
+pictures = [b["source"]["media_type"] for b in content if b["type"] == "image"]
+if pictures:
+    prompt += "\npictures: " + ", ".join(pictures)
 out = lambda m: print(json.dumps(m), flush=True)
-init = {"type": "system", "subtype": "init", "session_id": "s-1"}
+model = args[args.index("--model") + 1] if "--model" in args else "opus"
+effort = args[args.index("--effort") + 1] if "--effort" in args else "unset"
+init = {"type": "system", "subtype": "init", "session_id": "s-1", "model": f"claude-{model}-5-5"}
 out(init | {"mcp_servers": [{"name": "nullbill", "status": "connected"}]})
 env = config["env"] | {"PATH": "/usr/bin:/bin"}
 mcp = subprocess.Popen([config["command"], *config["args"]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=env)
@@ -48,7 +56,9 @@ for line in prompt.splitlines():
         done = {"type": "tool_result", "tool_use_id": f"t{n}", "content": text, "is_error": result["isError"]}
         out({"type": "user", "message": {"content": [done]}})
         said.append(text)
-out({"type": "assistant", "message": {"content": [{"type": "text", "text": "heard: " + prompt[:200]}]}})
+if "EFFORT" in prompt:
+    prompt = f"effort {effort}. " + prompt
+out({"type": "assistant", "message": {"content": [{"type": "text", "text": "heard: " + prompt[:400]}]}})
 out({"type": "result", "subtype": "success", "is_error": False, "result": "ok", "session_id": "s-1", "total_cost_usd": 0.01})
 """
 

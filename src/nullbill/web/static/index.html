@@ -55,6 +55,7 @@
   <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
   <symbol id="i-back" viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></symbol>
   <symbol id="i-send" viewBox="0 0 24 24"><path d="M4.5 12L20 4.5 15.5 20l-3-6.5z"/><path d="M12.5 13.5L20 4.5"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><circle cx="9" cy="10" r="1.5"/><path d="M4.5 17l4.5-4 3 2.5 3.5-4 4 4.5"/></symbol>
   <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2"/></symbol>
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
   <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></symbol>
@@ -707,6 +708,18 @@
             </div>
           </div>
 
+          <div class="setting" id="sec-model">
+            <div class="setting-text"><h2 id="h-model">Model and thinking</h2>
+              <p>Which Claude model answers in the chat and how long it thinks before it acts. A larger model and more thinking find harder faults; they are slower and use more of your plan's limit or API credit. Default leaves both to Claude Code and your plan.</p></div>
+            <div class="setting-control">
+              <div class="row">
+                <label class="field narrow"><span class="label">Model</span><select id="agent-model" data-setting="model"><option value="default">Default</option><option value="haiku">Haiku, fastest</option><option value="sonnet">Sonnet, fast</option><option value="opus">Opus, thorough</option><option value="fable">Fable, most capable</option></select></label>
+                <label class="field narrow"><span class="label">Thinking</span><select id="agent-effort" data-setting="effort"><option value="default">Default</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra high</option><option value="max">Maximum</option></select></label>
+              </div>
+              <p class="feedback" id="model-result" role="status"></p>
+            </div>
+          </div>
+
           <div class="setting" id="sec-powers">
             <div class="setting-text"><h2 id="h-powers">Operator agent</h2>
               <p id="powers-what">A second agent for long work, in the operator container. Root lets it run any command on Proxmox, setup and updates, each announced on your phone. Off removes its key at once.</p></div>
@@ -772,6 +785,10 @@
           <button type="button" id="chat-close" class="icon-btn dock-only" title="Hide the agent (Alt+A)"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg><span class="sr-only">Hide the agent</span></button>
         </div>
       </div>
+      <div id="chat-task" class="chat-task" role="status" hidden>
+        <div class="chat-task-text"><b id="chat-task-title"></b><span id="chat-task-scope"></span></div>
+        <button type="button" id="chat-task-end" class="btn small">End task</button>
+      </div>
       <div id="chat-log" class="chat-log" role="log" aria-live="polite" aria-relevant="additions" aria-labelledby="chat-title" tabindex="0"></div>
       <div id="chat-signin" class="chat-signin" hidden>
         <h3>Sign in the agent</h3>
@@ -788,8 +805,11 @@
         <div class="chips" id="chat-chips" role="group" aria-label="Suggestions"></div>
         <form id="composer" class="composer">
           <label class="sr-only" for="composer-text">Message the agent</label>
-          <textarea id="composer-text" rows="1" placeholder="Ask or tell the agent" aria-keyshortcuts="/" enterkeyhint="send" title="Enter sends, Shift Enter for a new line"></textarea>
+          <ul id="composer-pictures" class="composer-pictures" aria-label="Pictures to send" hidden></ul>
+          <textarea id="composer-text" rows="1" placeholder="Ask or tell the agent" aria-keyshortcuts="/" enterkeyhint="send" title="Enter sends, Shift Enter for a new line. Paste or drop a screenshot to attach it."></textarea>
           <div class="composer-bar">
+            <input type="file" id="composer-file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
+            <button type="button" id="composer-attach" class="icon-btn" title="Attach a screenshot or picture"><svg class="icon" aria-hidden="true"><use href="#i-image"/></svg><span class="sr-only">Attach a screenshot or picture</span></button>
             <div class="segmented mode-seg" role="group" aria-label="Access mode: what the agent may run without asking" id="chat-modes">
               <button type="button" data-mode="manual" aria-pressed="false">Manual</button>
               <button type="button" data-mode="auto" aria-pressed="false">Auto</button>
@@ -797,6 +817,10 @@
             </div>
             <button type="button" id="chat-stop" class="btn small danger" hidden><svg class="icon" aria-hidden="true"><use href="#i-stop"/></svg>Stop</button>
             <button type="submit" id="chat-send" class="icon-btn send" title="Send (Enter)"><svg class="icon" aria-hidden="true"><use href="#i-send"/></svg><span class="sr-only">Send</span></button>
+          </div>
+          <div class="composer-picks">
+            <label class="chat-pick"><span>Model</span><select id="chat-model" data-setting="model" title="Which Claude model answers. A larger one finds harder faults and uses more of your plan or credit."><option value="default">Default</option><option value="haiku">Haiku</option><option value="sonnet">Sonnet</option><option value="opus">Opus</option><option value="fable">Fable</option></select></label>
+            <label class="chat-pick"><span>Thinking</span><select id="chat-effort" data-setting="effort" title="How long the agent thinks before it acts. More is slower and uses more of your plan or credit."><option value="default">Default</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra high</option><option value="max">Maximum</option></select></label>
           </div>
         </form>
         <p class="feedback" id="composer-result" role="status"></p>

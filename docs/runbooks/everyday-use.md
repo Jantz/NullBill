@@ -103,7 +103,14 @@ no longer works.
   disks, deleting backups, reading secrets, silencing the command log and
   touching the NullBill container are refused in every mode. Every action
   is listed under **Agent**, **Log**. After a run fails, it looks into it
-  by itself. The top bar shows a run's progress; press it, or open the
+  by itself. For a bigger job ("set up Paperless for me") it shows its
+  plan as a checklist and asks once: while that **task** is on (the strip
+  above the chat, with **End task**) it works inside the one guest the
+  task names without a card for each step, and risky steps still ask.
+  Under the message box you choose the **Model** and how long it
+  **thinks**, and the picture button (or paste, or drop) attaches a
+  screenshot or photo for it to look at. A picture goes to Claude as it
+  is, so do not attach one that shows a password. The top bar shows a run's progress; press it, or open the
   run on the **Activity** page, to see it in full. You no longer need to run
   `install.sh` again for that.
 - **A run that hangs**: the **Activity** page says when a run has printed
@@ -137,7 +144,8 @@ Choose it under **Setup**, **What to run**, **When it runs**;
 Under **Setup**, **What to run**, **Your own services**, press **Ask the
 agent to add one**. The agent proposes a guest for it, the ports it opens
 and a setup script; nothing is saved until you have read and approved
-them, and the next setup run builds it.
+them. That one approval also runs setup, and the agent then checks that
+the program answers and corrects its script if not.
 [custom-services.md](custom-services.md) has each step and what such a
 script must do.
 

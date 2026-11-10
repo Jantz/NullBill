@@ -186,6 +186,138 @@ TOOLS = [
         },
     },
     {
+        "name": "stop_job",
+        "description": "End a run that hangs. What it finished stays; the rest waits for the next run.",
+        "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}, "why": WHY}, "required": ["id"]},
+    },
+    {
+        "name": "services",
+        "description": "Every guest on the server and what the owner opens on each (the Services page): address, name, "
+        "sign-in name, whether it is on. Passwords are never shown. Read docs/runbooks/agent-services.md for how to work "
+        "inside each guest.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "metrics",
+        "description": "Ask the server's Prometheus one PromQL question, such as up == 0, "
+        'node_filesystem_avail_bytes{mountpoint="/"} or nb_game_up. Every guest and the host report there.',
+        "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+    },
+    {
+        "name": "on_demand",
+        "description": "Start or stop a workload that runs on demand, or keep it on (status lists them under on_demand). "
+        "A start that does not fit and a stop of something in use change nothing and say what the owner must decide.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"enum": ["start", "stop", "keep"]},
+                "name": {"type": "string", "description": "The workload's name, as status lists it."},
+                "stop": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "With start: workloads to stop first to make room, once the owner agreed to those.",
+                },
+                "force": {"type": "boolean", "description": "With stop: stop it although it is in use, once the owner agreed."},
+                "on": {"type": "boolean", "description": "With keep: true keeps it on until told otherwise, false lets it stop again."},
+                "why": WHY,
+            },
+            "required": ["action", "name"],
+        },
+    },
+    {
+        "name": "people",
+        "description": "Access, People: who may open what over Tailscale, what can be given to a person, and what giving a service means.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "set_person",
+        "description": "Add a person or change what they may open. The owner approves it; giving more needs a typed "
+        "word. The invitation to Tailscale is the owner's to send.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Lowercase letters, digits and dashes, such as alex."},
+                "login": {"type": "string", "description": "The email address they sign in to Tailscale with. Leave out to keep it."},
+                "services": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Every service they may open, by the names people lists under can_be_given. Leave out to keep them.",
+                },
+                "why": WHY,
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "remove_person",
+        "description": "Take a person off the server: they can open nothing any more, and their Tailscale account "
+        "leaves the owner's network when the page may remove it.",
+        "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}, "why": WHY}, "required": ["name"]},
+    },
+    {
+        "name": "port_mapping",
+        "description": "Whether the router asks the home router to forward Tailscale's port (Access, Tailscale, Path), so "
+        "devices on mobile data connect directly.",
+        "inputSchema": {"type": "object", "properties": {"enabled": {"type": "boolean"}, "why": WHY}, "required": ["enabled"]},
+    },
+    {
+        "name": "check_updates",
+        "description": "Ask whether NullBill itself has updates waiting (the Updates page's Check for updates).",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "test_alert",
+        "description": "Send one test alert to the owner's phone, to show that alerts arrive.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "show_plan",
+        "description": "Show the owner your plan for a longer job as a checklist, and keep it current: call it again "
+        "with the whole list each time a step starts or ends. Steps are in the owner's words, a few words each.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "steps": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 20,
+                    "items": {
+                        "type": "object",
+                        "properties": {"text": {"type": "string"}, "state": {"enum": ["todo", "doing", "done"]}},
+                        "required": ["text"],
+                    },
+                },
+            },
+            "required": ["steps"],
+        },
+    },
+    {
+        "name": "start_task",
+        "description": "Ask the owner to approve a bigger job once. Until it ends, commands and file changes inside the "
+        "guests you name (and setup runs, with setup_runs) go ahead without a card each; risky ones still ask, blocked "
+        "ones stay blocked, and Proxmox itself and the platform's own guests are never covered. Not needed for "
+        "add_service with build, which starts its own.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "The job in the owner's words, such as Move Paperless to Postgres."},
+                "guests": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 8},
+                "setup_runs": {"type": "boolean", "description": "Whether the job starts setup runs or checks."},
+                "steps": {"type": "array", "items": {"type": "string"}, "description": "The plan, a few words a step."},
+                "why": WHY,
+            },
+            "required": ["title", "guests"],
+        },
+    },
+    {
+        "name": "finish_task",
+        "description": "Close the task once the job is done and you checked it. From then on changes ask again.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"summary": {"type": "string", "description": "Two or three lines: what is done and what you checked."}},
+        },
+    },
+    {
         "name": "read_service",
         "description": "One of the owner's own services (status marks them own): what it is, what it opens, and its setup script.",
         "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
@@ -197,7 +329,8 @@ TOOLS = [
         "the firewall for exactly the ports listed, updates, monitoring, backups and on-demand power; the setup script "
         "puts the program in, run as root inside the guest by the next setup run, and again whenever the script "
         "changes. The owner reads the definition and the whole script before it is saved. Read "
-        "docs/runbooks/custom-services.md first.",
+        "docs/runbooks/custom-services.md first. With build=true the same approval also starts the setup run and "
+        "lets you work inside that guest until it answers.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -250,10 +383,21 @@ TOOLS = [
                 "stop": {"enum": ["auto", "ask", "manual"]},
                 "idle_minutes": {"type": "integer"},
                 "on": {"type": "boolean", "description": "Whether it is ticked under Setup, What to run. A new one is on."},
+                "build": {
+                    "type": "boolean",
+                    "description": "Set it up in one go: once the owner approves, the page saves it, starts the setup "
+                    "run and tells you when that ends; then check_service.",
+                },
                 "why": WHY,
             },
             "required": ["name"],
         },
+    },
+    {
+        "name": "check_service",
+        "description": "Whether one of the owner's own services came up: its setup script ran as it is now, no unit "
+        "failed, each port it declares listens (and not on 127.0.0.1 only), and the script's last output.",
+        "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
     },
     {
         "name": "remove_service",
@@ -307,6 +451,19 @@ TOOLS = [
                 "console": {"type": "boolean"},
                 "owner_login": {"type": "string"},
                 "gpus": {"type": "object", "description": "PCI address to the card's memory in GB, for cards the probe could not read."},
+                "games": {
+                    "type": "object",
+                    "description": "Per game server by its name (minecraft, terraria, factorio, or a further server that "
+                    "add_game_server made): settings (the server's own options, such as {difficulty: hard}; "
+                    "docs/runbooks/games.md lists what NullBill sets itself), admins (player names), memory_mib, title "
+                    "(a further server's) and, for the game itself, eula (true only when the owner said they agree; it "
+                    "always waits for them).",
+                },
+                "power": {
+                    "type": "object",
+                    "description": "When a workload runs, by its name: run (always or on-demand), stop (auto, ask or "
+                    "manual) and idle_minutes (5 to 10080).",
+                },
                 "why": WHY,
             },
         },

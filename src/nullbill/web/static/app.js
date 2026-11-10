@@ -308,13 +308,14 @@ function setNav(view, text, kind, label) {
 // from nodes, never from HTML, since the text comes from the model.
 function inline(text) {
   const nodes = [];
-  const re = /(`[^`]+`)|(\*\*[^*]+\*\*)|\[([^\]]+)\]\((https?:\/\/[^)\s]+|#[\w/-]*)\)/g;
+  const re = /(`[^`]+`)|(\*\*[^*]+\*\*)|\[([^\]]+)\]\((https?:\/\/[^)\s]+|#[\w/-]*)\)|(\*[^*\s](?:[^*]*[^*\s])?\*)/g;
   let last = 0;
   let m;
   while ((m = re.exec(text))) {
     if (m.index > last) nodes.push(text.slice(last, m.index));
     if (m[1]) nodes.push(make("code", {textContent: m[1].slice(1, -1)}));
     else if (m[2]) nodes.push(make("b", {textContent: m[2].slice(2, -2)}));
+    else if (m[5]) nodes.push(make("em", {textContent: m[5].slice(1, -1)}));
     else {
       const a = make("a", {href: m[4], textContent: m[3]});
       if (!m[4].startsWith("#")) { a.target = "_blank"; a.rel = "noopener noreferrer"; }
@@ -326,10 +327,23 @@ function inline(text) {
   return nodes;
 }
 
+// A table the model wrote with pipes: a real one, which scrolls sideways
+// on its own instead of wrapping into a wall of bars.
+const TABLE_RULE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+function tableCells(line) {
+  return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+}
+function tableView(head, rows) {
+  const table = make("table", {},
+    make("thead", {}, make("tr", {}, ...head.map((c) => make("th", {scope: "col"}, ...inline(c))))),
+    make("tbody", {}, ...rows.map((r) => make("tr", {}, ...head.map((_, n) => make("td", {}, ...inline(r[n] || "")))))));
+  return make("div", {className: "md-table", tabIndex: 0}, table);
+}
+
 function markdown(text) {
   const out = [];
   const lines = String(text || "").split("\n");
-  const BLOCK = /^```|^\s*[-*] |^\s*\d+[.)] |^#{1,6} /;
+  const BLOCK = /^```|^\s*[-*] |^\s*\d+[.)] |^#{1,6} |^\s*\|.*\|\s*$/;
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
@@ -348,6 +362,14 @@ function markdown(text) {
     } else if (/^#{1,6} /.test(line)) {
       out.push(make("p", {}, make("b", {}, ...inline(line.replace(/^#+ /, "")))));
       i += 1;
+    } else if (/^\s*\|.*\|\s*$/.test(line) && TABLE_RULE.test(lines[i + 1] || "")) {
+      const head = tableCells(line);
+      const rows = [];
+      i += 2;
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) rows.push(tableCells(lines[i++]));
+      out.push(tableView(head, rows));
+    } else if (/^\s*([-*_]\s*){3,}$/.test(line)) {
+      i += 1; // a rule between sections: the gap between paragraphs says as much
     } else if (!line.trim()) {
       i += 1;
     } else {
@@ -1604,6 +1626,7 @@ function renderMode(settings) {
     button.title = MODE_DESC[button.dataset.mode];
   }
   $("chat-modes").dataset.mode = settings.mode;
+  for (const select of document.querySelectorAll("select[data-setting]")) select.value = settings[select.dataset.setting] || "default";
 }
 
 function renderAgentPowers(on) {
@@ -3511,6 +3534,8 @@ function signInAgent(event, fieldId, resultId) {
 const chat = {
   seq: 0, timer: null, running: false, busy: false, pending: [], asks: new Set(), nodes: new Map(),
   typing: null, seen: 0, latest: 0, mode: "manual", failures: 0,
+  // The agent's checklist that is still current, and pictures waiting to be sent.
+  plan: null, pictures: [], task: null,
 };
 
 function stopChat() {
@@ -3550,6 +3575,7 @@ function clearChatLog() {
   chat.nodes.clear();
   chat.asks.clear();
   chat.typing = null;
+  chat.plan = null;
 }
 
 function applyChat(view) {
@@ -3581,11 +3607,13 @@ function applyChat(view) {
   for (const [id, node] of chat.nodes) {
     if (node.classList.contains("request") && node.dataset.state === "pending" && !chat.pending.includes(id)) settleRequest(node, "expired");
   }
-  if (view.mode && state && state.chat && (view.mode !== state.chat.mode || view.auto_fix !== state.chat.auto_fix)) {
-    state.chat.mode = view.mode;
-    state.chat.auto_fix = view.auto_fix;
+  const SETTINGS = ["mode", "auto_fix", "model", "effort"];
+  if (view.mode && state && state.chat && SETTINGS.some((k) => view[k] !== state.chat[k])) {
+    for (const k of SETTINGS) state.chat[k] = view[k];
     renderMode(state.chat);
   }
+  chat.task = view.task || null;
+  paintTask();
   if (state && state.chat) { state.chat.busy = view.busy; state.chat.pending = chat.pending.length; }
   paintTyping();
   paintChatShell();
@@ -3674,7 +3702,7 @@ function addToLog(node) {
 const TIER_TEXT = {read: "Reads only", change: "Makes a change", risky: "Risky", blocked: "Blocked"};
 
 function turnMeta(e) {
-  const parts = [`${e.seconds} s`];
+  const parts = [...(e.model ? [e.model] : []), ...(e.effort ? [`${e.effort} thinking`] : []), `${e.seconds} s`];
   if (e.steps) parts.push(`${e.steps} step${e.steps === 1 ? "" : "s"}`);
   if (e.cost && state && state.agent_credential === "API key") parts.push(`$${Number(e.cost).toFixed(2)}`);
   return parts.join(" · ");
@@ -3694,9 +3722,20 @@ let cardCount = 0;
 
 function renderEvent(e) {
   switch (e.kind) {
-    case "user":
-      addToLog(make("div", {className: "msg user", textContent: e.text}));
+    case "user": {
+      // What the owner says next is about something new: a later plan is a new card.
+      chat.plan = null;
+      const pictures = (e.images || []).map((image, n) => {
+        const src = `/api/chat/image?id=${encodeURIComponent(image.id)}`;
+        const label = `Picture ${n + 1}, opens in a new tab`;
+        return make("a", {href: src, target: "_blank", rel: "noopener", className: "msg-picture", title: label, ariaLabel: label},
+          make("img", {src, alt: `Picture ${n + 1} you attached`, loading: "lazy"}));
+      });
+      addToLog(make("div", {className: "msg user"},
+        pictures.length ? make("div", {className: "msg-pictures"}, ...pictures) : null,
+        e.text ? make("span", {textContent: e.text}) : null));
       break;
+    }
     case "assistant":
       addToLog(make("div", {className: "msg assistant"}, ...markdown(e.text)));
       break;
@@ -3721,11 +3760,27 @@ function renderEvent(e) {
       }
       if (e.seconds) addToLog(make("div", {className: "turn-meta", textContent: turnMeta(e)}));
       break;
-    case "ran":
-      addToLog(make("div", {className: "ran"},
-        make("span", {className: `tier ${e.tier}`, textContent: `Ran in ${MODE_NAMES[e.mode] || e.mode}`}),
+    case "ran": {
+      // What ran without a card: under the access mode, or under a task approved once.
+      const node = addToLog(make("div", {className: "ran"},
+        make("span", {className: `tier ${e.tier}`, textContent: e.task ? "Ran for the task" : `Ran in ${MODE_NAMES[e.mode] || e.mode}`}),
         make("span", {textContent: e.title}),
         e.command ? make("code", {textContent: e.command}) : null));
+      if (e.lines && e.lines.length) node.append(make("ul", {className: "says"}, ...e.lines.map((l) => li(l))));
+      if (e.diff) node.append(make("details", {className: "ran-diff"}, make("summary", {textContent: "What changed"}), diffView(e.diff)));
+      break;
+    }
+    case "plan":
+      if (chat.plan && chat.plan.isConnected) paintPlan(chat.plan, e.steps || []);
+      else chat.plan = addToLog(paintPlan(make("div", {className: "card plan"}), e.steps || []));
+      break;
+    case "task":
+      if (e.state === "start") {
+        addToLog(make("div", {className: "msg system"}, make("b", {textContent: "Task approved: "}), e.title, ". ", taskScope(e)));
+      } else {
+        addToLog(make("div", {className: "msg system"}, make("b", {textContent: "Task ended: "}), e.title, "."));
+        if (e.by === "agent" && e.text) addToLog(make("div", {className: "msg assistant"}, ...markdown(e.text)));
+      }
       break;
     case "tool": {
       const node = make("details", {className: "tool"},
@@ -3749,7 +3804,7 @@ function renderEvent(e) {
       break;
     case "proposal_update": {
       const node = chat.nodes.get(e.id);
-      if (node) settleRequest(node, e.state, e.output, e.full);
+      if (node) settleRequest(node, e.state, e.output, e.full, e.says);
       break;
     }
     case "ask":
@@ -3777,6 +3832,38 @@ function renderEvent(e) {
   }
 }
 
+// The agent's checklist for a longer job. One card, kept current in place.
+const STEP_TEXT = {done: "Done", doing: "In progress", todo: "Not started"};
+function paintPlan(card, steps) {
+  const done = steps.filter((s) => s.state === "done").length;
+  const doing = steps.find((s) => s.state === "doing");
+  card.replaceChildren(
+    make("div", {className: "card-head"}, icon("checks"), make("b", {className: "card-title", textContent: "Plan"}),
+      make("span", {className: "plan-count", textContent: `${done} of ${steps.length} done`})),
+    make("ol", {className: "plan-list"}, ...steps.map((s) => {
+      const mark = make("span", {className: "plan-mark", ariaHidden: "true"}, s.state === "done" ? icon("check") : null);
+      const item = make("li", {}, mark, make("span", {textContent: s.text}), make("span", {className: "sr-only", textContent: `: ${STEP_TEXT[s.state] || s.state}`}));
+      item.dataset.state = s.state;
+      return item;
+    })));
+  card.dataset.doing = doing ? doing.text : "";
+  return card;
+}
+
+function taskScope(task) {
+  const guests = (task.guests || []).join(", ");
+  return `The agent changes things inside ${guests}${task.jobs ? " and runs setup" : ""} without asking each time. Risky steps still ask.`;
+}
+
+// The task that is on, above the conversation, with the way to end it.
+function paintTask() {
+  const task = chat.task;
+  show("chat-task", Boolean(task));
+  if (!task) return;
+  $("chat-task-title").textContent = `Task: ${task.title}`;
+  $("chat-task-scope").textContent = taskScope(task);
+}
+
 function requestCard(e) {
   const card = make("div", {className: "card request"});
   card.dataset.tier = e.tier;
@@ -3800,9 +3887,15 @@ function requestCard(e) {
       make("div", {className: "cmd", textContent: step.command})))));
   }
   if (e.act === "write" && e.diff) body.append(diffView(e.diff));
+  if (e.act === "task" && e.plan && e.plan.length) body.append(make("ol", {className: "says plan-steps"}, ...e.plan.map((l) => li(l))));
   if (e.lines && e.lines.length) body.append(make("ul", {className: "says"}, ...e.lines.map((l) => li(l))));
   // A service of the owner's own: what it is first, then its whole setup script.
   if (e.act === "service" && e.diff) body.append(diffView(e.diff));
+  // One approval for the whole job: what the page does next, said before the button.
+  if (e.then && e.then.length) {
+    body.append(make("div", {className: "then"}, make("b", {textContent: "If you approve, in one go:"}),
+      make("ul", {className: "says"}, ...e.then.map((l) => li(l)))));
+  }
   if (e.why) body.append(make("p", {className: "says", textContent: e.why}));
   body.append(make("p", {className: "why", textContent: `Asked because of: ${e.reason}.`}));
   const approve = make("button", {type: "button", className: `btn ${e.tier === "risky" ? "danger" : "primary"} small`, textContent: "Approve"});
@@ -3841,7 +3934,7 @@ const SETTLED = {
   declined: ["", "Declined"], expired: ["", "Expired: not answered in 30 minutes"],
 };
 
-function settleRequest(card, stateName, output, full) {
+function settleRequest(card, stateName, output, full, says) {
   card.dataset.state = stateName;
   if (stateName === "pending") return;
   card.classList.add("settled");
@@ -3855,7 +3948,11 @@ function settleRequest(card, stateName, output, full) {
   }
   const [kind, text] = SETTLED[stateName] || ["", stateName];
   line.replaceChildren(status(kind, text));
-  if (output) {
+  if (says) {
+    // The page's own word on what it did: a sentence, not a terminal's output.
+    for (const old of card.querySelectorAll(".result")) old.remove();
+    body.append(make("div", {className: "result said"}, ...markdown(says)));
+  } else if (output) {
     for (const old of card.querySelectorAll(".result")) old.remove();
     const shown = shownOutput(output, full);
     for (const node of shown) node.classList.add("result");
@@ -3903,16 +4000,96 @@ function settleAsk(card, text) {
   card.querySelector(".card-body").append(make("p", {className: "says"}, make("b", {textContent: "You: "}), text));
 }
 
-async function sendChat(text, feedback) {
+// Pictures for the next message. Each is drawn smaller than MAX_SIDE and
+// sent as PNG while that stays small, else as JPEG: a phone's screenshot is
+// several megabytes, and the model reads nothing finer than this anyway.
+const MAX_SIDE = 1568;
+const MAX_PICTURES = 4;
+const MAX_PICTURE_BYTES = 3 * 1024 * 1024;
+const PNG_UP_TO = 1024 * 1024;
+
+function canvasBlob(canvas, type, quality) {
+  return new Promise((resolve) => canvas.toBlob(resolve, type, quality));
+}
+
+function blobBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",", 2)[1] || "");
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function readPicture(file) {
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    throw new ApiError(`${file.name || "That file"} is not a picture this browser can read. Send a PNG or JPEG.`, 400);
+  }
+  const scale = Math.min(1, MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+  const canvas = make("canvas", {width: Math.max(1, Math.round(bitmap.width * scale)), height: Math.max(1, Math.round(bitmap.height * scale))});
+  canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  let blob = file.type === "image/jpeg" ? null : await canvasBlob(canvas, "image/png");
+  if (!blob || blob.size > PNG_UP_TO) blob = await canvasBlob(canvas, "image/jpeg", 0.85);
+  if (!blob || blob.size > MAX_PICTURE_BYTES) throw new ApiError("That picture is too large even made smaller. Crop it to the part that matters.", 400);
+  const thumb = make("canvas", {width: 112, height: 112, className: "thumb"});
+  const side = Math.min(bitmap.width, bitmap.height);
+  thumb.getContext("2d").drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, 112, 112);
+  if (bitmap.close) bitmap.close();
+  return {type: blob.type, data: await blobBase64(blob), thumb, name: file.name || "screenshot"};
+}
+
+async function addPictures(files) {
+  const list = [...files].filter((f) => f.type.startsWith("image/"));
+  if (!list.length) return;
+  if (!(state && state.chat && state.chat.signed_in)) return;
+  say("composer-result", "", "");
+  for (const file of list) {
+    if (chat.pictures.length >= MAX_PICTURES) {
+      say("composer-result", "info", `A message takes up to ${MAX_PICTURES} pictures. Send these, then attach the rest.`);
+      break;
+    }
+    try {
+      chat.pictures.push(await readPicture(file));
+    } catch (error) {
+      say("composer-result", "error", error.message);
+    }
+  }
+  paintPictures();
+  $("composer-text").focus();
+}
+
+function paintPictures() {
+  const box = $("composer-pictures");
+  show(box, chat.pictures.length > 0);
+  box.replaceChildren(...chat.pictures.map((picture, n) => {
+    const label = `Remove picture ${n + 1}`;
+    const remove = make("button", {type: "button", className: "icon-btn thumb-x", title: label, ariaLabel: label}, icon("x"));
+    remove.addEventListener("click", () => {
+      chat.pictures.splice(n, 1);
+      paintPictures();
+      announce(`Picture ${n + 1} removed.`);
+      $("composer-text").focus();
+    });
+    picture.thumb.setAttribute("role", "img");
+    picture.thumb.setAttribute("aria-label", `Picture ${n + 1}: ${picture.name}`);
+    return make("li", {}, picture.thumb, remove);
+  }), make("li", {className: "composer-pictures-note", textContent: "Sent to Claude as they are. Leave out a picture that shows a password."}));
+}
+
+async function sendChat(text, feedback, pictures) {
   text = text.trim();
-  if (!text) return false;
+  const images = (pictures || []).map((p) => ({type: p.type, data: p.data}));
+  if (!text && !images.length) return false;
   if (!(state.chat && state.chat.signed_in)) {
     openAgent(true);
     say("chat-signin-result", "info", "Sign the agent in first; then send your message again.");
     return false;
   }
   try {
-    const view = await api("/api/chat", {text, after: chat.seq});
+    const view = await api("/api/chat", {text, after: chat.seq, ...(images.length ? {images} : {})});
     applyChat(view);
     scheduleChat();
     say(feedback, "", "");
@@ -3971,8 +4148,7 @@ function paintChips() {
 
 async function saveSettings(body) {
   const result = await api("/api/chat/settings", body);
-  state.chat.mode = result.mode;
-  state.chat.auto_fix = result.auto_fix;
+  for (const k of ["mode", "auto_fix", "model", "effort"]) state.chat[k] = result[k];
   renderMode(state.chat);
   pollChat();
   return result;
@@ -4492,11 +4668,67 @@ document.addEventListener("DOMContentLoaded", () => {
   $("composer").addEventListener("submit", async (event) => {
     event.preventDefault();
     const text = composer.value;
-    if (!text.trim()) return;
+    const pictures = chat.pictures;
+    if (!text.trim() && !pictures.length) return;
     composer.value = "";
+    chat.pictures = [];
+    paintPictures();
     grow();
-    if (!(await sendChat(text, "composer-result"))) { composer.value = text; grow(); }
+    if (pictures.length) say("composer-result", "busy", `Sending ${count(pictures.length, "picture")}…`);
+    if (!(await sendChat(text, "composer-result", pictures))) {
+      composer.value = text;
+      chat.pictures = pictures;
+      paintPictures();
+      grow();
+    }
   });
+  // A screenshot: picked, pasted, or dropped anywhere on the conversation.
+  $("composer-attach").addEventListener("click", () => $("composer-file").click());
+  $("composer-file").addEventListener("change", async () => {
+    await addPictures($("composer-file").files);
+    $("composer-file").value = "";
+  });
+  composer.addEventListener("paste", (event) => {
+    const files = [...(event.clipboardData ? event.clipboardData.files : [])].filter((f) => f.type.startsWith("image/"));
+    if (!files.length) return;
+    event.preventDefault();
+    addPictures(files);
+  });
+  const dropZone = $("chat");
+  const carriesFiles = (event) => event.dataTransfer && [...event.dataTransfer.types].includes("Files");
+  dropZone.addEventListener("dragover", (event) => {
+    if (!carriesFiles(event)) return;
+    event.preventDefault();
+    dropZone.classList.add("dropping");
+  });
+  dropZone.addEventListener("dragleave", (event) => { if (!dropZone.contains(event.relatedTarget)) dropZone.classList.remove("dropping"); });
+  dropZone.addEventListener("drop", (event) => {
+    if (!carriesFiles(event)) return;
+    event.preventDefault();
+    dropZone.classList.remove("dropping");
+    addPictures(event.dataTransfer.files);
+  });
+  // The model and how long it thinks: beside the message box and on the Agent page.
+  for (const select of document.querySelectorAll("select[data-setting]")) {
+    select.addEventListener("change", async () => {
+      const feedback = select.closest(".composer") ? "composer-result" : "model-result";
+      const key = select.dataset.setting;
+      try {
+        say(feedback, "busy", "Saving…");
+        await saveSettings({[key]: select.value});
+        const picked = select.selectedOptions[0].textContent;
+        say(feedback, "ok", `${key === "model" ? "Model" : "Thinking"}: ${picked}, from your next message.`);
+      } catch (error) {
+        renderMode(state.chat);
+        say(feedback, "error", error.message);
+      }
+    });
+  }
+  $("chat-task-end").addEventListener("click", () => press($("chat-task-end"), "composer-result", "Ending the task…", async () => {
+    await api("/api/chat/task", {});
+    await pollChat();
+    return "The task is over. From now on the agent asks as your access mode says.";
+  }));
   $("chat-stop").addEventListener("click", () => press($("chat-stop"), "composer-result", "Stopping…", async () => {
     await api("/api/chat/stop", {});
     pollChat();
