@@ -160,12 +160,16 @@ def setup(client, action="apply", **more):
 
 
 def wait(client, job_id):
-    for _ in range(200):
+    """The job once it has ended. By the clock: the site fixture stubs
+    time.sleep, and 200 requests without a pause between them ended before
+    the job's process did on a busy machine."""
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
         status, job = client.call(f"/api/jobs/{job_id}")
         assert status == 200
         if job["state"] != "running":
             return job
-        time.sleep(0.05)
+        real_sleep(0.05)
     raise AssertionError("job did not finish")
 
 
