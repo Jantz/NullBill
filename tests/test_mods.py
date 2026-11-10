@@ -68,7 +68,7 @@ def test_the_catalog_pins_paper_and_fabric_for_the_minecraft_it_pins():
     allowed = model["services"]["minecraft"]["proxy_allow"]
     urls = [game["servers"]["paper"]["url"], *(lib["url"] for lib in game["servers"]["fabric"]["libraries"])]
     assert {urllib.parse.urlsplit(url).hostname for url in urls} | {"cdn.modrinth.com"} <= set(allowed)
-    assert "api.modrinth.com" in model["services"]["nullbill"]["proxy_allow"]
+    assert {"api.modrinth.com"} <= set(model["services"]["nullbill"]["proxy_allow"])
     assert not mods.takes(model, "terraria") and mods.view(model, "terraria") == {"name": "terraria", "takes": False}
 
 
@@ -255,7 +255,7 @@ def test_a_further_server_has_its_own_kind_and_list_and_the_games_pins(facts):
     assert mods.server(model, "minecraft") == "vanilla" and model["games"]["minecraft"]["mods"] == []
     assert mods.server(model, "creative") == "paper" and [m["project"] for m in model["games"]["creative"]["mods"]] == ["chunky"]
     assert model["games"]["creative"]["servers"] == model["games"]["minecraft"]["servers"]
-    assert "cdn.modrinth.com" in model["services"]["creative"]["proxy_allow"]
+    assert {"cdn.modrinth.com"} <= set(model["services"]["creative"]["proxy_allow"])
     plan = strip_notes(build_plan(model, facts("large")))
     assert plan["games"]["creative"]["server"] == "paper build 248" and "server" not in plan["games"]["minecraft"]
     assert games.variables(plan, model, "creative")["game_minecraft_server"] == "paper"
