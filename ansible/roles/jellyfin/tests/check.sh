@@ -119,6 +119,17 @@ token=$(curl -sS -H "$pascal" -H "$client" -H 'Content-Type: application/json' \
   -d "{\"Username\": \"nullbill-admin\", \"Pw\": \"$(cat /etc/nullbill/jellyfin-admin-password)\"}" \
   http://127.0.0.1:8096/Users/AuthenticateByName | python3 -c 'import json, sys; print(json.load(sys.stdin)["AccessToken"])')
 user_auth="Authorization: MediaBrowser Client=\"check\", Device=\"check\", DeviceId=\"check\", Version=\"1\", Token=\"$token\""
+# The scan the kept disk's library started has to end first: Jellyfin does
+# not scan a library that is added while a scan runs.
+scan() {
+  curl -sS -H "$pascal" -H "$(key)" http://127.0.0.1:8096/ScheduledTasks \
+    | python3 -c 'import json, sys; print(next(t["State"] for t in json.load(sys.stdin) if t["Key"] == "RefreshLibrary"))'
+}
+for _ in $(seq 60); do
+  [ "$(scan)" = Idle ] && break
+  sleep 1
+done
+[ "$(scan)" = Idle ] || fail "the scan of the kept disk's library ended"
 [ "$(code -X POST -H "$user_auth" "http://127.0.0.1:8096/Library/VirtualFolders?name=Films&collectionType=movies&paths=/media/old-hdd/Films&refreshLibrary=true")" = 204 ] \
   || fail "a library added"
 item=""
