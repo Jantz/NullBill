@@ -14,7 +14,8 @@ fail() {
 # shellcheck source=tools/host-check/legacy-disk.sh
 source /usr/local/lib/legacy-disk.sh
 
-dpkg-query -W -f '${Package} ${Version}\n' ansible-core openssh-server
+ansible --version | head -1
+dpkg-query -W -f '${Package} ${Version}\n' openssh-server
 ssh-keygen -A >/dev/null
 mkdir -p /root/.ssh /run/sshd
 

@@ -23,7 +23,7 @@ trixie_roles=" pbs "
 
 ctx=$(mktemp -d)
 trap 'rm -rf "$ctx"' EXIT
-cp tools/role-check/Dockerfile tools/role-check/role-check.sh "$ctx/"
+cp tools/role-check/Dockerfile tools/role-check/role-check.sh requirements-apply.txt "$ctx/"
 cat "${EXTRA_CA_FILE:-/dev/null}" > "$ctx/extra-ca.crt"
 # Build only the images these roles run on.
 for role in "${roles[@]}"; do

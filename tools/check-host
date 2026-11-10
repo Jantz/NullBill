@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Apply the Ansible host baseline to a Debian 12 container standing in for a
-# PVE 8 host and check the result. Needs docker and network access.
+# Apply the Ansible host baseline to a Debian 13 container standing in for a
+# PVE 9 host and check the result. Needs docker and network access.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 ctx=$(mktemp -d)
 trap 'rm -rf "$ctx"' EXIT
-cp tools/host-check/Dockerfile tools/host-check/check.sh tools/host-check/legacy-disk.sh "$ctx/"
+cp tools/host-check/Dockerfile tools/host-check/check.sh tools/host-check/legacy-disk.sh requirements-apply.txt "$ctx/"
 cat "${EXTRA_CA_FILE:-/dev/null}" > "$ctx/extra-ca.crt"
 docker build -q -t nullbill-host-check "$ctx" >/dev/null
 # The storage disk's thin pool needs the dm-thin target, which only the
