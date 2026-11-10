@@ -1,4 +1,4 @@
-# ADR 0017: Saying what a setup run does to each machine before it starts
+# ADR 0018: Saying what a setup run does to each machine before it starts
 
 Status: accepted (the owner asked "What happens to my Minecraft server when
 I run this update?", 2026-11-10, and the page could not say; he then left
