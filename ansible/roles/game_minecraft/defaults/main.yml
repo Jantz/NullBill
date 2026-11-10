@@ -8,6 +8,9 @@
 # game_minecraft_port: where players connect.
 # game_minecraft_settings: server.properties keys to set; the server keeps
 # the rest of that file.
+# game_minecraft_server: vanilla, paper or fabric; game_minecraft_server_files:
+# what that kind is made of, each {file, url, sha256}.
+# game_minecraft_mods: its plugins or mods, each {file, url, sha512}.
 # game_minecraft_proxy: the egress proxy, host:port.
 # game_minecraft_services: Mojang's names, which the server reaches through
 # nb-tls-tunnel.

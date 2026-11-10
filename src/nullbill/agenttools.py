@@ -478,6 +478,35 @@ TOOLS = [
         },
     },
     {
+        "name": "game_mods",
+        "description": "Which server runs a Minecraft game server, and its plugins or mods. server: vanilla (Mojang's own, "
+        "takes neither), paper (plugins; players join with the ordinary game) or fabric (mods; some must also be in each "
+        "player's own game, which the answer says). list: the kind and the list now, and whether the server runs it yet. "
+        "search: Modrinth's plugins or mods for this server's kind and Minecraft, most used first for an empty query. "
+        "add: one by its project name from search, in its newest version for this server, with what it needs. remove. "
+        "check: which have a newer version; update takes them. Changes are saved to the choices; the server follows "
+        "when setup's games stage runs (start_job apply, stage games), which restarts it. Changing the kind drops the "
+        "list (a plugin is no mod), and a world Paper has opened opens only under Paper afterwards (leaving Paper sets it "
+        "aside and starts a new world): the tool says what a change costs, which needs the owner's yes and yes=true. "
+        "Only Modrinth, only for Minecraft.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "The Minecraft server's name, as what_to_run lists it."},
+                "action": {"enum": ["list", "search", "check", "add", "remove", "update", "server"]},
+                "query": {"type": "string", "description": "With search: words to look for; empty lists the most used."},
+                "project": {
+                    "type": "string",
+                    "description": "With add and remove: the project's name as search and list give it, such as lithium.",
+                },
+                "server": {"enum": ["vanilla", "paper", "fabric"], "description": "With server: the kind to run."},
+                "yes": {"type": "boolean", "description": "With server: go ahead with what the change costs, once the owner agreed."},
+                "why": WHY,
+            },
+            "required": ["name", "action"],
+        },
+    },
+    {
         "name": "game_command",
         "description": "Restart a game server, or type one line on its console as its admin (such as say, kick, whitelist "
         "add; Factorio's begin with /). The answer to a console line is in the server's log, which comes back with it.",

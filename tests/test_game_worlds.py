@@ -352,6 +352,39 @@ def test_a_minecraft_upload_that_would_not_run_or_would_not_stay_in_its_place_is
     assert not list((home / "kept-worlds").iterdir()) and list(nb.TRANSFER.iterdir()) == []
 
 
+# Paper (docs/adr/0021-minecraft-mods.md; found with the real servers: a world Paper has opened
+# does not open under Mojang's server or Fabric).
+
+
+def test_a_world_paper_has_opened_runs_only_under_paper_and_is_set_aside_not_lost(minecraft):
+    nb, game, home = minecraft
+    world = home / "world"
+    assert nb.world(game, ["list"])["worlds"][0].get("paper") is None
+    assert nb.world(game, ["fit"]) == {"aside": None}
+    # What Paper does to a world the first time it opens it.
+    for held in (nb.MOJANG_HOLDS, nb.PAPER_HOLDS):
+        (world / held).parent.mkdir(parents=True, exist_ok=True)
+    (world / nb.MOJANG_HOLDS).write_bytes(b"settings")
+    os.rename(world / nb.MOJANG_HOLDS, world / nb.PAPER_HOLDS)
+    assert nb.world(game, ["list"])["worlds"][0]["paper"] is True
+    # A Paper server keeps running it.
+    assert nb.world({**game, "server": "paper"}, ["fit"]) == {"aside": None}
+    # Any other sets it aside, kept, and makes a new one at its next start.
+    assert nb.world({**game, "server": "fabric"}, ["fit"]) == {"aside": "w1", "title": "First world"}
+    assert not world.exists() and (home / nb.KEPT / "w1" / nb.PAPER_HOLDS).is_file()
+    world.mkdir()
+    (world / "level.dat").write_bytes((home / nb.KEPT / "w1" / "level.dat").read_bytes())
+    listed = nb.world(game, ["list"])["worlds"]
+    assert [(w["id"], w["title"], w["active"], w.get("paper")) for w in listed] == [
+        ("w1", "First world", False, True),
+        ("w2", "New world after Paper", True, None),
+    ]
+    assert nb.world(game, ["fit"]) == {"aside": None}
+    with pytest.raises(nb.Refused, match="First world was opened by Paper.*only a Paper server opens it now"):
+        nb.world(game, ["use", "w1"])
+    assert (world / "level.dat").is_file() and (home / nb.KEPT / "w1").is_dir()
+
+
 def test_a_factorio_save_is_kept_as_the_file_it_is(guest, monkeypatch, tmp_path):
     nb, game, server = guest
     home = tmp_path / "factorio"

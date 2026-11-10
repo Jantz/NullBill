@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Record what Modrinth answers for the tests: tests/fixtures/modrinth.json.
+
+The tests of nullbill/mods.py replay these answers instead of asking
+Modrinth, and the Minecraft role's check installs the plugin and the mods
+they lead to (ansible/roles/game_minecraft/tests/paper.json, fabric.json).
+Run it when catalog.yaml's Minecraft pin moves, then
+`UPDATE_GOLDEN=1 python3 -m pytest tests/test_mods.py` and review the diff.
+Only the fields mods.py reads are kept. Needs network access.
+"""
+
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+from nullbill import mods  # noqa: E402
+from nullbill.model import build_model  # noqa: E402
+
+OUT = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "modrinth.json"
+# Per kind: what is searched for, then what is added, in this order, and
+# what is only looked up; last, each one's newest version is asked for.
+ASKED = {
+    "paper": {"search": ["", "chunky"], "add": ["chunky"], "look": []},
+    "fabric": {"search": ["", "lithium"], "add": ["lithium", "chunky"], "look": ["fabric-api"]},
+}
+KEEP = {
+    "hit": ("slug", "title", "description", "author", "downloads", "client_side"),
+    "project": ("slug", "id", "title", "client_side", "server_side", "project_type"),
+    "version": ("status", "version_type", "date_published", "version_number", "loaders", "game_versions"),
+}
+
+
+def key(path: str, params: dict | None) -> str:
+    return path + (" " + json.dumps(params, sort_keys=True) if params else "")
+
+
+def trim(path: str, answer: object) -> object:
+    if path == "search":
+        return {"hits": [{k: hit.get(k) for k in KEEP["hit"]} for hit in answer["hits"]]}
+    if path.endswith("/version"):
+        return [
+            {k: v.get(k) for k in KEEP["version"]}
+            | {
+                "files": [
+                    {"filename": f["filename"], "url": f["url"], "primary": f["primary"], "hashes": {"sha512": f["hashes"]["sha512"]}}
+                    for f in v["files"]
+                ],
+                "dependencies": [
+                    {"project_id": d.get("project_id"), "dependency_type": d.get("dependency_type")} for d in v.get("dependencies") or []
+                ],
+            }
+            # The newest few: the tests take the newest.
+            for v in answer[:3]
+        ]
+    return {k: answer.get(k) for k in KEEP["project"]}
+
+
+def main() -> int:
+    recorded: dict = {}
+
+    def ask(path: str, params: dict | None = None) -> object:
+        answer = trim(path, mods.fetch(path, params))
+        recorded[key(path, params)] = answer
+        return answer
+
+    for kind, asked in ASKED.items():
+        config: dict = {"games": {"minecraft": {"server": kind}}}
+        for query in asked["search"]:
+            mods.search(ask, build_model(config), "minecraft", query)
+        for project in asked["add"]:
+            model = build_model(config)
+            entries = mods.resolve(ask, model, "minecraft", project)
+            config = mods.put(config, model, "minecraft", entries)
+            print(kind, *mods.describe(entries), sep="\n  ")
+        for project in asked["look"]:
+            ask(f"project/{project}")
+        mods.newer(ask, build_model(config), "minecraft")
+    OUT.write_text(json.dumps(recorded, indent=1, sort_keys=True) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -257,6 +257,79 @@ The agent on the page does the same when asked ("make a new Expert world
 on Terraria"): it asks you before it changes worlds, and asks for a typed
 word before it deletes one or disconnects players.
 
+## 7. Plugins and mods for Minecraft
+
+Mojang's own server takes neither. A Minecraft server can run one of two
+others instead, and each server of yours chooses for itself. Why it works
+this way: [ADR 0021](../adr/0021-minecraft-mods.md).
+
+| Server | Takes | What players need |
+|---|---|---|
+| Vanilla | nothing | the ordinary game |
+| Paper | plugins | the ordinary game |
+| Fabric | mods | the ordinary game, plus the mods the list marks **Players need it too** |
+
+You need: Minecraft ticked under **Setup**, **What to run**. The server
+does not have to exist yet.
+
+1. On the **Services** page open the Minecraft row. Under **Server and
+   plugins**, press **Paper** or **Fabric**.
+2. Press **Add a plugin** (or **Add a mod**). The page lists what
+   [Modrinth](https://modrinth.com) has for this server and its Minecraft
+   version, the most used first; type to search. Press **Add** beside
+   one. What it needs to run comes with it and is marked
+   **Needed by** it.
+3. Press **Apply to the server**. This runs setup's part for game servers
+   and restarts the server with the list; anyone playing is disconnected
+   for a moment. Until then the row says **The server does not run this
+   yet**.
+
+- **Remove** takes a plugin or mod off the list, and with it what was
+  only there because it needed it. What something else still needs
+  cannot be removed first.
+- **Check for updates** asks Modrinth for newer versions and shows them;
+  nothing updates until you press **Take it**. Apply afterwards.
+- Changing between Paper and Fabric, or back to Vanilla, empties the
+  list after asking: a plugin is no mod. Things only a plugin or mod put
+  into a world may be gone when it is opened without it.
+- **Paper changes a world for good.** The first time Paper opens a world
+  it stores it its own way, and from then on only Paper opens it; the
+  list of worlds marks it **Paper only**. So:
+  - before you change a server to Paper, **Download** the world (section
+    6) if you may ever want it on Vanilla or Fabric again. That download
+    is the only way back;
+  - when you change a server from Paper to Fabric or Vanilla, the world
+    that runs is kept in the list and the server starts with a new world.
+    Nothing is deleted. Change back to Paper and press **Run this one**
+    to play the kept world again.
+
+  Vanilla and Fabric open each other's worlds, so changing between those
+  two keeps the world running. The page asks before each change that
+  costs something.
+
+What you should know before adding one:
+
+- A plugin or mod is someone else's program. It can do what the game
+  server can: change the world, read who plays. It runs inside that
+  server's container and reaches the internet only as far as the server
+  itself may, which is Mojang's sign-in and the places NullBill downloads
+  from. A plugin that needs more, such as a Discord bridge, does not work.
+- The server takes exactly the file Modrinth listed on the day you added
+  it, checked by its SHA-512. A file changed later is not installed.
+- A mod marked **Players need it too** must be in each player's own game
+  (with Fabric installed there), in a version that fits. Tell your
+  friends which; the page does not send it to them.
+- A plugin's or mod's own settings are files in the server's home
+  (`/var/lib/minecraft/plugins/<name>/` for Paper, `/var/lib/minecraft/config/`
+  for Fabric), not on the page. Many also take commands on the console
+  (section 5).
+- Not built: Forge, NeoForge, modpacks, mods from CurseForge or from a
+  file of your own, and mods for Terraria or Factorio.
+
+The agent on the page does the same when asked ("add a map plugin to
+Minecraft"): it asks before it changes the list, then runs the same part
+of setup.
+
 ## When a game updates
 
 A player's game and the server must be the same version. NullBill pins
@@ -290,6 +363,16 @@ installation**, pick the version; Factorio on Steam: **Properties**,
 
 A world opened by a newer server cannot go back to an older one. Copy it
 out first if you are not sure.
+
+A Minecraft server with plugins or mods (section 7): after NullBill moved
+to a newer Minecraft, **Review and run** may refuse with "is not for
+Minecraft ...". Press **Check for updates** in the Minecraft row and take
+the newer ones, or remove what has none yet. To keep playing the older
+Minecraft until a mod catches up, pin the old `version`, `url` and
+`sha256` under `games.minecraft` as in step 2. If you pin a newer
+Minecraft yourself while the server is Paper or Fabric, pin that server
+too: `tools/game-pins` prints `servers` for Paper and Fabric beside
+Mojang's file.
 
 ## If something is wrong
 

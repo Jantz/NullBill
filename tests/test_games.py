@@ -266,6 +266,7 @@ def test_verify_asks_each_planned_game(facts):
     assert labels == [
         "minecraft runs version 26.3 and answers",
         *[f"minecraft reaches {host} through the proxy" for host in games.MOJANG],
+        "minecraft runs Mojang's own server",
         "minecraft's admins are those in config.yaml",
         "terraria runs version 1.4.5.8 and answers",
         "factorio runs version 2.1.24 and answers",

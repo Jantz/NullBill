@@ -16,7 +16,7 @@ http_access deny CONNECT !SSL_ports
 http_access deny private
 http_access allow allowed
 acl from_nullbill src 10.42.1.2/32
-acl allowed_nullbill dstdomain -n registry.opentofu.org galaxy.ansible.com
+acl allowed_nullbill dstdomain -n registry.opentofu.org galaxy.ansible.com api.modrinth.com
 http_access allow from_nullbill allowed_nullbill
 acl from_monitoring src 10.42.1.14/32
 acl allowed_monitoring dstdomain -n apt.grafana.com ntfy.sh hc-ping.com

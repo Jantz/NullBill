@@ -57,6 +57,9 @@ def view(model: dict, name: str, report: dict | None, why: str | None = None, of
     if report is None:
         return out
     out |= {key: report.get(key) for key in ("running", "players", "names", "active", "free_bytes", "most")}
+    # Which server runs the game and its plugin or mod files (Minecraft);
+    # a guest from before NullBill asked says nothing, and runs Mojang's.
+    out |= {"server": str(report.get("server") or "vanilla"), "mods": [str(f) for f in report.get("mods") or []]}
     out["log"] = [str(line) for line in report.get("log") or []]
     out["worlds"] = [
         {
@@ -67,6 +70,8 @@ def view(model: dict, name: str, report: dict | None, why: str | None = None, of
             "made": world.get("made") if world.get("origin") != "setup" else None,
             "origin": ORIGIN.get(world.get("origin"), ""),
             "options": summary(of, world.get("options") or {}),
+            # Minecraft: one Paper has opened, which only Paper opens now.
+            **({"paper": True} if world.get("paper") else {}),
         }
         for world in report.get("worlds") or []
     ]

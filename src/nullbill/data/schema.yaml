@@ -365,6 +365,36 @@ $defs:
     # One line each: a second line in Terraria's file would be another key.
     additionalProperties: {type: [string, integer, number, boolean], pattern: "^[^\\r\\n]*$"}
 
+  # A file in a server's mods or plugins directory.
+  game_mod_file: {type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9._+-]{0,120}[.]jar$"}
+
+  # One plugin or mod: a version of a Modrinth project, as one file. The
+  # guest downloads `url` and checks `sha512`; the rest is for the page and
+  # for plan, which refuses a file made for another server or Minecraft.
+  game_mod:
+    type: object
+    additionalProperties: false
+    required: [project, id, title, version, file, url, sha512, loaders, game_versions]
+    properties:
+      # Modrinth's name for the project in its addresses, and its id.
+      project: {type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9._!@$()`+,-]{0,63}$"}
+      id: {type: string, pattern: "^[A-Za-z0-9]{6,12}$"}
+      title: {type: string, minLength: 1, maxLength: 80, pattern: "^[^\\r\\n]*$"}
+      version: {type: string, minLength: 1, maxLength: 60, pattern: "^[^\\r\\n]*$"}
+      file: {$ref: "#/$defs/game_mod_file"}
+      # Modrinth's own file store, nowhere else.
+      url: {type: string, pattern: "^https://cdn[.]modrinth[.]com/data/[A-Za-z0-9]+/versions/[A-Za-z0-9]+/[A-Za-z0-9%._+-]+[.]jar$"}
+      sha512: {type: string, pattern: "^[0-9a-f]{128}$"}
+      loaders: {type: array, maxItems: 30, items: {type: string, pattern: "^[a-z0-9-]{1,30}$"}}
+      game_versions: {type: array, maxItems: 200, items: {type: string, pattern: "^[0-9A-Za-z. +_-]{1,40}$"}}
+      # Every player needs it in their own game too.
+      players_need: {type: boolean}
+      # The others in the list it does not run without (their `project`).
+      needs: {type: array, items: {type: string}}
+      # It is in the list only because another needs it, and leaves with
+      # the last that does.
+      for_others: {type: boolean}
+
   # One more server of a game: a guest, a workload and a rule for when it
   # runs, all of this entry's name (model.py's _more_games makes them from
   # the game's own). `game` says which; `id` is its address like a
@@ -403,6 +433,43 @@ $defs:
       admins: {type: array, uniqueItems: true, items: {type: string, pattern: "^[A-Za-z0-9_]{3,16}$"}}
       # server.properties keys.
       settings: {$ref: "#/$defs/game_settings"}
+      # Which server runs the game: Mojang's own, Paper (plugins) or
+      # Fabric (mods).
+      server: {enum: [vanilla, paper, fabric]}
+      servers:
+        type: object
+        additionalProperties: false
+        properties:
+          paper:
+            type: object
+            additionalProperties: false
+            properties:
+              version: {$ref: "#/$defs/game_pin/version"}
+              build: {type: integer, minimum: 1}
+              url: {$ref: "#/$defs/game_pin/url"}
+              sha256: {$ref: "#/$defs/game_pin/sha256"}
+          fabric:
+            type: object
+            additionalProperties: false
+            properties:
+              version: {$ref: "#/$defs/game_pin/version"}
+              loader: {$ref: "#/$defs/game_pin/version"}
+              libraries:
+                type: array
+                minItems: 1
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [file, url, sha256]
+                  properties:
+                    file: {$ref: "#/$defs/game_mod_file"}
+                    url: {$ref: "#/$defs/game_pin/url"}
+                    sha256: {$ref: "#/$defs/game_pin/sha256"}
+      # Plugins or mods from Modrinth (nullbill/mods.py writes them).
+      mods:
+        type: array
+        maxItems: 60
+        items: {$ref: "#/$defs/game_mod"}
 
   game_terraria:
     type: object

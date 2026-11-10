@@ -30,5 +30,8 @@
     "api.minecraftservices.com",
     "sessionserver.mojang.com",
     "api.mojang.com"
-  ]
+  ],
+  "game_minecraft_server": "vanilla",
+  "game_minecraft_server_files": [],
+  "game_minecraft_mods": []
 }

@@ -6,6 +6,10 @@ under games.<name> in config.yaml until NullBill has them).
 
 Mojang publishes SHA-1 and Wube SHA-256, which this checks against the
 download; Re-Logic publishes none, so Terraria's is the download's own.
+For Minecraft it also prints `servers`: Paper's newest stable build for
+that version (PaperMC publishes its SHA-256) and Fabric's newest stable
+loader with its libraries (Fabric's Maven publishes each SHA-256); a
+version neither has yet prints without them.
 Needs network access; downloads each server once to hash it.
 """
 
@@ -13,12 +17,16 @@ import hashlib
 import json
 import re
 import sys
+import urllib.error
 import urllib.request
 
 MOJANG = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 TEMURIN = "https://api.adoptium.net/v3/assets/latest/{}/hotspot?architecture=x64&image_type=jre&os=linux&vendor=eclipse"
 TERRARIA = "https://terraria.org/api/get/dedicated-servers-names"
 TERRARIA_FILE = "https://terraria.org/api/download/pc-dedicated-server/{}"
+PAPER = "https://fill.papermc.io/v3/projects/paper/versions/{}/builds"
+FABRIC_LOADERS = "https://meta.fabricmc.net/v2/versions/loader/{}"
+FABRIC_SERVER = "https://meta.fabricmc.net/v2/versions/loader/{}/{}/server/json"
 FACTORIO = "https://factorio.com/api/latest-releases"
 FACTORIO_SUMS = "https://factorio.com/download/sha256sums/"
 FACTORIO_FILE = "https://factorio.com/get-download/{}/headless/linux64"
@@ -46,12 +54,55 @@ def minecraft() -> dict:
         raise SystemExit(f"minecraft: {server['url']} has SHA-1 {sha1}, Mojang says {server['sha1']}")
     java = json.loads(get(TEMURIN.format(version["javaVersion"]["majorVersion"])))[0]
     package = java["binary"]["package"]
+    servers = {kind: pins for kind, pins in (("paper", paper(release)), ("fabric", fabric(release))) if pins}
     return {
         "version": release,
         "url": server["url"],
         "sha256": sha256,
         "java": {"version": java["release_name"].removeprefix("jdk-"), "url": package["link"], "sha256": package["checksum"]},
+        **({"servers": servers} if servers else {}),
     }
+
+
+def paper(version: str) -> dict | None:
+    """Paper's newest stable build for a Minecraft version, or None."""
+    try:
+        builds = json.loads(get(PAPER.format(version)))
+    except urllib.error.HTTPError:
+        return None
+    stable = [b for b in builds if b.get("channel") == "STABLE"]
+    if not stable:
+        return None
+    build = max(stable, key=lambda b: b["id"])
+    file = build["downloads"]["server:default"]
+    sha256 = digests(file["url"])[0]
+    if sha256 != file["checksums"]["sha256"]:
+        raise SystemExit(f"paper: {file['url']} has SHA-256 {sha256}, PaperMC says {file['checksums']['sha256']}")
+    return {"version": version, "build": build["id"], "url": file["url"], "sha256": sha256}
+
+
+def fabric(version: str) -> dict | None:
+    """Fabric's newest stable loader for a Minecraft version, with the
+    libraries its server profile names, or None."""
+    try:
+        loaders = json.loads(get(FABRIC_LOADERS.format(version)))
+    except urllib.error.HTTPError:
+        return None
+    stable = [entry["loader"]["version"] for entry in loaders if entry["loader"].get("stable")]
+    if not stable:
+        return None
+    profile = json.loads(get(FABRIC_SERVER.format(version, stable[0])))
+    libraries = []
+    for library in profile["libraries"]:
+        group, name, release = library["name"].split(":")
+        file = f"{name}-{release}.jar"
+        url = f"{library['url'].rstrip('/')}/{group.replace('.', '/')}/{name}/{release}/{file}"
+        sha256 = digests(url)[0]
+        listed = get(url + ".sha256").decode().split()[0]
+        if sha256 != listed:
+            raise SystemExit(f"fabric: {url} has SHA-256 {sha256}, Fabric's Maven says {listed}")
+        libraries.append({"file": file, "url": url, "sha256": sha256})
+    return {"version": version, "loader": stable[0], "libraries": libraries}
 
 
 def terraria() -> dict:
@@ -73,11 +124,30 @@ def factorio() -> dict:
     return {"version": version, "url": url, "sha256": sha256}
 
 
+def yaml_text(value: object, indent: int = 0) -> str:
+    """Nested pins as YAML, with versions quoted so 26.3 stays text."""
+    pad, out = "  " * indent, ""
+    if isinstance(value, dict):
+        for key, inner in value.items():
+            if isinstance(inner, (dict, list)):
+                out += f"{pad}{key}:\n{yaml_text(inner, indent + 1)}"
+            else:
+                out += f"{pad}{key}: {json.dumps(inner) if key in ('version', 'loader') else inner}\n"
+    else:
+        for item in value:
+            lines = yaml_text(item, indent + 1).splitlines()
+            out += f"{pad}- {lines[0].strip()}\n" + "".join(f"{line}\n" for line in lines[1:])
+    return out
+
+
 def main() -> int:
     for name, pins in (("minecraft", minecraft), ("terraria", terraria), ("factorio", factorio)):
         print(f"{name}:")
         for key, value in pins().items():
-            if isinstance(value, dict):
+            if key == "servers":
+                # As catalog.yaml holds it.
+                print("  " + yaml_text({key: value}).replace("\n", "\n  ").rstrip())
+            elif isinstance(value, dict):
                 print(f"  {key}:")
                 for inner, text in value.items():
                     print(f"    {inner}: {json.dumps(text) if inner == 'version' else text}")

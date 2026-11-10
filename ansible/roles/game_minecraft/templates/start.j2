@@ -7,8 +7,31 @@
 # names Mojang's services at this guest's own address, where nb-tls-tunnel
 # carries each connection out through the egress proxy; the server ignores
 # Java's proxy settings (it asks for a direct connection by name).
+#
+# Which server runs Mojang's file (games.<name>.server), and the plugins or
+# mods it is started with: the files in /opt/minecraft/mods, root's, which
+# the role fetched by the hashes below. A change in either restarts it.
+# A plugin or mod runs as the server does: user game, in this guest, whose
+# only way out is the egress proxy with this guest's allow-list.
+{% for file in game_minecraft_server_files %}
+# {{ game_minecraft_server }}: {{ file.file }} sha256 {{ file.sha256 }}
+{% endfor %}
+{% for mod in game_minecraft_mods %}
+# {{ mod.file }} sha512 {{ mod.sha512 }}
+{% endfor %}
 exec /opt/minecraft/java-{{ game_minecraft_java_version }}/bin/java \
   -Xmx{{ game_minecraft_heap_mib }}M \
   -Djdk.net.hosts.file=/etc/minecraft/hosts \
+{% if game_minecraft_server == "fabric" %}
+  -Dfabric.gameJarPath=/opt/minecraft/server-{{ game_minecraft_version }}.jar \
+  -Dfabric.modsFolder=/opt/minecraft/mods \
+  -cp '/opt/minecraft/fabric/*' net.fabricmc.loader.impl.launch.knot.KnotServer --nogui \
+{% elif game_minecraft_server == "paper" %}
+  -jar '/opt/minecraft/paper/{{ game_minecraft_server_files[0].file }}' --nogui \
+{% for mod in game_minecraft_mods %}
+  --add-plugin='/opt/minecraft/mods/{{ mod.file }}' \
+{% endfor %}
+{% else %}
   -jar /opt/minecraft/server-{{ game_minecraft_version }}.jar --nogui \
+{% endif %}
   <>/run/minecraft/console

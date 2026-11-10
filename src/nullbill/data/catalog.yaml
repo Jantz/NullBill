@@ -143,7 +143,9 @@ services:
     installed: true
     description: NullBill itself, made by install.sh. The setup and status page, apply, its state and secrets. Owner only.
     # What apply fetches: OpenTofu's provider registry and Ansible Galaxy.
-    proxy_allow: [registry.opentofu.org, galaxy.ansible.com]
+    # And Modrinth's list of mods and plugins, which the page reads when
+    # the owner adds one to a Minecraft server (nullbill/mods.py).
+    proxy_allow: [registry.opentofu.org, galaxy.ansible.com, api.modrinth.com]
     floor: {cores: 1, memory_mib: 768, disk_gib: 8}
     ports:
       # host: the on-site screen's browser runs there. operator: the
@@ -313,9 +315,14 @@ services:
     workload: minecraft
     description: Minecraft Java Edition server. Not agent-managed.
     # The server file, and Mojang's services: the server asks them whether
-    # each player who joins is signed in to the account they claim.
+    # each player who joins is signed in to the account they claim. Then
+    # where the role fetches Paper, Fabric and the plugins or mods the
+    # owner added, each pinned by its hash (games.minecraft.servers, mods).
     proxy_allow:
       - piston-data.mojang.com
+      - fill-data.papermc.io
+      - maven.fabricmc.net
+      - cdn.modrinth.com
       - discovery.minecraftservices.com
       - api.minecraftservices.com
       - sessionserver.mojang.com
@@ -615,6 +622,54 @@ games:
     eula: false
     admins: []
     settings: {}
+    # Which server runs the game (docs/adr/0021-minecraft-mods.md):
+    # vanilla is Mojang's own above. paper takes plugins and fabric takes
+    # mods; players join both with the same Minecraft. Each further server
+    # chooses its own (games.<name>.server).
+    server: vanilla
+    servers:
+      # The newest stable build for this Minecraft in
+      # https://fill.papermc.io/v3/projects/paper/versions/26.3/builds, with
+      # PaperMC's own SHA-256. It patches Mojang's server file above, which
+      # the role hands it, so it downloads nothing when it starts.
+      paper:
+        version: "26.3"
+        build: 248
+        url: https://fill-data.papermc.io/v1/objects/352dbbf965946456a81305f4c4a8d39cb7a8e55a0b0126b417a24efd944b92c2/paper-26.3-248.jar
+        sha256: 352dbbf965946456a81305f4c4a8d39cb7a8e55a0b0126b417a24efd944b92c2
+      # Fabric's loader and the libraries it names for this Minecraft
+      # (https://meta.fabricmc.net/v2/versions/loader/26.3/0.20.1/server/json),
+      # each with the SHA-256 Fabric's Maven publishes beside it. The loader
+      # starts Mojang's server file above.
+      fabric:
+        version: "26.3"
+        loader: 0.20.1
+        libraries:
+          - file: asm-9.10.1.jar
+            url: https://maven.fabricmc.net/org/ow2/asm/asm/9.10.1/asm-9.10.1.jar
+            sha256: ed825d10ab1399c8c0cb669e688cf0c8c82629b4c8399b58352b68e92ca10fcb
+          - file: asm-analysis-9.10.1.jar
+            url: https://maven.fabricmc.net/org/ow2/asm/asm-analysis/9.10.1/asm-analysis-9.10.1.jar
+            sha256: dede75a21306b65974ecd8f87114ff6970f09fb794157a4ca09ab25c888c2bfc
+          - file: asm-commons-9.10.1.jar
+            url: https://maven.fabricmc.net/org/ow2/asm/asm-commons/9.10.1/asm-commons-9.10.1.jar
+            sha256: 6d0abefb7cbf972ea16edb37ec14835372505063a45f976ab7ea889ed9497895
+          - file: asm-tree-9.10.1.jar
+            url: https://maven.fabricmc.net/org/ow2/asm/asm-tree/9.10.1/asm-tree-9.10.1.jar
+            sha256: 3dfb0d5b6a106cd40b5b250e39935fbf2f927f4477546a5369a3ac609cf0506b
+          - file: asm-util-9.10.1.jar
+            url: https://maven.fabricmc.net/org/ow2/asm/asm-util/9.10.1/asm-util-9.10.1.jar
+            sha256: 1bb99d091fba2597dc6d51193e9bbcf0d8447e7ed96bd8f0198b18152f09655c
+          - file: sponge-mixin-0.17.5+mixin.0.8.7.jar
+            url: https://maven.fabricmc.net/net/fabricmc/sponge-mixin/0.17.5+mixin.0.8.7/sponge-mixin-0.17.5+mixin.0.8.7.jar
+            sha256: 03f0065023bfc3045d71bfb99872451d9ad5a0800a5a0dac34ab8c7d5c134f5d
+          - file: fabric-loader-0.20.1.jar
+            url: https://maven.fabricmc.net/net/fabricmc/fabric-loader/0.20.1/fabric-loader-0.20.1.jar
+            sha256: d0c5a082e07410aaff9de7ab196aa6b4236002870f9ba3ad5c1260fcce5110ad
+    # Plugins (paper) or mods (fabric) from Modrinth, each one file pinned
+    # by the SHA-512 Modrinth publishes. The page's Add writes them
+    # (nullbill/mods.py); none in the catalog.
+    mods: []
   terraria:
     title: Terraria
     # The file https://terraria.org/api/get/dedicated-servers-names lists

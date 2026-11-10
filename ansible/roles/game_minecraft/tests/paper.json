@@ -1,0 +1,17 @@
+{
+  "game_minecraft_server": "paper",
+  "game_minecraft_server_files": [
+    {
+      "file": "paper-26.3-248.jar",
+      "url": "https://fill-data.papermc.io/v1/objects/352dbbf965946456a81305f4c4a8d39cb7a8e55a0b0126b417a24efd944b92c2/paper-26.3-248.jar",
+      "sha256": "352dbbf965946456a81305f4c4a8d39cb7a8e55a0b0126b417a24efd944b92c2"
+    }
+  ],
+  "game_minecraft_mods": [
+    {
+      "file": "Chunky-Paper-1.5.66.jar",
+      "url": "https://cdn.modrinth.com/data/fALzjamp/versions/RBuKjN4k/Chunky-Paper-1.5.66.jar",
+      "sha512": "c67b14569b8624d8d4ca550f0a064703e144d388073b4c34a913c3bd34ea39351bef504542101d7f85b499b4de95c24d027a62ee64aad3f9a7051ae4bec80c52"
+    }
+  ]
+}

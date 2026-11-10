@@ -103,7 +103,7 @@ def _own_vm_ssh(model: dict) -> None:
 # One more server of a game the catalog has (docs/adr/0016-more-game-
 # servers.md): what the game's own entry says, with this server's own
 # title, settings and admins.
-OWN_PER_SERVER = ("title", "settings", "admins")
+OWN_PER_SERVER = ("title", "settings", "admins", "server", "mods")
 
 
 def _more_games(model: dict, catalog: dict, config: dict) -> None:
@@ -132,6 +132,8 @@ def _more_games(model: dict, catalog: dict, config: dict) -> None:
         title = entry.get("title") or f"{base['title']} ({name})"
         full = {key: copy.deepcopy(value) for key, value in base.items() if key not in OWN_PER_SERVER}
         full |= {"settings": {}} | ({"admins": []} if "admins" in base else {})
+        # Which server runs it and its plugins or mods are each server's own.
+        full |= {"server": "vanilla", "mods": []} if "server" in base else {}
         model["games"][name] = merge(full, entry) | {"title": title}
         svc = copy.deepcopy(catalog["services"][kind])
         svc |= {"id": entry["id"], "workload": name, "description": f"{title}: one more {base['title']} server. Not agent-managed."}

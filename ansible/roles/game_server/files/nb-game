@@ -11,12 +11,14 @@ its own systemd units and the owner on its console.
     nb-game busy              why this guest is in use, or nothing when it is not
     nb-game metrics           write node_exporter's textfile metrics
     nb-game report            one JSON line for the page: the server, who plays, its log, its worlds
+    nb-game mods              which server runs the game, then its plugin or mod files, on one line
     nb-game service start|stop|restart
     nb-game world list
     nb-game world new TITLE [KEY=VALUE...]   set the world aside and make a new one
     nb-game world use ID [--kick]            set the world aside and run a kept one
     nb-game world rename ID TITLE
     nb-game world delete ID                  a kept world, for good
+    nb-game world fit                        set aside a world this kind of server cannot open (Minecraft after Paper)
     nb-game world export ID                  a file to download: its path, size and name
     nb-game world sent FILE                  remove that file
     nb-game world receive SIZE TITLE         a world file on standard input, kept beside the others
@@ -382,6 +384,24 @@ def save_worlds(state: dict) -> None:
     os.replace(tmp, WORLDS)
 
 
+# Paper keeps a world's own settings (its generator, game rules, weather)
+# in the overworld's data, and moves them there the first time it opens a
+# world. Mojang's server and Fabric look in the world's data and do not
+# start without them: a world Paper has opened is Paper's from then on.
+PAPER_HOLDS = Path("dimensions/minecraft/overworld/data/minecraft/world_gen_settings.dat")
+MOJANG_HOLDS = Path("data/minecraft/world_gen_settings.dat")
+
+
+def papers(game: dict, place: Path) -> bool:
+    """Whether a Minecraft world is one only Paper opens."""
+    return game["world"]["how"] == "minecraft" and (place / PAPER_HOLDS).is_file() and not (place / MOJANG_HOLDS).is_file()
+
+
+def opens(game: dict) -> bool:
+    """Whether this server opens a world Paper has opened."""
+    return game.get("server", "vanilla") == "paper"
+
+
 def worlds(game: dict) -> dict:
     """{"active": id or None, "next": n, "worlds": {id: {...}}}. A world the
     server made before this record existed is taken in as the first."""
@@ -393,6 +413,11 @@ def worlds(game: dict) -> dict:
         made = int(min(f.stat().st_mtime for f in world_files(game, world_place(game))))
         # More than one only after a swap that was cut short.
         title = "First world" if not state["worlds"] else f"World found on the server ({state['next']})"
+        # Named by what set the earlier one aside (world fit).
+        found = state.pop("found", None)
+        if found:
+            taken = any(world["title"].lower() == found.lower() for world in state["worlds"].values())
+            title = f"{found} ({state['next']})" if taken else found
         state["active"] = add_world(state, title, "setup", made=made)
         save_worlds(state)
     return state
@@ -416,7 +441,7 @@ def world_list(game: dict, state: dict | None = None) -> dict:
     for ident, world in state["worlds"].items():
         active = ident == state["active"]
         place = world_place(game) if active else kept_place(game, ident)
-        out.append({"id": ident, "active": active, "bytes": size_of(place), **world})
+        out.append({"id": ident, "active": active, "bytes": size_of(place), **world, **({"paper": True} if papers(game, place) else {})})
     usage = shutil.disk_usage(game["world"]["home"])
     return {"worlds": out, "free_bytes": usage.free, "most": MAX_WORLDS, "options": list(game["world"].get("options", {}))}
 
@@ -639,9 +664,29 @@ def world_use(game: dict, ident: str, kick: bool) -> dict:
     world = known(state, ident)
     if ident == state["active"]:
         raise Refused(f"{world['title']} is the world that runs")
+    if papers(game, kept_place(game, ident)) and not opens(game):
+        raise Refused(
+            f"{world['title']} was opened by Paper, which keeps a world its own way; only a Paper server opens it now. "
+            "It stays in the list: change the server to Paper to run it, or download it"
+        )
     in_the_way(game, kick)
     swap(game, state, lambda: bring(game, state, ident), USE_WAIT_S)
     return {"id": ident, **world_list(game, state)}
+
+
+def world_fit(game: dict) -> dict:
+    """For the role, before it starts a server of another kind: a running
+    world this server cannot open is set aside, kept, and the server makes
+    a new one at its next start. Nothing else is touched."""
+    state = worlds(game)
+    ident = state["active"]
+    if ident is None or opens(game) or not papers(game, world_place(game)):
+        return {"aside": None}
+    service(game, "stop")
+    set_aside(game, state)
+    state["found"] = "New world after Paper"
+    save_worlds(state)
+    return {"aside": ident, "title": state["worlds"][ident]["title"]}
 
 
 def world_rename(game: dict, ident: str, title: str) -> dict:
@@ -896,7 +941,7 @@ def world_receive(game: dict, size: int, title: str) -> dict:
 
 def world(game: dict, args: list[str]) -> dict:
     if "world" not in game or not args:
-        raise Refused("nb-game world: list, new, use, rename, delete, export, sent or receive")
+        raise Refused("nb-game world: list, new, use, rename, delete, fit, export, sent or receive")
     command, rest = args[0], args[1:]
     kick = "--kick" in rest
     rest = [a for a in rest if a != "--kick"]
@@ -908,6 +953,8 @@ def world(game: dict, args: list[str]) -> dict:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as err:
             raise Refused("another change to this server's worlds is still running; wait for it") from err
+        if command == "fit" and not rest:
+            return world_fit(game)
         if command == "list" and not rest:
             return world_list(game)
         if command == "new" and rest:
@@ -922,7 +969,17 @@ def world(game: dict, args: list[str]) -> dict:
             return world_export(game, rest[0])
         if command == "receive" and len(rest) == 2 and rest[0].isdigit():
             return world_receive(game, int(rest[0]), rest[1])
-    raise Refused("nb-game world: list, new, use, rename, delete, export, sent or receive")
+    raise Refused("nb-game world: list, new, use, rename, delete, fit, export, sent or receive")
+
+
+def mods(game: dict) -> tuple[str, list[str]]:
+    """Which server runs the game (Minecraft: vanilla, paper or fabric)
+    and the plugin or mod files its role put beside it."""
+    try:
+        found = sorted(entry.name for entry in os.scandir(game.get("mods", "")) if entry.name.endswith(".jar") and entry.is_file())
+    except OSError:
+        found = []
+    return game.get("server", "vanilla"), found
 
 
 def report(game: dict) -> dict:
@@ -932,6 +989,8 @@ def report(game: dict) -> dict:
     except NotAnswering as err:
         status = {"running": False, "players": 0, "names": None, "why": str(err)}
     out = {"game": game["name"], "version": game["version"], **status, "active": unit_active(game), "log": log(game)}
+    if "server" in game:
+        out["server"], out["mods"] = mods(game)
     if "world" in game:
         try:
             out |= world_list(game)
@@ -941,7 +1000,7 @@ def report(game: dict) -> dict:
 
 
 def main(argv: list[str]) -> int:
-    commands = ("status", "players", "wait", "console", "stop", "admins", "busy", "metrics", "report", "service", "world")
+    commands = ("status", "players", "wait", "console", "stop", "admins", "busy", "metrics", "report", "mods", "service", "world")
     if len(argv) < 2 or argv[1] not in commands:
         print(__doc__.split("\n\n")[1], file=sys.stderr)
         return 2
@@ -976,6 +1035,8 @@ def main(argv: list[str]) -> int:
             metrics(game)
         elif command == "report":
             print(json.dumps(report(game)))
+        elif command == "mods":
+            print(" ".join([mods(game)[0], *mods(game)[1]]))
         elif command == "service":
             if args not in (["start"], ["stop"], ["restart"]):
                 raise NotAnswering("nb-game service: start, stop or restart")

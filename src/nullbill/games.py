@@ -20,7 +20,7 @@ import copy
 import re
 import shlex
 
-from nullbill import custom, power
+from nullbill import custom, mods, power
 from nullbill.errors import NullBillError, Refused
 from nullbill.model import NODE_EXPORTER
 from nullbill.probe import Runner
@@ -296,6 +296,23 @@ def plan_section(model: dict, planned_services: dict, sizes: dict, errors: list[
             for host in MOJANG:
                 if not allows(allow, host):
                     errors.append(f"services.{name}.proxy_allow: {host} is missing; the server checks each player's account there")
+            errors.extend(mods.problems(model, name))
+            # Mojang's own server is said by saying nothing, as before.
+            if mods.server(model, name) != "vanilla":
+                listed = game.get("mods") or []
+                word = mods.WORD[mods.server(model, name)]
+                entry["server"] = Note(
+                    f"{mods.server(model, name)} {mods.release(model, name)}",
+                    f"Players join with the same Minecraft. {len(listed)} {word}{'' if len(listed) == 1 else 's'} from Modrinth, "
+                    "each pinned by its SHA-512."
+                    + (
+                        " Each player needs in their own game: " + ", ".join(m["title"] for m in listed if m.get("players_need")) + "."
+                        if any(m.get("players_need") for m in listed)
+                        else ""
+                    ),
+                )
+                if listed:
+                    entry["mods"] = [f"{m['title']} {m['version']}" for m in listed]
             entry["heap_mib"] = Note(
                 heap_mib(sizes[name]["memory_mib"]),
                 f"Java's heap: the container's memory less {JVM_OVERHEAD_MIB} MiB for Java itself and the system. "
@@ -330,6 +347,9 @@ def variables(plan: dict, model: dict, name: str) -> dict:
     if of == "minecraft":
         out |= {f"java_{k}": game["java"][k] for k in ("version", "url", "sha256")}
         out |= {"heap_mib": plan["games"][name]["heap_mib"], "eula": game["eula"], "proxy": proxy, "services": list(MOJANG)}
+        # Which server runs Mojang's file, what that kind is made of, and
+        # its plugins or mods (nullbill/mods.py).
+        out |= {"server": mods.server(model, name), "server_files": mods.files(model, name), "mods": mods.role_mods(model, name)}
     if of == "factorio":
         out |= {"space_age": game["space_age"], "proxy": f"http://{proxy}", "rcon_port": FACTORIO_RCON_PORT}
     return {prefix + key: value for key, value in out.items()}
@@ -366,6 +386,13 @@ def _checks(plan: dict, model: dict, name: str) -> list[tuple[str, str, str]]:
     if kind(model, name) == "minecraft":
         for host in MOJANG:
             out.append((f"{name} reaches {host} through the proxy", f"/usr/local/sbin/nb-tls-tunnel check {host} 2>&1", "ok"))
+    if kind(model, name) == "minecraft":
+        # What the role put there, by name: the files the server is started with.
+        want = " ".join([mods.server(model, name), *sorted(m["file"] for m in game.get("mods") or [])])
+        label = {"vanilla": "Mojang's own server", "paper": "Paper with its plugins", "fabric": "Fabric with its mods"}[
+            mods.server(model, name)
+        ]
+        out.append((f"{name} runs {label}", f"{NB_GAME} mods", want))
     if game.get("admins"):
         want = " ".join(sorted(a.lower() for a in game["admins"]))
         # The owner may have made more admins on the console: those stay.

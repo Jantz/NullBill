@@ -887,7 +887,19 @@ tr.detail > td { background: var(--bg-sub); padding: 14px 16px 16px 56px; }
 .world-name .name { font-weight: 500; overflow-wrap: anywhere; }
 .world-name .sub { flex-basis: 100%; color: var(--text-3); font-size: 12px; }
 .world-name .badge { padding: 0 7px; border: 1px solid var(--line); border-radius: 9px; color: var(--good); font-size: 11px; font-weight: 500; line-height: 18px; white-space: nowrap; }
+.world-name .badge.warn { color: var(--warn); }
+.world-name .badge.plain { color: var(--text-2); }
+.world-list li.empty { padding: 10px 12px; }
 .world-actions { flex-wrap: wrap; }
+/* Which server runs a Minecraft server, and its plugins or mods. */
+.mods-room { margin-top: 6px; }
+.mods-head { display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap; }
+.mods-head .hint { flex: 1 1 260px; margin: 0; }
+.mods-pending { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-sub); font-size: 13px; }
+.mods-pending[hidden] { display: none; }
+.mod-hits { max-height: 320px; overflow: auto; background: var(--bg); }
+.mod-hits:empty { display: none; }
+.game-form input[type=search] { flex: 1 1 200px; min-width: 0; max-width: 360px; }
 .world-rename { flex: 1 1 100%; }
 .world-rename input { flex: 1 1 160px; max-width: 320px; }
 .btn.ghost.danger { background: transparent; border-color: transparent; color: var(--bad); }

@@ -176,6 +176,12 @@ Rules:
   new one with the game's own options (difficulty, size, seed), runs a kept one, renames or deletes one. A new world
   never needs the server unticked or a file removed by hand, and nothing but delete removes a world. game_command
   restarts a server or types on its console. Use these, not pct exec. World files go up and down on the Services page.
+- A Minecraft server runs Mojang's own server, Paper (plugins) or Fabric (mods): game_mods says which, searches
+  Modrinth, adds, removes and updates. Never put a .jar into a guest by hand: the list in the choices is what the
+  server is started with. After a change, start_job apply with stage games installs it and restarts that server.
+  Say which mods every player needs in their own game too. A world Paper has opened opens only under Paper from
+  then on: say so before changing a server to or from Paper, and have the owner download the world first.
+  Other sources than Modrinth, modpacks and Forge are not built.
 - A guest that runs on demand and is off (status, on_demand) is off on purpose, not broken. Start and stop one with
   the on_demand tool, never with pct or qm: nb-power counts the memory. Whether it runs on demand at all is the
   owner's choice, under Setup, What to run (set_choices, power).
@@ -1167,6 +1173,8 @@ def tool_label(name: str, args: dict) -> str:
         "game_server": f"Looked at the game server {args.get('name', '')}",
         "game_world": f"World of {args.get('name', '')}: {args.get('action', '')} {args.get('title') or args.get('id') or ''}",
         "game_command": f"{args.get('name', '')}: {args.get('action', '')} {args.get('line', '')}",
+        "game_mods": f"Plugins and mods of {args.get('name', '')}: {args.get('action', '')} "
+        f"{args.get('project') or args.get('query') or args.get('server') or ''}",
         "add_game_server": f"Add the game server {args.get('title', '')}",
         "remove_game_server": f"Remove the game server {args.get('name', '')}",
         "ask_owner": "Asked you a question",
@@ -2144,6 +2152,75 @@ class Tools:
         action_ = {"act": "game_act", "server": name, "body": body, "lines": [f"On {title}'s console: {body['line'].strip()}"]}
         return self.gated(action_, verdict, why, f"Type on {title}'s console")
 
+    def t_game_mods(
+        self, name: str, action: str, query: str = "", project: str = "", server: str = "", yes: bool = False, why: str = ""
+    ) -> str:
+        """Which server runs a Minecraft game server, and its plugins or
+        mods from Modrinth: list, search, check for updates (reads), and
+        add, remove, update, server (changes to the choices)."""
+        from nullbill import mods
+
+        name, action = str(name), str(action)
+        if action not in ("list", "search", "check", "add", "remove", "update", "server"):
+            raise NullBillError("action is list, search, check, add, remove, update or server")
+        model = build_model(self.app.config() or {})
+        if name not in model["games"] or not mods.takes(model, name):
+            raise NullBillError(f"{name[:40]!r} is no Minecraft server; only those take plugins or mods, and what_to_run names them")
+        title = model["games"][name]["title"]
+        if action == "list":
+            view = self.app.mods_view(name)
+            out = {k: view[k] for k in ("name", "title", "minecraft", "server", "release", "applied")}
+            out["runs_on_the_server"] = {
+                True: "yes",
+                False: "not yet: setup's games stage installs it",
+                None: "not known; game_server asks the server",
+            }[view["applied"]]
+            out[f"{view['word'] or 'mod'}s"] = [
+                {k: m[k] for k in ("project", "title", "version", "file")}
+                | {k: m[k] for k in ("players_need", "for_others", "needs") if m[k]}
+                for m in view["mods"]
+            ]
+            return yaml.safe_dump(out, sort_keys=False, width=200, allow_unicode=True)
+        body = {"action": action, "query": str(query), "project": str(project), "server": str(server), "yes": bool(yes)}
+        if action in ("search", "check"):
+            found = self.app.mods_act(name, body, by="the agent")
+            key = "hits" if action == "search" else "updates"
+            rows = [{k: v for k, v in row.items() if k != "link" and v not in (None, False, "")} for row in found[key]]
+            return yaml.safe_dump({key: rows} if rows else {key: "none"}, sort_keys=False, width=200, allow_unicode=True)
+        kind = mods.server(model, name)
+        then = "The server gets it with setup's games stage, which restarts it"
+        if action == "server":
+            _, gone = mods.set_server(self.app.config() or {}, model, name, body["server"])
+            costs = mods.consequences(model, name, body["server"], gone)
+            if costs and not yes:
+                raise NullBillError(
+                    f"changing {title} to {mods.LABEL[body['server']]} costs something the owner must agree to first: "
+                    + " ".join(costs)
+                    + " Ask the owner (ask_owner), then send it with yes=true"
+                )
+            lines = [f"{title} runs {mods.LABEL[body['server']]} instead of {mods.LABEL[kind]}: {mods.WHAT[body['server']]}", *costs]
+            what = f"Run {mods.LABEL[body['server']]} on {title}"
+        elif action == "add":
+            entries = mods.resolve(self.app.modrinth, model, name, body["project"])
+            lines = [
+                *mods.describe(entries),
+                "From Modrinth, taken by its SHA-512; someone else's program, run inside this game server only",
+            ]
+            what = f"Add {entries[0]['title']} to {title}"
+        elif action == "remove":
+            _, gone = mods.drop(self.app.config() or {}, model, name, body["project"])
+            lines = [f"{gone_title} leaves the list" for gone_title in gone]
+            what = f"Remove {gone[0]} from {title}"
+        else:
+            found = mods.newer(self.app.modrinth, model, name)
+            if not found:
+                return f"every {mods.WORD.get(kind, 'mod')} of {title} is the newest for its Minecraft; nothing to update"
+            lines = mods.describe(found)
+            what = f"Update {title}'s {mods.WORD.get(kind, 'mod')}s"
+        lines.append(then)
+        verdict = gate.change("changes which server or which plugins or mods a Minecraft server runs, from its next setup run on")
+        return self.gated({"act": "mods_act", "server": name, "body": body, "lines": lines}, verdict, why, what)
+
     def gated(self, action: dict, verdict: gate.Verdict, why: str, title: str) -> str:
         mode = self.chat.settings()["mode"]
         record = {"what": title, "tier": verdict.tier, "mode": mode} | {
@@ -2186,7 +2263,7 @@ class Tools:
             return action["service"] in guests
         if kind == "power":
             return action["name"] in guests
-        if kind == "game_act":
+        if kind in ("game_act", "mods_act"):
             return action["server"] in guests
         return False
 
@@ -2271,6 +2348,8 @@ class Tools:
             return self.power(action["body"])
         if kind == "game_act":
             return self.game_act(action["server"], action["body"])
+        if kind == "mods_act":
+            return self.mods_act(action["server"], action["body"])
         if kind == "person":
             saved = self.app.save_person(action["body"])
             invite = "Access, People has the words to send them; the invitation itself is the owner's to send from Tailscale."
@@ -2329,6 +2408,23 @@ class Tools:
             f"the plan fits; setup run {job.id} has started and builds it. You are told when it ends: end your turn now with "
             "one short sentence that says so. You may work inside the guest without asking until the task ends.",
             "The setup run has started. The agent goes on when it ends.",
+        )
+
+    def mods_act(self, name: str, body: dict) -> str:
+        """A change to a Minecraft server's kind or its plugins or mods:
+        saved to the choices; the server follows with the games stage."""
+        result = self.app.mods_act(name, body, by="the agent")
+        if not result["ok"]:
+            return f"nothing changed: {' '.join(result['costs'])} Send it with yes=true once the owner agreed"
+        view = result["view"]
+        listed = ", ".join(f"{m['title']} {m['version']}" for m in view["mods"]) or "none"
+        need = [m["title"] for m in view["mods"] if m["players_need"]]
+        said = f"saved: {view['title']} runs {view['server']} with {view['word'] or 'mod'}s: {listed}."
+        if need:
+            said += f" Every player needs in their own game: {', '.join(need)}; tell the owner."
+        return Told(
+            f"{said} Not on the server yet: start_job apply with stage games installs it and restarts the server.",
+            f"Saved. {view['title']} gets it with the next setup run of its server.",
         )
 
     def game_act(self, name: str, body: dict) -> str:

@@ -207,13 +207,26 @@ answered items move to the decisions list at the bottom.
   admins, memory and friends, added on the page or by the agent; every
   game server's settings are on the page (owner asked, 2026-11-10: "multiple
   Minecraft servers with customizations"; design by Claude,
-  docs/adr/0016-more-game-servers.md). Not built: mods and plugin servers.
+  docs/adr/0016-more-game-servers.md).
 - Worlds per game server: a list on the Services page, new world with
   the game's own options, run a kept one, upload, download, rename,
   delete; console, log and who plays in the same row; the agent has tools
   for it (owner asked, 2026-11-10: "a game server save/world feature";
   design by Claude, docs/adr/0019-game-worlds.md). Not tried on real
   hardware: large files through `pct exec`.
+- Paper, Fabric and mods for Minecraft: each Minecraft server runs
+  Mojang's own server, Paper (plugins) or Fabric (mods), with plugins or
+  mods from Modrinth pinned by SHA-512, chosen in the game's row on the
+  Services page or by the agent (the owner asked for the most wanted
+  things after worlds, 2026-11-10; design by Claude,
+  docs/adr/0021-minecraft-mods.md). Decided by Claude, for the owner to
+  overrule: Modrinth is the only source; nothing updates by itself; adding
+  a mod is a change for the agent, not a typed word; a newer Minecraft
+  with mods made for the old one stops plan until they are updated or
+  removed; a world Paper has opened is never converted back, it is kept
+  for Paper and the server starts a new one when it leaves Paper. Not
+  built: Forge, modpacks, uploads of a .jar, Factorio's mod portal (needs
+  a factorio.com token). Not tried on real hardware.
 - Direct connections from mobile data: built, on by default, with a
   switch on the page (owner asked, 2026-11-09; design by Claude,
   docs/adr/0014-direct-connections.md; question 16 stays open for the

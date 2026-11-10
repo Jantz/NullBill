@@ -53,6 +53,7 @@ from nullbill import (
     lan,
     legacy,
     llm,
+    mods,
     names,
     owner,
     people,
@@ -409,6 +410,8 @@ class App:
     # Worlds: making one takes minutes, and a world file is bytes, not text.
     host_long: Callable[[str, str], tuple[int, str, str]] = functools.partial(ssh_run, timeout=GAME_TIMEOUT_S)
     host_pipe: Callable[[str, str], subprocess.Popen] = ssh_pipe
+    # Modrinth's list of plugins and mods (nullbill/mods.py).
+    modrinth: Callable[..., object] = mods.fetch
     game_seen: dict[str, tuple[float, dict]] = field(default_factory=dict)
     game_acting: dict[str, str] = field(default_factory=dict)
     power_seen: tuple[float, dict | None] | None = None
@@ -1589,6 +1592,78 @@ class App:
             # With the server's last lines: what did not happen, then what it said.
             raise Refused(said, last) if last else NullBillError(said)
         return {"ok": True, "id": found.get("id"), "deleted": found.get("deleted"), "view": self.game_view(name, fresh=True)}
+
+    # Which server runs a Minecraft game server, and its plugins or mods
+    # (nullbill/mods.py, docs/adr/0021-minecraft-mods.md). The page asks
+    # Modrinth and writes config.yaml; the server's guest gets the files
+    # with the next run of setup's games stage.
+    def mods_view(self, name: str) -> dict:
+        model = build_model(self.config() or {})
+        if name not in model["games"]:
+            raise NullBillError(f"no game server {name[:40]!r} is planned; Setup, What to run, lists them")
+        view = mods.view(model, name)
+        if not view["takes"]:
+            return view
+        # What the server's guest holds, where the page asked it lately:
+        # the list is the owner's choice, and this says whether it runs.
+        with self.lock:
+            seen = self.game_seen.get(name)
+        view["applied"] = None
+        if seen is not None and seen[1].get("live"):
+            guest = seen[1]
+            view["applied"] = guest.get("server") == view["server"] and sorted(guest.get("mods") or []) == sorted(
+                m["file"] for m in view["mods"]
+            )
+            view["players"] = int(guest.get("players") or 0)
+        return view
+
+    def mods_act(self, name: str, body: dict, by: str = "the page") -> dict:
+        """Search Modrinth, or change a Minecraft server's kind or its
+        list of plugins or mods. A change of kind that costs something (the
+        list, or which servers open the world) changes nothing and says
+        what, until it comes with `yes`."""
+        config = self.config()
+        if config is None:
+            raise NullBillError("nothing is chosen yet; save your choices under Setup, What to run, first")
+        model = build_model(config)
+        if name not in model["games"] or not mods.takes(model, name):
+            raise NullBillError("only a Minecraft server takes plugins or mods")
+        action, title = body.get("action"), model["games"][name]["title"]
+        if action == "search":
+            return {"ok": True, "hits": mods.search(self.modrinth, model, name, body.get("query"))}
+        have = {mod["project"]: mod for mod in model["games"][name].get("mods") or []}
+        if action in ("check", "update"):
+            found = mods.newer(self.modrinth, model, name)
+            updates = [
+                {
+                    "project": e["project"],
+                    "title": e["title"],
+                    "to": e["version"],
+                    "from": have[e["project"]]["version"] if e["project"] in have else None,
+                }
+                for e in found
+            ]
+            if action == "check" or not found:
+                return {"ok": True, "updates": updates, "view": self.mods_view(name)}
+            new, out = mods.put(config, model, name, found), {"updated": updates}
+        elif action == "server":
+            new, gone = mods.set_server(config, model, name, body.get("server"))
+            costs = mods.consequences(model, name, str(body.get("server")), gone)
+            if costs and body.get("yes") is not True:
+                return {"ok": False, "costs": costs, "title": title, "to": mods.LABEL[str(body.get("server"))]}
+            out = {"dropped": gone}
+        elif action == "add":
+            entries = mods.resolve(self.modrinth, model, name, body.get("project"))
+            new, out = mods.put(config, model, name, entries), {"added": mods.describe(entries)}
+        elif action == "remove":
+            new, gone = mods.drop(config, model, name, body.get("project"))
+            out = {"removed": gone}
+        else:
+            raise NullBillError("send action: search, check, update, server, add or remove")
+        print(f"nullbill-web: game {name}: mods {action} by {by}", file=sys.stderr, flush=True)
+        self._save_config(new)
+        self.plan()
+        return {"ok": True, **out, "view": self.mods_view(name)}
 
     def world_download(self, name: str, ident: str) -> tuple[str, int, subprocess.Popen, Callable[[], None]]:
         """(file name, bytes, the stream, what to call when done) for one
@@ -2905,6 +2980,11 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                     return self.json(200, {"view": app.game_view(asked.get("name", [""])[0], fresh="fresh" in asked)})
                 except NullBillError as exc:
                     return self.json(404, refusal(exc))
+            if path == "/api/game/mods":
+                try:
+                    return self.json(200, {"view": app.mods_view(urllib.parse.parse_qs(query).get("name", [""])[0])})
+                except NullBillError as exc:
+                    return self.json(404, refusal(exc))
             if path == "/api/game/world":
                 return self.world_download(urllib.parse.parse_qs(query))
             if path == "/api/own-service":
@@ -3084,6 +3164,8 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                     return self.json(200, app.power_act(body))
                 if self.path == "/api/game":
                     return self.json(200, app.game_act(str(body.get("name", "")), body))
+                if self.path == "/api/game/mods":
+                    return self.json(200, app.mods_act(str(body.get("name", "")), body))
                 if self.path == "/api/alerts":
                     app.save_alerts(body)
                     return self.json(200, {"ok": True, "alerts": app.alerts()})

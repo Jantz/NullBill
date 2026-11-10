@@ -120,6 +120,12 @@ function readAt(t) {
   const d = new Date(t * 1000);
   return d.toDateString() === new Date().toDateString() ? d.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"}) : clock(t);
 }
+// A large number as people say it: 1.4 million, 20 thousand.
+function howMany(n) {
+  if (n >= 1e6) return `${(n / 1e6).toFixed(n < 1e7 ? 1 : 0)} million`;
+  if (n >= 1e3) return `${Math.round(n / 1e3)} thousand`;
+  return String(n);
+}
 function count(n, word) { return `${n} ${word}${n === 1 ? "" : "s"}`; }
 
 function announce(text, urgent) {
@@ -3008,6 +3014,7 @@ function serviceDetail(s, feedback) {
     rows.length ? make("dl", {className: "kv"}, ...rows) : null,
     s.password_note ? make("p", {className: "svc-note", textContent: s.password_note}) : null,
     s.game ? gameRoom(s) : null,
+    s.mods ? modsRoom(s) : null,
     serviceSteps(s, feedback),
     feedback,
   ];
@@ -3048,6 +3055,187 @@ function setGameRoom(view) {
   const room = document.querySelector(`.game-room[data-game="${view.name}"]`);
   // An open form keeps what was typed: only the lists are painted anew.
   if (room) paintGameRoom(room, view);
+  // What the guest holds says whether its plugins or mods are the list's.
+  if (modsViews.has(view.name)) loadModsRoom(view.name);
+}
+
+// Which server runs a Minecraft game server (Mojang's, Paper, Fabric) and
+// its plugins or mods from Modrinth. The list is the owner's choice, saved
+// at once; the server gets it when setup's games stage runs, which the
+// block offers. Asked for an open row only, and it needs no server yet.
+const modsViews = new Map();   // name -> the last /api/game/mods view
+function modsRoom(s) {
+  const room = make("div", {className: "game-room mods-room"});
+  room.dataset.mods = s.name;
+  const view = modsViews.get(s.name);
+  if (view) paintModsRoom(room, view);
+  if (expanded.has(s.name)) loadModsRoom(s.name);
+  return room;
+}
+
+async function loadModsRoom(name) {
+  try {
+    setModsRoom((await api(`/api/game/mods?name=${encodeURIComponent(name)}`)).view);
+  } catch { /* the row's own block says what is wrong */ }
+}
+
+function setModsRoom(view) {
+  modsViews.set(view.name, view);
+  const room = document.querySelector(`.mods-room[data-mods="${view.name}"]`);
+  if (room) paintModsRoom(room, view);
+}
+
+function modsAct(button, feedback, name, body, busy, done) {
+  return press(button, feedback, busy, async () => {
+    const answer = await api("/api/game/mods", {name, ...body});
+    if (answer.view) setModsRoom(answer.view);
+    return typeof done === "function" ? done(answer) : done;
+  });
+}
+
+function paintModsRoom(room, v) {
+  if (!v.takes) { room.replaceChildren(); return; }
+  if (!room.querySelector(".mods-kinds")) {
+    const said = make("p", {className: "feedback mods-said"});
+    said.setAttribute("role", "status");
+    const kinds = make("div", {className: "segmented mods-kinds", role: "group", ariaLabel: `Which server runs ${v.title}`});
+    for (const k of v.servers) {
+      const b = make("button", {type: "button", textContent: k.label, title: k.what});
+      b.dataset.kind = k.id;
+      b.addEventListener("click", () => {
+        const now = modsViews.get(v.name);
+        if (now.server === k.id) return;
+        press(b, said, "Saving…", async () => {
+          let answer = await api("/api/game/mods", {name: v.name, action: "server", server: k.id});
+          if (!answer.ok && answer.costs) {
+            const ok = await confirmDialog({title: `Change ${answer.title} to ${answer.to}?`, text: "Before you change:", points: answer.costs, yes: `Change to ${answer.to}`});
+            if (!ok) return "";
+            answer = await api("/api/game/mods", {name: v.name, action: "server", server: k.id, yes: true});
+          }
+          room.querySelector(".mods-forms").replaceChildren();
+          setModsRoom(answer.view);
+          return `${answer.view.title} runs ${k.label} from the next setup run of its server.`;
+        });
+      });
+      kinds.append(b);
+    }
+    const add = make("button", {type: "button", className: "btn small mods-add"}, icon("plus"), make("span", {className: "mods-add-text"}));
+    const check = make("button", {type: "button", className: "btn small mods-check"}, icon("refresh"), "Check for updates");
+    const forms = make("div", {className: "game-forms mods-forms"});
+    add.addEventListener("click", () => forms.replaceChildren(modSearchForm(room, forms)));
+    check.addEventListener("click", () => modsAct(check, said, v.name, {action: "check"}, "Asking Modrinth…", (answer) => {
+      if (!answer.updates.length) return "Everything is the newest for this Minecraft.";
+      forms.replaceChildren(modUpdatesForm(room, forms, answer.updates));
+      return "";
+    }));
+    const apply = make("button", {type: "button", className: "btn small primary"}, "Apply to the server");
+    const pending = make("div", {className: "mods-pending", hidden: true}, make("span", {className: "mods-pending-text"}), apply);
+    apply.addEventListener("click", () => press(apply, said, "Starting…", async () => {
+      const job = await api("/api/jobs", {action: "apply", stage: "games"});
+      follow(job, true, said);
+      refresh().catch(() => {});
+      return "Started. The run shows at the top of the page; the list is the server's when it ends.";
+    }));
+    room.replaceChildren(
+      make("h3", {className: "mods-title"}),
+      make("div", {className: "mods-head"}, kinds, make("span", {className: "hint mods-what"})),
+      said,
+      make("ul", {className: "world-list mods-list"}),
+      make("div", {className: "row game-buttons mods-buttons"}, add, check),
+      forms,
+      pending);
+  }
+  const words = v.word ? `${v.word[0].toUpperCase()}${v.word.slice(1)}s` : "Plugins and mods";
+  room.querySelector(".mods-title").textContent = `Server and ${words.toLowerCase()}`;
+  for (const b of room.querySelectorAll(".mods-kinds button")) b.setAttribute("aria-pressed", b.dataset.kind === v.server ? "true" : "false");
+  const chosen = v.servers.find((k) => k.id === v.server);
+  room.querySelector(".mods-what").textContent = `${chosen.what}${v.release ? ` Minecraft ${v.minecraft}, ${v.release}.` : ""}`;
+  const said = room.querySelector(".mods-said");
+  const list = room.querySelector(".mods-list");
+  list.hidden = v.server === "vanilla";
+  room.querySelector(".mods-buttons").hidden = v.server === "vanilla";
+  if (v.server === "vanilla") room.querySelector(".mods-forms").replaceChildren();
+  list.replaceChildren(...(v.mods.length ? v.mods.map((m) => modRow(v, m, said))
+    : [make("li", {className: "empty"}, make("span", {className: "sub", textContent: `No ${v.word}s yet.`}))]));
+  if (v.word) room.querySelector(".mods-add-text").textContent = `Add a ${v.word}`;
+  room.querySelector(".mods-check").hidden = v.mods.length === 0;
+  const full = v.mods.length >= v.most;
+  const add = room.querySelector(".mods-add");
+  if (full) { add.setAttribute("aria-disabled", "true"); add.dataset.why = `A server takes at most ${v.most}.`; }
+  else { add.removeAttribute("aria-disabled"); delete add.dataset.why; }
+  const pending = room.querySelector(".mods-pending");
+  pending.hidden = v.applied !== false;
+  if (v.applied === false) {
+    const n = v.players || 0;
+    pending.querySelector(".mods-pending-text").textContent = `The server does not run this yet. Applying restarts it${n ? `, and ${n === 1 ? "the player in it is" : `the ${n} players in it are`} disconnected for a moment` : ""}.`;
+  }
+}
+
+function modRow(v, m, said) {
+  const needed = v.mods.filter((o) => o.needs.includes(m.project)).map((o) => o.title);
+  const facts = [m.version, needed.length ? `Needed by ${andList(needed)}` : ""].filter(Boolean).join(" · ");
+  const name = make("div", {className: "world-name"},
+    make("a", {className: "name link", href: m.link, target: "_blank", rel: "noopener noreferrer", textContent: m.title}),
+    m.players_need ? make("span", {className: "badge warn", textContent: "Players need it too", title: `Every player needs ${m.title} in their own game to join.`}) : null,
+    make("span", {className: "sub", textContent: facts}));
+  const remove = make("button", {type: "button", className: "btn small ghost"}, "Remove", make("span", {className: "sr-only", textContent: ` ${m.title}`}));
+  remove.addEventListener("click", () => modsAct(remove, said, v.name, {action: "remove", project: m.project}, "Removing…",
+    (answer) => `Removed ${andList(answer.removed)}.`));
+  return make("li", {}, name, make("span", {className: "row world-actions"}, remove));
+}
+
+function modSearchForm(room, forms) {
+  const v = modsViews.get(room.dataset.mods);
+  const query = make("input", {type: "search", maxLength: 80, autocomplete: "off", spellcheck: false, placeholder: v.server === "paper" ? "Such as map, permissions, backup" : "Such as lithium, map, backup", ariaLabel: `Search Modrinth for a ${v.word}`});
+  const go = make("button", {type: "submit", className: "btn small"}, "Search");
+  const close = make("button", {type: "button", className: "btn small ghost"}, "Close");
+  const said = make("p", {className: "feedback"});
+  said.setAttribute("role", "status");
+  const hits = make("ul", {className: "world-list mod-hits"});
+  const form = make("form", {className: "game-form"},
+    make("p", {className: "help", textContent: `From Modrinth, for ${v.servers.find((k) => k.id === v.server).label} on Minecraft ${v.minecraft}. The server takes exactly the file listed here, checked by its SHA-512, and what a ${v.word} needs comes with it. A ${v.word} is someone else's program and can do what the game server can: change the world, read who plays. It runs inside this server's container and nowhere else.`}),
+    make("div", {className: "row"}, query, go, close), said, hits);
+  close.addEventListener("click", () => forms.replaceChildren());
+  const search = () => press(go, said, "Asking Modrinth…", async () => {
+    const answer = await api("/api/game/mods", {name: v.name, action: "search", query: query.value});
+    hits.replaceChildren(...answer.hits.map((h) => {
+      const add = make("button", {type: "button", className: "btn small"}, h.added ? "Added" : "Add", make("span", {className: "sr-only", textContent: ` ${h.title}`}));
+      if (h.added) add.setAttribute("aria-disabled", "true");
+      add.addEventListener("click", () => modsAct(add, said, v.name, {action: "add", project: h.project}, "Adding…", (done) => {
+        add.replaceChildren("Added");
+        add.setAttribute("aria-disabled", "true");
+        return done.added.length === 1 ? `Added ${done.added[0]}.` : done.added.map((line) => `Added ${line}.`);
+      }));
+      return make("li", {}, make("div", {className: "world-name"},
+        make("a", {className: "name link", href: h.link, target: "_blank", rel: "noopener noreferrer", textContent: h.title}),
+        h.players_need ? make("span", {className: "badge warn", textContent: "Players need it too"}) : null,
+        make("span", {className: "sub", textContent: [h.what, h.by ? `By ${h.by}` : "", `${howMany(h.downloads)} downloads`].filter(Boolean).join(" · ")})),
+        make("span", {className: "row world-actions"}, add));
+    }));
+    return answer.hits.length ? "" : `Modrinth has no ${v.word} of that name for this server and Minecraft.`;
+  });
+  form.addEventListener("submit", (event) => { event.preventDefault(); search(); });
+  setTimeout(() => { query.focus(); search(); });
+  return form;
+}
+
+function modUpdatesForm(room, forms, updates) {
+  const v = modsViews.get(room.dataset.mods);
+  const go = make("button", {type: "button", className: "btn small primary"}, updates.length === 1 ? "Take it" : `Take all ${updates.length}`);
+  const cancel = make("button", {type: "button", className: "btn small ghost"}, "Not now");
+  const said = make("p", {className: "feedback"});
+  said.setAttribute("role", "status");
+  const rows = updates.map((u) => make("li", {}, make("div", {className: "world-name"},
+    make("span", {className: "name", textContent: u.title}),
+    make("span", {className: "sub", textContent: u.from ? `${u.from} to ${u.to}` : `${u.to}, which another needs now`}))));
+  cancel.addEventListener("click", () => forms.replaceChildren());
+  go.addEventListener("click", () => modsAct(go, said, v.name, {action: "update"}, "Saving…", () => {
+    forms.replaceChildren();
+    say(room.querySelector(".mods-said"), "ok", `The list has the newer ${updates.length === 1 ? "one" : "ones"}.`);
+    return "";
+  }));
+  return make("div", {className: "game-form"}, make("p", {className: "help", textContent: "Newer on Modrinth for this server and Minecraft:"}),
+    make("ul", {className: "world-list"}, ...rows), make("div", {className: "row"}, go, cancel), said);
 }
 
 function gameAct(button, feedback, name, body, busy, done) {
@@ -3139,6 +3327,7 @@ function worldRow(v, w, said) {
   const facts = [bytes(w.bytes), w.origin + (w.made ? ` ${clock(w.made)}` : ""), ...w.options].filter(Boolean).join(" · ");
   const name = make("div", {className: "world-name"}, make("span", {className: "name", textContent: w.title}),
     w.active ? make("span", {className: "badge good", textContent: "Runs now"}) : null,
+    w.paper ? make("span", {className: "badge plain", textContent: "Paper only", title: "Paper has opened this world and stores it its own way. Only a Paper server opens it now."}) : null,
     make("span", {className: "sub", textContent: facts}));
   const button = (text, cls, onClick, glyph) => {
     const b = make("button", {type: "button", className: `btn small ${cls || ""}`.trim()}, glyph ? icon(glyph) : null, text, make("span", {className: "sr-only", textContent: ` ${w.title}`}));
@@ -3318,6 +3507,7 @@ function renderServices(st) {
       detail.hidden = !on;
       if (on) expanded.add(s.name); else expanded.delete(s.name);
       if (on && s.game && built()) loadGameRoom(s.name);
+      if (on && s.mods) loadModsRoom(s.name);
     };
     toggle.addEventListener("click", (event) => { event.stopPropagation(); flip(); });
     row.addEventListener("click", (event) => { if (!event.target.closest("a, button")) flip(); });

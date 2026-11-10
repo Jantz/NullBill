@@ -4,7 +4,9 @@
 # (tests/vars.json), then run the real server as its unit does behind a
 # stand-in for the egress proxy and prove that it reaches Mojang only
 # through nb-tls-tunnel, asks Mojang about a player who joins, takes console
-# lines from nb-game, keeps the owner's settings and saves when stopped.
+# lines from nb-game, keeps the owner's settings and saves when stopped;
+# then its worlds, and the same world under Paper with a plugin and under
+# Fabric with mods, each fetched by its pinned hash.
 set -euo pipefail
 # shellcheck source=tools/role-check/role-check.sh
 source /usr/local/lib/role-check.sh
@@ -222,3 +224,101 @@ ansible-playbook -i localhost, -c local -e "@$tests/vars.json" -e "$here" /ansib
 grep -Eq 'localhost +: ok=[0-9]+ +changed=0 ' /tmp/fourth.log || { grep -B3 changed: /tmp/fourth.log; fail "the role changed something after the worlds changed"; }
 systemctl stop minecraft
 pass "nb-game report says what the page shows; the role leaves the worlds alone"
+
+# Paper and Fabric (docs/adr/0021-minecraft-mods.md): the world the role's
+# server made, opened by each in turn, with the plugin and the mods the
+# page would have added (tests/paper.json and tests/fabric.json, which
+# tests/test_mods.py keeps equal to what apply passes). The role fetches
+# every file by its pinned hash; the server only reads them.
+as_kind() {
+  local kind=$1 more=()
+  [ "$kind" = vanilla ] || more=(-e "@$tests/$kind.json")
+  ansible-playbook -i localhost, -c local -e "@$tests/vars.json" "${more[@]}" -e "$here" /ansible/game-minecraft.yml >"/tmp/$kind.log" 2>&1 \
+    || { cat "/tmp/$kind.log"; fail "the role as $kind"; }
+  ansible-playbook -i localhost, -c local -e "@$tests/vars.json" "${more[@]}" -e "$here" /ansible/game-minecraft.yml >"/tmp/$kind-again.log" 2>&1 \
+    || { cat "/tmp/$kind-again.log"; fail "the role as $kind, again"; }
+  grep -Eq 'localhost +: ok=[0-9]+ +changed=0 ' "/tmp/$kind-again.log" || { grep -B3 changed: "/tmp/$kind-again.log"; fail "a second run as $kind changed something"; }
+  : >/tmp/minecraft.log
+  systemctl start minecraft
+  nb-game wait 300 || { tail -40 /tmp/minecraft.log; fail "the server answers as $kind"; }
+}
+files_of() {
+  python3 -c 'import json, sys; print(" ".join(sorted(m["file"] for m in json.load(open(sys.argv[1]))["game_minecraft_mods"])))' "$tests/$1.json"
+}
+
+as_kind paper
+[ "$(nb-game mods)" = "paper $(files_of paper)" ] || { nb-game mods; fail "nb-game mods names Paper and its plugin"; }
+[ "$(stat -c '%U %a' /opt/minecraft/paper/paper-*.jar /opt/minecraft/mods/*.jar | sort -u)" = "root 644" ] || fail "Paper and its plugin are root's"
+if runuser -u game -- touch /opt/minecraft/mods/own.jar 2>/dev/null; then fail "the server can write where its plugins are"; fi
+game_says minecraft 'This server is running Paper version' 5 || fail "the server that runs is Paper"
+game_says minecraft '\[Chunky\] Enabling Chunky' 5 || fail "Paper loaded the plugin the role fetched"
+# Paper asks its makers for a newer build, which this guest's Java cannot
+# resolve: it says so in its log and goes on.
+if grep -q 'Downloading mojang_' /tmp/minecraft.log; then grep 'mojang_' /tmp/minecraft.log; fail "Paper started from the file the role gave it"; fi
+nb-game console "chunky version"
+game_says minecraft '\[Chunky\]' 15 || fail "the plugin answers on the console"
+world list
+world_is "[(x['id'], x['active'], x.get('paper')) for x in w['worlds']] == [('w1', True, True)]" \
+  || fail "Paper runs the world that was there, and stores it its own way from then on"
+systemctl stop minecraft
+grep -q 'Saving worlds\|Saving chunks' /tmp/minecraft.log || { tail -20 /tmp/minecraft.log; fail "Paper saved the world when stopped"; }
+pass "Paper: the role's pinned build runs the same world with a plugin from Modrinth, taken by its SHA-512, and stops on nb-game's word"
+
+# A world Paper has opened does not open under Fabric or Mojang's server
+# (they stop with "Overworld settings missing"): the role sets it aside,
+# kept for Paper, and the server makes a new one.
+as_kind fabric
+grep -A2 'A world this server cannot open is set aside' /tmp/fabric.log | grep -q '^changed:' \
+  || { grep -A3 'cannot open' /tmp/fabric.log; fail "the role set the Paper world aside"; }
+test ! -e /opt/minecraft/paper || fail "Paper's files are gone once the server is Fabric"
+[ "$(nb-game mods)" = "fabric $(files_of fabric)" ] || { nb-game mods; ls /opt/minecraft/mods; fail "nb-game mods names Fabric and its mods, and the plugin is gone"; }
+[ "$(stat -c '%U' /opt/minecraft/fabric/*.jar /opt/minecraft/mods/*.jar | sort -u)" = root ] || fail "Fabric and its mods are root's"
+game_says minecraft 'Loading Minecraft .* with Fabric Loader' 5 || fail "the server that runs is Fabric"
+for mod in lithium chunky fabric-api; do
+  grep -Eq -- "- $mod " /tmp/minecraft.log || { grep -A40 'Loading .* mods' /tmp/minecraft.log | head -60; fail "Fabric loaded $mod"; }
+done
+test ! -e /var/lib/minecraft/mods || [ -z "$(ls /var/lib/minecraft/mods)" ] || fail "Fabric reads its mods from the role's directory alone"
+world list
+world_is "[(x['id'], x['title'], x['active'], x.get('paper')) for x in w['worlds']] == [('w1', 'First world', False, True), ('w5', 'New world after Paper', True, None)]" \
+  || fail "the Paper world is kept and Fabric runs a new one"
+if world use w1; then fail "ran a Paper world under Fabric"; fi
+world_is "'only a Paper server opens it now' in w['error']" || fail "says why the Paper world does not run here"
+[ "$(nb-game players)" = 0 ] || fail "the server still answers after the refusal"
+systemctl stop minecraft
+pass "Fabric: the role's pinned loader runs with Lithium, Chunky and the Fabric API Chunky needs; the world Paper opened is kept, not run"
+
+# A changed mod file is fetched again, not run: the pin is the file's hash.
+echo tampered >>/opt/minecraft/mods/"$(files_of fabric | cut -d' ' -f1)"
+ansible-playbook -i localhost, -c local -e "@$tests/vars.json" -e "@$tests/fabric.json" -e "$here" /ansible/game-minecraft.yml >/tmp/tampered.log 2>&1 \
+  || { cat /tmp/tampered.log; fail "the role over a changed mod file"; }
+python3 - "$tests/fabric.json" <<'PY' || fail "every mod file has the pinned SHA-512 again"
+import hashlib
+import json
+import sys
+
+for mod in json.load(open(sys.argv[1]))["game_minecraft_mods"]:
+    got = hashlib.sha512(open("/opt/minecraft/mods/" + mod["file"], "rb").read()).hexdigest()
+    assert got == mod["sha512"], mod["file"]
+PY
+pass "a mod file that no longer has its pinned SHA-512 is replaced by the one that has"
+
+as_kind vanilla
+test ! -e /opt/minecraft/fabric || fail "Fabric's files are gone once the server is Mojang's"
+[ "$(nb-game mods)" = vanilla ] || { nb-game mods; fail "no mods are left for Mojang's server"; }
+game_says minecraft 'Done \(' 5 || fail "Mojang's server runs the world Fabric made"
+world list
+world_is "[(x['id'], x['active']) for x in w['worlds']] == [('w1', False), ('w5', True)]" || fail "Mojang's server and Fabric share a world"
+systemctl stop minecraft
+pass "back to Mojang's own server: Paper, Fabric and every mod are gone, and the world Fabric made runs"
+
+# Paper again: the world it opened before is still whole.
+as_kind paper
+world use w1 || { cat /tmp/world.json; tail -20 /tmp/minecraft.log; fail "the kept Paper world runs under Paper again"; }
+world_is "[(x['id'], x['active']) for x in w['worlds']] == [('w1', True), ('w5', False)]" || fail "the first world runs again"
+systemctl stop minecraft
+as_kind vanilla
+world list
+world_is "[(x['id'], x['active']) for x in w['worlds']][:2] == [('w1', False), ('w5', False)] and w['worlds'][2]['active']" \
+  || fail "leaving Paper again keeps both worlds and starts a third"
+systemctl stop minecraft
+pass "a world set aside for Paper runs again once the server is Paper; no world was lost on the way"

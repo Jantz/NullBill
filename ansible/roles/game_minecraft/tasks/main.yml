@@ -47,6 +47,100 @@
     downloads_dest: "/opt/minecraft/server-{{ game_minecraft_version }}.jar"
     downloads_checksum: "sha256:{{ game_minecraft_sha256 }}"
 
+# Paper or Fabric (games.<name>.server): what that kind is made of, beside
+# Mojang's file, which both start. Root's and read-only to the server.
+- name: The server kind's directory
+  when: game_minecraft_server != "vanilla"
+  ansible.builtin.file:
+    path: "/opt/minecraft/{{ game_minecraft_server }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: The server kind's files
+  ansible.builtin.include_role:
+    name: downloads
+    tasks_from: fetch
+  vars:
+    downloads_url: "{{ game_minecraft_file.url }}"
+    downloads_dest: "/opt/minecraft/{{ game_minecraft_server }}/{{ game_minecraft_file.file }}"
+    downloads_checksum: "sha256:{{ game_minecraft_file.sha256 }}"
+  loop: "{{ game_minecraft_server_files }}"
+  loop_control:
+    loop_var: game_minecraft_file
+    label: "{{ game_minecraft_file.file }}"
+
+- name: The other kinds removed
+  ansible.builtin.file:
+    path: "/opt/minecraft/{{ item }}"
+    state: absent
+  loop: "{{ ['paper', 'fabric'] | difference([game_minecraft_server]) }}"
+
+# Paper patches Mojang's file and looks for it here before it would
+# download it, which this guest's Java cannot (start's hosts file).
+- name: Paper's cache
+  when: game_minecraft_server == "paper"
+  ansible.builtin.file:
+    path: /var/lib/minecraft/cache
+    state: directory
+    owner: game
+    group: game
+    mode: "0750"
+
+- name: Mojang's file where Paper looks for it
+  when: game_minecraft_server == "paper"
+  ansible.builtin.copy:
+    src: "/opt/minecraft/server-{{ game_minecraft_version }}.jar"
+    dest: "/var/lib/minecraft/cache/mojang_{{ game_minecraft_version }}.jar"
+    remote_src: true
+    owner: game
+    group: game
+    mode: "0640"
+
+# Plugins (Paper) or mods (Fabric), each the one file config.yaml pins by
+# SHA-512. The server is started with this directory (start), which it
+# cannot write to: it runs what the page lists, as Modrinth gave it.
+- name: Plugins and mods directory
+  ansible.builtin.file:
+    path: /opt/minecraft/mods
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Plugins or mods
+  ansible.builtin.include_role:
+    name: downloads
+    tasks_from: fetch
+  vars:
+    downloads_url: "{{ game_minecraft_file.url }}"
+    downloads_dest: "/opt/minecraft/mods/{{ game_minecraft_file.file }}"
+    downloads_checksum: "sha512:{{ game_minecraft_file.sha512 }}"
+  loop: "{{ game_minecraft_mods }}"
+  loop_control:
+    loop_var: game_minecraft_file
+    label: "{{ game_minecraft_file.file }}"
+
+- name: What is in those directories
+  ansible.builtin.find:
+    paths: "{{ ['/opt/minecraft/mods'] + ([] if game_minecraft_server == 'vanilla' else ['/opt/minecraft/' ~ game_minecraft_server]) }}"
+    file_type: any
+    hidden: true
+  register: game_minecraft_placed
+
+- name: What config.yaml no longer names removed
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: >-
+    {{ game_minecraft_placed.files | rejectattr('path', 'in',
+    (game_minecraft_mods | map(attribute='file') | map('regex_replace', '^', '/opt/minecraft/mods/') | list)
+    + (game_minecraft_server_files | map(attribute='file') | map('regex_replace', '^', '/opt/minecraft/' ~ game_minecraft_server ~ '/') | list)) | list }}
+  loop_control:
+    label: "{{ item.path }}"
+  notify: Restart minecraft
+
 - name: Other versions
   ansible.builtin.find:
     paths: /opt/minecraft
@@ -83,6 +177,31 @@
     src: nb-properties
     dest: /usr/local/sbin/nb-properties
     mode: "0755"
+
+- name: What nb-game needs to know
+  ansible.builtin.copy:
+    dest: /etc/nullbill/game.json
+    mode: "0644"
+    content: >-
+      {{ {"name": "minecraft", "title": "Minecraft", "version": game_minecraft_version, "port": game_minecraft_port | int,
+      "console": "/run/minecraft/console", "players": {"how": "minecraft"}, "stop": "stop",
+      "server": game_minecraft_server, "mods": "/opt/minecraft/mods",
+      "admins": "/var/lib/minecraft/ops.json", "unit": "minecraft",
+      "world": {"how": "minecraft", "home": "/var/lib/minecraft", "dir": "world", "options": game_minecraft_new_world,
+      "properties": "/var/lib/minecraft/server.properties", "set_properties": "/usr/local/sbin/nb-properties",
+      "jar": "/opt/minecraft/server-" ~ game_minecraft_version ~ ".jar", "log": "/var/lib/minecraft/logs/latest.log"}} | to_nice_json }}
+
+# A world Paper has opened is stored Paper's way, and Mojang's server and
+# Fabric do not start with it. When the server is no longer Paper, the
+# world that runs is set aside (kept in the list, for Paper) and the
+# server makes a new one. The page says so before the kind is changed.
+- name: A world this server cannot open is set aside
+  ansible.builtin.command:
+    cmd: /usr/local/sbin/nb-game world fit
+  register: game_minecraft_fit
+  changed_when: (game_minecraft_fit.stdout | from_json).aside is not none
+  failed_when: game_minecraft_fit.rc != 0 or not (game_minecraft_fit.stdout | from_json).ok
+  notify: Restart minecraft
 
 # What shapes a world (its seed, hardcore) is the world's once it is made:
 # the page's New world sets those for the world it makes (nb-game world
@@ -134,18 +253,6 @@
     dest: /opt/minecraft/start
     mode: "0755"
   notify: Restart minecraft
-
-- name: What nb-game needs to know
-  ansible.builtin.copy:
-    dest: /etc/nullbill/game.json
-    mode: "0644"
-    content: >-
-      {{ {"name": "minecraft", "title": "Minecraft", "version": game_minecraft_version, "port": game_minecraft_port | int,
-      "console": "/run/minecraft/console", "players": {"how": "minecraft"}, "stop": "stop",
-      "admins": "/var/lib/minecraft/ops.json", "unit": "minecraft",
-      "world": {"how": "minecraft", "home": "/var/lib/minecraft", "dir": "world", "options": game_minecraft_new_world,
-      "properties": "/var/lib/minecraft/server.properties", "set_properties": "/usr/local/sbin/nb-properties",
-      "jar": "/opt/minecraft/server-" ~ game_minecraft_version ~ ".jar", "log": "/var/lib/minecraft/logs/latest.log"}} | to_nice_json }}
 
 - name: Tunnel unit
   ansible.builtin.template:
