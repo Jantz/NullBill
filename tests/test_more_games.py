@@ -566,7 +566,9 @@ def test_the_agent_adds_game_servers_as_a_change_and_never_agrees_for_the_owner(
         view = say(client, call(**bad))
         assert not kinds(view, "proposal")[1:] or kinds(view, "proposal")[-1]["id"] == proposal["id"]
         assert said in kinds(view, "tool_done")[-1]["output"]
-    status = yaml.safe_load(kinds(say(client, "CALL status {}"), "tool_done")[-1]["output"])
+    done = kinds(say(client, "CALL status {}"), "tool_done")[-1]
+    # The page shows the end of a long answer; the whole of it is kept.
+    status = yaml.safe_load(app.chat.output(done["full"]) if done.get("full") else done["output"])
     assert next(i for i in status["what_to_run"] if i["name"] == name)["game_server_of"] == "minecraft"
     assert next(i for i in status["what_to_run"] if i["name"] == "terraria")["game_server_of"] == "terraria"
 

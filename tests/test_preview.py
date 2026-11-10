@@ -7,7 +7,7 @@ import copy
 import subprocess
 
 import pytest
-from fixturedata import custom_config, fixture_config, games_config, legacy_config
+from fixturedata import custom_config, fixture_config, games_config, legacy_config, torrents_config
 from test_apply import FakeReach, ctx, passing_verify, tailnet, with_client  # noqa: F401 (fixtures)
 
 from nullbill import applied, apply, ci, custom, preview
@@ -25,6 +25,7 @@ CONFIGS = {
     "kept disk": legacy_config,
     "games": games_config,
     "own services": custom_config,
+    "downloads": lambda: torrents_config("home"),
 }
 
 

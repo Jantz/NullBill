@@ -122,7 +122,7 @@ Said on the page under the table, and here in full:
 
 - A new stage must have an entry in `apply.FORESEEN`, and a new playbook
   run a `Step` built from the inputs builder the stage uses
-  (`tests/test_preview.py` runs a full setup on six plans and fails when a
+  (`tests/test_preview.py` runs a full setup on seven plans and fails when a
   recorded run is not foreseen exactly, or a foreseen one not recorded).
 - `applied.sources` now counts a role whose file another role places
   (`host_baseline` installs `agent_ssh`'s `nb-agent-command`), which the

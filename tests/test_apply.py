@@ -10,7 +10,7 @@ import pytest
 from conftest import HOME_PUBLIC, ROUTER_CLOCK, FakeTailnet, fixture_config, guest_exec, portmap_state, tailscale_status
 from fixturedata import games_config
 
-from nullbill import applied, apply, backups, browserca, ci, direct, flows, games, hostroot, lan, llm, names, owner, power
+from nullbill import applied, apply, backups, browserca, ci, direct, flows, games, hostroot, lan, llm, names, owner, power, torrents
 from nullbill.apply import ApplyError, Context, connection, run_apply
 from nullbill.artifacts import render_all
 from nullbill.errors import NullBillError
@@ -109,6 +109,8 @@ class FakeReach:
         # The Jellyfin guest (VMID 2024), which OpenTofu makes, and the host's
         # render nodes by PCI address. nb-jellyfin's runs.
         self.media_ct = {"exists": False, "status": "running", "mps": {}, "devs": {}, "restarts": 0}
+        self.torrents_asked = []
+        self.torrents_ct = {"exists": False, "status": "running", "mps": {}, "restarts": 0}
         self.render_nodes = {"0000:00:02.0": "/dev/dri/renderD128"}
         self.jellyfin = []
         # nb-forgejo-owner's runs, and the keys given to the workspace, with what each read on stdin.
@@ -225,6 +227,8 @@ class FakeReach:
             return self.inference(command)
         if command.split()[:3] in (["pct", c, "2024"] for c in ("config", "set", "status", "reboot", "start", "shutdown")):
             return self.media(command)
+        if command.split()[:3] in (["pct", c, "2028"] for c in ("config", "set", "status", "reboot", "start", "shutdown")):
+            return self.downloads(command)
         if command.startswith("readlink -e /dev/dri/by-path/pci-"):
             pci = command.split("pci-", 1)[1].split("-render")[0]
             return 0, self.render_nodes.get(pci, "") + "\n", ""
@@ -407,6 +411,33 @@ class FakeReach:
                 ct["devs"][int(flag.removeprefix("--dev"))] = value
         return 0, "", ""
 
+    def downloads(self, command):
+        """pct for the download client's guest (VMID 2028)."""
+        argv = shlex.split(command)
+        ct = self.torrents_ct
+        if argv[1] == "config":
+            if not ct["exists"]:
+                return 2, "", "Configuration file 'nodes/pve/lxc/2028.conf' does not exist\n"
+            return 0, "hostname: qbittorrent\n" + "".join(f"{k}: {v}\n" for k, v in sorted(ct["mps"].items())), ""
+        if argv[1] == "status":
+            return 0, f"status: {ct['status']}\n", ""
+        if argv[1] in ("start", "reboot"):
+            ct["status"] = "running"
+            ct["restarts"] += 1
+            return 0, "", ""
+        if argv[1] == "shutdown":
+            ct["status"] = "stopped"
+            return 0, "", ""
+        args = argv[3:]
+        for flag, value in zip(args[::2], args[1::2], strict=True):
+            assert ct["status"] == "stopped", "mount points change only while the download client's guest is stopped"
+            if flag == "--delete":
+                for key in value.split(","):
+                    del ct["mps"][key]
+            else:
+                ct["mps"][flag[2:]] = value
+        return 0, "", ""
+
     def kept(self, command):
         """nb-legacy-disk, findmnt and pct for the files guest (VMID 2023)."""
         argv = shlex.split(command)
@@ -498,6 +529,9 @@ class FakeReach:
             return 0, ("changed\n" if first or argv[1] == "encoding" else "same\n") if argv[1] != "wait" else "", ""
         if vmid == "2024" and argv == ["cat", "/etc/nullbill/jellyfin-admin-password"]:
             return 0, "jellyfin-password\n", ""
+        if vmid == "2028" and argv[0] == torrents.NB_TORRENTS:
+            self.torrents_asked.append(argv[1:])
+            return 0, "changed\n" if argv[1:] == ["settings"] and self.torrents_asked.count(["settings"]) == 1 else "", ""
         if argv[0] == games.NB_GAME:
             server = self.game_servers.setdefault(vmid, {"admins": [], "typed": [], "asked": []})
             server["asked"].append(argv[1])
@@ -531,6 +565,7 @@ class FakeReach:
         if argv[:2] == ["tofu", "apply"] and not any(a.startswith("-target=") for a in argv):
             self.files_ct["exists"] = True
             self.media_ct["exists"] = True
+            self.torrents_ct["exists"] = True
             if self.replacing:
                 self.templates.clear()  # OpenTofu made a fresh, plain VM
         for start, left in self.flaky.items():

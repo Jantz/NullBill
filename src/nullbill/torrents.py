@@ -1,5 +1,5 @@
 """The download client: what plan, apply, verify and the page need for
-qBittorrent (docs/adr/0017-download-client.md).
+qBittorrent (docs/adr/0020-download-client.md).
 
 It runs alone in the torrents zone and downloads into one folder of a kept
 disk the owner made editable (legacy.py), bind-mounted at STORE: the same

@@ -88,7 +88,7 @@ zones:
   # lists names: it talks to whoever else holds a file, on any port. With
   # torrents.route: home the zone goes out directly, like services; with
   # vpn the plan closes it to everything but the owner's VPN server
-  # (docs/adr/0017-download-client.md).
+  # (docs/adr/0020-download-client.md).
   torrents:
     index: 10
     description: The download client, alone, with one folder of a kept disk.
@@ -283,7 +283,7 @@ services:
     ports:
       - {port: 8096, proto: tcp, from: ["role:owner", "shared"]}
   # The download client (the torrents section below,
-  # docs/adr/0017-download-client.md). Its page has one password and no
+  # docs/adr/0020-download-client.md). Its page has one password and no
   # accounts: whoever signs in adds and removes downloads and changes every
   # setting, which is why `access` says so.
   qbittorrent:
@@ -637,7 +637,7 @@ games:
     admins: []
     settings: {}
 
-# The download client (docs/adr/0017-download-client.md). route has no
+# The download client (docs/adr/0020-download-client.md). route has no
 # default: config.yaml says vpn (the owner's own WireGuard VPN, whose file
 # is a secret and whose server is torrents.vpn.endpoint) or home (others in
 # each download see the home's public address). Downloads go into `folder`

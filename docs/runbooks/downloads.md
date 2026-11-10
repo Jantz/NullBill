@@ -3,7 +3,7 @@
 The workload **Downloads (qBittorrent)** is a BitTorrent client on the
 server. What it finishes lands in one folder of a disk you kept, where
 Jellyfin and the file share already look. Why it is built this way:
-[ADR 0017](../adr/0017-download-client.md).
+[ADR 0020](../adr/0020-download-client.md).
 
 | What | Where |
 |---|---|

@@ -1,4 +1,4 @@
-# ADR 0017: A download client beside Jellyfin
+# ADR 0020: A download client beside Jellyfin
 
 Status: accepted (the owner asked what should come next and left the choice
 and the design to Claude, 2026-11-10; the brief was a download client whose

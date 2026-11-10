@@ -1975,6 +1975,13 @@ def stage_media(ctx: Context) -> None:
     ctx.say(f"media: from your devices on the tailnet Jellyfin is {url}; sign in as {media.ADMIN_USER}, the page shows the password")
 
 
+def torrents_inputs(ctx: Context) -> dict:
+    """The qbittorrent role's variables; raises NullBillError when the plan
+    sends through a VPN and the saved WireGuard file does not fit it."""
+    password = ctx.secrets.ensure(torrents.PASSWORD_SECRET, lambda: secrets.token_urlsafe(18))
+    return torrents.variables(ctx.bare, ctx.model, password, ctx.secrets.data.get(torrents.VPN_SECRET))
+
+
 def stage_torrents(ctx: Context) -> None:
     """The download client in its guest. Behind a VPN, first the host loads
     WireGuard's module, which a container cannot; then the role, with the
@@ -1990,9 +1997,8 @@ def stage_torrents(ctx: Context) -> None:
         rc, _, err = ctx.reach.host(f"modprobe {torrents.MODULE}")
         if rc != 0:
             raise ApplyError("torrents", f"the host cannot load WireGuard, which the VPN needs: {(err.strip() or f'exit {rc}')[:200]}")
-    password = ctx.secrets.ensure(torrents.PASSWORD_SECRET, lambda: secrets.token_urlsafe(18))
     try:
-        variables = torrents.variables(ctx.bare, ctx.model, password, ctx.secrets.data.get(torrents.VPN_SECRET))
+        variables = torrents_inputs(ctx)
     except NullBillError as exc:
         raise ApplyError("torrents", "; ".join(exc.messages)) from exc
     run_playbook(ctx, "torrents", torrents.PLAYBOOK, name, variables)
@@ -2850,6 +2856,12 @@ def foresee_media(ctx: Context) -> list[Step]:
     return [step(ctx, "media", "jellyfin.yml", media.JELLYFIN, jellyfin_inputs(ctx))] if media.enabled(ctx.bare) else []
 
 
+def foresee_torrents(ctx: Context) -> list[Step]:
+    if not torrents.enabled(ctx.bare):
+        return []
+    return [step(ctx, "torrents", torrents.PLAYBOOK, torrents.QBITTORRENT, torrents_inputs(ctx))]
+
+
 def foresee_games(ctx: Context) -> list[Step]:
     return [
         step(ctx, "games", games.playbook(ctx.model, name), name, games.variables(ctx.bare, ctx.model, name))
@@ -2926,6 +2938,7 @@ FORESEEN: dict[str, Callable[[Context], list[Step]] | None] = {
     "inference": foresee_inference,
     "files": foresee_files,
     "media": foresee_media,
+    "torrents": foresee_torrents,
     "games": foresee_games,
     "ci": foresee_ci,
     "agents": foresee_agents,

@@ -95,7 +95,7 @@ answered items move to the decisions list at the bottom.
     forward the port yourself or have none open, switch off **Ask the home
     router for the port** on the page's **Access** page.
 
-17. **The download client** (docs/adr/0017-download-client.md), four
+17. **The download client** (docs/adr/0020-download-client.md), four
     things left out on purpose. (a) A VPN provider's port forwarding (from home the port is
     open already): it differs per provider. Recommendation: not until you
     use a VPN for downloads; then say which provider. (b) A place for downloads other than a kept disk.

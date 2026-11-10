@@ -450,3 +450,27 @@ def test_the_fixtures_copy_of_the_plan_is_what_the_checks_render(facts):
     assert config["torrents"] == {"route": "vpn", "vpn": {"endpoint": VPN_SERVER}}
     assert "large-torrents" in (ROOT / "tools/render-fixtures").read_text()
     assert "tunnel.sh" in (ROOT / "tools/check-guests").read_text()
+
+
+def test_a_setup_run_gives_the_client_its_folder_while_stopped_and_sets_it_up_after(monkeypatch, tmp_path, facts):
+    """The whole run on the stand-in host: the folder of the kept disk is
+    made and mounted while the guest is stopped (the stand-in refuses
+    otherwise), once, and the stage runs after."""
+    import test_apply
+
+    monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
+    monkeypatch.setattr(apply, "run_verify", test_apply.passing_verify)
+    monkeypatch.setattr(apply, "sleep", lambda s: None)
+    model = build_model(torrents_config("home"))
+    plan = build_plan(model, facts("large"))
+    reach = test_apply.FakeReach()
+    c = apply.Context(
+        plan, model, tmp_path, test_apply.TARGET, reach, test_apply.Secrets(test_apply.MemoryCodec()), render_all(plan, model)
+    )
+    apply.run_apply(c)
+    ct = reach.torrents_ct
+    assert ct["mps"] == {"mp0": "/mnt/nb-legacy/data/Downloads,mp=/downloads,backup=0,ro=0"} and ct["status"] == "running"
+    assert reach.torrents_asked == [["wait"], ["settings"]]
+    restarts = ct["restarts"]
+    apply.run_apply(c)
+    assert ct["restarts"] == restarts, "a second run leaves the guest running"
