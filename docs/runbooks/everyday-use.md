@@ -76,12 +76,13 @@ no longer works.
   updates waiting, a request from the agent), then health, services and
   recent runs. **Run setup**, at the top of every page, opens **Setup**,
   **Review and run**: why a run is due, and what it does to the server.
-  The table has a row for each machine the run touches: created, deleted,
-  changed, or **set up again**, with why (which settings or files
-  changed), which programs **may restart** for it, and how long that
-  machine's setup took the last time. Every other machine is named under
-  **Left alone**: the run does not log in to it for setup and nothing in
-  it restarts. Below are the disks and every changed line of the plan.
+  The table has one line for each machine the run touches: **Delete**,
+  **Create**, **Change** or **Set up again**, and in a few words what
+  happens to it ("Minecraft may restart", "Nothing restarts"). What is
+  interrupted comes first. Press a line for why (which settings or files
+  changed) and how long that machine's setup took the last time. Every
+  other machine is named under **Left alone**: nothing in it restarts.
+  Below are the disks and every changed line of the plan.
   The page works this out by itself from what the last runs wrote down;
   it asks the server nothing, so looking is always safe. Nothing starts
   before you press **Start setup** there. On a server built before the

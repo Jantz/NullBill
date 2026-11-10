@@ -125,8 +125,10 @@ def test_a_changed_choice_sets_up_again_only_what_takes_it(ctx, monkeypatch, tai
     by_name = {m["name"]: m for m in found["machines"]}
     assert [m["name"] for m in found["machines"] if m["what"] != "alone"] == ["minecraft"]
     minecraft = by_name["minecraft"]
-    assert minecraft["what"] == "again" and minecraft["why"] == ["What it is set up with changed: settings (difficulty)."]
+    assert minecraft["what"] == "again" and minecraft["why"] == ["Changed: settings (difficulty)."]
     assert minecraft["restarts"] == [{"what": "minecraft", "how": "restart"}] and minecraft["restart_note"] == "Minecraft may restart."
+    # The row's few words, which the page shows before anything is opened.
+    assert minecraft["effect"] == "Minecraft may restart" and minecraft["interrupts"] is True
     # How long its setup took, and how long players waited after it, the last time.
     assert minecraft["last"]["took_s"] >= 0 and minecraft["last"]["at"] > 0
     assert by_name["factorio"]["what"] == "alone" and by_name["factorio"]["restarts"] == []
@@ -142,11 +144,13 @@ def test_a_new_and_a_dropped_workload_are_created_and_deleted_and_their_neighbou
     by_name = {m["name"]: m for m in found["machines"]}
     assert by_name["jellyfin"]["what"] == "create" and by_name["jellyfin"]["why"] == [preview.CREATED]
     assert by_name["jellyfin"]["steps"] == [] and by_name["jellyfin"]["restarts"] == []
+    assert by_name["jellyfin"]["effect"] == "New guest" and by_name["terraria"]["effect"] == "Deletes the guest and everything on its disk"
+    assert by_name["terraria"]["interrupts"] is True and by_name["minecraft"]["effect"] == ""
     assert by_name["terraria"]["what"] == "delete" and by_name["terraria"]["why"]
     # A new zone gives the router a leg more: its interfaces change, so it may restart whole.
     router = by_name["router"]
     assert router["what"] == "again" and preview.IN_PLACE in router["why"]
-    assert {"what": "the whole machine", "how": "reboot"} in router["restarts"]
+    assert {"what": "the whole machine", "how": "reboot"} in router["restarts"] and router["effect"] == "The whole machine may restart"
     assert any("/etc/network/interfaces" in line for line in router["why"])
     # The proxy's allow-list changed; nothing changed for a game that stays.
     assert by_name["egress-proxy"]["restarts"] == [{"what": "squid", "how": "restart"}]
@@ -168,6 +172,8 @@ def test_only_rules_changing_restarts_the_routers_services_not_the_router(ctx, m
     # The operator's list of guests changed, which restarts nothing there.
     assert by_name["operator"]["what"] == "again" and by_name["operator"]["restarts"] == []
     assert by_name["operator"]["restart_note"].startswith("Nothing in it restarts")
+    assert by_name["operator"]["effect"] == "Nothing restarts" and by_name["operator"]["interrupts"] is False
+    assert router["effect"] == "Nftables and 2 more may restart" and router["interrupts"] is True
     assert by_name["factorio"]["what"] == "alone"
 
 
@@ -196,6 +202,8 @@ def test_a_pools_image_is_baked_again_when_it_is_a_week_old_or_its_settings_chan
     pool, dispatcher = by_name["linux-runner"], by_name["runner-dispatcher"]
     assert pool["what"] == "again" and pool["why"] == ["Its image is over 7 days old, so the run bakes it again."]
     assert pool["restart_note"] == preview.BAKES and pool["last"]["took_s"] == image["took_s"]
+    assert pool["effect"] == preview.BAKES_SHORT and pool["interrupts"] is True
+    assert dispatcher["effect"] == "Nb-dispatcher may restart"
     assert dispatcher["what"] == "again" and dispatcher["restarts"] == [{"what": "nb-dispatcher", "how": "restart"}]
     assert dispatcher["why"] == ["It stops taking jobs while the image of linux-runner is baked again."]
     assert found["counts"]["again"] == 2

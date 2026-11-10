@@ -781,20 +781,26 @@ select:disabled { color: var(--text-3); background: var(--bg-sub); cursor: not-a
 .review-part > .ready { margin: 0; }
 .review-part > .disclosure, .review-part > .help, .review-part > .note { margin: 10px 0 0; }
 .review-part > .table-wrap { margin-top: 10px; }
-.review-summary { color: var(--text); }
-.table.review td { padding: 9px 12px; }
-.table.review .sub { max-width: 64ch; white-space: normal; }
-.table.review td:nth-child(2) { width: 1%; }
+.review-summary { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-wrap: wrap; gap: 2px 0; color: var(--text-2); font-size: 13px; }
+.review-summary > li:not(:last-child)::after { content: "·" / ""; margin: 0 8px; color: var(--text-3); }
+.table.review td { padding: 4px 12px; vertical-align: middle; }
+.table.review td:nth-child(2) { width: 1%; white-space: nowrap; }
+.table.review td:nth-child(4) { width: 1%; white-space: nowrap; }
 .table.review tr.review-delete > td:first-child { box-shadow: inset 3px 0 0 var(--bad-dot); }
-.table.review td { vertical-align: top; }
-.table.review .review-lines { margin-top: 3px; max-width: 68ch; white-space: normal; display: grid; gap: 2px; }
-.table.review td:nth-child(2) { white-space: nowrap; }
-.table.review td:nth-child(2) .sub { margin-left: 14px; }
+.table.review .review-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.table.review .review-name > .name { font-weight: 500; overflow-wrap: anywhere; }
+.table.review .review-name > .expand:disabled { visibility: hidden; }
+.table.review .review-effect { color: var(--text-2); white-space: normal; }
+.table.review tr.review-quiet .review-effect, .table.review tr.review-quiet .review-name > .name { color: var(--text-2); font-weight: 400; }
+.table.review .effect-narrow { display: none; margin: -4px 0 5px 32px; white-space: normal; }
+.table.review tr.detail > td { padding: 8px 16px 10px 46px; }
+.review-lines { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; max-width: 76ch; color: var(--text-2); font-size: 12.5px; white-space: normal; }
 .review-names { margin-top: 14px; }
 .review-names > h4 { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--text); }
 .review-names > ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 6px; }
 .review-names > ul > li { padding: 2px 8px; border: 1px solid var(--line); border-radius: 6px; font-size: 12.5px; color: var(--text-2); background: var(--bg-sub); }
-.review-names > .help { margin: 8px 0 0; }
+#review-foot { margin-top: 14px; }
+.review-how { margin: 0; padding-left: 18px; display: grid; gap: 4px; max-width: 76ch; color: var(--text-2); font-size: 12.5px; }
 #update-effect { margin-top: 18px; }
 #update-effect > .help { margin: 4px 0 0; }
 #update-effect > .table-wrap { margin-top: 8px; }
@@ -1110,6 +1116,7 @@ dialog::backdrop { background: var(--scrim); }
   .only-phone { display: inline-flex; }
   .only-phone-inline { display: inline; }
   .hide-phone { display: none; }
+  .table.review .effect-narrow { display: block; }
   .vh-phone { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .sidebar, .dock, .scrim { display: none !important; }
   .topbar { padding: 0 8px 0 12px; gap: 6px; }
@@ -1211,6 +1218,8 @@ dialog::backdrop { background: var(--scrim); }
 }
 @container main (max-width: 560px) {
   .table .hide-phone { display: none; }
+  .table.review .effect-narrow { display: block; }
+  .table.review tr.detail > td { padding: 8px 12px 10px 40px; }
 }
 
 /* A tab's content: even spacing, whatever it holds. */

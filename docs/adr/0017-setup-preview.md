@@ -75,13 +75,18 @@ counts for the whole role, and the row says "could not be followed". It
 never says "restarts", only "may restart": Ansible restarts a unit only
 when the file on the machine in fact differs.
 
-**The page.** Review and run shows a row per machine the run touches:
-create, delete, change, or set up again, with why (which settings, which
-files), what may restart, and how long its setup took the last time.
-Everything else is listed by name under "Left alone". The Updates page
-shows the same for a waiting update, from the files the two commits hold
-(`git archive`; nothing of the new version runs). The agent's `status`
-carries both, so it answers from the same source as the page.
+**The page.** Review and run shows one line per machine the run touches:
+what the run does (delete, create, change, set up again) and what happens
+to it in a few words (`effect`: "Minecraft may restart", "Nothing
+restarts"), what is interrupted first. Why, which programs, and how long
+its setup took the last time open under the line. Everything else is
+listed by name under "Left alone". The first version put all of that in
+every row as sentences; the owner called it "so long, ugly and pointlessly
+hard to read", and he was right: the question is "what gets interrupted",
+and the reasons are for whoever wants them. The Updates page shows the
+same for a waiting update, from the files the two commits hold (`git
+archive`; nothing of the new version runs). The agent's `status` carries
+both, so it answers from the same source as the page.
 
 ## What it does not know
 

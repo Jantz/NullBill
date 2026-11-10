@@ -590,7 +590,7 @@ def test_status_says_what_a_setup_run_would_do_to_each_machine(agent):
 
 
 def test_the_preview_reads_for_the_agent_as_it_does_on_the_page():
-    row = {"name": "minecraft", "what": "again", "why": ["What it is set up with changed: settings (difficulty)."]}
+    row = {"name": "minecraft", "what": "again", "why": ["Changed: settings (difficulty)."]}
     row |= {"restart_note": "Minecraft may restart.", "last": {"took_s": 41.0, "answered_s": 34.0, "at": 1}}
     rest = [{"name": "factorio", "what": "alone"}, {"name": "pbs", "what": "unknown"}, {"name": "jellyfin", "what": "create"}]
     found = {"known": True, "full": False, "machines": [row, *rest]}

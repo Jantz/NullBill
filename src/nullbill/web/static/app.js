@@ -2297,11 +2297,12 @@ function changeItem(c, tag, waiting) {
 // the owner starts it.
 // What a run does to a machine, as the table says it (nullbill/preview.py).
 const WHAT_WORDS = {create: ["good", "Create"], delete: ["bad", "Delete"], change: ["warn", "Change"], again: ["info", "Set up again"]};
-// A machine's row: why the run touches it, what that can restart and how
-// long its setup took the last time, each on a line of its own.
+// Behind a machine's row: why the run touches it, what that can restart
+// and how long its setup took the last time, each on a line of its own.
 function machineLines(m, shared) {
   const lines = m.why.map((text) => sentence(text));
-  if (m.restart_note) lines.push(m.restart_note);
+  // Only what the row's own few words do not say already.
+  if (m.restart_note && m.restart_note !== `${m.effect}.` && !m.restart_note.startsWith("Nothing in it restarts")) lines.push(m.restart_note);
   if (m.last) {
     const when = m.last.at ? ` the last time it ran, ${ago(m.last.at)}` : " the last time it ran";
     const answered = m.last.answered_s ? ` It answered again ${duration(Math.round(m.last.answered_s))} later.` : "";
@@ -2314,24 +2315,57 @@ function machineLines(m, shared) {
   if (m.what === "delete") shared.set(text, m.name);
   return lines;
 }
-function machineRow(m, guest, shared) {
-  const g = guest || {};
-  const restarts = m.restarts.some((x) => x.how !== "reload");
-  const [kind, word] = m.what === "again" ? [restarts ? "warn" : "info", "Set up again"] : WHAT_WORDS[m.what];
+// A machine is one line: its name, what the run does and what happens to it
+// in a few words. Why, and the rest, open under it. open: the names whose
+// rows the owner opened, kept while the page draws the table again.
+function machineRows(m, shared, open, prefix, guest) {
+  const [kind, word] = m.what === "again" ? [m.interrupts ? "warn" : "info", "Set up again"] : WHAT_WORDS[m.what];
   const lines = machineLines(m, shared);
-  return make("tr", {className: `review-${m.what}`},
-    make("td", {className: "name"}, make("span", {textContent: m.name}),
-      lines.length ? make("ul", {className: "plain review-lines"}, ...lines.map((text) => make("li", {textContent: text}))) : null),
-    make("td", {}, status(kind, word), m.what === "again" && restarts ? make("span", {className: "sub", textContent: "may restart"}) : null),
-    make("td", {className: "muted hide-phone", textContent: m.host ? "host" : [g.kind, g.zone].filter(Boolean).join(" · ")}),
-    make("td", {className: "num muted hide-phone", textContent: g.cores ? `${g.cores}${g.count ? ` × ${g.count}` : ""}` : ""}),
-    make("td", {className: "num muted hide-phone", textContent: g.memory_mib ? gib(g.memory_mib) : ""}));
+  if (guest && m.what === "create") {
+    const size = [guest.cores ? count(guest.cores, "core") : "", guest.memory_mib ? `${gib(guest.memory_mib)} of memory` : ""].filter(Boolean);
+    lines.push(sentence(`${guest.kind === "lxc" ? "A container" : "A virtual machine"} in the ${guest.zone} zone${size.length ? ` with ${andList(size)}` : ""}`));
+  }
+  const took = m.last && m.last.took_s !== null && m.last.took_s !== undefined ? duration(Math.round(m.last.took_s)) : "";
+  const id = `${prefix}-${m.name.replace(/[^A-Za-z0-9_-]/g, "-")}`;
+  const toggle = make("button", {type: "button", className: "icon-btn expand", title: "Why"}, icon("chevron-right"),
+    make("span", {className: "sr-only", textContent: `${m.name}: why`}));
+  toggle.setAttribute("aria-expanded", open.has(m.name) ? "true" : "false");
+  toggle.setAttribute("aria-controls", id);
+  toggle.disabled = lines.length === 0;
+  const quiet = m.what === "again" && !m.interrupts;
+  const row = make("tr", {className: `review-${m.what}${lines.length ? " link-row" : ""}${quiet ? " review-quiet" : ""}`},
+    make("td", {}, make("div", {className: "review-name"}, toggle, make("span", {className: "name", textContent: m.name})),
+      m.effect ? make("span", {className: "sub effect-narrow", textContent: m.effect}) : null),
+    make("td", {}, status(kind, word)),
+    make("td", {className: "hide-phone review-effect", textContent: m.effect || ""}),
+    make("td", {className: "num muted hide-narrow", textContent: took}));
+  const detail = make("tr", {className: "detail", id, hidden: !open.has(m.name)},
+    make("td", {colSpan: 4}, make("ul", {className: "review-lines"}, ...lines.map((text) => make("li", {textContent: text})))));
+  const flip = () => {
+    const on = toggle.getAttribute("aria-expanded") !== "true";
+    toggle.setAttribute("aria-expanded", on ? "true" : "false");
+    detail.hidden = !on;
+    if (on) open.add(m.name); else open.delete(m.name);
+  };
+  if (lines.length) {
+    toggle.addEventListener("click", (event) => { event.stopPropagation(); flip(); });
+    row.addEventListener("click", (event) => { if (!event.target.closest("a, button")) flip(); });
+  }
+  return [row, detail];
 }
+// What interrupts first, then what is only set up again.
+function byImpact(machines) {
+  const rank = (m) => ["delete", "create", "change"].indexOf(m.what) + 1 || (m.interrupts ? 4 : 5);
+  return machines.filter((m) => ["delete", "create", "change", "again"].includes(m.what)).sort((x, y) => rank(x) - rank(y));
+}
+const reviewOpen = new Set();
+const updateOpen = new Set();
 // The review's guests as rows, for a server whose machines could not be
 // foreseen: what OpenTofu creates, deletes and changes, and nothing more.
 function guestsAsMachines(guests) {
   return guests.map((g) => ({name: g.name, host: false, what: g.change === "keep" ? "unknown" : g.change, why: g.change === "change" ? [andList(g.detail)] : g.detail,
-    restarts: [], restart_note: "", last: null, on_demand: false}));
+    effect: g.change === "create" ? "New guest" : g.change === "keep" ? "" : (g.detail[0] || "").split(". ")[0].replace(/\.$/, ""),
+    interrupts: g.change === "delete", restarts: [], restart_note: "", last: null, on_demand: false}));
 }
 function renderReview() {
   const r = state.review;
@@ -2355,26 +2389,29 @@ function renderReview() {
   const by = (what) => machines.filter((m) => m.what === what);
   const [created, deleted, changed, again, alone, unknown] = ["create", "delete", "change", "again", "alone", "unknown"].map(by);
   const erased = (r.disks || []).filter((d) => d.erases);
+  const restart = again.filter((m) => m.interrupts);
   const parts = [];
-  if (created.length) parts.push(`creates ${count(created.length, "guest")}`);
-  if (deleted.length) parts.push(`deletes ${count(deleted.length, "guest")}`);
-  if (changed.length) parts.push(`changes ${count(changed.length, "guest")}`);
-  if (erased.length) parts.push(`erases ${count(erased.length, "disk")}`);
-  if (again.length) parts.push(`sets ${again.length === 1 ? again[0].name : count(again.length, "machine")} up again`);
-  if (alone.length) parts.push(`leaves ${count(alone.length, "machine")} alone`);
-  $("review-summary").textContent = parts.length ? sentence(`This run ${andList(parts)}`) : "";
+  if (deleted.length) parts.push(`${deleted.length} deleted`);
+  if (created.length) parts.push(`${created.length} created`);
+  if (changed.length) parts.push(`${changed.length} changed`);
+  if (erased.length) parts.push(`${count(erased.length, "disk")} erased`);
+  if (restart.length) parts.push(`${restart.length} may restart`);
+  if (again.length > restart.length) parts.push(`${again.length - restart.length} set up again, nothing restarts`);
+  if (alone.length) parts.push(`${alone.length} left alone`);
+  $("review-summary").replaceChildren(...parts.map((text) => make("li", {textContent: text})));
   show("review-unknown", r.known === false);
   // Before the first run that wrote down what each machine was set up with.
   show("review-unseen", built() && (!seen || !seen.known));
   show("review-full", Boolean(seen && seen.full));
-  const guestOf = new Map(guests.map((g) => [g.name, g]));
   const shared = new Map();
-  const rows = [...deleted, ...created, ...changed, ...again].map((m) => machineRow(m, guestOf.get(m.name), shared));
+  const guestOf = new Map(guests.map((g) => [g.name, g]));
+  const rows = byImpact(machines).flatMap((m) => machineRows(m, shared, reviewOpen, "review-why", guestOf.get(m.name)));
   for (const d of r.disks || []) {
     rows.push(make("tr", {className: d.erases ? "review-delete" : ""},
-      make("td", {className: "name"}, make("span", {textContent: `Disk ${d.id}`}), make("span", {className: "sub", textContent: d.text})),
+      make("td", {}, make("div", {className: "review-name"}, make("span", {className: "name", textContent: `Disk ${d.id}`})), make("span", {className: "sub effect-narrow", textContent: d.text})),
       make("td", {}, d.erases ? status("bad", "Erase") : status("", "Disk")),
-      make("td", {className: "muted hide-phone", textContent: d.size_gib ? `${d.size_gib} GiB` : ""}), make("td", {className: "hide-phone"}), make("td", {className: "hide-phone"})));
+      make("td", {className: "hide-phone review-effect", textContent: d.text}),
+      make("td", {className: "num muted hide-narrow", textContent: d.size_gib ? `${d.size_gib} GiB` : ""})));
   }
   show("review-table", rows.length > 0);
   $("review-rows").replaceChildren(...rows);
@@ -2459,19 +2496,11 @@ function renderUpdateEffect(e) {
   if (!e) return;
   const again = e.machines.filter((m) => m.what === "again");
   const alone = e.machines.filter((m) => m.what !== "again");
-  const first = "Updating restarts this page and nothing else.";
-  $("update-effect-text").textContent = again.length
-    ? `${first} The setup run after it sets ${again.length === 1 ? "one machine" : count(again.length, "machine")} up again:`
-    : `${first} By the files it changes, the setup run after it sets no machine up again.`;
+  const restart = again.filter((m) => m.interrupts).length;
+  $("update-effect-text").textContent = !again.length ? "Updating restarts only this page. By the files it changes, the setup run after it sets no machine up again."
+    : `Updating restarts only this page. The setup run after it sets ${count(again.length, "machine")} up again${restart ? `; ${restart === again.length ? (restart === 1 ? "it" : "all") : restart} may restart` : ", and nothing restarts"}.`;
   show("update-effect-table", again.length > 0);
-  $("update-effect-rows").replaceChildren(...again.map((m) => {
-    const restarts = m.restarts.some((x) => x.how !== "reload");
-    const lines = machineLines(m, new Map());
-    return make("tr", {},
-      make("td", {className: "name"}, make("span", {textContent: m.name}),
-        make("ul", {className: "plain review-lines"}, ...lines.map((text) => make("li", {textContent: text})))),
-      make("td", {}, status(restarts ? "warn" : "info", "Set up again"), restarts ? make("span", {className: "sub", textContent: "may restart"}) : null));
-  }));
+  $("update-effect-rows").replaceChildren(...byImpact(again).flatMap((m) => machineRows(m, new Map(), updateOpen, "update-why")));
   show("update-effect-alone", alone.length > 0);
   $("update-effect-alone-title").textContent = `Left alone (${alone.length})`;
   $("update-effect-alone-names").replaceChildren(...alone.map((m) => make("li", {textContent: m.name})));

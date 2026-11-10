@@ -620,6 +620,27 @@ def restart_note(found: Effects, runs: bool) -> str:
     )
 
 
+def in_short(what: str, why: list[str], found: Effects, shorts: list[str]) -> tuple[str, bool]:
+    """A machine's row in a few words, and whether the run interrupts
+    anything on it: the page's one line per machine, with why behind it."""
+    if what == "create":
+        return "New guest", False
+    if what in ("delete", "change"):
+        # The first reason, without its further sentences.
+        return (why[0].split(". ")[0].rstrip(".") if why else ""), what == "delete"
+    if what != "again":
+        return "", False
+    if shorts:
+        return "; ".join(shorts), True
+    if any(r.how == "reboot" for r in found.restarts):
+        return "The whole machine may restart", True
+    units = [r.what for r in found.restarts if r.how == "restart"]
+    if not units:
+        return "Nothing restarts", False
+    first = units[0][0].upper() + units[0][1:]
+    return (f"{first} may restart" if len(units) == 1 else f"{first} and {len(units) - 1} more may restart"), True
+
+
 @dataclass
 class Baseline:
     """What the next run is compared with."""
@@ -668,7 +689,7 @@ def _step(base: Baseline, now: Tree | None, v: Verdict) -> dict:
     if does == SOURCE:
         why.append(_source_why(files))
     if does in (SOURCE, INPUTS) and words:
-        why.append(f"What it is set up with changed: {_and(words)}.")
+        why.append(f"Changed: {_and(words)}.")
     if does == UNFINISHED:
         why.append("Its last setup did not finish, so it runs from the start.")
     if does == FIRST:
@@ -720,6 +741,7 @@ def _row(name: str | None, guest: dict | None, lines: list[dict], stuck: str | N
         why.append(IN_PLACE)
     effect = Effects(_unique(r for line in again for r in line["effect"].restarts), all(line["effect"].followed for line in again))
     notes = [line["note"] for line in again if line.get("note")]
+    effect_text, interrupts = in_short(what, why, effect, [line["short"] for line in again if line.get("short")])
     timed = [line["last"] for line in again if line["last"] and line["last"].get("took_s") is not None]
     last = None
     if timed:
@@ -732,6 +754,8 @@ def _row(name: str | None, guest: dict | None, lines: list[dict], stuck: str | N
         "name": name or HOST,
         "host": name is None,
         "what": what,
+        "effect": effect_text,
+        "interrupts": interrupts,
         "why": why,
         "restarts": [{"what": r.what, "how": r.how} for r in effect.restarts],
         "restart_note": " ".join(notes) or restart_note(effect, bool(again)),
@@ -743,6 +767,7 @@ def _row(name: str | None, guest: dict | None, lines: list[dict], stuck: str | N
 
 WHATS = ("create", "delete", "change", "again", "alone", UNKNOWN)
 DISPATCHER = "runner-dispatcher"
+BAKES_SHORT = "Its image is baked again; CI jobs wait"
 BAKES = "Jobs that run finish first and new ones wait in Forgejo until the image is baked."
 
 
@@ -766,7 +791,7 @@ def _images(ctx: apply.Context, base: Baseline, at: float) -> dict[str, dict]:
             days = ci.REBAKE_AFTER_S // 86400
             line |= {"does": "again", "why": [f"Its image is over {days} days old, so the run bakes it again."]}
         if line["does"] == "again":
-            line |= {"note": BAKES, "last": {"took_s": last.get("took_s"), "at": last.get("baked")}}
+            line |= {"note": BAKES, "short": BAKES_SHORT, "last": {"took_s": last.get("took_s"), "at": last.get("baked")}}
         lines[name] = line
     baked = [name for name, line in lines.items() if line["does"] == "again"]
     if baked:

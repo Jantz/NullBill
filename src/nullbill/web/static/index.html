@@ -487,18 +487,23 @@
 
         <section class="review-part" id="review-what" aria-labelledby="h-review-what" hidden>
           <h3 id="h-review-what">What it does to the server</h3>
-          <p id="review-summary" class="review-summary"></p>
+          <ul id="review-summary" class="review-summary" aria-label="In short"></ul>
           <p class="note" id="review-unknown" hidden><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><span>This server was built by an earlier NullBill that kept no record of its guests, so the page cannot tell new guests from old ones here. This run makes that record.</span></p>
           <div class="table-wrap" id="review-table" hidden><table class="table review">
-            <caption class="sr-only">What this setup run creates, deletes, changes and sets up again</caption>
-            <thead><tr><th scope="col">What</th><th scope="col">This run</th><th scope="col" class="hide-phone">Kind</th><th scope="col" class="num hide-phone">Cores</th><th scope="col" class="num hide-phone">Memory</th></tr></thead>
+            <caption class="sr-only">What this setup run creates, deletes, changes and sets up again. Open a row for why.</caption>
+            <thead><tr><th scope="col">Machine</th><th scope="col">This run</th><th scope="col" class="hide-phone">What happens</th><th scope="col" class="num hide-narrow">Took last time</th></tr></thead>
             <tbody id="review-rows"></tbody></table></div>
-          <div class="review-names" id="review-alone" hidden><h4 id="review-alone-title"></h4><ul id="review-alone-names" aria-labelledby="review-alone-title"></ul>
-            <p class="help">Nothing these were set up with has changed, so the run checks them and changes nothing in them.</p></div>
+          <div class="review-names" id="review-alone" hidden><h4 id="review-alone-title"></h4><ul id="review-alone-names" aria-labelledby="review-alone-title"></ul></div>
           <div class="review-names" id="review-notknown" hidden><h4 id="review-notknown-title"></h4><ul id="review-notknown-names" aria-labelledby="review-notknown-title"></ul></div>
-          <p class="note" id="review-unseen" hidden><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><span>No setup run has written down yet what each machine was set up with, so the page cannot say which ones this run leaves alone. This run writes it down. From the next one on, this list says it before you start.</span></p>
-          <p class="note" id="review-full" hidden><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><span>The last run's checks failed, so this run goes through every step on every machine again instead of skipping what is unchanged.</span></p>
-          <p class="help" id="review-foot" hidden>Worked out on this page from what the last runs wrote down; the server is asked nothing and nothing on it changes until you start. "May restart" means the run restarts it only if its settings on the machine in fact differ. Not foreseen: a certificate that ran out while the server was off, a restart for a changed device or disk, and anything changed by hand inside a guest.</p>
+          <p class="note" id="review-unseen" hidden><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><span>The page cannot say yet which machines this run leaves alone. This run writes that down, and from the next one on the list is here before you start.</span></p>
+          <p class="note" id="review-full" hidden><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><span>The last run's checks failed, so this run goes through every step on every machine again.</span></p>
+          <details class="disclosure small" id="review-foot" hidden><summary>How the page knows this</summary>
+            <ul class="review-how">
+              <li>It compares your saved choices with what the last runs wrote down. The server is asked nothing, and nothing on it changes until you start.</li>
+              <li>"May restart": the run restarts a program only if its settings on the machine in fact differ.</li>
+              <li>"Left alone": nothing these were set up with has changed, so the run changes nothing in them.</li>
+              <li>Not foreseen: a certificate that ran out while the server was off, a restart for a changed device or disk, and anything changed by hand inside a guest.</li>
+            </ul></details>
           <p class="help" id="review-sections" hidden></p>
           <details class="disclosure small" id="review-diff" hidden><summary>Every changed line of the plan</summary><div id="review-diff-slot"></div></details>
         </section>
@@ -545,11 +550,11 @@
               <h3 class="mini-head">What it does to the server</h3>
               <p class="help" id="update-effect-text"></p>
               <div class="table-wrap" id="update-effect-table" hidden><table class="table review">
-                <caption class="sr-only">What the setup run after this update sets up again</caption>
-                <thead><tr><th scope="col">What</th><th scope="col">The setup run after</th></tr></thead>
+                <caption class="sr-only">What the setup run after this update sets up again. Open a row for why.</caption>
+                <thead><tr><th scope="col">Machine</th><th scope="col">Setup run</th><th scope="col" class="hide-phone">What happens</th><th scope="col" class="num hide-narrow">Took last time</th></tr></thead>
                 <tbody id="update-effect-rows"></tbody></table></div>
               <div class="review-names" id="update-effect-alone" hidden><h4 id="update-effect-alone-title"></h4><ul id="update-effect-alone-names" aria-labelledby="update-effect-alone-title"></ul></div>
-              <p class="note" id="update-effect-code" hidden><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><span>This update also changes how NullBill works out what each machine is set up with, which can add to this list. After updating, Setup, Review and run says exactly what the run does, before you start it.</span></p>
+              <p class="note" id="update-effect-code" hidden><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><span>This update also changes how NullBill plans, which can add to this list. After updating, Setup, Review and run says exactly, before you start.</span></p>
             </div>
           </div>
         </div>
