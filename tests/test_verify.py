@@ -7,11 +7,13 @@ import threading
 import time
 
 import pytest
-from conftest import backup_host, fixture_config
+from conftest import backup_host, direct_answers, fixture_config, portmap_state
 
-from nullbill import verify
+from nullbill import direct, verify
 from nullbill.model import build_model
 from nullbill.plan import build_plan
+from nullbill.render import strip_notes
+from nullbill.results import Result
 from nullbill.verify import _connect_via, _lan, _tcp, batch, probes, run_verify, tcp_connect, unbatch
 
 PUBLIC = "192.0.2.80"  # RFC 5737 stand-in for the resolved public name
@@ -334,3 +336,25 @@ def test_the_policy_in_tailscale_is_compared_with_the_plans(facts):
     assert policy(down) == [("SKIP", "Tailscale did not answer")]
     # verify without the page's secrets does not ask at all.
     assert not [r for r in run_verify(plan, model, None, None) if r.name == verify.POLICY]
+
+
+def test_direct_connections_are_checked_and_the_page_hears_the_outcome(facts, tmp_path):
+    plan, model = setup(facts, "small")
+    run = firewall(plan, model)
+    results = run_verify(plan, model, "root@pve.internal", run, lambda h, p: "timeout", lambda n: PUBLIC, home=tmp_path)
+    assert Result("PASS", direct.LABEL) in results
+    assert direct.recorded(tmp_path)["kind"] == direct.DIRECT
+
+    # A home router that does not open the port: relays still carry everything.
+    closed = direct_answers(strip_notes(plan), portmap_state(method=None, external=None, why={"UPnP": "no answer"}))
+
+    def unanswered(target, command):
+        return (0, closed[command], "") if command in closed else run(target, command)
+
+    results = run_verify(plan, model, "root@pve.internal", unanswered, lambda h, p: "timeout", lambda n: PUBLIC)
+    by = statuses(results)
+    assert by["FAIL"] == [] and direct.LABEL in [r.name for r in by["DEGRADED"]]
+    # Without a home nothing is written.
+    assert direct.recorded(tmp_path)["kind"] == direct.DIRECT
+    skipped = run_verify(plan, model, None, run)
+    assert Result("SKIP", direct.LABEL, "no target.ssh in config.yaml") in skipped

@@ -7,10 +7,10 @@ import time
 from pathlib import Path
 
 import pytest
-from conftest import FakeTailnet, fixture_config
+from conftest import HOME_PUBLIC, ROUTER_CLOCK, FakeTailnet, fixture_config, guest_exec, portmap_state, tailscale_status
 from fixturedata import games_config
 
-from nullbill import applied, apply, backups, browserca, ci, flows, games, hostroot, lan, llm, names, owner, power
+from nullbill import applied, apply, backups, browserca, ci, direct, flows, games, hostroot, lan, llm, names, owner, power
 from nullbill.apply import ApplyError, Context, connection, run_apply
 from nullbill.artifacts import render_all
 from nullbill.errors import NullBillError
@@ -60,6 +60,11 @@ class FakeReach:
         self.nets = {0: "name=eth0,bridge=vmbr0,hwaddr=02:4E:42:00:00:99,ip=dhcp,type=veth"}
         self.nullbill = []
         self.tailnet = "NeedsLogin"
+        # What nb-portmap on the router last heard from the home router, and
+        # the addresses Tailscale offers for the vpn guest, one list per
+        # reading (the last one stays).
+        self.portmap = portmap_state()
+        self.offered = [None]
         self.backup_disk = None
         self.pbs_fingerprint = "aa:bb:cc"
         self.backed_up = set()
@@ -146,6 +151,10 @@ class FakeReach:
             return 0, "6.12.40-1-pve\n", ""
         if command == apply.CLUSTER_VMS:
             return 0, json.dumps(self.vms), ""
+        if direct.ROUTER_STATE in command:
+            if self.portmap is None:
+                return 0, guest_exec("", 1, f"cat: {direct.ROUTER_STATE}: No such file or directory\n"), ""
+            return 0, guest_exec(f"{json.dumps(self.portmap)}\n{ROUTER_CLOCK}\n"), ""
         if "qm guest exec " in command:
             vmid = int(command.split("qm guest exec ")[1].split()[0])
             key = self.agent_keys.get(vmid)
@@ -486,7 +495,8 @@ class FakeReach:
                     server["admins"].append(argv[2].split()[-1].lower())
             return 0, "", ""
         if argv == ["tailscale", "status", "--json"]:
-            return 0, json.dumps({"BackendState": self.tailnet, "Self": {"DNSName": "nullbill.example-tailnet.ts.net."}}), ""
+            addrs = self.offered.pop(0) if len(self.offered) > 1 else self.offered[0]
+            return 0, tailscale_status(addrs, self.tailnet), ""
         return 127, "", f"fake guest {vmid}: unexpected {argv}"
 
     def local(self, argv, cwd, env, capture=False):
@@ -1452,20 +1462,59 @@ def test_vpn_stage_waits_for_the_policy_then_a_key_then_logs_in_once_and_forgets
     assert variables["vpn_routes"] == [z["subnet"] for n, z in c.bare["zones"].items() if n != "access"] + ["10.42.6.1/32"]
     assert c.log[-1].startswith("vpn: waiting for a Tailscale auth key")
 
+    def last_vars():
+        return [call[3] for call in c.reach.calls if call[:2] == ("playbook", "vpn.yml")][-1]
+
     c.secrets.set("tailscale_auth_key", "tskey-auth-example")
     apply.stage_vpn(c)
-    assert c.reach.calls[-2][3]["vpn_auth_key"] == "tskey-auth-example"
-    assert c.log[-2].startswith("vpn: on the tailnet as nullbill.example-tailnet.ts.net, advertising 10.42.1.0/24")
-    assert c.log[-1] == f"vpn: from your devices on the tailnet the page is https://{c.bare['guests']['nullbill']['ip']}:8443"
+    assert last_vars()["vpn_auth_key"] == "tskey-auth-example"
+    assert c.log[-3].startswith("vpn: on the tailnet as nullbill.example-tailnet.ts.net, advertising 10.42.1.0/24")
+    assert c.log[-2] == f"vpn: from your devices on the tailnet the page is https://{c.bare['guests']['nullbill']['ip']}:8443"
     assert "tailscale_auth_key" not in c.secrets.data
     names.record(c.home, "nullbill.internal", "10.42.6.1")
     c.secrets.set("tailscale_auth_key", "tskey-auth-example")
     apply.stage_vpn(c)
-    assert c.log[-1] == "vpn: from your devices on the tailnet the page is https://nullbill.nullbill.internal:8443"
+    assert c.log[-2] == "vpn: from your devices on the tailnet the page is https://nullbill.nullbill.internal:8443"
 
     apply.stage_vpn(c)
-    assert c.reach.calls[-2][3]["vpn_auth_key"] == ""
-    assert c.log[-2].startswith("vpn: on the tailnet")
+    assert last_vars()["vpn_auth_key"] == ""
+    assert c.log[-3].startswith("vpn: on the tailnet")
+
+
+def test_vpn_stage_runs_tailscale_on_the_port_the_firewalls_name_and_says_how_devices_reach_it(ctx, tailnet, monkeypatch):
+    pauses = []
+    monkeypatch.setattr(apply, "sleep", pauses.append)
+    c = with_client(ctx("small"))
+    c.reach.tailnet = "Running"
+    apply.stage_vpn(c)
+    assert playbook_vars(c, "vpn.yml")["vpn_port"] == flows.TAILSCALE_PORT == 41642
+    # The home router opened the port and Tailscale offers it: nothing to wait for.
+    assert c.log[-1] == "vpn: devices on any network reach the server directly: the home router sends UDP 41642 here (UPnP)"
+    assert pauses == [] and direct.recorded(c.home)["kind"] == direct.DIRECT
+    # The public address stays out of the run's log and the record.
+    assert HOME_PUBLIC not in "".join(c.log) + (c.home / direct.STATE).read_text()
+
+    # tailscaled, restarted on the new port, learns where it is seen a little later.
+    # (The stage's own look at the login state comes first.)
+    c.reach.offered = [None, [], [], None]
+    apply.stage_vpn(c)
+    assert pauses == [5, 10] and c.log[-1].startswith("vpn: devices on any network reach the server directly")
+
+    # A home router that does not answer: setup goes on, and says what to do.
+    pauses.clear()
+    c.reach.portmap = portmap_state(method=None, external=None, why={"NAT-PMP": "no answer", "UPnP": "no answer"})
+    apply.stage_vpn(c)
+    assert pauses == [] and "turn on UPnP or NAT-PMP; or forward UDP 41642 to 192.168.1.57 there yourself" in c.log[-1]
+    assert direct.recorded(c.home)["kind"] == direct.CLOSED
+
+    # It never learns: four looks, then the line says so.
+    c.reach.portmap, c.reach.offered = portmap_state(), [[]]
+    apply.stage_vpn(c)
+    assert pauses == [5, 10, 15] and direct.recorded(c.home)["kind"] == direct.UNSEEN
+
+    c.reach.portmap = None
+    apply.stage_vpn(c)
+    assert c.log[-1].startswith("vpn: nothing to read on the router: cat: /var/lib/nullbill-portmap/state.json")
 
 
 def test_vpn_routes_cover_only_zones_people_reach(ctx):
@@ -1569,7 +1618,8 @@ def test_verify_reports_an_open_lan_as_degraded_not_failed(ctx, monkeypatch):
     assert seen.pop("say") and seen.pop("browser_root") == c.home / "browser-ca" / "ca.crt"
     # The policy check asks Tailscale with the owner's client, once there is one.
     assert seen.pop("tailnet")() is None
-    assert seen == {"lan_state": "open", "lan_host": "pve.internal"}
+    # home: where the check of direct connections leaves its finding for the page.
+    assert seen == {"lan_state": "open", "lan_host": "pve.internal", "home": c.home}
 
 
 def test_a_failed_playbook_stops_apply_before_later_stages(ctx):

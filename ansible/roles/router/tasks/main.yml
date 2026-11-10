@@ -5,10 +5,21 @@
       - "'/etc/nftables.conf' in router_files"
     fail_msg: router_files is empty; run this through nullbill apply
 
+# miniupnpc and natpmpc: the UPnP and NAT-PMP clients nb-portmap asks the
+# home router with.
 - name: Router packages
   ansible.builtin.apt:
-    name: [nftables, dnsmasq-base, ifupdown]
+    name: [nftables, dnsmasq-base, ifupdown, miniupnpc, natpmpc]
     update_cache: true
+
+# Asks the home router to send Tailscale's port here, so devices behind a
+# mobile carrier's NAT reach the vpn guest directly (nullbill/direct.py).
+# The rendered nullbill-portmap.timer runs it.
+- name: nb-portmap
+  ansible.builtin.copy:
+    src: nb-portmap
+    dest: /usr/local/sbin/nb-portmap
+    mode: "0755"
 
 # cloud-init configured the first boot's network; from now on the rendered
 # interfaces file does, with names the .link files give each leg.
@@ -98,3 +109,18 @@
         name: "{{ item }}"
         state: started
       loop: [nftables, nullbill-dnsmasq@internal, nullbill-dnsmasq@external]
+
+    - name: Port mapping
+      when: "'/etc/systemd/system/nullbill-portmap.timer' in router_files"
+      block:
+        - name: Ask the home router for Tailscale's port every quarter of an hour
+          ansible.builtin.systemd_service:
+            name: nullbill-portmap.timer
+            enabled: true
+            state: started
+
+        # Now, not at the timer's next turn: apply's vpn stage and verify read
+        # what the home router answered. nb-portmap exits 0 whatever that is.
+        - name: Ask the home router now
+          ansible.builtin.command: systemctl start nullbill-portmap.service
+          changed_when: false

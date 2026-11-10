@@ -24,7 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from nullbill import agent, backups, browserca, ci, forge, games, hostroot, lan, legacy, llm, media, names, power
+from nullbill import agent, backups, browserca, ci, direct, forge, games, hostroot, lan, legacy, llm, media, names, power
 from nullbill.errors import NullBillError
 from nullbill.flows import HOST, HOST_PORTS, resolve_flows
 from nullbill.probe import Runner
@@ -290,6 +290,7 @@ def run_verify(
     say: Callable[[Result], None] | None = None,
     browser_root: Path | None = None,
     tailnet: Callable[[], Tailnet | None] | None = None,
+    home: Path | None = None,
 ) -> list[Result]:
     """Every check's result, in a fixed order; `say` hears each one as soon as
     it and those before it are in, so a long run shows its progress."""
@@ -323,6 +324,7 @@ def run_verify(
             *games.skipped(plan, model, reason),
             *names.skipped(plan, reason),
             *power.skipped(plan, reason),
+            *direct.skipped(plan, reason),
             *(browserca.skipped(plan, reason) if browser_root is not None else []),
             *(_policy(plan, model, tailnet) if tailnet is not None else []),
         )
@@ -389,6 +391,7 @@ def run_verify(
     add(*games.check(plan, model, target, awake))
     add(*names.check(plan, target, run))
     add(*power.check(plan, target, run, found))
+    add(*direct.check(plan, model, target, run, home))
     if browser_root is not None:
         add(*browserca.check(plan, browser_root, target, run, lan_closed=lan_state == lan.CLOSED))
     if tailnet is not None:

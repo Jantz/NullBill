@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""A home router's NAT-PMP side (RFC 6886) for tools/guest-check/portmap.sh.
+
+It answers on UDP 5351 the way home routers do and forwards the ports it
+grants with nft in its own network namespace.
+
+    home-router LAN_ADDRESS PUBLIC_ADDRESS
+
+UPnP has no such stand-in. Debian's upnpc takes a router for connected only
+when the address it reports is a public one, which the check's
+documentation addresses are not; so does miniupnpd, the daemon many home
+routers run. portmap.sh runs that pair for the answer they give on such an
+address, and tests/test_portmap.py reads what upnpc prints once a mapping
+is made.
+"""
+
+import socket
+import struct
+import subprocess
+import sys
+import time
+
+
+class Mappings:
+    """The ports this router forwards: (protocol, public port) -> (address, port)."""
+
+    def __init__(self):
+        self.held: dict[tuple[str, int], tuple[str, int]] = {}
+        self.load()
+
+    def load(self) -> None:
+        held = self.held.items()
+        rules = "".join(f'        iifname "wan" {proto} dport {port} dnat to {to}:{inner}\n' for (proto, port), (to, inner) in held)
+        chain = f"    chain prerouting {{\n        type nat hook prerouting priority dstnat; policy accept;\n{rules}    }}\n"
+        table = f"table ip portmap\ndelete table ip portmap\ntable ip portmap {{\n{chain}}}\n"
+        subprocess.run(["nft", "-f", "-"], input=table, text=True, check=True)
+
+    def add(self, proto: str, port: int, to: str, inner: int) -> bool:
+        """False when another device holds the port."""
+        if self.held.get((proto, port), (to, inner))[0] != to:
+            return False
+        self.held[proto, port] = (to, inner)
+        self.load()
+        return True
+
+    def drop(self, proto: str, to: str, inner: int) -> None:
+        self.held = {k: v for k, v in self.held.items() if (k[0], *v) != (proto, to, inner)}
+        self.load()
+
+
+def main() -> int:
+    if len(sys.argv) != 3:
+        print(__doc__, file=sys.stderr)
+        return 2
+    lan, public = sys.argv[1], sys.argv[2]
+    mappings = Mappings()
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    # natpmpc takes answers from its gateway's address only.
+    sock.bind((lan, 5351))
+    started = time.time()
+    print(f"home router: NAT-PMP on {lan}", flush=True)
+    while True:
+        data, client = sock.recvfrom(64)
+        epoch = int(time.time() - started)
+        if len(data) == 2 and data[1] == 0:
+            sock.sendto(struct.pack("!BBHI4s", 0, 128, 0, epoch, socket.inet_aton(public)), client)
+        elif len(data) == 12 and data[1] in (1, 2):
+            proto = "udp" if data[1] == 1 else "tcp"
+            inner, wanted, lifetime = struct.unpack("!HHI", data[4:])
+            port = 0
+            if lifetime == 0:
+                mappings.drop(proto, client[0], inner)
+            else:
+                # A port another device holds: the next free one, as miniupnpd answers.
+                port = next(p for p in range(wanted or inner, 65536) if mappings.add(proto, p, client[0], inner))
+            sock.sendto(struct.pack("!BBHIHHI", 0, 128 + data[1], 0, epoch, inner, port, lifetime), client)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

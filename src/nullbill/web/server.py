@@ -38,7 +38,7 @@ from pathlib import Path
 
 import yaml
 
-from nullbill import browserca, hostroot, lan, legacy, llm, names, owner, people, power, tailscale
+from nullbill import browserca, direct, hostroot, lan, legacy, llm, names, owner, people, power, tailscale
 from nullbill.apply import DISKS_FILE, GUESTS, NTFY, REMOVALS, SPKI, STAGES
 from nullbill.cli import plan_text, reach_target
 from nullbill.errors import NullBillError
@@ -754,6 +754,28 @@ class App:
         build_model(config)
         _write_private(self.home / "config.yaml", yaml.safe_dump(config, sort_keys=False))
         return keys
+
+    def port_mapping(self) -> bool:
+        """Whether the router asks the home router for Tailscale's port (direct.py)."""
+        return (self.config() or {}).get("tailnet", {}).get("port_mapping", True) is not False
+
+    def save_port_mapping(self, body: dict) -> bool:
+        """Off for an owner who forwards the port by hand, or wants none open;
+        the next setup run tells the router."""
+        asked = body.get("enabled") is True
+        config = self.config()
+        if config is None:
+            raise NullBillError("save your choices under Setup, What to run, first")
+        tailnet = config.setdefault("tailnet", {})
+        if asked:
+            tailnet.pop("port_mapping", None)  # the catalog's default
+        else:
+            tailnet["port_mapping"] = False
+        if not tailnet:
+            del config["tailnet"]
+        build_model(config)
+        _write_private(self.home / "config.yaml", yaml.safe_dump(config, sort_keys=False))
+        return asked
 
     def password(self, name: str) -> str:
         if name not in PASSWORDS:
@@ -1648,6 +1670,8 @@ class App:
             "agent_credential": self.agent_credential(),
             "tailscale_key": self.tailscale_key(),
             "tailscale_client": self.tailscale_client(),
+            "direct": direct.recorded(self.home),
+            "port_mapping": self.port_mapping(),
             "remote_agents": sorted(self.remote_agents()),
             "trust": self.trust(),
             "agent_powers": self.agent_powers(),
@@ -1950,6 +1974,8 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                     return self.json(200, {"ok": True, "tailscale_key": app.tailscale_key()})
                 if self.path == "/api/ssh-keys":
                     return self.json(200, {"ok": True, "ssh_keys": app.save_ssh_keys(body)})
+                if self.path == "/api/port-mapping":
+                    return self.json(200, {"ok": True, "port_mapping": app.save_port_mapping(body)})
                 if self.path == "/api/password-reveal":
                     return self.json(200, {"password": app.password(str(body.get("name", "")))})
                 if self.path == "/api/alerts/test":

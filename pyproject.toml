@@ -26,7 +26,7 @@ pythonpath = ["src"]
 [tool.ruff]
 line-length = 140
 target-version = "py311"
-# The Python scripts roles install, which have no .py suffix.
+# The Python scripts roles install and checks run, which have no .py suffix.
 extend-include = [
   "ansible/roles/game_factorio/files/nb-factorio-mods",
   "ansible/roles/game_minecraft/files/nb-properties",
@@ -38,10 +38,12 @@ extend-include = [
   "ansible/roles/log_shipper/files/nb-log-shipper",
   "ansible/roles/operator/files/nb-log-tool-use",
   "ansible/roles/pbs/files/pbs-configure",
+  "ansible/roles/router/files/nb-portmap",
   "ansible/roles/runner_dispatcher/files/nb-dispatcher",
   "ansible/roles/step_ca/files/agent-provisioner",
   "tools/game-pins",
   "ansible/roles/updates/files/nb-busy",
+  "tools/guest-check/home-router",
 ]
 
 [tool.ruff.lint]

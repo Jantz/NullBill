@@ -11,11 +11,23 @@ HOST = "pve-host"
 # The PVE web UI/API and SSH: verify checks the LAN is refused both.
 HOST_PORTS = (8006, 22)
 HOST_SET = "nb-host"
-# tailscaled's UDP port on the vpn guest (ansible/roles/vpn sets it). From
-# this port alone the vpn guest may reach private addresses past the router:
-# a device on the home network then talks to it directly instead of through
-# Tailscale's relays (DERP), which are slow for video.
-TAILSCALE_PORT = 41641
+# tailscaled's UDP port on the vpn guest (ansible/roles/vpn sets it). Not
+# Tailscale's default 41641: a PC at home running Tailscale holds that port on
+# the home router, which then gives the vpn guest another one for every
+# destination, and devices are told a port that does not answer. Two paths
+# need the port by number:
+# - out: from this port alone the vpn guest may reach private addresses past
+#   the router, so a device on the home network talks to it directly instead
+#   of through Tailscale's relays (DERP), which are slow for video;
+# - in: the router passes what arrives for this port on its uplink to the vpn
+#   guest, which accepts it. A device behind a mobile carrier's NAT cannot be
+#   answered at the port Tailscale's servers saw it use; it has to reach the
+#   server first, on a port the home router forwards (nullbill/direct.py).
+TAILSCALE_PORT = 41642
+# Where nb-portmap on the router hears home routers answer its UPnP search:
+# the answer is a new packet from the home router, not a reply to the
+# multicast search, so the router's input chain names the port.
+SSDP_REPLY_PORT = 1901
 # In a port's `from`: the people whose own `services` list names the port's
 # service. Like a role, they arrive through the vpn guest, so the firewall
 # opens the port to it and the tailnet policy decides who gets through.

@@ -28,10 +28,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from nullbill import applied, backups, browserca, ci, games, hostroot, lan, legacy, llm, media, names, owner, power, tailscale
+from nullbill import applied, backups, browserca, ci, direct, games, hostroot, lan, legacy, llm, media, names, owner, power, tailscale
 from nullbill.artifacts import write_build
 from nullbill.errors import NullBillError
-from nullbill.flows import mac
+from nullbill.flows import TAILSCALE_PORT, mac
 from nullbill.home import REPO_ROOT
 from nullbill.model import NODE_EXPORTER, node_exporter_guest
 from nullbill.probe import NTFS_CHECK, Runner, ntfs_state
@@ -2328,6 +2328,23 @@ def stage_tailnet(ctx: Context) -> None:
     split_dns(ctx, "tailnet", tailnet_api(ctx))
 
 
+def direct_path(ctx: Context) -> None:
+    """Say, and keep for the page, whether a device on mobile data reaches the
+    vpn guest directly or through Tailscale's relays (direct.py). tailscaled,
+    just restarted on another port, takes some seconds to learn the address
+    its packets have past the home router."""
+    found = None
+    for pause in (0, 5, 10, 15):
+        if pause:
+            sleep(pause)
+        found = direct.find(ctx.plan, ctx.model, ctx.target, lambda _target, command: ctx.reach.host(command))
+        if found is None or found.kind != direct.UNSEEN:
+            break
+    direct.record(ctx.home, found)
+    if found:
+        ctx.say(f"vpn: {direct.line(found)}")
+
+
 def stage_vpn(ctx: Context) -> None:
     """Tailscale on the vpn guest as the tagged subnet router. It logs in once
     with the owner's one-time auth key; until then it waits, logged out. It
@@ -2342,6 +2359,7 @@ def stage_vpn(ctx: Context) -> None:
         "vpn_routes": routes(ctx.plan, ctx.model),
         "vpn_tag": TAG,
         "vpn_auth_key": ctx.secrets.data.get("tailscale_auth_key", ""),
+        "vpn_port": TAILSCALE_PORT,
     }
     run_playbook(ctx, "vpn", "vpn.yml", "vpn", variables)
     status = json.loads(guest_out(ctx, "vpn", "vpn", ["tailscale", "status", "--json"]))
@@ -2352,6 +2370,7 @@ def stage_vpn(ctx: Context) -> None:
         ctx.say(f"vpn: from your devices on the tailnet the page is {page}")
         # A one-time key is spent once it has logged in.
         ctx.secrets.drop("tailscale_auth_key")
+        direct_path(ctx)
     elif variables["vpn_auth_key"]:
         state = status.get("BackendState")
         raise ApplyError("vpn", f"Tailscale did not log in ({state}); make a new one-time auth key and paste it on the page")
@@ -2371,6 +2390,7 @@ def stage_verify(ctx: Context) -> None:
         say=lambda r: ctx.say(r.line()),
         browser_root=ctx.home / browserca.DIR / "ca.crt",
         tailnet=lambda: tailnet_api(ctx),
+        home=ctx.home,
     )
     failed = [r for r in results if r.status == "FAIL"]
     flag = ctx.home / FULL_NEXT

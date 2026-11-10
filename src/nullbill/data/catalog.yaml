@@ -645,6 +645,12 @@ updates:
 # (2026-11-04). plan fails when people and roles would exceed them.
 tailnet:
   free_limits: {users: 6, groups: 3, tagged_devices: 50}
+  # The router asks the home router (NAT-PMP, then UPnP) to send Tailscale's
+  # UDP port to it, so devices behind a mobile carrier's NAT reach the vpn
+  # guest directly and not through Tailscale's relays. false: it never asks;
+  # forward the port on the home router by hand (docs/runbooks/vpn.md), or
+  # those devices stay on the relays.
+  port_mapping: true
 
 # People are listed in config.yaml with their Tailscale login; the catalog
 # ships none. The page's Access, People tab adds and removes everyone but

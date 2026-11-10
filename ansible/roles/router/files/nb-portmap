@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""Ask the home router to send Tailscale's UDP port to this router.
+
+A device behind a mobile carrier's NAT reaches the vpn guest directly only
+on a port the home router forwards (nullbill/direct.py); this router passes
+that port on to the vpn guest (its nftables.conf). Home routers open a port
+on request: NAT-PMP first, one question to the gateway, then UPnP, both with
+Debian's own clients (natpmpc, upnpc).
+
+    nb-portmap /etc/nullbill/portmap.json
+
+nullbill-portmap.timer runs it every quarter of an hour: one request with a
+lease of LEASE_S seconds, so a mapping outlives three missed runs and one
+this router no longer asks for ends by itself. With "enabled": false it
+gives back what it may still hold and asks for nothing. What the home
+router said goes to $STATE_DIRECTORY/state.json, for verify and the page,
+and one line to the journal; "held" there names every way a mapping was
+made and not given back since, which a restart of this router must not
+forget: some home routers keep a UPnP mapping until told otherwise. It
+exits 0 whatever the answer: a home router without UPnP is not a failed
+unit.
+"""
+
+import ipaddress
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+LEASE_S = 3600
+# natpmpc doubles its wait from 250 ms: four tries fit, and a gateway that
+# will answer has by then.
+NATPMP_WAIT_S = 6
+UPNP_WAIT_S = 30
+NATPMP, UPNP = "NAT-PMP", "UPnP"
+
+PMP_ADDRESS = re.compile(r"^Public IP address : (\S+)$", re.M)
+# natpmpc spells it "liftime".
+PMP_MAPPED = re.compile(r"^Mapped public port (\d+) protocol UDP to local port (\d+) lif\w*time (\d+)$", re.M)
+PMP_FAILED = re.compile(r"^readnatpmpresponseorretry\(\) failed : (.+)$", re.M)
+# upnpc prints this line from what the router reads back, not from its own request.
+UPNP_MAPPED = re.compile(r"^external (\S*):(\d+) UDP is redirected to internal (\S+):(\d+)", re.M)
+UPNP_FAILED = re.compile(r"AddPortMapping\(.*\) failed with code (-?\d+) \((.*)\)")
+NO_PUBLIC_ADDRESS = "it has no public address of its own"
+# Nothing to set against what Tailscale offers: such a mapping is given back.
+UNNAMED = "it mapped the port without saying its public address"
+REFUSED = "it does not let this device open ports"
+# natpmpc's words (libnatpmp's strnatpmperr).
+PMP_REASONS = {
+    "the gateway does not support nat-pmp": "not offered",
+    "network failure": NO_PUBLIC_ADDRESS,
+    "not authorized": REFUSED,
+}
+TAKEN = "it already sends that port to another device"
+UPNP_CODES = {"606": REFUSED, "718": TAKEN}
+
+
+def run(argv: list[str], wait: int) -> str:
+    """What a tool printed; "" when it is missing or did not finish."""
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True, timeout=wait, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return done.stdout + done.stderr
+
+
+def uplink(name: str) -> tuple[str | None, str | None]:
+    """This router's address on the home network and the home router's."""
+    try:
+        routes = json.loads(run(["ip", "-j", "-4", "route", "show", "default", "dev", name], 5) or "[]")
+        links = json.loads(run(["ip", "-j", "-4", "addr", "show", "dev", name], 5) or "[]")
+    except ValueError:
+        return None, None
+    gateway = next((r["gateway"] for r in routes if "gateway" in r), None)
+    address = next((a["local"] for link in links for a in link.get("addr_info", []) if "local" in a), None)
+    return address, gateway
+
+
+def ipv4(text: str) -> str | None:
+    """An IPv4 address as the home router wrote it, or None for anything else."""
+    try:
+        return str(ipaddress.IPv4Address(text))
+    except ValueError:
+        return None
+
+
+def natpmp(gateway: str, port: int, lease: int) -> tuple[str | None, str]:
+    """(external address:port, "") once the gateway maps the port, else (None, why not)."""
+    ask = ["natpmpc", "-g", gateway, "-a"]
+    out = run([*ask, str(port), str(port), "udp", str(lease)], NATPMP_WAIT_S)
+    address, mapped = PMP_ADDRESS.search(out), PMP_MAPPED.search(out)
+    if mapped and int(mapped[2]) == port and int(mapped[3]) > 0:
+        if int(mapped[1]) != port:
+            # The port is another device's; Tailscale would not know this one.
+            run([*ask, "0", str(port), "udp", "0"], NATPMP_WAIT_S)
+            return None, f"it offered port {mapped[1]}: {port} goes to another device"
+        if address and ipv4(address[1]):
+            return f"{ipv4(address[1])}:{port}", ""
+        run([*ask, str(port), str(port), "udp", "0"], NATPMP_WAIT_S)
+        return None, UNNAMED
+    failed = PMP_FAILED.search(out)
+    return None, PMP_REASONS.get(failed[1], f"it answered: {failed[1][:60]}") if failed else "no answer"
+
+
+def upnp(settings: dict, address: str, lease: int) -> tuple[str | None, str]:
+    port = str(settings["port"])
+    base = ["upnpc", "-m", settings["uplink"], "-z", str(settings["ssdp_port"]), "-e", "nullbill"]
+    out = run([*base, "-a", address, port, port, "UDP", str(lease)], UPNP_WAIT_S)
+    failed = UPNP_FAILED.search(out)
+    if failed and failed[1] == "725":
+        # OnlyPermanentLeasesSupported: such a router keeps it until told otherwise.
+        out = run([*base, "-a", address, port, port, "UDP"], UPNP_WAIT_S)
+        failed = UPNP_FAILED.search(out)
+    mapped = UPNP_MAPPED.search(out)
+    if mapped and (mapped[2], mapped[3], mapped[4]) == (port, address, port):
+        if ipv4(mapped[1]):
+            return f"{ipv4(mapped[1])}:{port}", ""
+        run([*base, "-d", port, "UDP"], UPNP_WAIT_S)
+        return None, UNNAMED
+    if failed:
+        return None, UPNP_CODES.get(failed[1], f"it answered error {failed[1]} ({failed[2][:60]})")
+    if mapped:
+        return None, TAKEN
+    if "No valid UPNP Internet Gateway Device found" in out:
+        # An IGD that says it is not connected: miniupnpd on a router whose
+        # own address is private, as behind a provider's NAT.
+        return None, NO_PUBLIC_ADDRESS
+    return None, "no answer"
+
+
+def release(settings: dict, gateway: str, method: str) -> bool:
+    """True once the home router answered: it holds the mapping no longer, or
+    never did. Without an answer the mapping may still be there."""
+    port = str(settings["port"])
+    if method == NATPMP:
+        out = run(["natpmpc", "-g", gateway, "-a", port, port, "udp", "0"], NATPMP_WAIT_S)
+        return bool(PMP_MAPPED.search(out) or PMP_FAILED.search(out))
+    out = run(["upnpc", "-m", settings["uplink"], "-z", str(settings["ssdp_port"]), "-d", port, "UDP"], UPNP_WAIT_S)
+    return "UPNP_DeletePortMapping()" in out
+
+
+def read(path: Path) -> dict:
+    try:
+        found = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    return found if isinstance(found, dict) else {}
+
+
+def once(settings: dict, before: dict) -> dict:
+    address, gateway = uplink(settings["uplink"])
+    held = before.get("held")
+    state = {
+        "at": int(time.time()),
+        "enabled": bool(settings["enabled"]),
+        "port": settings["port"],
+        "address": address,
+        "gateway": gateway,
+        "method": None,
+        "external": None,
+        "why": {},
+        "held": [m for m in (NATPMP, UPNP) if isinstance(held, list) and m in held],
+    }
+    if not address or not gateway:
+        # Nobody to ask or to tell: what is held stays on the record.
+        state["why"] = dict.fromkeys((NATPMP, UPNP), f"{settings['uplink']} has no address or no default route")
+        return state
+    if not settings["enabled"]:
+        return state | {"held": [m for m in state["held"] if not release(settings, gateway, m)]}
+    for method in (NATPMP, UPNP):
+        external, why = natpmp(gateway, settings["port"], LEASE_S) if method == NATPMP else upnp(settings, address, LEASE_S)
+        if external:
+            return state | {"method": method, "external": external, "held": [m for m in (NATPMP, UPNP) if m in (*state["held"], method)]}
+        state["why"][method] = why
+    return state
+
+
+def main() -> int:
+    if len(sys.argv) != 2:
+        print(__doc__, file=sys.stderr)
+        return 2
+    settings = json.loads(Path(sys.argv[1]).read_text())
+    target = Path(os.environ.get("STATE_DIRECTORY", "/var/lib/nullbill-portmap")) / "state.json"
+    state = once(settings, read(target))
+    part = target.with_suffix(".part")
+    part.write_text(json.dumps(state) + "\n")
+    part.chmod(0o644)
+    part.replace(target)
+    port = settings["port"]
+    if state["method"]:
+        print(f"the home router sends UDP {port} here ({state['method']}, {state['external']})")
+    elif not state["enabled"]:
+        waits = f"; it has not answered about the mapping made over {' and '.join(state['held'])} yet" if state["held"] else ""
+        print(f"not asking the home router for UDP {port} (tailnet.port_mapping is off){waits}")
+    else:
+        print(f"the home router did not open UDP {port}: " + "; ".join(f"{m}: {w}" for m, w in state["why"].items()))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

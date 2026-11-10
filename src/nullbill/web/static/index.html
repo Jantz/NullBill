@@ -409,7 +409,8 @@
       </div>
 
       <section class="tabpanel" id="sec-tailscale" role="tabpanel" aria-labelledby="tab-tailscale">
-        <dl class="props compact"><div><dt>Status</dt><dd id="tailscale-state"></dd></div></dl>
+        <dl class="props compact"><div><dt>Status</dt><dd id="tailscale-state"></dd></div><div id="direct-row" hidden><dt>Path</dt><dd id="direct-state"></dd></div></dl>
+        <p class="help" id="direct-help" hidden></p>
         <p class="help">Your server joins your free <a href="https://tailscale.com/" rel="noopener noreferrer" target="_blank">Tailscale</a> network, so this page and your services open from your devices anywhere, and from nothing else.</p>
         <div class="settings">
           <form id="tailscale-client-form" class="setting" novalidate>
@@ -431,8 +432,17 @@
               <div class="row"><button type="submit" class="btn">Save auth key</button><p class="feedback" id="vpn-result" role="status"></p></div>
             </div>
           </form>
+          <div class="setting" id="sec-portmap">
+            <div class="setting-text"><h2 id="h-portmap">Home router</h2>
+              <p>A phone on mobile data connects directly only when your home router sends UDP port <span id="portmap-port">41642</span> to the server. The server asks it for that port by itself. Switch this off if you forward the port yourself<span id="portmap-where"></span>, or want no port open: the server cannot see a forward it did not ask for.</p></div>
+            <div class="setting-control">
+              <label class="switch-row"><input type="checkbox" id="port-mapping" role="switch" aria-describedby="port-mapping-result"><span class="switch" aria-hidden="true"></span><span>Ask the home router for the port</span></label>
+              <p class="feedback" id="port-mapping-result" role="status"></p>
+            </div>
+          </div>
         </div>
         <details class="disclosure"><summary>Names on your devices</summary><p class="help">Names such as <code>forgejo.nullbill.internal</code> work once a setup run had DNS on the client. On Android, set <b>Settings, Private DNS</b> to <b>Automatic</b> if it names a provider; on Linux, run <code>sudo tailscale set --accept-routes --accept-dns</code>. Addresses keep working either way.</p></details>
+        <details class="disclosure"><summary>Direct and relayed connections</summary><p class="help">A device connects to the server directly when it can, and through Tailscale's relays when it cannot. Relays are slower, and video stutters. A phone on mobile data connects directly only when your home router sends UDP port <span id="direct-port">41642</span> to the server. The server asks your home router for that every quarter of an hour, with UPnP or NAT-PMP; a router that has both switched off needs one switched on, or the port forwarded by hand<span id="direct-where"></span>. A router that is itself behind your provider's shared address cannot open a port at all, and such devices stay on relays. The Tailscale app shows which it is: open the server's entry there and look for <b>Direct</b> or <b>Relayed</b>. After a change on the home router, <b>Run the checks</b> in the Run setup menu reads it again.</p></details>
         <details id="tailnet-details" class="disclosure" hidden><summary>The Tailscale policy setup puts in place</summary><pre id="tailnet-policy" aria-label="Tailscale policy"></pre></details>
       </section>
 

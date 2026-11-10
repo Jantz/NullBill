@@ -6,7 +6,9 @@ renders decides which person reaches which address in them. Tailscale's free
 Personal plan is enough (plan.yaml's `tailnet` section counts what is used).
 Setup also points Tailscale's DNS for `nullbill.internal` at the router, so
 names such as `forgejo.nullbill.internal` work on every device on the
-tailnet ([Names](#names)).
+tailnet ([Names](#names)), and asks your home router for the one port that
+lets a phone on mobile data connect without a relay
+([Direct connections](#direct-connections)).
 
 Reference: <https://tailscale.com/kb/1019/subnets>,
 <https://tailscale.com/kb/1085/auth-keys>, <https://tailscale.com/kb/1054/dns>.
@@ -103,6 +105,86 @@ router` as DEGRADED while Tailscale sends the domain elsewhere, and
 `browsers trust ... by name` for the page, Proxmox, Forgejo and Grafana.
 `nslookup forgejo.nullbill.internal` on a device should answer with
 Forgejo's address.
+
+## Direct connections
+
+A device reaches the server either directly or through one of Tailscale's
+relays. Both work. A relay is slower, and video from Jellyfin may buffer.
+At home, and from most Wi-Fi networks elsewhere, devices connect directly
+with nothing from you. A phone on mobile data does so only when your home
+router sends one port, UDP 41642, on to the server: the mobile network
+gives the phone no address the server could reach, so the server has to be
+the one that can be reached. The port leads to Tailscale on the vpn guest
+and to nothing else, and Tailscale answers only devices on your tailnet.
+
+Every quarter of an hour the server asks your home router to open that
+port, the way game consoles do (UPnP or NAT-PMP). Many home routers say
+yes and you have nothing to do.
+
+**You need:** the server on Tailscale ([Once](#once)); for anything on
+the home router, its admin page and password.
+
+1. On the page, open **Access**, **Tailscale** tab, and read **Path**:
+   - **Direct**: the home router sends the port to the server. Done.
+   - **Relayed on mobile data**: the line below it says what the home
+     router answered and what to do. The cases are listed under step 3.
+   - **Home router not asked**: **Ask the home router for the port** on
+     the same tab is off.
+   - No **Path** line: the server is not on Tailscale yet.
+2. Check from the phone: turn Wi-Fi off, open the Tailscale app, tap the
+   `nullbill` machine and ping it. The app says **Direct connection** or
+   **Relayed connection**. The first seconds of any connection are
+   relayed, so ping a few times. On a computer, `tailscale ping nullbill`
+   ends with `via <address>:41642` when direct and `via DERP(...)` when
+   relayed.
+3. If it is relayed, do what fits the line under **Path**, then press
+   **Run the checks** (the arrow beside **Run setup**) to read it again:
+   - **The home router did not open the port, no answer**: UPnP and
+     NAT-PMP are off on the home router. Either turn one on (routers
+     call it UPnP, NAT-PMP, or port sharing by devices); the server then
+     has the port within a quarter of an hour. That lets every device at
+     home ask for ports, not only the server. Or forward the port
+     yourself: UDP 41642 from the internet to the address the page names,
+     port 41642. That address is the NullBill router's on your home
+     network, the device with the MAC address `02:4e:42:00:00:01` in the
+     home router's device list, not the Proxmox host. Tell the home router
+     to always give that device the same address, or the forward points
+     nowhere after the address changes. Then switch off **Ask the home
+     router for the port** and press **Run setup**: the server cannot see a
+     forward it did not ask for, so with the switch on it keeps reporting
+     the port as closed. Step 2 tells you whether your forward works.
+   - **It does not let this device open ports**: the home router has UPnP
+     on but wants each device allowed first. On a FRITZ!Box that is
+     **Internet, Permit Access, Port Sharing**: add the device with the
+     MAC address above and tick **Permit independent port sharing for this
+     device**
+     (<https://fritz.com/en/apps/knowledge-base/FRITZ-Box-4020/894_Setting-up-automatic-port-sharing>;
+     menu names differ a little between models). The NullBill router asks
+     for this one port only. If you would rather not let it ask, forward
+     the port yourself as above.
+   - **It already sends that port to another device**: remove that
+     forwarding of UDP 41642 on the home router. The server asks again
+     within a quarter of an hour.
+   - **The home router is behind another router**: the home router's own
+     address is not a public one, so a port it opens cannot be reached
+     from the internet. If the other router is a second box at home (a
+     modem with its own router, say), forward UDP 41642 on it to the home
+     router, and on the home router to the address the page names unless
+     the line says the home router opened the port. If it is your
+     provider's (common with mobile and cable
+     internet, where customers share addresses), nothing on your side
+     opens a port. Some providers give a public IPv4 address on request.
+     Until then devices on mobile data use relays, and everything keeps
+     working.
+
+**Run the checks** reports this as `devices on mobile data reach the vpn
+guest directly`: PASS when the home router sends the port here and
+Tailscale offers it to your devices, DEGRADED with the same line as the
+page otherwise, and SKIP while the switch is off.
+
+To have no port open, switch off **Ask the home router for the port** and
+press **Run setup**. The server gives the port back and devices on mobile
+data use relays.
 
 ## Close Proxmox to the home network
 

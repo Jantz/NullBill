@@ -55,10 +55,20 @@ def test_vpn_reaches_devices_at_home_only_from_tailscales_port(facts):
     vpn = rules(rendered(facts, "mid")["firewall/2011.fw"])
     assert vpn[-4:] == [
         "OUT DROP -dest +nb-zones",
-        "OUT ACCEPT -dest +nb-private -p udp -sport 41641",
+        "OUT ACCEPT -dest +nb-private -p udp -sport 41642",
         "OUT DROP -dest +nb-private",
         "OUT ACCEPT",
     ]
+
+
+def test_vpn_takes_tailscales_port_from_anywhere_and_nothing_else_unasked(facts):
+    # What the home router forwards and the router passes on (direct.py); a
+    # phone on mobile data reaches the vpn guest directly only this way.
+    files = rendered(facts, "mid")
+    vpn = rules(files["firewall/2011.fw"])
+    anywhere = [r for r in vpn if r.startswith("IN ") and "-source" not in r]
+    assert anywhere == ["IN ACCEPT -p udp -dport 41642"]
+    assert [path for path, text in files.items() if path.startswith("firewall/") and "41642" in text] == ["firewall/2011.fw"]
 
 
 def test_proxy_zone_has_no_direct_egress(facts):

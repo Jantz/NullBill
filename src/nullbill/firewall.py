@@ -82,9 +82,15 @@ def _cluster(plan: dict, lan_open: bool) -> str:
 def _guest_rules(name: str, rules_by_guest: _Rules, egress: str) -> list[str]:
     rules = rules_by_guest.inbound[name] + rules_by_guest.outbound[name]
     if name == "vpn":
-        # Tailscale's direct path to devices on the home network; NullBill's
-        # own zones stay reachable through flows only.
-        rules += [
+        # Tailscale's direct paths. In: whatever the router passes on for
+        # tailscaled's port, from the home network or forwarded by the home
+        # router; WireGuard answers nothing it cannot authenticate. Out: to
+        # devices on the home network from that port only; NullBill's own
+        # zones stay reachable through flows only.
+        rules = [
+            *rules_by_guest.inbound[name],
+            f"IN ACCEPT -p udp -dport {TAILSCALE_PORT} # Tailscale, direct from devices anywhere",
+            *rules_by_guest.outbound[name],
             "OUT DROP -dest +nb-zones # NullBill's zones only through flows",
             f"OUT ACCEPT -dest +nb-private -p udp -sport {TAILSCALE_PORT} # Tailscale, direct to devices at home",
         ]

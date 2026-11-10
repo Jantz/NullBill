@@ -1543,6 +1543,36 @@ function wirePeople() {
   }));
 }
 
+// Whether a phone on mobile data reaches the server directly or through
+// Tailscale's relays, as the last setup run or checks found it (direct.py).
+const PATHS = {
+  direct: ["good", "Direct"],
+  closed: ["warn", "Relayed on mobile data"],
+  shared: ["warn", "Relayed on mobile data"],
+  unseen: ["warn", "Relayed on mobile data"],
+  off: ["", "Home router not asked"],
+  unread: ["", "Not known"],
+};
+
+function renderDirect(found) {
+  const path = found && PATHS[found.kind];
+  show("direct-row", Boolean(path));
+  show("direct-help", Boolean(path) && found.kind !== "direct");
+  if (!path) return;
+  const [kind, word] = path;
+  $("direct-state").replaceChildren(status(kind, word, found.kind === "direct" ? `UDP ${found.port} (${found.method})` : ""));
+  // What it found, then what to do about it.
+  $("direct-help").textContent = String(found.detail || "").split("; ").map(sentence).join(" ");
+}
+
+// The port and where a forward made by hand goes, wherever the page names them.
+function renderPortMapping(asked, found) {
+  $("port-mapping").checked = asked;
+  if (!found) return;
+  for (const id of ["direct-port", "portmap-port"]) $(id).textContent = found.port;
+  for (const id of ["direct-where", "portmap-where"]) $(id).textContent = found.address ? ` to ${found.address}` : "";
+}
+
 function renderLan(lan) {
   const [kind, word, text] = LAN[lan.state];
   const extra = lan.state === "closing" && !lan.via_vpn ? " This page is not open over Tailscale right now." : "";
@@ -1684,6 +1714,8 @@ function paintStates() {
   $("ts-dot-client").classList.toggle("done", st.tailscale_client);
   $("ts-dot-key").classList.toggle("done", ts.kind === "done");
   show("tailscale-client-saved", st.tailscale_client);
+  renderDirect(st.direct);
+  renderPortMapping(st.port_mapping, st.direct);
   renderSshKeys(st);
   show("vpn-saved", st.tailscale_key);
   show("pending-dot", Boolean(st.config_changed || st.tailscale_key));
@@ -3731,6 +3763,18 @@ document.addEventListener("DOMContentLoaded", () => {
   $("modes").addEventListener("click", (event) => {
     const button = event.target.closest(".choice");
     if (button) setMode(button.dataset.mode, "mode-result", button);
+  });
+  $("port-mapping").addEventListener("change", async () => {
+    const asked = $("port-mapping").checked;
+    say("port-mapping-result", "busy", "Saving…");
+    try {
+      state.port_mapping = (await api("/api/port-mapping", {enabled: asked})).port_mapping;
+      say("port-mapping-result", "ok", asked ? "Saved. The next setup run asks the home router." : "Saved. The next setup run gives the port back and stops asking.");
+      refresh();
+    } catch (error) {
+      $("port-mapping").checked = state.port_mapping;
+      say("port-mapping-result", "error", error.message);
+    }
   });
   $("auto-fix").addEventListener("change", async () => {
     try {

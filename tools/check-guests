@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Render the router and egress-proxy files for every fixture class and check
 # them with nft, dnsmasq, squid and ifupdown in a Debian 12 container, the
-# release those guests run. Needs docker.
+# release those guests run. Then walk the path a phone on mobile data takes
+# to the vpn guest (tools/guest-check/portmap.sh). Needs docker.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -9,9 +10,12 @@ out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
 
 mkdir "$out/context"
-cp tools/guest-check/Dockerfile tools/guest-check/check.sh "$out/context/"
+cp tools/guest-check/Dockerfile tools/guest-check/check.sh tools/guest-check/portmap.sh tools/guest-check/home-router "$out/context/"
 docker build -q -t nullbill-guest-check "$out/context" >/dev/null
 tools/render-fixtures "$out/build" >/dev/null
 # nft -c needs CAP_NET_ADMIN; the container's own network namespace is the
 # only one it can touch, and -c changes nothing.
 docker run --rm --cap-add NET_ADMIN -v "$out/build:/build:ro" nullbill-guest-check small mid large large-legacy large-games
+# Network namespaces need a privileged container; this one has no network.
+docker run --rm --privileged --network none --entrypoint bash -v "$out/build:/build:ro" \
+  -v "$PWD/ansible/roles/router/files/nb-portmap:/usr/local/sbin/nb-portmap:ro" nullbill-guest-check /usr/local/bin/portmap.sh

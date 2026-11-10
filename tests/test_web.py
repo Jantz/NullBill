@@ -18,7 +18,8 @@ import pytest
 import yaml
 from fixturedata import fixture_config, write_raw
 
-from nullbill import browserca
+from nullbill import browserca, direct
+from nullbill.model import build_model
 from nullbill.probe import parse
 from nullbill.web import progress
 from nullbill.web import server as web
@@ -588,6 +589,39 @@ def test_tailscale_key_waits_for_setup_and_is_never_shown(site):
     assert client.call("/api/vpn", {"key": f" {key}\n"}) == (200, {"ok": True, "tailscale_key": True})
     assert app.codec(app.home).load()["tailscale_auth_key"] == key
     assert key not in json.dumps(client.call("/api/state")[1])
+
+
+def test_the_page_is_told_how_devices_on_mobile_data_reach_the_server(site):
+    app, client = site
+    sign_in(app, client)
+    # Before the vpn guest is on the tailnet nothing is known.
+    assert client.call("/api/state")[1]["direct"] is None
+    why = "the home router did not open UDP 41642"
+    direct.record(app.home, direct.Finding(direct.CLOSED, why, 41642, "192.168.1.57"))
+    found = client.call("/api/state")[1]["direct"]
+    assert found == {"kind": "closed", "detail": why, "port": 41642, "address": "192.168.1.57", "method": None}
+    direct.record(app.home, None)
+    assert client.call("/api/state")[1]["direct"] is None
+
+
+def test_the_owner_switches_off_asking_the_home_router_on_the_page(site):
+    app, client = site
+    sign_in(app, client)
+    assert client.call("/api/state")[1]["port_mapping"] is True
+    status, data = client.call("/api/port-mapping", {"enabled": False})
+    assert status == 400 and "save your choices" in data["error"]
+    choices = {"workloads": ["agents"], "owner_login": "owner-a@example.internal"}
+    client.call("/api/choices", choices)
+    assert client.call("/api/port-mapping", {"enabled": False}) == (200, {"ok": True, "port_mapping": False})
+    config = yaml.safe_load((app.home / "config.yaml").read_text())
+    assert config["tailnet"] == {"port_mapping": False} and build_model(config)["tailnet"]["port_mapping"] is False
+    # Saving the choices again keeps it.
+    client.call("/api/choices", choices)
+    assert client.call("/api/state")[1]["port_mapping"] is False
+    # On is the catalog's default: nothing stays in config.yaml.
+    assert client.call("/api/port-mapping", {"enabled": True}) == (200, {"ok": True, "port_mapping": True})
+    config = yaml.safe_load((app.home / "config.yaml").read_text())
+    assert "tailnet" not in config and build_model(config)["tailnet"]["port_mapping"] is True
 
 
 def test_tailscale_oauth_client_is_kept_and_never_shown(site):

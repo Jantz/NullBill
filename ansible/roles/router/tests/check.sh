@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Container check for the router role, run by tools/check-roles: place the
-# rendered small-class router files twice, and prove a broken ruleset or
-# dnsmasq file is refused and the working one stays in place.
+# rendered small-class router files twice, prove a broken ruleset or dnsmasq
+# file is refused and the working one stays in place, and run nb-portmap
+# where no home router answers. tools/check-guests has one that does.
 set -euo pipefail
 # shellcheck source=tools/role-check/role-check.sh
 source /usr/local/lib/role-check.sh
@@ -19,6 +20,25 @@ test ! -e /etc/netplan/50-cloud-init.yaml || fail "cloud-init's netplan file rem
 grep -qx "network: {config: disabled}" /etc/cloud/cloud.cfg.d/99-nullbill-network.cfg || fail "cloud-init network off"
 test -f /etc/systemd/network/11-nb-mgmt.link || fail ".link files placed"
 pass "rendered files placed; cloud-init no longer configures the network"
+
+# The port mapping: the script, the clients it runs and the units that run it.
+test -x /usr/local/sbin/nb-portmap || fail "nb-portmap installed"
+command -v upnpc natpmpc >/dev/null || fail "Debian's UPnP and NAT-PMP clients installed"
+units=(/etc/systemd/system/nullbill-portmap.service /etc/systemd/system/nullbill-portmap.timer)
+verify=$(systemd-analyze verify "${units[@]}" 2>&1) || fail "systemd refuses the port mapping units: $verify"
+grep -q "nullbill-portmap" <<<"$verify" && fail "systemd warns about the port mapping units: $verify"
+# This container has no nb-uplink: nothing is asked, and that is no error.
+STATE_DIRECTORY=/tmp/portmap
+export STATE_DIRECTORY
+mkdir -p "$STATE_DIRECTORY"
+said=$(/usr/local/sbin/nb-portmap /etc/nullbill/portmap.json) || fail "nb-portmap exits 0 whatever the home router answers"
+grep -q "did not open UDP 41642: NAT-PMP: nb-uplink has no address or no default route" <<<"$said" || fail "nb-portmap without an uplink: $said"
+python3 - <<'PY' || fail "nb-portmap's state for verify and the page"
+import json
+state = json.load(open("/tmp/portmap/state.json"))
+assert state["enabled"] is True and state["port"] == 41642 and state["method"] is None and state["at"] > 0, state
+PY
+pass "nb-portmap, its clients and its timer are in place; without a home router to ask it reports that and exits 0"
 
 for broken in /etc/nftables.conf /etc/nullbill/dnsmasq-internal.conf; do
   python3 - /tmp/vars.json "$broken" <<'PY' >/tmp/broken.json

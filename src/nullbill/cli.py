@@ -134,6 +134,7 @@ def cmd_verify(_args: argparse.Namespace) -> int:
         say=lambda r: print(r.line(), flush=True),
         browser_root=home / browserca.DIR / "ca.crt",
         tailnet=lambda: tailscale.from_secrets(Secrets(Sops(home)).data),
+        home=home,
     )
     counts = {s: sum(r.status == s for r in results) for s in ("PASS", "FAIL", "SKIP", "DEGRADED")}
     print(", ".join(f"{n} {s}" for s, n in counts.items()))

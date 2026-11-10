@@ -67,6 +67,10 @@ your disks.
 
 TVs without Tailscale on your home network cannot reach it yet.
 
+If video buffers on mobile data while it plays well at home, the phone
+reaches the server through one of Tailscale's relays:
+[vpn.md](vpn.md#direct-connections) says how to check and what to change.
+
 ## If setup stops at Set up Jellyfin
 
 - "no render node for the integrated graphics": the processor's graphics

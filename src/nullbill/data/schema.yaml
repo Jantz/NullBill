@@ -259,6 +259,7 @@ $defs:
             users: {type: integer, minimum: 1}
             groups: {type: integer, minimum: 1}
             tagged_devices: {type: integer, minimum: 1}
+        port_mapping: {type: boolean}
     verify:
       type: object
       additionalProperties: false
@@ -411,6 +412,9 @@ $defs:
       services: {$ref: "#/$defs/common/services"}
       people: {$ref: "#/$defs/common/people"}
       proxy: {$ref: "#/$defs/common/proxy"}
+      # port_mapping: false keeps the router from asking the home router for
+      # Tailscale's port (direct.py).
+      tailnet: {$ref: "#/$defs/common/tailnet"}
       updates: {$ref: "#/$defs/common/updates"}
       images: {$ref: "#/$defs/common/images"}
       verify: {$ref: "#/$defs/common/verify"}

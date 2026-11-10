@@ -59,7 +59,7 @@ def service_answers(plan: dict, wrong: str = "") -> dict[str, str]:
     the check labelled `wrong` gets a wrong answer."""
     import shlex
 
-    from nullbill import ci, forge, llm, media, names
+    from nullbill import ci, direct, forge, llm, media, names
     from nullbill.render import strip_notes
 
     bare = strip_notes(plan)
@@ -77,7 +77,59 @@ def service_answers(plan: dict, wrong: str = "") -> dict[str, str]:
     if names.nameserver(bare):
         server = "192.0.2.53" if wrong == names.LABEL else names.nameserver(bare)
         answers[names.command(bare)] = dns_status(bare["domain"], server)
+    if "vpn" in bare["guests"]:
+        # The home router opened the port, unless this is the wrong answer.
+        state = portmap_state(method=None, external=None, why={"UPnP": "no answer"}) if wrong == direct.LABEL else None
+        answers |= direct_answers(bare, state)
     return answers
+
+
+HOME_PUBLIC = "203.0.113.7"
+ROUTER_CLOCK = 1_800_000_000
+
+
+def portmap_state(**changes) -> dict:
+    """What nb-portmap writes on the router once the home router opened the
+    port over UPnP, a minute before ROUTER_CLOCK."""
+    from nullbill.flows import TAILSCALE_PORT
+
+    state = {
+        "at": ROUTER_CLOCK - 60,
+        "enabled": True,
+        "port": TAILSCALE_PORT,
+        "address": "192.168.1.57",
+        "gateway": "192.168.1.1",
+        "method": "UPnP",
+        "external": f"{HOME_PUBLIC}:{TAILSCALE_PORT}",
+        "why": {"NAT-PMP": "no answer"},
+    }
+    return state | changes
+
+
+def guest_exec(text: str, exitcode: int = 0, err: str = "") -> str:
+    """What `qm guest exec` prints for a command that wrote text in the VM."""
+    answer = {"exitcode": exitcode, "exited": 1} | ({"out-data": text} if text else {}) | ({"err-data": err} if err else {})
+    return json.dumps(answer, indent=3)
+
+
+def tailscale_status(addrs: list[str] | None = None, backend: str = "Running") -> str:
+    """`tailscale status --json` on the vpn guest, as far as direct.py reads it."""
+    from nullbill.flows import TAILSCALE_PORT
+
+    if addrs is None:
+        addrs = [f"{HOME_PUBLIC}:{TAILSCALE_PORT}", f"10.42.6.11:{TAILSCALE_PORT}", f"[2001:db8::11]:{TAILSCALE_PORT}"]
+    return json.dumps({"BackendState": backend, "Self": {"DNSName": "nullbill.example-tailnet.ts.net.", "Addrs": addrs}})
+
+
+def direct_answers(plan: dict, state: dict | None = None, addrs: list[str] | None = None, backend: str = "Running") -> dict[str, str]:
+    """The two commands direct.py runs on the host and what they print."""
+    from nullbill import direct
+
+    state = portmap_state() if state is None else state
+    return {
+        direct.vpn_command(plan): tailscale_status(addrs, backend),
+        direct.router_command(plan): guest_exec(f"{json.dumps(state)}\n{ROUTER_CLOCK}\n"),
+    }
 
 
 def dns_status(domain: str, server: str) -> str:

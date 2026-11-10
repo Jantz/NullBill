@@ -86,6 +86,13 @@ answered items move to the decisions list at the bottom.
     `power.windows-dev.busy.cpu_pct` in `config.yaml` for those who accept
     that. Recommendation: keep it that way until Windows work starts; a
     small agent in Windows could then report the signed-in session.
+16. **A port at your home router** (docs/adr/0014-direct-connections.md).
+    So that a phone on mobile data connects without a relay, the server
+    asks your home router to send UDP 41642 to Tailscale on the vpn guest.
+    It is the first port NullBill opens to the internet; Tailscale answers
+    only your tailnet's devices on it. Recommendation: leave it on. To
+    forward the port yourself or have none open, switch off **Ask the home
+    router for the port** on the page's **Access** page.
 
 ## Defaults picked for cosmetic choices
 
@@ -172,6 +179,10 @@ answered items move to the decisions list at the bottom.
 
 ## Decisions
 
+- Direct connections from mobile data: built, on by default, with a
+  switch on the page (owner asked, 2026-11-09; design by Claude,
+  docs/adr/0014-direct-connections.md; question 16 stays open for the
+  default).
 - Game servers for Minecraft, Terraria and Factorio, built into NullBill
   (owner, 2026-11-09).
 - Jellyfin, built into NullBill (owner, 2026-11-08).

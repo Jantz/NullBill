@@ -1,5 +1,6 @@
 """Router and egress-proxy files. tools/check-guests parses them with the real tools."""
 
+import json
 import re
 
 import pytest
@@ -26,11 +27,45 @@ def test_router_forwards_only_planned_flows(facts):
     egress = [line for line in nft.splitlines() if 'oifname "nb-uplink"' in line and "accept" in line]
     # Only direct zones reach the uplink, and never a private range, except
     # tailscaled's own port on the vpn guest, for direct paths to devices at home.
-    tailscale = f'ip saddr {plan["guests"]["vpn"]["ip"]} oifname "nb-uplink" udp sport 41641 accept'
+    tailscale = f'ip saddr {plan["guests"]["vpn"]["ip"]} oifname "nb-uplink" udp sport 41642 accept'
     assert [line.strip().split(" #")[0] for line in egress if "iifname" not in line] == [tailscale]
     egress = [line for line in egress if "iifname" in line]
     assert [re.search(r'iifname "(\S+)"', line)[1] for line in egress] == ["nb-services", "nb-access"]
     assert all("ip daddr != @private" in line for line in egress)
+
+
+def test_router_passes_tailscales_port_on_to_the_vpn_guest_and_asks_the_home_router_for_it(facts):
+    plan, model = planned(facts, "mid")
+    files = render_router(plan, model)
+    nft, vpn = files["etc/nftables.conf"], plan["guests"]["vpn"]["ip"]
+    # What the home router forwards arrives for the router's own address.
+    assert f'iifname "nb-uplink" udp dport 41642 dnat to {vpn}:41642' in nft
+    assert f'iifname "nb-uplink" ip daddr {vpn} udp dport 41642 accept' in nft
+    # Nothing else is let in from the uplink: the forward rule above, and
+    # the port nb-portmap hears the home router's UPnP answer on.
+    arriving = [line.split(" #")[0].strip() for line in nft.splitlines() if line.strip().startswith('iifname "nb-uplink"')]
+    assert arriving == [
+        'iifname "nb-uplink" udp dport 1901 accept',
+        f'iifname "nb-uplink" ip daddr {vpn} udp dport 41642 accept',
+        f'iifname "nb-uplink" udp dport 41642 dnat to {vpn}:41642',
+    ]
+    assert json.loads(files["etc/nullbill/portmap.json"]) == {"enabled": True, "port": 41642, "ssdp_port": 1901, "uplink": "nb-uplink"}
+    unit = files["etc/systemd/system/nullbill-portmap.service"]
+    assert "ExecStart=/usr/local/sbin/nb-portmap /etc/nullbill/portmap.json\n" in unit
+    # It reads what the home router sends back: as nobody, and never to a NullBill zone.
+    assert "DynamicUser=yes\n" in unit and f"IPAddressDeny={model['network']['base']}\n" in unit
+    assert "OnUnitActiveSec=15min\n" in files["etc/systemd/system/nullbill-portmap.timer"]
+
+
+def test_port_mapping_switched_off_asks_nothing_and_still_passes_a_port_forwarded_by_hand(facts):
+    plan, model = planned(facts, "mid", tailnet={"port_mapping": False})
+    files = render_router(plan, model)
+    nft, vpn = files["etc/nftables.conf"], plan["guests"]["vpn"]["ip"]
+    assert f'iifname "nb-uplink" udp dport 41642 dnat to {vpn}:41642' in nft
+    # nb-portmap still runs, to give back a mapping it held; over UPnP that needs the home router's answer let in.
+    assert 'iifname "nb-uplink" udp dport 1901 accept' in nft
+    assert json.loads(files["etc/nullbill/portmap.json"])["enabled"] is False
+    assert "etc/systemd/system/nullbill-portmap.timer" in files
 
 
 def test_proxy_zones_resolve_internal_names_only(facts):
