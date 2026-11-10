@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 from fixturedata import games_config
 
 from nullbill import games, people, power
@@ -221,6 +222,22 @@ def test_admins_are_made_on_the_console_only_when_missing(facts):
     config = games_config()
     config["games"]["minecraft"]["admins"] = ["Owner_A"]
     assert games.missing_admins(build_model(config), "minecraft", "owner_a\n") == []
+
+
+def test_only_games_that_keep_admins_are_asked_for_them(facts):
+    """nb-game admins fails in a guest whose game.json names no list
+    (Terraria), so apply and verify may ask only a game config.yaml can give
+    admins to. Its role's game.json, its console command and its schema
+    entry must agree; apply's stand-in nb-game (test_apply.py) fails the same."""
+    schema = yaml.safe_load((ROOT / "src" / "nullbill" / "data" / "schema.yaml").read_text())["$defs"]
+    for name in GAMES:
+        role = (ROOT / "ansible" / "roles" / f"game_{name}" / "tasks" / "main.yml").read_text()
+        keeps = '"admins":' in role
+        assert keeps == (name in games.ADMIN_COMMAND) == ("admins" in schema[f"game_{name}"]["properties"]), name
+    plan, model = planned(facts)
+    for label, command, _ in games.commands(plan, model):
+        if "terraria" in label:
+            assert "admins" not in command
 
 
 def test_the_admins_check_reads_nb_game(facts, tmp_path, monkeypatch):

@@ -91,6 +91,8 @@ class FakeReach:
         # Game servers, by VMID: their admins and what nb-game typed on each
         # console. no_such_player: names the games do not know.
         self.game_servers = {}
+        # Terraria's game.json names no list of admins, so nb-game admins fails there.
+        self.no_admin_list = {"2026"}
         self.no_such_player = set()
         # VMs as /cluster/resources lists them, for retiring CI clones.
         self.vms = []
@@ -487,6 +489,8 @@ class FakeReach:
         if argv[0] == games.NB_GAME:
             server = self.game_servers.setdefault(vmid, {"admins": [], "typed": [], "asked": []})
             server["asked"].append(argv[1])
+            if argv[1] == "admins" and vmid in self.no_admin_list:
+                return 1, "", "nb-game: no list of admins: 'admins'\n"
             if argv[1] == "admins":
                 return 0, "".join(f"{name}\n" for name in sorted(server["admins"])), ""
             if argv[1] == "console":
@@ -2480,7 +2484,7 @@ def test_games_stage_runs_each_role_waits_and_makes_the_admins(ctx):
     servers = c.reach.game_servers
     assert servers["2025"]["typed"] == ["op owner_a"] and servers["2027"]["typed"] == ["/promote owner_a"]
     # Terraria has no admins; every server is waited for before anything is typed.
-    assert servers["2026"]["typed"] == [] and servers["2026"]["asked"] == ["wait", "admins"]
+    assert servers["2026"]["typed"] == [] and servers["2026"]["asked"] == ["wait"]
     assert servers["2025"]["asked"][:3] == ["wait", "admins", "console"]
     calls = host_calls(c)
     assert index_of(calls, f"pct exec 2025 -- {games.NB_GAME} wait {games.START_WAIT_S}") < index_of(
