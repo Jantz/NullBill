@@ -8,7 +8,10 @@ output. A failure ends with the `nullbill: <message>` lines cli.main prints.
 
 import json
 import re
+import textwrap
 import time
+
+import yaml
 
 from nullbill.apply import STAGE_MARK, STAGE_TIME, STAGES
 
@@ -60,7 +63,18 @@ JOB_TEXT = {
 }
 STAGE_LINE = re.compile(re.escape(STAGE_MARK) + r"([a-z-]+), (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)$")
 TASK = re.compile(r"^TASK \[(?:([^:\]]+) : )?(.+?)\] \**$")
-FATAL = re.compile(r"^(?:fatal|failed): \[([^\]]+)\](?: \(item=.*?\))?: (?:FAILED|UNREACHABLE)! => (.*)$")
+# One failed result: `fatal: [host]: FAILED! => ...`, or per item of a loop
+# `failed: [host] (item=...) => ...`.
+FATAL = re.compile(r"^(?:fatal|failed): \[([^\]]+)\](?: \(item=(.*?)\))?(?:: (?:FAILED|UNREACHABLE)!)? =>\s?(.*)$")
+PLAYBOOK_FAILED = re.compile(r"\S+\.yml failed on .+ \(exit \d+\)$")
+TOFU_WITH = re.compile(r"^\s+with (\S+?),?$")
+TOFU_SOURCE = re.compile(r"^\s+on \S+ line \d+|^\s*\d+: ")
+TOFU_KINDS = {"proxmox_virtual_environment_container": "Container", "proxmox_virtual_environment_vm": "VM"}
+TRACEBACK = "Traceback (most recent call last):"
+RAISED = re.compile(r"^[A-Za-z_][\w.]*(?:Error|Exception|Exit|Interrupt|Warning)\b.*$")
+# What a module says when it has nothing to say: the program's own words
+# are in stderr then.
+NO_MESSAGE = {"", "non-zero return code", "the command exited with a non-zero return code."}
 # Result.line(): the status padded to eight characters, then the check.
 VERIFY = re.compile(r"^(PASS|FAIL|SKIP|DEGRADED) {1,5}(?<=^.{9})(.+)$")
 ERROR_PREFIX = "nullbill: "
@@ -175,9 +189,15 @@ ADVICE = [
         "Upload the Windows 11 ISO in Proxmox (local storage, ISO Images, keep Win in its name), or untick Windows under Setup.",
     ),
     (
-        r"Tunnel connection failed: 403|403 Forbidden.*proxy|proxy.*403 Forbidden",
+        r"Tunnel connection failed: 403|403 Forbidden.*proxy|proxy.*403 Forbidden|403\s+Forbidden \[IP: \S+ 3128\]",
         "NullBill's internet proxy refused a site this guest needs: the site is not on its allowed list. "
         "Update NullBill on the Updates page and run setup again; if it stops here again, copy the details and report them.",
+    ),
+    (
+        # pveproxy's own code for a node that took too long, which is not
+        # the internet connection the "timed out" rule below speaks of.
+        r"HTTP 59\d response",
+        "Proxmox took too long to answer, often while a disk is busy. Wait a few minutes and run setup again; finished parts are kept.",
     ),
     (r"No space left on device", "A disk is full. Free space on it, or choose fewer workloads under Setup, then run setup again."),
     (
@@ -217,13 +237,22 @@ STAGE_ADVICE = {
 DEFAULT_ADVICE = (
     "Run setup again; it is safe to repeat and picks up where it stopped. If it stops at the same place, copy the details and report them."
 )
+BUG_ADVICE = (
+    "This is a fault in NullBill, not something you did. Press Update NullBill on the Updates page in case a fix is out, "
+    "then run it again. If it stops here again, copy the details and report them."
+)
 
 
-def advice(message: str, stage: str | None = None, default: str | None = None) -> str:
+def specific(message: str) -> str | None:
+    """What to do about a cause the page knows, or None."""
     for pattern, text in ADVICE:
         if re.search(pattern, message, re.I):
             return text
-    return default or STAGE_ADVICE.get(stage or "", DEFAULT_ADVICE)
+    return None
+
+
+def advice(message: str, stage: str | None = None, default: str | None = None) -> str:
+    return specific(message) or default or STAGE_ADVICE.get(stage or "", DEFAULT_ADVICE)
 
 
 def sentence(text: str) -> str:
@@ -234,7 +263,8 @@ def sentence(text: str) -> str:
     # A word, not a file or a name: router.yml stays as it is.
     if re.match(r"[a-z]+[\s,:;]", text):
         text = text[0].upper() + text[1:]
-    return text if text[-1] in ".!?" else text + "."
+    text = text.rstrip(":;, ")
+    return text if text[-1:] in (".", "!", "?", "…") else text + "."
 
 
 def _when(stamp: str) -> float | None:
@@ -244,39 +274,119 @@ def _when(stamp: str) -> float | None:
         return None
 
 
-def _ansible_failure(lines: list[str]) -> dict | None:
-    """The last task that failed (and was not ignored) in these lines."""
-    found = None
-    task = None
-    for i, line in enumerate(lines):
+def cut(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _result(first: str, rest: list[str]) -> dict:
+    """What a failed task returned. Ansible prints it as YAML under the
+    line (apply asks for that), or as JSON on it in logs from before."""
+    try:
+        if first.lstrip().startswith("{"):
+            data = json.loads("\n".join([first, *rest]))
+        else:
+            data = yaml.safe_load(textwrap.dedent("\n".join(rest)))
+    except (ValueError, yaml.YAMLError):
+        data = None
+    return data if isinstance(data, dict) else {"msg": "\n".join(line.strip() for line in [first, *rest] if line.strip())}
+
+
+def _said(data: dict) -> tuple[str, str]:
+    """One failure as a line and, when there is more, what it printed: the
+    message, or the program's last line when the module only gives an exit
+    code, then the end of its output."""
+    message = str(data.get("msg") or "").strip()
+    errors = [x for x in str(data.get("stderr") or data.get("module_stderr") or "").splitlines() if x.strip()]
+    output = [x for x in str(data.get("stdout") or data.get("module_stdout") or "").splitlines() if x.strip()]
+    printed = errors or output
+    lines = message.splitlines()
+    if message.lower() in NO_MESSAGE:
+        text = printed[-1].strip() if printed else "it failed without a message"
+        if data.get("rc") not in (None, 0):
+            text += f" (exit {data['rc']})"
+        lines = []
+    else:
+        text = lines[0].strip()
+    more = [*lines[1:], *(x for x in printed[-12:] if x.strip() not in message)]
+    detail = "\n".join(more).strip() if more else ""
+    if len(text) > 300:
+        detail = "\n".join(filter(None, [message, detail]))
+    return cut(text, 300), detail[-1500:]
+
+
+def _ansible_failures(lines: list[str]) -> list[dict]:
+    """Every failure of the last task that failed and was not ignored: one
+    per machine, or per item of its loop."""
+    tasks: list[tuple[str | None, list[dict]]] = [(None, [])]
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        i += 1
         if m := TASK.match(line):
-            task = m[2] + (f" ({m[1]})" if m[1] else "")
+            tasks.append((m[2] + (f" ({m[1]})" if m[1] else ""), []))
+            continue
+        if line.startswith("...ignoring"):
+            tasks[-1][1].clear()
             continue
         m = FATAL.match(line)
         if not m:
             continue
-        rest = [m[2]]
-        j = i + 1
-        while j < len(lines) and lines[j].strip() and not lines[j].startswith(("TASK [", "PLAY ", "...ignoring")):
-            rest.append(lines[j])
-            j += 1
-        if j < len(lines) and lines[j].startswith("...ignoring"):
-            continue
-        raw = "\n".join(rest)
-        try:
-            data = json.loads(raw)
-        except ValueError:
-            data = {"msg": raw}
-        detail = str(data.get("msg") or "").strip()
-        extra = data.get("stderr") or data.get("module_stderr") or ""
-        if extra and str(extra).strip() not in detail:
-            detail = (detail + "\n" if detail else "") + "\n".join(str(extra).strip().splitlines()[-6:])
-        found = {"task": task, "host": m[1], "detail": detail[:800]}
-    return found
+        # The result goes on in indented lines; a blank line belongs to it
+        # only when more of it follows.
+        rest = []
+        while i < len(lines):
+            if lines[i].startswith((" ", "\t")) or lines[i] == "}":
+                rest.append(lines[i])
+            elif not lines[i].strip() and i + 1 < len(lines) and lines[i + 1].startswith((" ", "\t")):
+                rest.append("")
+            else:
+                break
+            i += 1
+        text, detail = _said(_result(m[3], rest))
+        tasks[-1][1].append({"task": tasks[-1][0], "host": m[1], "item": m[2], "text": text, "detail": detail})
+    return next((found for _, found in reversed(tasks) if found), [])
 
 
-def _tofu_errors(lines: list[str]) -> list[str]:
-    return [line.removeprefix("Error: ").strip() for line in lines if line.startswith("Error: ")][-3:]
+def _tofu_errors(lines: list[str]) -> list[dict]:
+    """OpenTofu's errors, each with the resource it names and what it adds
+    below; where in the rendered file it stands helps nobody."""
+    found = []
+    block: list[str] | None = None
+    for line in [*lines, "Error: "]:
+        if line.startswith(("Error: ", "Warning: ")):
+            if block:
+                found.append(block)
+            block = [line.removeprefix("Error: ")] if line.startswith("Error: ") else None
+        elif block is not None and len(block) < 40:
+            block.append(line)
+    out = []
+    for block in found[-5:]:
+        head = [block[0].strip()]
+        rest = block[1:]
+        while rest and rest[0].strip():
+            head.append(rest.pop(0).strip())
+        resource = next((m[1] for line in rest if (m := TOFU_WITH.match(line))), None)
+        kind, _, name = (resource or "").partition(".")
+        body = [line.strip() for line in rest if not TOFU_WITH.match(line) and not TOFU_SOURCE.match(line)]
+        detail = "\n".join([*head[1:], *body]).strip()
+        out.append(
+            {
+                "title": f"{TOFU_KINDS[kind]} {name.replace('_', '-')}" if kind in TOFU_KINDS and name else resource,
+                "text": sentence(cut(head[0], 300)),
+                "detail": re.sub(r"\n{3,}", "\n\n", detail)[:1500],
+            }
+        )
+    return out
+
+
+def _crash(lines: list[str]) -> dict | None:
+    """A Python traceback at the end of the log: the program itself broke."""
+    start = next((i for i in range(len(lines) - 1, -1, -1) if lines[i].strip() == TRACEBACK), None)
+    if start is None:
+        return None
+    trace = [line for line in lines[start:] if line.strip()]
+    raised = next((line.strip() for line in reversed(trace) if RAISED.match(line.strip())), None)
+    return {"raised": cut(raised or "an error it did not name", 200), "detail": "\n".join(trace[-25:])[-2000:]}
 
 
 def _activity(lines: list[str], stage: str) -> str | None:
@@ -293,6 +403,12 @@ def _activity(lines: list[str], stage: str) -> str | None:
     return None
 
 
+def _check(text: str) -> dict:
+    """A check's line as its name and, after the first colon, what it found."""
+    name, _, detail = text.partition(": ")
+    return {"name": name, "detail": detail}
+
+
 def verify_results(lines: list[str]) -> dict | None:
     counts = {"PASS": 0, "FAIL": 0, "SKIP": 0, "DEGRADED": 0}
     problems = []
@@ -300,7 +416,7 @@ def verify_results(lines: list[str]) -> dict | None:
         if m := VERIFY.match(line):
             counts[m[1]] += 1
             if m[1] in ("FAIL", "DEGRADED"):
-                problems.append({"status": m[1], "text": m[2]})
+                problems.append({"status": m[1], "text": m[2]} | _check(m[2]))
     if not any(counts.values()):
         return None
     return {"counts": counts, "problems": problems}
@@ -333,24 +449,57 @@ def summarize(action: str, text: str, state: str, times: dict) -> dict:
     if state == "failed":
         joined = "\n".join(errors)
         m = STOPPED.search(joined)
-        failed_stage, message = (m[1], m[2]) if m else (current, errors[0] if errors else "")
+        failed_stage, message = (m[1], m[2].split("\n")[0]) if m else (current, errors[0] if errors else "")
+        others = [e for e in errors if not STOPPED.search(e) and e != message]
+        stage_lines = sections.get(failed_stage, [])
+        failures = results["counts"]["FAIL"] if results else 0
+        items: list[dict] = []
+        default = None
         if stopped:
             message = "you stopped this run from the page"
-        failures = results["counts"]["FAIL"] if results else 0
-        if not message and failures:
+        elif not message and failures:
             message = f"{failures} check{'s' if failures > 1 else ''} failed"
-        stage_lines = sections.get(failed_stage, [])
-        ansible = None if stopped else _ansible_failure(stage_lines)
-        tofu = _tofu_errors(stage_lines) if failed_stage == "tofu" and not stopped else []
-        found = " ".join([message, (ansible or {}).get("detail", ""), *tofu, *errors])
+        elif not message and (crash := _crash(stage_lines)):
+            message = f"NullBill stopped with an error of its own: {crash['raised']}"
+            items = [{"title": None, "text": "", "detail": crash["detail"]}]
+            default = BUG_ADVICE
+        elif (not message or PLAYBOOK_FAILED.search(message)) and (failed := _ansible_failures(stage_lines)):
+            # The step and what it said, not the playbook's exit code.
+            step = (failed[0]["task"] or "a step").split(" (")[0]
+            hosts = list(dict.fromkeys(f["host"] for f in failed))
+            where = hosts[0] if len(hosts) == 1 else f"{len(hosts)} machines"
+            times_over = f", for {len(failed)} items" if len(failed) > 1 and len(hosts) == 1 else ""
+            message = f'the step "{step[0].upper() + step[1:]}" failed on {where}{times_over}'
+            many = len(failed) > 1
+            items = [
+                {"title": (f["item"] or f["host"]) if many else None, "text": sentence(f["text"]), "detail": f["detail"]} for f in failed
+            ]
+        elif failed_stage == "tofu" and (said := _tofu_errors(stage_lines)):
+            items = said
+            message = "OpenTofu stopped with an error" if len(said) == 1 else f"OpenTofu stopped with {len(said)} errors"
+        elif others and not m:
+            # Several causes at once, as plan reports them: none is the first.
+            others = [message, *others]
+            message = f"the plan has {len(others)} problems" if failed_stage == PREPARE else f"it stopped with {len(others)} errors"
+        if not stopped:
+            items += [{"title": None, "text": sentence(e), "detail": ""} for e in others]
+        # What to do. Several causes each get their own line beside them;
+        # one cause, or none the page knows, gets the one under the card.
+        fallback = default or advice("", failed_stage if names else None)
+        for item in items:
+            item["advice"] = specific(f"{item['text']}\n{item['detail']}") if len(items) > 1 else None
+        if stopped:
+            todo = STOPPED_ADVICE
+        elif len(items) > 1:
+            todo = fallback
+        else:
+            todo = specific("\n".join([message, *(f"{i['text']}\n{i['detail']}" for i in items)])) or fallback
         out["error"] = {
             "stage": failed_stage if names else None,
             "stage_text": STAGE_TEXT.get(failed_stage) if names else None,
             "message": sentence(message or "it ended without saying why; the full log below may show more"),
-            "more": [sentence(e) for e in errors if not STOPPED.search(e) and e != message],
-            "task": ansible,
-            "tofu": tofu,
-            "advice": STOPPED_ADVICE if stopped else advice(found, failed_stage if names else None),
+            "items": items,
+            "advice": todo,
         }
     if names:
         steps = []

@@ -300,8 +300,11 @@ def test_a_games_agreement_and_admins_are_saved_with_the_choices(site):
         "Minecraft's server runs only once you agree to its EULA (https://aka.ms/MinecraftEULA): "
         "tick that you agree beside Minecraft under Setup, What to run, or untick Minecraft."
     ]
+    # The problem and what to do about it travel together, for the page to show them so.
+    (problem,) = [x for x in plan["problems"] if x["text"].startswith("games.minecraft.eula")]
+    assert problem["advice"] == plan["advice"][0]
     preview = client.call("/api/choices/preview", {**choices, "games": form})[1]
-    assert preview["advice"] == plan["advice"]
+    assert preview["advice"] == plan["advice"] and preview["problems"] == plan["problems"]
     # Agreed, with admins typed as people type them.
     form = {"minecraft": {"eula": True, "admins": " owner_a,  Friend_B owner_a "}, "factorio": {"admins": "owner-a"}}
     status, data = client.call("/api/choices", {**choices, "games": form})
@@ -518,6 +521,15 @@ def test_activity_lists_runs_newest_first_and_built_waits_for_a_good_setup_run(s
     assert [r["id"] for r in st["runs"]] == [good["id"], failed["id"]]
     assert st["runs"][1]["state"] == "failed" and st["runs"][1]["stopped"] is False and st["runs"][0]["by"] == "owner"
     assert all(r["seconds"] >= 0 for r in st["runs"])
+    # The list says where a failed run stopped; a finished one has nothing to say.
+    assert st["runs"][0]["where"] is None and st["runs"][1]["where"] == 'At "Read your choices and make the plan"'
+
+
+def test_each_plan_problem_carries_what_to_do_about_it():
+    """A problem with its advice beside it, and each advice line once."""
+    view = web.problems({"errors": ["intent asks for inference, but no host-shared GPU budgets VRAM to it", "something new"]}, "Other.")
+    assert [x["advice"] for x in view["problems"]] == [view["advice"][0], None] and view["advice"][1] == "Other."
+    assert view["advice"][0].startswith("Untick Local AI models")
 
 
 def test_one_job_at_a_time(site, tmp_path):
@@ -560,7 +572,7 @@ def test_a_hung_run_is_stopped_with_everything_under_it(site, tmp_path, monkeypa
     assert not Path(f"/proc/{grandchild}").exists() or Path(f"/proc/{grandchild}/stat").read_text().split(")")[1].split()[0] == "Z"
     error = done["progress"]["error"]
     assert error["message"] == "You stopped this run from the page." and error["stage"] == "media"
-    assert error["advice"] == progress.STOPPED_ADVICE and error["more"] == [] and error["task"] is None
+    assert error["advice"] == progress.STOPPED_ADVICE and error["items"] == []
     # The page tells a deliberate stop from a failure.
     st = client.call("/api/state")[1]
     assert done["stopped"] is True and st["last_jobs"]["apply"]["stopped"] is True

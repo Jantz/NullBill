@@ -2546,6 +2546,10 @@ class SshReach:
                 "ANSIBLE_PIPELINING": "true",
                 "ANSIBLE_CONNECTION_PLUGINS": str(ANSIBLE / "connection_plugins"),
                 "ANSIBLE_PARAMIKO_PTY": "false",
+                # A failed task's result as YAML, its output line by line,
+                # not as one line of JSON a thousand characters long: the
+                # owner reads this log on the page (progress.py reads both).
+                "ANSIBLE_CALLBACK_RESULT_FORMAT": "yaml",
             }
             argv = ["ansible-playbook", "-i", str(inventory), "-e", f"@{values}", str(ANSIBLE / playbook)]
             try:

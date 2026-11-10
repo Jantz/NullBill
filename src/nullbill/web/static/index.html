@@ -323,8 +323,8 @@
             <p class="note" id="budget-hint" hidden><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><span><a href="#setup/hardware">Read the hardware</a> first to see what fits in this server.</span></p>
             <div id="choices-problems" class="problem" tabindex="-1" hidden>
               <h3>These choices do not fit</h3>
-              <ul id="choices-errors"></ul>
-              <h4>What to do</h4>
+              <ul id="choices-errors" class="fails"></ul>
+              <h4 id="choices-advice-head">What to do</h4>
               <ul id="choices-advice"></ul>
             </div>
             <div class="pick-tools" id="pick-tools" hidden>
@@ -372,8 +372,8 @@
         <p id="plan-stale" class="note warn" hidden><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg><span>Your choices are not saved; this plan is for the last saved ones.</span></p>
         <div id="plan-problems" class="problem" hidden>
           <h3>The plan does not fit yet</h3>
-          <ul id="plan-errors"></ul>
-          <h4>What to do</h4>
+          <ul id="plan-errors" class="fails"></ul>
+          <h4 id="plan-advice-head">What to do</h4>
           <ul id="plan-advice"></ul>
           <div class="row"><button type="button" class="btn small" data-ask="The plan does not fit. Look at my hardware and choices and tell me the smallest change that makes it fit."><svg class="icon" aria-hidden="true"><use href="#i-agent"/></svg>Ask the agent</button></div>
         </div>
@@ -901,8 +901,7 @@
     <div class="problem job-error" hidden>
       <h3 class="job-error-title" tabindex="-1">What went wrong</h3>
       <p class="job-message"></p>
-      <ul class="job-more"></ul>
-      <div class="job-detail" hidden><h4 class="job-detail-title"></h4><pre class="job-detail-text"></pre></div>
+      <ul class="fails job-items" hidden></ul>
       <h4>What to do</h4>
       <p class="job-advice"></p>
       <div class="row">

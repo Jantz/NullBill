@@ -310,6 +310,17 @@ class Job:
         return "done" if self.rc == 0 else "failed"
 
 
+def problems(view: dict, other: str | None) -> dict:
+    """A view's `errors` with what to do: `problems` pairs each with the
+    advice for its cause where the page knows the cause, and `advice` lists
+    every line once, in the problems' order, `other` standing in for a
+    cause it does not know."""
+    known = [progress.specific(m) for m in view["errors"]]
+    view["problems"] = [{"text": m, "advice": a} for m, a in zip(view["errors"], known, strict=True)]
+    view["advice"] = list(dict.fromkeys(a or other for a in known if a or other))
+    return view
+
+
 @dataclass
 class App:
     home: Path
@@ -332,6 +343,8 @@ class App:
     # Tailscale's API with the owner's OAuth client, for the People tab.
     tailnet_client: Callable[[str, str], Tailnet] = Tailnet
     tailnet_seen: tuple[float, dict] | None = None
+    # Where each failed run stopped, for Activity's list.
+    failed_stages: dict = field(default_factory=dict, repr=False)
     people_busy: bool = False
     agent_command: list[str] = field(default_factory=lambda: list(AGENT_COMMAND))
     agent_user: str | None = AGENT_USER
@@ -1017,11 +1030,9 @@ class App:
         try:
             model = build_model(config)
         except NullBillError as exc:
-            return {"items": [], "power": [], "memory": None, "errors": exc.messages, "adds": None, "removes": None, "advice": []}
+            return problems({"items": [], "power": [], "memory": None, "errors": exc.messages, "adds": None, "removes": None}, None)
         out = workloads.options(model, self.facts(), self.existing_guests(), self.home)
-        other = "Turn off a choice, or change one, until this no longer applies."
-        out["advice"] = list(dict.fromkeys(progress.advice(m, default=other) for m in out["errors"]))
-        return out
+        return problems(out, "Turn off a choice, or change one, until this no longer applies.")
 
     def preview(self, body: dict) -> dict | None:
         """The page's form, not saved: what it would come to."""
@@ -1319,10 +1330,8 @@ class App:
             model = build_model(config)
             text = plan_text(model, facts.read_bytes())
         except NullBillError as exc:
-            # One line of advice per cause, in the order the problems are listed.
             other = "Change your choices under Setup, What to run, so this no longer applies, and press Save and plan."
-            advice = list(dict.fromkeys(progress.advice(m, default=other) for m in exc.messages))
-            return {"text": None, "errors": exc.messages, "advice": advice, "summary": None, "tailnet_policy": None}
+            return problems({"text": None, "errors": exc.messages, "summary": None, "tailnet_policy": None}, other)
         _write_private(self.home / "plan.yaml", text)
         loaded = yaml.safe_load(text)
         policy = render_tailnet(loaded, model)["policy.json"]
@@ -1822,9 +1831,22 @@ class App:
                     "started": job.started,
                     "seconds": seconds,
                     "by": job.by,
+                    "where": self.failed_at(job) if state == "failed" and not stopped else None,
                 }
             )
         return out
+
+    def failed_at(self, job: Job) -> str | None:
+        """Where a failed run stopped, for Activity's list: its stage in the
+        page's words, or how many checks failed. Read from its log once: a
+        run that ended does not change."""
+        if job.id not in self.failed_stages:
+            view = self.job_view(job)["progress"]
+            stage = (view.get("error") or {}).get("stage_text")
+            failed = (view.get("verify") or {}).get("counts", {}).get("FAIL", 0)
+            where = f'At "{stage}"' if stage else f"{failed} check{'s' if failed > 1 else ''}" if failed else None
+            self.failed_stages[job.id] = where
+        return self.failed_stages[job.id]
 
     def built(self) -> bool:
         """A setup run has finished at least once: the guests exist, even

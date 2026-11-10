@@ -396,6 +396,16 @@ def test_a_turn_cut_off_by_a_restart_ends_with_a_note(agent):
     assert last["state"] == "end" and "carry on" in last["error"]
 
 
+def test_a_failed_turn_is_a_line_to_act_on_with_what_the_program_printed_apart():
+    raw = 'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_x"}'
+    line, detail = chat_module.friendly_error(raw)
+    assert line == "The model is busy, or your plan's limit is reached. Ask again in a few minutes." and detail == raw
+    # A short line of its own needs no second place; a stack trace is never the message.
+    assert chat_module.friendly_error("the agent CLI ended with exit code 3") == ("the agent CLI ended with exit code 3", "")
+    trace = "node:internal/process/promises:394\n      triggerUncaughtException(err, true);\nError: something odd\n    at main (cli.js:1:1)"
+    assert chat_module.friendly_error(trace) == ("The agent's program stopped with an error.", trace)
+
+
 def test_the_backup_server_cannot_be_destroyed(agent, tmp_path):
     app, client, host = signed_in(agent, "yolo")
     (app.home / "plan.yaml").write_text("guests:\n  pbs: {kind: vm, vmid: 140, zone: backup}\n")

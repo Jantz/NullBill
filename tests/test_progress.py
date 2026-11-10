@@ -31,7 +31,9 @@ def test_a_finished_apply_has_every_stage_done_with_its_time():
     assert all(s["status"] == "done" for s in steps)
     assert steps[0]["seconds"] == 2 and steps[1]["seconds"] == 10 and steps[-1]["seconds"] == 300 - 10 * (len(STAGES) - 1)
     assert view["verify"]["counts"] == {"PASS": 1, "FAIL": 0, "SKIP": 1, "DEGRADED": 1}
-    assert view["verify"]["problems"] == [{"status": "DEGRADED", "text": "backups: no second disk"}]
+    assert view["verify"]["problems"] == [
+        {"status": "DEGRADED", "text": "backups: no second disk", "name": "backups", "detail": "no second disk"}
+    ]
     assert "error" not in view
 
 
@@ -92,13 +94,144 @@ def test_a_failed_ansible_task_is_shown_with_its_message_not_an_exit_code():
         ]
     )
     error = summarize("apply", log, "failed", times(9, 9))["error"]
-    assert error["task"] == {
-        "task": "install nftables (router)",
-        "host": "router",
-        "detail": "Failed to update apt cache: W:Temporary failure resolving 'deb.debian.org'",
-    }
-    assert error["message"] == "router.yml failed on router (exit 2)."
+    assert error["message"] == 'The step "Install nftables" failed on router.'
+    assert error["items"] == [
+        {"title": None, "text": "Failed to update apt cache: W:Temporary failure resolving 'deb.debian.org'.", "detail": "", "advice": None}
+    ]
     assert "internet connection" in error["advice"]
+
+
+# What ansible-core 2.19 prints for a failed command with apply's
+# ANSIBLE_CALLBACK_RESULT_FORMAT=yaml (made with the pinned version; the
+# Origin line's path shortened).
+YAML_FAILURE = """\
+TASK [forgejo : Install the packages Forgejo needs] ****************************
+[ERROR]: Task failed: Module failed: non-zero return code
+Origin: /opt/nullbill/ansible/roles/forgejo/tasks/main.yml:5:7
+
+3   gather_facts: false
+4   tasks:
+5     - name: Install the packages Forgejo needs
+        ^ column 7
+
+fatal: [forgejo]: FAILED! =>{SPACE}
+    changed: false
+    cmd: |-
+        apt-get -y install nginx
+
+        exit 100
+    delta: '0:00:00.002876'
+    msg: non-zero return code
+    rc: 100
+    stderr: |-
+        E: Failed to fetch http://deb.debian.org/debian/pool/main/n/nginx/nginx_1.22.1-9_amd64.deb  403  Forbidden [IP: 10.20.0.3 3128]
+        E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?
+    stderr_lines: <omitted>
+    stdout: |-
+        Reading package lists...
+
+        Building dependency tree...
+    stdout_lines: <omitted>
+
+PLAY RECAP *********************************************************************
+forgejo                    : ok=0    changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0
+""".replace("{SPACE}", " ")
+
+
+def test_a_failed_command_leads_with_what_the_program_said_and_keeps_its_output_apart():
+    log = "\n".join([mark("forgejo", 0), YAML_FAILURE, "nullbill: apply stopped at forgejo: forgejo.yml failed on forgejo (exit 2)"])
+    error = summarize("apply", log, "failed", times(9, 9))["error"]
+    assert error["message"] == 'The step "Install the packages Forgejo needs" failed on forgejo.'
+    (item,) = error["items"]
+    assert item["title"] is None
+    assert item["text"] == "E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing? (exit 100)."
+    assert item["detail"].splitlines() == [
+        "E: Failed to fetch http://deb.debian.org/debian/pool/main/n/nginx/nginx_1.22.1-9_amd64.deb  403  Forbidden [IP: 10.20.0.3 3128]",
+        "E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?",
+    ]
+    assert error["advice"].startswith("NullBill's internet proxy refused a site")
+
+
+def test_each_item_of_a_loop_that_failed_is_an_item_of_its_own():
+    log = "\n".join(
+        [
+            mark("forgejo", 0),
+            "TASK [forgejo : check the release] ****",
+            "failed: [forgejo] (item=old) => ",
+            "    msg: not this one",
+            "...ignoring",
+            "TASK [forgejo : fetch the pinned release] ****",
+            "failed: [forgejo] (item=forgejo-12.0.1-linux-amd64) => ",
+            "    ansible_loop_var: item",
+            "    msg: 'Request failed: <urlopen error Tunnel connection failed: 502 Bad Gateway>'",
+            "    url: https://example.invalid/forgejo-12.0.1-linux-amd64",
+            'failed: [forgejo] (item=forgejo-12.0.1-linux-amd64.sha256) => {"changed": false, "msg": "HTTP Error 404: Not Found"}',
+            "",
+            "PLAY RECAP ****",
+            "nullbill: apply stopped at forgejo: forgejo.yml failed on forgejo (exit 2)",
+        ]
+    )
+    error = summarize("apply", log, "failed", times(9, 9))["error"]
+    assert error["message"] == 'The step "Fetch the pinned release" failed on forgejo, for 2 items.'
+    assert [(i["title"], i["text"]) for i in error["items"]] == [
+        ("forgejo-12.0.1-linux-amd64", "Request failed: <urlopen error Tunnel connection failed: 502 Bad Gateway>."),
+        ("forgejo-12.0.1-linux-amd64.sha256", "HTTP Error 404: Not Found."),
+    ]
+
+
+def test_opentofu_errors_are_items_with_the_guest_they_name():
+    log = "\n".join(
+        [
+            mark("tofu", 0),
+            "proxmox_virtual_environment_vm.router: Creating...",
+            "",
+            "Error: error creating container: received an HTTP 500 response - Reason: unable to create CT 2014",
+            "",
+            "  with proxmox_virtual_environment_container.forgejo,",
+            "  on main.tf.json line 233, in resource.proxmox_virtual_environment_container.forgejo:",
+            " 233:       }",
+            "",
+            "",
+            "Error: error waiting for VM clone: All attempts fail:",
+            "#1: error retrieving task status: received an HTTP 596 response - Reason: Connection timed out",
+            "",
+            "  with proxmox_virtual_environment_vm.router,",
+            "  on main.tf.json line 412, in resource.proxmox_virtual_environment_vm.router:",
+            " 412:       }",
+            "",
+            "The task did not finish within 1800 seconds.",
+            "",
+            "nullbill: apply stopped at tofu: tofu apply failed (exit 1)",
+        ]
+    )
+    error = summarize("apply", log, "failed", times(9, 9))["error"]
+    assert error["message"] == "OpenTofu stopped with 2 errors."
+    first, second = error["items"]
+    assert first["title"] == "Container forgejo" and first["detail"] == ""
+    assert first["text"] == "Error creating container: received an HTTP 500 response - Reason: unable to create CT 2014."
+    assert second["title"] == "VM router" and second["text"] == "Error waiting for VM clone: All attempts fail."
+    assert second["detail"].startswith("#1: error retrieving task status: received an HTTP 596 response")
+    assert second["detail"].endswith("\n\nThe task did not finish within 1800 seconds.")
+    # A node that answers late is not the internet connection: each cause gets its own advice.
+    assert first["advice"] is None and second["advice"].startswith("Proxmox took too long to answer")
+    assert error["advice"].startswith("Proxmox refused a change")
+
+
+def test_a_traceback_is_said_to_be_nullbills_own_fault():
+    log = "\n".join(
+        [
+            mark("ca", 0),
+            "Traceback (most recent call last):",
+            '  File "/opt/nullbill/src/nullbill/apply.py", line 1411, in stage_ca',
+            '    token = issue["token"]',
+            "KeyError: 'token'",
+        ]
+    )
+    error = summarize("apply", log, "failed", times(9, 9))["error"]
+    assert error["stage"] == "ca"
+    assert error["message"] == "NullBill stopped with an error of its own: KeyError: 'token'."
+    assert error["items"][0]["text"] == "" and error["items"][0]["detail"].startswith("Traceback")
+    assert error["advice"].startswith("This is a fault in NullBill")
 
 
 def test_a_plan_that_does_not_fit_stops_before_the_first_stage():
@@ -110,9 +243,13 @@ def test_a_plan_that_does_not_fit_stops_before_the_first_stage():
     assert view["steps"][0] == {"name": PREPARE, "text": "Read your choices and make the plan", "status": "failed", "seconds": 3}
     assert all(s["status"] == "waiting" for s in view["steps"][1:])
     error = view["error"]
-    assert error["message"].startswith("Memory: planned guests need 23040 MiB")
-    assert error["more"] == ["Intent asks for inference, but no host-shared GPU budgets VRAM to it."]
-    assert "more memory" in error["advice"]
+    # Each problem is an item with what to do about it; none is the headline.
+    assert error["message"] == "The plan has 2 problems."
+    memory, gpu = error["items"]
+    assert memory["text"].startswith("Memory: planned guests need 23040 MiB") and "more memory" in memory["advice"]
+    assert gpu["text"] == "Intent asks for inference, but no host-shared GPU budgets VRAM to it."
+    assert gpu["advice"].startswith("Untick Local AI models")
+    assert error["advice"] == "Fix what the message names under Setup, then run setup again."
 
 
 def test_failed_checks_are_listed():
@@ -120,7 +257,9 @@ def test_failed_checks_are_listed():
     view = summarize("verify", log, "failed", times(4, 4))
     assert "steps" not in view
     assert view["verify"]["counts"] == {"PASS": 1, "FAIL": 1, "SKIP": 0, "DEGRADED": 0}
-    assert view["verify"]["problems"] == [{"status": "FAIL", "text": "lan: 8006 answers from the LAN"}]
+    assert view["verify"]["problems"] == [
+        {"status": "FAIL", "text": "lan: 8006 answers from the LAN", "name": "lan", "detail": "8006 answers from the LAN"}
+    ]
     assert view["error"]["message"] == "1 check failed."
 
 

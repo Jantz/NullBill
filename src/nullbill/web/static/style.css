@@ -393,6 +393,8 @@ main { grid-area: main; container: main / inline-size; overflow-y: auto; padding
 .table td.actions { text-align: right; white-space: nowrap; width: 1%; }
 .table .name { font-weight: 500; color: var(--text); }
 .table .name a { color: var(--text); }
+.table .sub.run-where { white-space: normal; max-width: 40ch; }
+.table .sub.alert-todo { color: var(--text-2); font-size: 13px; white-space: normal; max-width: 72ch; }
 .table .sub { display: block; color: var(--text-3); font-size: 12px; margin-top: 1px; }
 .table code { background: none; padding: 0; color: var(--text-2); }
 .table .mono { font-family: var(--mono); font-size: 12px; color: var(--text-2); }
@@ -660,6 +662,31 @@ select:disabled { color: var(--text-3); background: var(--bg-sub); cursor: not-a
 .problem h4 { margin-top: 6px; }
 .problem ul { list-style: disc; padding-left: 18px; }
 .problem .row { margin-top: 8px; }
+.problem > p, .problem > h4 + ul { max-width: 86ch; }
+
+/* What failed, one item per cause, with a rule between them: what it is
+   about, what it said in a line, what to do, and its output only on demand.
+   Never several causes run together in a paragraph. */
+.fails, .problem ul.fails { list-style: none; padding: 0; display: grid; }
+.fails[hidden] { display: none; }
+.fail { display: grid; gap: 2px; min-width: 0; padding: 8px 0; border-top: 1px solid var(--line); }
+.fail:first-child { padding-top: 2px; border-top: 0; }
+.fail:last-child { padding-bottom: 2px; }
+.fail-title { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.fail-text { max-width: 86ch; overflow-wrap: anywhere; }
+.fail-fix { max-width: 86ch; color: var(--text-2); font-size: 13px; }
+.fail-fix b { color: var(--text); font-weight: 500; }
+.fail-more { margin-top: 4px; min-width: 0; }
+.fail-more > summary { cursor: pointer; width: fit-content; color: var(--text-2); font-size: 12px; font-weight: 500; }
+.fail-more > summary:hover { color: var(--text); }
+.fail-more[open] > summary { margin-bottom: 6px; }
+.fail-more .out > pre { max-height: min(40vh, 300px); }
+
+/* Several things said beside one control: a list under a count. */
+.feedback.several { display: flex; align-items: flex-start; white-space: normal; }
+.feedback.several .icon { flex: none; margin-top: 2px; }
+.say-body { display: grid; gap: 2px; min-width: 0; }
+.say-list { list-style: disc; padding-left: 16px; display: grid; gap: 2px; }
 .done-note { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; margin: 12px 0; border: 1px solid var(--line); border-left: 3px solid var(--good-dot); border-radius: var(--radius); }
 .done-note > .icon { color: var(--good); margin-top: 2px; }
 .done-note.warn { border-left-color: var(--warn-dot); }
@@ -684,9 +711,15 @@ select:disabled { color: var(--text-3); background: var(--bg-sub); cursor: not-a
 .job-verify { margin: 12px 0; }
 .counts { font-size: 13px; color: var(--text-2); }
 .counts b { color: var(--text); }
-.problems { margin-top: 6px; display: grid; gap: 4px; font-size: 13px; }
-.problems .fail b { color: var(--bad); }
-.problems .degraded b { color: var(--warn); }
+/* The checks that failed or are degraded: a row each, what the check found
+   under its name. */
+.problems { margin-top: 8px; border: 1px solid var(--line); border-radius: var(--radius); font-size: 13px; }
+.problems[hidden] { display: none; }
+.problems li { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 2px 12px; align-items: baseline; padding: 8px 12px; border-top: 1px solid var(--line); }
+.problems li:first-child { border-top: 0; }
+.check { display: grid; gap: 1px; min-width: 0; }
+.check-name { font-weight: 500; overflow-wrap: anywhere; }
+.check-detail { color: var(--text-2); overflow-wrap: anywhere; }
 .job-cols { display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); gap: 24px; margin-top: 20px; align-items: start; }
 .mini-head { font-size: 12px; font-weight: 500; color: var(--text-3); margin-bottom: 8px; }
 
@@ -830,6 +863,7 @@ tr.detail > td { background: var(--bg-sub); padding: 14px 16px 16px 56px; }
 .msg.user { align-self: flex-end; max-width: 88%; padding: 8px 12px; border-radius: 10px; background: var(--bg-sub); border: 1px solid var(--line); white-space: pre-wrap; }
 .msg.system { color: var(--text-3); font-size: 12px; }
 .msg.error { color: var(--bad); font-size: 13px; }
+.msg.error .fail-more > summary { color: var(--text-2); }
 .turn-meta { color: var(--text-3); font-size: 12px; margin-top: -6px; }
 .ran { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 12px; color: var(--text-2); }
 .ran .tier { font-size: 12px; }
@@ -1040,6 +1074,7 @@ dialog::backdrop { background: var(--scrim); }
 }
 /* Narrow is a phone, and also a laptop with the agent open beside the page. */
 @container main (max-width: 640px) {
+  .problems li { grid-template-columns: minmax(0, 1fr); }
   .setting { grid-template-columns: minmax(0, 1fr); padding: 16px; }
   .person-fields { grid-template-columns: minmax(0, 1fr); }
   #access-tabs { gap: 16px; }

@@ -119,8 +119,14 @@ function announce(text, urgent) {
   setTimeout(() => { region.textContent = text; }, 60);
 }
 
+// What the server refused, one message per cause (.messages); .message is
+// all of them in a line, for the places that have only a line.
 class ApiError extends Error {
-  constructor(message, status) { super(message); this.status = status; }
+  constructor(message, status, messages) {
+    super(message);
+    this.status = status;
+    this.messages = messages && messages.length ? messages : [message];
+  }
 }
 
 // The digest of the page's files this script came with; every answer names
@@ -194,10 +200,12 @@ async function api(path, body) {
     throw new ApiError("You were signed out. Sign in again; nothing you saved is lost.", 401);
   }
   if (!response.ok) {
-    const error = new ApiError(sentence(data.error || `The server answered ${response.status} ${response.statusText}`), response.status);
+    // Several reasons come as a list too (.list as sent, .messages as
+    // sentences, .headline what did not happen), for a place with room.
+    const list = Array.isArray(data.errors) && data.errors.length > 1 ? data.errors : null;
+    const error = new ApiError(sentence(data.error || `The server answered ${response.status} ${response.statusText}`), response.status, list && list.map(sentence));
     error.review = Boolean(data.review);
-    // Several reasons come as a list too, for a place with room for one.
-    error.list = Array.isArray(data.errors) && data.errors.length > 1 ? data.errors : null;
+    error.list = list;
     error.headline = data.headline || "";
     throw error;
   }
@@ -221,15 +229,21 @@ function toast(text, link, seconds) {
   if (text && seconds) toastTimer = setTimeout(() => toast(""), seconds * 1000);
 }
 
-// The line next to a control: busy, ok, error or info.
-function say(id, kind, text) {
+// The line next to a control: busy, ok, error or info. Several things to
+// say (an array) become a short list, one each, never one run-on line,
+// under `head` (what did not happen) when the server sent one.
+function say(id, kind, text, head) {
   const node = typeof id === "string" ? $(id) : id;
   if (!node) return;
-  node.className = `${node.className.split(" ").filter((c) => !["ok", "error", "info", "busy"].includes(c)).join(" ")} ${kind || ""}`.trim();
+  const lines = (Array.isArray(text) ? text : [text]).filter(Boolean);
+  node.className = `${node.className.split(" ").filter((c) => !["ok", "error", "info", "busy", "several"].includes(c)).join(" ")} ${kind || ""}${lines.length > 1 ? " several" : ""}`.trim();
   node.replaceChildren();
-  if (!text) return;
+  if (!lines.length) return;
   const mark = {busy: make("span", {className: "spin", ariaHidden: "true"}), ok: icon("check"), error: icon("alert")}[kind];
-  node.append(...[mark, make("span", {textContent: text})].filter(Boolean));
+  const body = lines.length > 1
+    ? make("span", {className: "say-body"}, make("span", {textContent: `${head ? head.replace(/[.:]+$/, "") : `${lines.length} things ${kind === "error" ? "are in the way" : "to know"}`}:`}), make("ul", {className: "say-list"}, ...lines.map((l) => li(l))))
+    : make("span", {textContent: lines[0]});
+  node.append(...[mark, body].filter(Boolean));
 }
 
 // One press: the button waits, the line beside it says what happens. work()
@@ -248,7 +262,10 @@ async function press(button, feedback, busyText, work, field) {
     const text = await work();
     say(feedback, text ? "ok" : "", text);
   } catch (error) {
-    say(feedback, "error", error.listed ? "" : error.message);
+    // Several reasons: a list under what did not happen, unless a block of
+    // its own took them (showProblem).
+    if (error.listed) say(feedback, "", "");
+    else say(feedback, "error", error.list ? error.messages : error.message, error.headline);
     if (field && error.status !== 0 && error.status !== 401) {
       field.setAttribute("aria-invalid", "true");
       field.focus();
@@ -1018,8 +1035,7 @@ function paintBudget(view) {
   show("budget-hint", !m);
   show("budget-base", Boolean(m));
   const hasErrors = view.errors.length > 0;
-  $("choices-errors").replaceChildren(...view.errors.map((e) => li(sentence(e))));
-  $("choices-advice").replaceChildren(...view.advice.map((a) => li(a)));
+  planProblems("choices", view);
   show("choices-problems", hasErrors);
   if (!m) return;
   const over = m.free_mib < 0;
@@ -1324,10 +1340,21 @@ function renderHardware(hw) {
 
 const KINDS = {"lxc": "Container", "vm": "VM", "vm-pool": "VM pool"};
 
+// Why the choices cannot be planned: each problem with what to do about
+// it beside it, and under them only the advice that belongs to no one
+// problem.
+function planProblems(prefix, view) {
+  const problems = view.problems || view.errors.map((e) => ({text: e, advice: null}));
+  $(`${prefix}-errors`).replaceChildren(...failItems(problems.map((x) => ({text: sentence(x.text), advice: x.advice}))));
+  const rest = (view.advice || []).filter((a) => !problems.some((x) => x.advice === a));
+  $(`${prefix}-advice`).replaceChildren(...rest.map((a) => li(a)));
+  show(`${prefix}-advice-head`, rest.length > 0);
+  show(`${prefix}-advice`, rest.length > 0);
+}
+
 function renderPlan(plan) {
   const hasErrors = plan.errors.length > 0;
-  $("plan-errors").replaceChildren(...plan.errors.map((e) => li(sentence(e))));
-  $("plan-advice").replaceChildren(...(plan.advice || []).map((a) => li(a)));
+  planProblems("plan", plan);
   show("plan-problems", hasErrors);
   show("plan-ok", Boolean(plan.text));
   $("plan").textContent = plan.text || "";
@@ -1370,6 +1397,13 @@ function renderAlerts(alerts) {
   $("healthchecks-url").value = alerts ? alerts.healthchecks_url : "";
 }
 
+// An alert's summary says what happened, then after a semicolon what to do:
+// a line each.
+function alertText(a) {
+  const [what, ...todo] = String(a.summary || a.name).split("; ");
+  return {what: sentence(what).replace(/\.$/, ""), todo: todo.map(sentence).join(" ")};
+}
+
 // What is firing, from monitoring.
 function renderFiring() {
   const s = lastStatus;
@@ -1388,7 +1422,8 @@ function renderFiring() {
     if (ask) ask.addEventListener("click", () => askAgent(`The alert ${a.name} fires${a.summary ? `: ${a.summary.replace(/[.\s]+$/, "")}` : ""}. What does it mean, and what should I do?`));
     return make("tr", {},
       make("td", {className: "hide-phone"}, status(a.severity === "page" ? "bad" : "warn", a.severity === "page" ? "Urgent" : "When you can")),
-      make("td", {}, make("div", {className: "name", textContent: a.summary || a.name}),
+      make("td", {}, make("div", {className: "name", textContent: alertText(a).what}),
+        alertText(a).todo ? make("div", {className: "sub alert-todo", textContent: alertText(a).todo}) : null,
         make("div", {className: "sub"}, make("span", {className: "only-phone-inline", textContent: a.severity === "page" ? "Urgent · " : "When you can · "}), make("code", {textContent: a.name}))),
       make("td", {className: "actions"}, ask));
   }));
@@ -1531,7 +1566,7 @@ function renderPeople() {
   $("people-waits").querySelector("span").textContent = ts.waits || "";
   show("people-drift", !ts.waits && ts.in_place === false);
   show("people-error", Boolean(ts.error));
-  $("people-error").querySelector("span").textContent = ts.error ? `${sentence(ts.error)} Who is listed here still holds; their devices show again once Tailscale answers.` : "";
+  $("people-error").querySelector("span").textContent = ts.error ? `${ts.error.split("; ").map(sentence).join(" ")} Who is listed here still holds. Their devices show again once Tailscale answers.` : "";
   $("people-count").textContent = `${view.limit.used} of ${view.limit.max} people on Tailscale's free plan, you included`;
   const full = view.limit.used >= view.limit.max;
   $("person-add").setAttribute("aria-disabled", full ? "true" : "false");
@@ -2198,7 +2233,7 @@ function attentionItems() {
   if ((state.removals || []).length && state.removals_stopped) add("bad", `Setup stopped before deleting ${andList(state.removals)}`, "Keep them or confirm the deletion.", [link("Decide", "#setup/build")]);
   const s = lastStatus;
   if (s && s.monitoring === "ok") {
-    for (const a of s.alerts) add(a.severity === "page" ? "bad" : "warn", a.summary || a.name, a.name, [link("Alerts", "#alerts")]);
+    for (const a of s.alerts) add(a.severity === "page" ? "bad" : "warn", alertText(a).what, alertText(a).todo || a.name, [link("Alerts", "#alerts")]);
     if (s.down.length) add("bad", `${s.down.length} system${s.down.length > 1 ? "s do" : " does"} not answer`, s.down.join(", "),
       signed ? [ask("Ask the agent", "Look at the systems that do not answer, find the cause and propose the fix.")] : []);
     if (s.reboot_waiting.length) add("warn", "A restart would finish installed updates", s.reboot_waiting.join(", "), []);
@@ -2856,7 +2891,7 @@ function runView(r) {
     const v = job.view;
     const steps = (v.progress && v.progress.steps) || [];
     const done = steps.filter((s) => s.status === "done").length;
-    return {...r, state: v.state, stopped: v.stopped, seconds: v.seconds, stage: v.state === "running" && steps.length ? `Stage ${Math.min(steps.length, done + 1)} of ${steps.length}` : ""};
+    return {...r, state: v.state, stopped: v.stopped, seconds: v.seconds, where: v.progress && v.progress.error && v.progress.error.stage_text ? `At "${v.progress.error.stage_text}"` : r.where, stage: v.state === "running" && steps.length ? `Stage ${Math.min(steps.length, done + 1)} of ${steps.length}` : ""};
   }
   return r;
 }
@@ -2865,7 +2900,7 @@ function runRow(raw) {
   const result = r.state === "running" ? status("run", r.stage || "Running") : r.state === "done" ? status("good", "Finished") : r.stopped ? status("", "Stopped by you") : status("bad", "Failed");
   const row = make("tr", {className: `link-row${job && job.id === r.id && currentSub === r.id ? " current" : ""}`},
     make("td", {className: "name"}, make("a", {href: `#activity/${r.id}`, textContent: JOB_NAMES[r.action] || r.action})),
-    make("td", {}, result),
+    make("td", {}, result, r.state === "failed" && !r.stopped && r.where ? make("span", {className: "sub run-where", textContent: r.where}) : null),
     make("td", {className: "muted"}, make("span", {textContent: clock(r.started), title: ago(r.started)})),
     make("td", {className: "num muted hide-phone", textContent: r.state === "running" ? duration(r.seconds) : duration(r.seconds)}),
     make("td", {className: "muted hide-phone", textContent: r.by === "agent" ? "Agent" : r.by === "owner" ? "You" : r.by}));
@@ -2922,8 +2957,9 @@ function follow(first, watched, feedback) {
   if (job && job.feedback && job.feedback !== feedback && !job.feedback.classList.contains("error")) say(job.feedback, "", "");
   const node = $("job-template").content.firstElementChild.cloneNode(true);
   // A clone keeps no listeners, so the copy buttons go on here.
-  for (const pre of node.querySelectorAll(".job-log pre, .job-detail-text")) outputBox(pre);
-  job = {id: first.id, view: first, node, offset: 0, timer: null, watched, misses: 0, feedback, stage: null};
+  for (const pre of node.querySelectorAll(".job-log pre")) outputBox(pre);
+  // The first view came with the log up to its offset; the next asks from there.
+  job = {id: first.id, view: first, node, offset: first.offset || 0, timer: null, watched, misses: 0, feedback, stage: null};
   const again = ["verify", "upgrade"].includes(first.action) ? first.action : "apply";
   for (const button of node.querySelectorAll(".job-retry, .job-again")) {
     button.addEventListener("click", () => {
@@ -3034,6 +3070,23 @@ function paintPill(view) {
   }
 }
 
+// What failed, one item per cause: what it is about, what it said in a
+// line, what to do about it when that is known, and what it printed only
+// when asked for.
+function failItems(items) {
+  return items.map((item) => {
+    const node = make("li", {className: "fail"});
+    if (item.title) node.append(make("b", {className: "fail-title", textContent: item.title}));
+    if (item.text) node.append(make("p", {className: "fail-text", textContent: item.text}));
+    if (item.advice) node.append(make("p", {className: "fail-fix"}, make("b", {textContent: "What to do: "}), item.advice));
+    if (item.detail) {
+      const pre = make("pre", {textContent: item.detail});
+      node.append(make("details", {className: "fail-more"}, make("summary", {textContent: "What it printed"}), outputBox(pre)));
+    }
+    return node;
+  });
+}
+
 function drawJob(current, view) {
   const node = current.node;
   const p = view.progress;
@@ -3099,20 +3152,15 @@ function drawJob(current, view) {
     const e = p.error;
     node.querySelector(".job-error-title").textContent = view.stopped ? (e.stage_text ? `Stopped by you at "${e.stage_text}"` : "Stopped by you") : e.stage_text ? `Failed at "${e.stage_text}"` : "What went wrong";
     node.querySelector(".job-message").textContent = e.message;
-    node.querySelector(".job-more").replaceChildren(...e.more.map((m) => li(m)));
-    const detail = node.querySelector(".job-detail");
-    const lines = [];
-    let title = "";
-    if (e.task) {
-      title = `The step that failed${e.task.task ? `: ${e.task.task}` : ""}, on ${e.task.host}`;
-      lines.push(e.task.detail);
-    } else if (e.tofu.length) {
-      title = "What Proxmox or OpenTofu said";
-      lines.push(...e.tofu);
+    // Drawn again each second while the page follows a run: keep what is
+    // there, with whatever the owner opened, unless it changed.
+    const items = node.querySelector(".job-items");
+    const key = JSON.stringify(e.items);
+    if (items.dataset.key !== key) {
+      items.dataset.key = key;
+      items.replaceChildren(...failItems(e.items));
     }
-    detail.hidden = !lines.length;
-    node.querySelector(".job-detail-title").textContent = title;
-    node.querySelector(".job-detail-text").textContent = lines.join("\n");
+    items.hidden = !e.items.length;
     node.querySelector(".job-advice").textContent = e.advice;
     const retry = node.querySelector(".job-retry");
     retry.hidden = !["apply", "verify", "rebake-ci", "upgrade", "remove-guests"].includes(view.action) || (reviewed && !sameReview(view));
@@ -3128,8 +3176,18 @@ function drawJob(current, view) {
     const c = v.counts;
     const part = (n, word) => [make("b", {textContent: String(n)}), ` ${word}`];
     box.querySelector(".counts").replaceChildren(...part(c.PASS, "passed"), " · ", ...part(c.FAIL, "failed"), " · ", ...part(c.DEGRADED, "degraded"), " · ", ...part(c.SKIP, "skipped"));
-    box.querySelector(".problems").replaceChildren(...v.problems.map((x) =>
-      make("li", {className: x.status.toLowerCase()}, make("b", {textContent: x.status === "FAIL" ? "Failed: " : "Degraded: "}), x.text)));
+    const list = box.querySelector(".problems");
+    const key = JSON.stringify(v.problems);
+    if (list.dataset.key !== key) {
+      list.dataset.key = key;
+      // Failed before degraded; what a check found on lines of its own.
+      const rows = [...v.problems].sort((a, b) => (a.status === "FAIL" ? 0 : 1) - (b.status === "FAIL" ? 0 : 1));
+      list.replaceChildren(...rows.map((x) => make("li", {className: x.status.toLowerCase()},
+        status(x.status === "FAIL" ? "bad" : "warn", x.status === "FAIL" ? "Failed" : "Degraded"),
+        make("div", {className: "check"}, make("span", {className: "check-name", textContent: x.name || x.text}),
+          ...String(x.detail || "").split("; ").filter(Boolean).map((d) => make("span", {className: "check-detail", textContent: d}))))));
+    }
+    list.hidden = !v.problems.length;
   }
   const pre = node.querySelector(".job-log pre");
   const atEnd = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40;
@@ -3158,7 +3216,7 @@ function drawOutcome(node, view) {
     "remove-guests": ["Setup finished.", "The guests you chose to delete are gone; everything else in the plan is in place."],
   }[view.action] || ["Finished.", ""];
   const warned = p.verify && p.verify.counts.DEGRADED ? p.verify.problems.filter((x) => x.status === "DEGRADED").map((x) => x.text) : [];
-  if (warned.length && view.action === "verify") text[1] = `No check failed; ${warned.length === 1 ? "one warns" : `${warned.length} warn`}: ${warned.join(", ")}.`;
+  if (warned.length && view.action === "verify") text[1] = `No check failed; ${warned.length === 1 ? "one is degraded" : `${warned.length} are degraded`}, listed below.`;
   let warn = warned.length > 0;
   if (view.action === "probe") next.append(make("a", {className: "btn small", href: "#setup/choices", textContent: "Choose what to run"}));
   if (view.action === "apply") next.append(make("a", {className: "btn small", href: "#services", textContent: "Open your services"}));
@@ -3194,7 +3252,7 @@ async function copyDetails(node) {
   const text = [
     `${view.progress.title}: ${view.state} (nullbill ${view.args.join(" ")})`,
     e ? `${e.stage ? `Stage ${e.stage}: ` : ""}${e.message}` : "",
-    e && e.task ? `Failed step: ${e.task.task || "?"} on ${e.task.host}\n${e.task.detail}` : "",
+    ...(e ? e.items : []).map((i) => [[i.title, i.text].filter(Boolean).join(": "), i.detail].filter(Boolean).join("\n")),
     "Last lines of the log:",
     log,
   ].filter(Boolean).join("\n\n");
@@ -3492,7 +3550,9 @@ function renderEvent(e) {
     case "turn":
       if (e.state !== "end") break;
       if (e.error) {
-        const node = addToLog(make("div", {className: "msg error", textContent: e.error}));
+        const node = addToLog(make("div", {className: "msg error"}, make("p", {textContent: e.error})));
+        // What the agent's program printed, for whoever wants to read it.
+        if (e.detail) node.append(make("details", {className: "fail-more"}, make("summary", {textContent: "Details"}), outputBox(make("pre", {textContent: e.detail}))));
         if (/carry on/i.test(e.error)) {
           const chip = make("button", {type: "button", className: "chip", textContent: "Carry on"});
           chip.addEventListener("click", () => askAgent("Carry on."));

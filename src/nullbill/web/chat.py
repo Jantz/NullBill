@@ -576,9 +576,9 @@ class Chat:
                 self.emit("system", text="The agent's earlier conversation was gone, so it starts a new one.")
                 self._start()
                 return
-            error = friendly_error(text) if failed else None
+            error, detail = friendly_error(text) if failed else (None, "")
             if ended.get("subtype") == "error_max_turns":
-                error = "The agent stopped after 60 steps in one go. Say carry on if it should keep going."
+                error, detail = "The agent stopped after 60 steps in one go. Say carry on if it should keep going.", ""
             self.emit(
                 "turn",
                 state="end",
@@ -586,6 +586,7 @@ class Chat:
                 seconds=round(now() - self.turn_started),
                 steps=ended.get("num_turns"),
                 error=error,
+                detail=detail,
             )
             if self.queue:
                 self._start()
@@ -864,16 +865,27 @@ def tool_label(name: str, args: dict) -> str:
     return str(labels.get(name, name))[:300]
 
 
-def friendly_error(text: str) -> str:
-    if re.search(r"credit balance|billing", text, re.I):
-        return "Your Anthropic account has no credit left: add credit in the Anthropic console, then try again. (" + text[:200] + ")"
-    if re.search(r"usage limit|limit reached|resets? at", text, re.I):
-        return "Your Claude plan's usage limit is reached; try again after it resets. (" + text[:200] + ")"
-    if re.search(r"invalid api key|authentication|401|oauth token|expired", text, re.I):
-        return "The agent could not sign in: " + text[:300] + " Paste a new key or token on the Agent page."
-    if re.search(r"rate.?limit|429|overloaded|529", text, re.I):
-        return "The model is busy or your plan's limit is reached; try again in a few minutes. (" + text[:200] + ")"
-    return text[:500]
+# Why a turn failed, by what the agent's program said: the line the owner
+# can act on. The first match wins.
+TURN_ERRORS = [
+    (r"credit balance|billing", "Your Anthropic account has no credit left. Add credit in the Anthropic console, then ask again."),
+    (r"usage limit|limit reached|resets? at", "Your Claude plan's usage limit is reached. Ask again after it resets."),
+    (r"invalid api key|authentication|401|oauth token|expired", "The agent could not sign in. Paste a new key or token on the Agent page."),
+    (r"rate.?limit|429|overloaded|529", "The model is busy, or your plan's limit is reached. Ask again in a few minutes."),
+    (r"no space left|ENOSPC", "The disk the agent works on is full. Free space on the NullBill container, then ask again."),
+]
+
+
+def friendly_error(text: str) -> tuple[str, str]:
+    """A failed turn as a line for the owner and, apart from it, what the
+    agent's program printed, which the page shows only when asked."""
+    raw = text.strip()
+    for pattern, line in TURN_ERRORS:
+        if re.search(pattern, raw, re.I):
+            return line, raw[-1500:]
+    if "\n" not in raw and len(raw) <= 200:
+        return raw, ""
+    return "The agent's program stopped with an error.", raw[-1500:]
 
 
 class Tools:
