@@ -2353,6 +2353,7 @@ def test_media_stage_gives_jellyfin_the_integrated_graphics_once_and_keeps_its_p
     (play,) = [call for call in c.reach.calls if call[0] == "playbook"]
     assert play[1] == "jellyfin.yml" and list(play[2]) == ["jellyfin"]
     assert play[3] == {"jellyfin_proxy": "http://10.42.2.10:3128"}
+    # No kept disk, so no library and no scan.
     assert c.reach.jellyfin == [["wait"], ["setup", "nullbill-admin"], ["encoding", "qsv", "/dev/dri/renderD128"]]
     calls = host_calls(c)
     # The device first, so Jellyfin starts with it; setup right after the role starts it.
@@ -2426,7 +2427,10 @@ def test_jellyfin_gets_each_kept_disk_read_only_and_lets_go_before_the_host_unmo
 def test_media_stage_adds_each_kept_disk_as_a_library(ctx):
     c = made_by_tofu(ctx("large", config=media_legacy_config()))
     apply.stage_media(c)
-    assert ["library", "data", "/media/data"] in c.reach.jellyfin
+    # One scan, after the last library: Jellyfin starts none for a library
+    # that is added while it scans (#91).
+    assert c.reach.jellyfin[-2:] == [["library", "data", "/media/data"], ["scan"]]
+    assert c.reach.jellyfin.count(["scan"]) == 1
 
 
 # The owner's own accounts (owner.py).

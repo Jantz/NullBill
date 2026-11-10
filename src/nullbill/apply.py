@@ -1753,7 +1753,8 @@ def stage_media(ctx: Context) -> None:
     """Jellyfin in its guest: the integrated graphics when it transcodes there,
     the role, then nb-jellyfin finishes its first-run setup at once (until
     then anyone who reaches it could make themselves its admin), sets how it
-    transcodes and adds each kept disk as a library, once."""
+    transcodes, adds each kept disk as a library, once, and starts one scan
+    for the libraries it added."""
     if not media.enabled(ctx.bare):
         return
     guest = ctx.bare["guests"][media.JELLYFIN]
@@ -1765,9 +1766,17 @@ def stage_media(ctx: Context) -> None:
     encoding = ["qsv", node] if node else ["none"]
     if guest_out(ctx, "media", media.JELLYFIN, [NB_JELLYFIN, "encoding", *encoding]).strip() == "changed":
         ctx.say(f"media: Jellyfin transcodes {'with Quick Sync on the integrated graphics' if node else 'on the CPU'}")
-    for share in media.library(ctx.bare):
+    shares = media.library(ctx.bare)
+    for share in shares:
         if guest_out(ctx, "media", media.JELLYFIN, [NB_JELLYFIN, "library", share, f"{media.MEDIA_ROOT}/{share}"]).strip() == "changed":
-            ctx.say(f"media: Jellyfin has a library of {media.MEDIA_ROOT}/{share} and reads it now")
+            ctx.say(f"media: Jellyfin has a library of {media.MEDIA_ROOT}/{share}")
+    # One scan after the last library: Jellyfin starts none for a library
+    # added while it scans, which left a second kept disk's library empty.
+    scan = guest_out(ctx, "media", media.JELLYFIN, [NB_JELLYFIN, "scan"]).strip() if shares else "same"
+    if scan == "started":
+        ctx.say("media: Jellyfin reads its new libraries now")
+    elif scan == "waiting":
+        ctx.say("media: Jellyfin is still scanning; the next setup run, or Scan All Libraries on its dashboard, reads the new libraries")
     password = guest_out(ctx, "media", media.JELLYFIN, ["cat", media.PASSWORD_FILE]).strip()
     ctx.secrets.set("jellyfin_admin_password", password)
     url = f"http://{guest['ip']}:{media.PORT}"

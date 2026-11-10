@@ -4,7 +4,8 @@
 # media stage does. The first-run setup leaves an admin with the password
 # apply keeps and nothing open to anyone else; the API key it makes works
 # and is replaced, not added to, when lost; transcoding switches between
-# the CPU and Quick Sync and says when nothing changed.
+# the CPU and Quick Sync and says when nothing changed; two kept disks
+# become two libraries and one scan finds the films on both.
 set -euo pipefail
 # shellcheck source=tools/role-check/role-check.sh
 source /usr/local/lib/role-check.sh
@@ -101,16 +102,60 @@ grep -q '"VaapiDevice":"/dev/dri/renderD128"' <<<"$(encoding)" || fail "render n
 grep -q '"HardwareAccelerationType":"none"' <<<"$(encoding)" || fail "CPU set"
 pass "transcoding switches between the CPU and Quick Sync, and says when nothing changed"
 
-# The kept disk as a library, once.
+# Each kept disk as a library, once, and one scan for both. Two disks:
+# Jellyfin starts no scan for a library added while it scans, so with a scan
+# per library the second disk's stayed empty.
+mkdir -p /media/second/Films
+echo film >/media/second/Films/b.mkv
+chown -R 1000:1000 /media/second
 folders() { curl -sS -H "$pascal" -H "$(key)" http://127.0.0.1:8096/Library/VirtualFolders; }
+scan() {
+  curl -sS -H "$pascal" -H "$(key)" http://127.0.0.1:8096/ScheduledTasks \
+    | python3 -c 'import json, sys; print(next(t["State"] for t in json.load(sys.stdin) if t["Key"] == "RefreshLibrary"))'
+}
+scan_ends() {
+  for _ in $(seq 60); do
+    [ "$(scan)" = Idle ] && return 0
+    sleep 1
+  done
+  return 1
+}
+films() { # the films Jellyfin knows, by path
+  curl -sS -H "$pascal" -H "$(key)" "http://127.0.0.1:8096/Items?Recursive=true&IncludeItemTypes=Movie&Fields=Path" \
+    | python3 -c 'import json, sys; print(*sorted(i["Path"] for i in json.load(sys.stdin)["Items"]))'
+}
+[ "$(nb-jellyfin scan)" = same ] || fail "no scan before a library is added"
 [ "$(nb-jellyfin library old-hdd /media/old-hdd)" = changed ] || fail "a library for the kept disk"
+[ "$(nb-jellyfin library second /media/second)" = changed ] || fail "a library for the second kept disk"
 [ "$(nb-jellyfin library old-hdd /media/old-hdd)" = same ] || fail "the library again changes nothing"
-python3 -c 'import json,sys; f=json.load(sys.stdin); assert [(x["Name"], x["Locations"], x.get("CollectionType")) for x in f] == [("old-hdd", ["/media/old-hdd"], "mixed")], f' \
-  <<<"$(folders)" || fail "one mixed library of /media/old-hdd (got $(folders))"
+python3 -c 'import json,sys; f=json.load(sys.stdin); assert [(x["Name"], x["Locations"], x.get("CollectionType")) for x in f] == [("old-hdd", ["/media/old-hdd"], "mixed"), ("second", ["/media/second"], "mixed")], f' \
+  <<<"$(folders)" || fail "a mixed library of each kept disk (got $(folders))"
+[ "$(nb-jellyfin scan)" = started ] || fail "one scan for the libraries added"
+[ "$(nb-jellyfin scan)" = same ] || fail "the scan again changes nothing"
+scan_ends || fail "the scan of the kept disks' libraries ended"
+[ "$(films)" = "/media/old-hdd/Films/a.mkv /media/second/Films/b.mkv" ] || fail "Jellyfin found the films on both kept disks (got $(films))"
+pass "each kept disk becomes a library once, and one scan finds the films on both"
+
+# A library added while Jellyfin scans: nb-jellyfin scan waits for that scan
+# to end and starts its own, so the new library is read too.
+mkdir -p /media/third/Films
+echo film >/media/third/Films/c.mkv
+chown -R 1000:1000 /media/third
+task=$(curl -sS -H "$pascal" -H "$(key)" http://127.0.0.1:8096/ScheduledTasks \
+  | python3 -c 'import json, sys; print(next(t["Id"] for t in json.load(sys.stdin) if t["Key"] == "RefreshLibrary"))')
+[ "$(code -X POST -H "$(key)" "http://127.0.0.1:8096/ScheduledTasks/Running/$task")" = 204 ] || fail "a scan started by the owner"
+[ "$(nb-jellyfin library third /media/third)" = changed ] || fail "a library added during a scan"
+[ "$(nb-jellyfin scan)" = started ] || fail "a scan after the one that ran"
+scan_ends || fail "the scan of the third library ended"
+grep -q /media/third/Films/c.mkv <<<"$(films)" || fail "Jellyfin found the film of a library added during a scan (got $(films))"
+pass "a library added while Jellyfin scans is read once that scan ends"
+
 curl -fsS -X DELETE -H "$(key)" "http://127.0.0.1:8096/Library/VirtualFolders?name=old-hdd" || fail "remove the library"
 [ "$(nb-jellyfin library old-hdd /media/old-hdd)" = same ] || fail "a removed library stays removed"
-[ "$(folders)" = "[]" ] || fail "no library after the owner removed it (got $(folders))"
-pass "each kept disk becomes a library once, and one the owner removed is not made again"
+[ "$(nb-jellyfin scan)" = same ] || fail "no scan for a library that stays removed"
+python3 -c 'import json,sys; assert [x["Name"] for x in json.load(sys.stdin)] == ["second", "third"]' <<<"$(folders)" \
+  || fail "the library the owner removed stays removed (got $(folders))"
+pass "a library the owner removed is not made again"
 
 # In use: a device that signed in a moment ago, then one that plays. The
 # session is the one login() above made as device "check".
@@ -119,27 +164,9 @@ token=$(curl -sS -H "$pascal" -H "$client" -H 'Content-Type: application/json' \
   -d "{\"Username\": \"nullbill-admin\", \"Pw\": \"$(cat /etc/nullbill/jellyfin-admin-password)\"}" \
   http://127.0.0.1:8096/Users/AuthenticateByName | python3 -c 'import json, sys; print(json.load(sys.stdin)["AccessToken"])')
 user_auth="Authorization: MediaBrowser Client=\"check\", Device=\"check\", DeviceId=\"check\", Version=\"1\", Token=\"$token\""
-# The scan the kept disk's library started has to end first: Jellyfin does
-# not scan a library that is added while a scan runs.
-scan() {
-  curl -sS -H "$pascal" -H "$(key)" http://127.0.0.1:8096/ScheduledTasks \
-    | python3 -c 'import json, sys; print(next(t["State"] for t in json.load(sys.stdin) if t["Key"] == "RefreshLibrary"))'
-}
-for _ in $(seq 60); do
-  [ "$(scan)" = Idle ] && break
-  sleep 1
-done
-[ "$(scan)" = Idle ] || fail "the scan of the kept disk's library ended"
-[ "$(code -X POST -H "$user_auth" "http://127.0.0.1:8096/Library/VirtualFolders?name=Films&collectionType=movies&paths=/media/old-hdd/Films&refreshLibrary=true")" = 204 ] \
-  || fail "a library added"
-item=""
-for _ in $(seq 60); do
-  item=$(curl -sS -H "$pascal" -H "$user_auth" "http://127.0.0.1:8096/Items?Recursive=true&IncludeItemTypes=Movie" \
-    | python3 -c 'import json, sys; items = json.load(sys.stdin)["Items"]; print(items[0]["Id"] if items else "")')
-  [ -n "$item" ] && break
-  sleep 2
-done
-[ -n "$item" ] || fail "the library scan found the film"
+item=$(curl -sS -H "$pascal" -H "$user_auth" "http://127.0.0.1:8096/Items?Recursive=true&IncludeItemTypes=Movie" \
+  | python3 -c 'import json, sys; items = json.load(sys.stdin)["Items"]; print(items[0]["Id"] if items else "")')
+[ -n "$item" ] || fail "the admin sees a film of the kept disks"
 [ "$(code -X POST -H "$user_auth" -H 'Content-Type: application/json' -d "{\"ItemId\": \"$item\", \"CanSeek\": true}" http://127.0.0.1:8096/Sessions/Playing)" = 204 ] \
   || fail "playback reported"
 nb-jellyfin busy >/tmp/busy.txt

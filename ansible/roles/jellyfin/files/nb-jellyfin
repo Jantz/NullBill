@@ -12,12 +12,16 @@ its API on 127.0.0.1, as apply's media stage runs them.
   nb-jellyfin library NAME PATH    add a library NAME of PATH, once: never when a
                                    library holds PATH already, or after the
                                    owner removed the one made here (ADDED_DIR)
+  nb-jellyfin scan                 have Jellyfin read the libraries added here,
+                                   once for all of them
   nb-jellyfin busy                 a line per reason Jellyfin is in use, for
                                    nb-busy: nothing means it may be stopped
 
-setup, encoding and library print "changed" or "same". Until the first-run setup is
-done, anyone who reaches Jellyfin could make themselves its admin, so apply
-runs setup right after Jellyfin first starts.
+setup, encoding and library print "changed" or "same"; scan prints "started",
+"same" (nothing new to read) or "waiting" (Jellyfin is still scanning; the
+next call tries again). Until the first-run setup is done, anyone who reaches
+Jellyfin could make themselves its admin, so apply runs setup right after
+Jellyfin first starts.
 """
 
 import json
@@ -35,6 +39,14 @@ API_KEY_FILE = "/etc/nullbill/jellyfin-api-key"
 # One file per path a library was added for, so a library the owner removed
 # stays removed.
 ADDED_DIR = "/var/lib/nullbill/jellyfin-libraries"
+# Present while a library added here has not been scanned yet.
+SCAN_OWED = "/var/lib/nullbill/jellyfin-scan-owed"
+# Jellyfin's task "Scan Media Library".
+SCAN_TASK = "RefreshLibrary"
+# How long scan waits for a scan that is already running, and for its own to
+# show as started.
+SCAN_WAIT_S = 300
+SCAN_START_S = 30
 # Films and series found by name, the rest by folder: a kept disk holds
 # whatever its owner put there.
 COLLECTION = "mixed"
@@ -177,6 +189,9 @@ def encoding(kind: str, device: str | None) -> None:
 
 
 def library(name: str, path: str) -> None:
+    """Add the library and leave reading it to scan: Jellyfin starts no scan
+    for a library that is added while a scan runs, so with two kept disks the
+    second library stayed empty."""
     key = read_secret(API_KEY_FILE)
     if not key_works(key):
         die("no working API key; run nb-jellyfin setup first")
@@ -185,11 +200,47 @@ def library(name: str, path: str) -> None:
     if held or os.path.exists(marker):
         print("same")
         return
-    query = urllib.parse.urlencode({"name": name, "collectionType": COLLECTION, "refreshLibrary": "true"})
-    call("POST", f"/Library/VirtualFolders?{query}", {"LibraryOptions": {"PathInfos": [{"Path": path}]}}, token=key)
     os.makedirs(ADDED_DIR, mode=0o700, exist_ok=True)
+    # Before the library: a call that ends between the two still gets its scan.
+    open(SCAN_OWED, "w").close()
+    query = urllib.parse.urlencode({"name": name, "collectionType": COLLECTION, "refreshLibrary": "false"})
+    call("POST", f"/Library/VirtualFolders?{query}", {"LibraryOptions": {"PathInfos": [{"Path": path}]}}, token=key)
     open(marker, "w").close()
     print("changed")
+
+
+def scan_task(key: str) -> dict:
+    return next(t for t in call("GET", "/ScheduledTasks", token=key) if t.get("Key") == SCAN_TASK)
+
+
+def scan() -> None:
+    """One scan for every library added since the last. Jellyfin drops a
+    request to scan while it scans, so wait for a running scan to end, start
+    one, and count it started only once Jellyfin shows it."""
+    if not os.path.exists(SCAN_OWED):
+        print("same")
+        return
+    key = read_secret(API_KEY_FILE)
+    if not key_works(key):
+        die("no working API key; run nb-jellyfin setup first")
+    deadline = time.monotonic() + SCAN_WAIT_S
+    while (task := scan_task(key)).get("State") != "Idle":
+        if time.monotonic() > deadline:
+            print("waiting")
+            return
+        time.sleep(2)
+    before = (task.get("LastExecutionResult") or {}).get("StartTimeUtc")
+    call("POST", f"/ScheduledTasks/Running/{task['Id']}", token=key)
+    deadline = time.monotonic() + SCAN_START_S
+    while True:
+        task = scan_task(key)
+        if task.get("State") != "Idle" or (task.get("LastExecutionResult") or {}).get("StartTimeUtc") != before:
+            break
+        if time.monotonic() > deadline:
+            die("Jellyfin did not start the scan of its libraries")
+        time.sleep(1)
+    os.unlink(SCAN_OWED)
+    print("started")
 
 
 # A device counts as using Jellyfin this long after it last asked for
@@ -233,10 +284,12 @@ def main(argv: list[str]) -> None:
         encoding(argv[1], argv[2] if len(argv) == 3 else None)
     elif argv[:1] == ["library"] and len(argv) == 3:
         library(argv[1], argv[2])
+    elif argv == ["scan"]:
+        scan()
     elif argv == ["busy"]:
         busy()
     else:
-        die("usage: nb-jellyfin wait | setup USER | encoding none | encoding qsv DEVICE | library NAME PATH | busy")
+        die("usage: nb-jellyfin wait | setup USER | encoding none | encoding qsv DEVICE | library NAME PATH | scan | busy")
 
 
 if __name__ == "__main__":
