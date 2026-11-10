@@ -25,6 +25,7 @@ files go, how much room to keep and which way traffic leaves.
 
 import base64
 import hashlib
+import hmac
 import json
 import os
 import pwd
@@ -47,7 +48,7 @@ STATE = Path("/var/lib/nullbill")
 # The downloads this script paused for room, to resume those and no others.
 PAUSED = STATE / "torrents-paused.json"
 # A digest of the password the client's page has now.
-PASSWORD_SET = STATE / "torrents-password.sha256"
+PASSWORD_SET = STATE / "torrents-password.mark"
 TEXTFILES = Path("/var/lib/prometheus/node-exporter")
 NB_BUSY = "/usr/local/sbin/nb-busy"
 # The routing table of the client's user, and the rules that send it there.
@@ -109,8 +110,19 @@ def password_hash(password: str) -> str:
     return f"@ByteArray({base64.b64encode(salt).decode()}:{base64.b64encode(key).decode()})"
 
 
-def digest(password: str) -> str:
-    return hashlib.sha256(password.encode()).hexdigest()
+def digest(password: str, salt: str = "") -> str:
+    """The mark of which password the page has: salt and PBKDF2 key in hex."""
+    salt = salt or secrets.token_hex(16)
+    return f"{salt}:{hashlib.pbkdf2_hmac('sha512', password.encode(), bytes.fromhex(salt), 100000).hex()}"
+
+
+def marked(password: str) -> bool:
+    """Is this the password the mark was made for?"""
+    try:
+        mark = PASSWORD_SET.read_text().strip()
+        return hmac.compare_digest(mark, digest(password, mark.partition(":")[0]))
+    except (OSError, ValueError):
+        return False
 
 
 def interface(cfg: dict) -> str:
@@ -200,7 +212,7 @@ def settings(cfg: dict) -> int:
     have = json.loads(api(cfg, "app/preferences"))
     change = {key: value for key, value in want.items() if have.get(key) != value}
     password = PASSWORD.read_text().strip()
-    if not PASSWORD_SET.exists() or PASSWORD_SET.read_text().strip() != digest(password):
+    if not marked(password):
         change["web_ui_password"] = password
     # Jellyfin passes over a folder that holds a file named .ignore.
     marker = f"{store}/incomplete/.ignore"
