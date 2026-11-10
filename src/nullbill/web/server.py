@@ -11,6 +11,7 @@ server restarts (an update restarting it, say), and the restarted server
 shows it again.
 """
 
+import difflib
 import functools
 import hashlib
 import hmac
@@ -20,6 +21,7 @@ import math
 import os
 import re
 import secrets
+import shutil
 import signal
 import socket
 import socketserver
@@ -38,7 +40,7 @@ from pathlib import Path
 
 import yaml
 
-from nullbill import browserca, direct, hostroot, lan, legacy, llm, names, owner, people, power, tailscale, version
+from nullbill import browserca, custom, direct, hostroot, lan, legacy, llm, names, owner, people, power, tailscale, version
 from nullbill.apply import DISKS_FILE, GUESTS, NTFY, REMOVALS, SPKI, STAGES
 from nullbill.cli import plan_text, reach_target
 from nullbill.errors import NullBillError
@@ -972,7 +974,7 @@ class App:
             model = build_model(config)
         except NullBillError as exc:
             return {"items": [], "power": [], "memory": None, "errors": exc.messages, "adds": None, "removes": None, "advice": []}
-        out = workloads.options(model, self.facts(), self.existing_guests())
+        out = workloads.options(model, self.facts(), self.existing_guests(), self.home)
         other = "Turn off a choice, or change one, until this no longer applies."
         out["advice"] = list(dict.fromkeys(progress.advice(m, default=other) for m in out["errors"]))
         return out
@@ -1012,12 +1014,116 @@ class App:
             _write_private(path, json.dumps({"guests": names, "gone": sorted({*gone, *planned})}, indent=2) + "\n")
 
     def save_choices(self, body: dict) -> None:
-        config = self._choices_config(body)
-        build_model(config)  # validates against the schema before anything is written
+        self._save_config(self._choices_config(body))
+
+    def _save_config(self, config: dict) -> None:
+        """Write config.yaml, once it passes the schema, and before that
+        what is on the server now, where no setup run has recorded it."""
+        build_model(config)
         existing = self.existing_guests()
         if existing is not None and not (self.home / GUESTS).exists():
             _write_private(self.home / GUESTS, json.dumps({"guests": sorted(existing)}, indent=2) + "\n")
         _write_private(self.home / "config.yaml", yaml.safe_dump(config, sort_keys=False))
+
+    # Services of the owner's own (nullbill/custom.py): ones NullBill has no
+    # role for. The page's agent adds one with the owner's approval
+    # (chat.Tools.t_add_service), or the owner writes it into config.yaml.
+    # The page lists them under Setup, What to run, like every choice.
+    def own_workloads(self, config: dict) -> list[str]:
+        try:
+            return custom.workloads(build_model(config))
+        except NullBillError:
+            return []
+
+    def own_service(self, name: str) -> dict:
+        """One such service's setup script, for the page to show."""
+        model = build_model(self.config() or {})
+        if name not in custom.names(model):
+            raise NullBillError("no service of your own has that name")
+        return {
+            "name": name,
+            "title": custom.title(model, name),
+            "script": custom.read_script(self.home, name),
+            "path": f"{custom.DIR}/{name}/{custom.SCRIPT}",
+        }
+
+    def service_change(self, name: str, want: dict, script: str | None) -> dict:
+        """What adding a service of the owner's own, or changing one, comes
+        to, with nothing saved: the new config.yaml, the service line by
+        line, the setup script's diff, and whether the change opens the
+        server further or brings code to run (`risky`). script None leaves
+        the script it has. Raises what config.yaml or the plan say against it."""
+        config = self.config()
+        if config is None:
+            raise NullBillError("nothing is chosen yet; the owner saves their choices under Setup, What to run, first")
+        model = build_model(config)
+        new = custom.define(config, model, name, want)
+        new_model = build_model(new)
+        facts = self.facts()
+        if facts is not None and name in new["intent"]["workloads"]:
+            build_plan(new_model, facts)
+        before = custom.read_script(self.home, name)
+        text = before if script is None else custom.check_script(script)
+        old, now = model["services"].get(name), new_model["services"][name]
+        opens = (
+            old is None
+            or custom.own_ports(old) != custom.own_ports(now)
+            or any(old.get(k) != now.get(k) for k in ("zone", "kind", "proxy_allow"))
+        )
+        diff = "".join(
+            difflib.unified_diff((before or "").splitlines(True), (text or "").splitlines(True), "setup.sh now", "setup.sh new", n=3)
+        )
+        return {
+            "config": new,
+            "script": text if text != before else None,
+            "new": old is None,
+            "title": custom.title(new_model, name),
+            "lines": custom.describe(new_model, name, text),
+            "diff": diff,
+            "risky": opens or text != before,
+            "same": new == config and text == before,
+        }
+
+    def save_service(self, name: str, config: dict, script: str | None) -> None:
+        """Keep what service_change made: the script first, so config.yaml
+        never names a service whose script is the one before. The plan
+        follows at once, as after saved choices."""
+        build_model(config)
+        if script is not None:
+            path = custom.script(self.home, name)
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            _write_private(path, script)
+        self._save_config(config)
+        self.plan()
+
+    def forget_service(self, name: str, save: bool = True) -> str:
+        """Take a service of the owner's own out of config.yaml and set its
+        setup script aside (custom/.removed). Only one that is off and has
+        no guest on the server: deleting a guest is setup's, after it asks
+        the owner. save False only says whether it may."""
+        config = self.config() or {}
+        model = build_model(config)
+        new = custom.forget(config, model, name)
+        workload = model["services"][name]["workload"]
+        title = custom.title(model, name)
+        if workload not in custom.workloads(model):
+            raise NullBillError(f"{name} belongs to the workload {workload}, which is not its own; take it out of config.yaml by hand")
+        if workload in config.get("intent", {}).get("workloads", []):
+            raise NullBillError(f"{title} is turned on; turn it off under Setup, What to run, and save first")
+        if name in (self.existing_guests() or set()):
+            raise NullBillError(
+                f"{title}'s guest is still on the server; run setup, which deletes it after asking you, then remove it here"
+            )
+        if not save:
+            return title
+        self._save_config(new)
+        kept = self.home / custom.DIR / name
+        if kept.is_dir():
+            aside = self.home / custom.DIR / custom.REMOVED
+            aside.mkdir(mode=0o700, exist_ok=True)
+            shutil.move(kept, aside / f"{name}-{time.strftime('%Y%m%dT%H%M%S')}")
+        self.plan()
+        return title
 
     @staticmethod
     def _games_config(config: dict, form: object) -> None:
@@ -1054,7 +1160,6 @@ class App:
     def _choices_config(self, body: dict, saving: bool = True) -> dict:
         """config.yaml with the page's form put into it. Saving checks what
         only a save needs: the owner's login and each erase confirmation."""
-        workloads = [w for w in body.get("workloads", []) if w in WORKLOADS]
         login = str(body.get("owner_login", "")).strip()
         if not re.fullmatch(r"[^@\s]+@[^@\s]+", login):
             if saving:
@@ -1064,8 +1169,9 @@ class App:
         if not install.get("host"):
             raise NullBillError("install.json is missing; run install.sh on the Proxmox host again")
         config = self.config() or {}
+        known = {*WORKLOADS, *self.own_workloads(config)}
         config["target"] = {"ssh": f"root@{install['host']}"}
-        config["intent"] = {"workloads": workloads}
+        config["intent"] = {"workloads": [w for w in body.get("workloads", []) if w in known]}
         people = {n: p for n, p in config.get("people", {}).items() if p.get("role") != "owner"}
         keys = owner.keys(config)
         config["people"] = {"owner": {"role": "owner", "login": login} | ({"ssh_keys": keys} if keys else {}), **people}
@@ -1105,7 +1211,7 @@ class App:
         keeps only what differs from the catalog, and what the page does
         not set (a title, busy.cpu_pct) stays as the owner wrote it."""
         catalog = build_model({})
-        known = {svc["workload"] for svc in catalog["services"].values()} - {"core"}
+        known = ({svc["workload"] for svc in catalog["services"].values()} - {"core"}) | set(self.own_workloads(config))
         pins = config.get("power") or {}
         for name, want in chosen.items():
             if name not in known or not isinstance(want, dict):
@@ -2053,6 +2159,11 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 return self.json(200, app.status())
             if path == "/api/on-demand":
                 return self.json(200, {"view": app.on_demand()})
+            if path == "/api/own-service":
+                try:
+                    return self.json(200, app.own_service(urllib.parse.parse_qs(query).get("name", [""])[0]))
+                except NullBillError as exc:
+                    return self.json(404, {"error": "; ".join(exc.messages)})
             if path == "/api/people":
                 try:
                     return self.json(200, app.people_view(fresh="fresh=1" in query.split("&")))
@@ -2152,6 +2263,8 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                     return self.json(200, {"ok": True, "plan": app.plan()})
                 if self.path == "/api/choices/preview":
                     return self.json(200, app.preview(body))
+                if self.path == "/api/own-service/remove":
+                    return self.json(200, {"ok": True, "removed": app.forget_service(str(body.get("name", "")))})
                 if self.path == "/api/on-demand":
                     return self.json(200, app.power_act(body))
                 if self.path == "/api/alerts":

@@ -39,7 +39,9 @@ from typing import TYPE_CHECKING
 
 import yaml
 
+from nullbill import custom
 from nullbill.errors import NullBillError
+from nullbill.model import build_model
 from nullbill.secretfile import Secrets
 from nullbill.web import gate, progress
 
@@ -111,6 +113,14 @@ Rules:
   few lines. Name the page's places as the owner sees them: Overview, Services, Activity, Alerts, Setup, Access, Agent, Updates.
 - A fix that belongs in NullBill's code: say so, name the file and the change; the owner can ask the operator agent
   (Agent page, Settings) to open a pull request with it.
+- A program NullBill has no built-in support for can still run here, as a service of the owner's own (status,
+  what_to_run, lists what there is; a built-in one that fits comes first, with set_choices). Read
+  docs/runbooks/custom-services.md, then add_service: its definition (a guest of its own, the ports it opens and to
+  whom, the names it may fetch from) and its setup script, which the next setup run runs as root inside the new
+  guest. The script: bash, safe to run again, never asks anything, takes the program from Debian's packages or a
+  download it checks, ends with a systemd unit listening on the ports you declared, holds no password or key. For
+  Docker use kind vm. Then start_job apply, and check with run_command where=<name> that it answers before you say it
+  works. remove_service forgets one that is off and whose guest setup has deleted.
 - A guest that runs on demand and is off (status, on_demand) is off on purpose, not broken. On the host,
   `nb-power status` says what is on and why; `nb-power start NAME` and `nb-power stop NAME` are the page's Start and
   Stop. Never start one with pct or qm: nb-power counts the memory. Whether it runs on demand at all is the owner's
@@ -834,6 +844,9 @@ def tool_label(name: str, args: dict) -> str:
         "start_job": f"Start: {progress.JOB_TEXT.get(str(args.get('action')), args.get('action'))}"
         + (f" (stage {args['stage']})" if args.get("stage") else ""),
         "set_choices": "Change what to run",
+        "read_service": f"Read your own service {args.get('name', '')}",
+        "add_service": f"Your own service {args.get('name', '')}: add or change",
+        "remove_service": f"Your own service {args.get('name', '')}: remove",
         "ask_owner": "Asked you a question",
         "watch_job": f"Watching {args.get('id', 'a run')}",
         "read_run": f"Read the output of {args.get('id', 'a command')}",
@@ -913,7 +926,9 @@ class Tools:
             # Each choice as the Setup page shows it: what the plan counts for
             # it, and which of its guests the last setup run left on the server.
             "what_to_run": [
-                {k: i[k] for k in ("name", "title", "chosen", "memory_mib", "disk_gib", "on_server", "blocked")} for i in options["items"]
+                {k: i[k] for k in ("name", "title", "chosen", "memory_mib", "disk_gib", "on_server", "blocked")}
+                | ({"own": True} if i.get("own") else {})
+                for i in options["items"]
             ],
             "memory_free_mib": (options["memory"] or {}).get("free_mib"),
             "plan_fits": bool(plan.get("text")) and not plan.get("errors"),
@@ -1188,6 +1203,47 @@ class Tools:
         verdict = gate.change("changes what the server runs; the next setup run builds it")
         return self.gated({"act": "choices", "changes": changes, "lines": lines}, verdict, why, "Change what to run: " + "; ".join(lines))
 
+    def t_read_service(self, name: str) -> str:
+        own = self.app.own_service(str(name))
+        model = build_model(self.app.config() or {})
+        lines = custom.describe(model, own["name"], own["script"])
+        return "\n".join(lines) + (f"\n\n{own['path']}:\n{own['script']}" if own["script"] else "")
+
+    def t_add_service(self, name: str, why: str = "", setup: str | None = None, **want: object) -> str:
+        """A service of the owner's own, new or changed: what it opens and
+        its setup script are the owner's to read first, with a typed word."""
+        name = str(name)
+        want = {k: v for k, v in want.items() if v is not None}
+        script = None if setup is None else str(setup)
+        if script is not None:
+            held = [v for v in Secrets(self.app.codec(self.app.home)).data.values() if isinstance(v, str) and len(v) >= 8]
+            if any(v in script for v in held):
+                raise NullBillError("the setup script holds one of the server's secrets; a script is no place for one, leave it out")
+        change = self.app.service_change(name, want, script)
+        if change["same"]:
+            return f"{name} is that way already; nothing to change"
+        if change["risky"]:
+            what = "puts a program NullBill does not know on the server, with a setup script that runs as root in its guest"
+            if not change["new"]:
+                what = "changes what one of your own services runs as root in its guest, or what it opens"
+            verdict = gate.risky(what, "add" if change["new"] else "change")
+        else:
+            verdict = gate.change("changes one of your own services; the next setup run builds it")
+        action = {
+            "act": "service",
+            "service": name,
+            "want": want,
+            "content": change["script"],
+            "lines": change["lines"],
+            "diff": change["diff"],
+        }
+        return self.gated(action, verdict, why, f"{'Add' if change['new'] else 'Change'} your own service {change['title']}")
+
+    def t_remove_service(self, name: str, why: str = "") -> str:
+        title = self.app.forget_service(str(name), save=False)
+        verdict = gate.change("takes a service that is off, and has no guest, out of the choices; its setup script is set aside")
+        return self.gated({"act": "forget", "service": str(name)}, verdict, why, f"Remove your own service {title}")
+
     def t_ask_owner(self, question: str, options: list | None = None) -> str:
         options = [str(o)[:120] for o in (options or [])][:6]
         self.chat.ask(str(question)[:1500], options)
@@ -1262,6 +1318,16 @@ class Tools:
             self.app.save_choices(body)
             plan = self.app.plan()
             return "saved; the plan " + ("fits" if not plan.get("errors") else "does not fit: " + "; ".join(plan["errors"]))
+        if kind == "service":
+            change = self.app.service_change(action["service"], action["want"], action.get("content"))
+            self.app.save_service(action["service"], change["config"], change["script"])
+            plan = self.app.plan()
+            fits = "fits" if not plan.get("errors") else "does not fit: " + "; ".join(plan["errors"])
+            on = action["service"] in self.app.choices().get("workloads", [])
+            then = "the next setup run builds it (start_job apply)" if on else "it is off; set_choices turns it on"
+            return f"saved {action['service']}; the plan {fits}; {then}"
+        if kind == "forget":
+            return f"removed {self.app.forget_service(action['service'])} from the choices"
         raise NullBillError(f"unknown action {kind}")
 
     def guest(self, name: str) -> dict:

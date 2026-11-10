@@ -28,7 +28,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from nullbill import applied, backups, browserca, ci, direct, games, hostroot, lan, legacy, llm, media, names, owner, power, tailscale
+from nullbill import (
+    applied,
+    backups,
+    browserca,
+    ci,
+    custom,
+    direct,
+    games,
+    hostroot,
+    lan,
+    legacy,
+    llm,
+    media,
+    names,
+    owner,
+    power,
+    tailscale,
+)
 from nullbill.artifacts import write_build
 from nullbill.errors import NullBillError
 from nullbill.flows import TAILSCALE_PORT, mac
@@ -1983,6 +2000,34 @@ def stage_games(ctx: Context) -> None:
         ctx.say(f"games: {game['title']} {game['version']} answers at {games.address(ctx.bare, name, ctx.model)}")
 
 
+def stage_custom(ctx: Context) -> None:
+    """Each planned service of the owner's own (custom.py): its setup script
+    from beside config.yaml, run as root in its guest by the custom_service
+    role. The playbook runs again when the script changed, and the script
+    itself whenever its last run did not end well. A service without a
+    script stays the Debian guest OpenTofu and the updates stage made.
+
+    A script that fails does not stop setup: the program is not NullBill's,
+    and one service's mistake must not keep the others, or the checks, from
+    running. The run's log has its output, and verify fails on it by name."""
+    failed = []
+    for name in custom.planned(ctx.bare, ctx.model):
+        text = custom.read_script(ctx.home, name)
+        if text is None:
+            ctx.say(f"custom: {name} has no setup script ({custom.DIR}/{name}/{custom.SCRIPT}); its guest stays as setup made it")
+            continue
+        variables = custom.variables(ctx.bare, ctx.model, name, text, proxy_url(ctx, name))
+        try:
+            run_playbook(ctx, "custom", custom.PLAYBOOK, name, variables)
+        except NullBillError as exc:
+            failed.append(name)
+            ctx.say(f"custom: {name}'s setup script did not finish ({'; '.join(exc.messages)[:300]}); setup goes on without it")
+            continue
+        ctx.say(f"custom: {custom.title(ctx.model, name)} is set up in {name}")
+    if failed:
+        ctx.say(f"custom: not set up: {', '.join(failed)}. Their output is above; the checks name each one")
+
+
 def stage_ci(ctx: Context) -> None:
     """Each Linux pool's golden image, then the dispatcher that clones it per job."""
     if not planned(ctx, "runner-dispatcher") or not linux_pools(ctx):
@@ -2429,6 +2474,8 @@ STAGES: list[Stage] = [
     ("logs", stage_logs),
     ("backups", stage_backups),
     ("vpn", stage_vpn),
+    # Last before the checks: nothing of NullBill's own waits for a program it does not know.
+    ("custom", stage_custom),
     ("verify", stage_verify),
 ]
 

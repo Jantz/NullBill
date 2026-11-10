@@ -33,6 +33,11 @@ is that first run.
 - **Game servers**, optional: Minecraft, Terraria and Factorio, each the
   maker's own server in a container of its own, for you and the friends
   you tick it for ([games.md](docs/runbooks/games.md)).
+- **Programs of your own**: anything else that runs on Debian gets the
+  same guest, firewall, updates, backups and checks from NullBill, and a
+  setup script you can read puts the program in. The page's agent writes
+  both and you approve them
+  ([custom-services.md](docs/runbooks/custom-services.md)).
 - **On demand**: what you use now and then stays installed and runs only
   while you use it, so a small server holds more than it can run at once.
   Some stop by themselves when unused, others only when you say

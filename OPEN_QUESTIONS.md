@@ -179,6 +179,13 @@ answered items move to the decisions list at the bottom.
 
 ## Decisions
 
+- Many services, and ones NullBill has no support for: built-in services
+  stay; anything else is a service of the owner's own, a guest NullBill
+  makes plus a setup script, which the page's agent may add once the owner
+  has read and approved it. The page's lists fold and filter for many
+  (owner asked, 2026-11-10; decided by Claude as asked,
+  docs/adr/0015-custom-services.md). Not built: several instances of one
+  built-in game; say if you want that rather than services of your own.
 - Direct connections from mobile data: built, on by default, with a
   switch on the page (owner asked, 2026-11-09; design by Claude,
   docs/adr/0014-direct-connections.md; question 16 stays open for the

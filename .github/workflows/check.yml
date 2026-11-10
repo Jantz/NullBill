@@ -40,9 +40,9 @@ jobs:
           - name: roles (inference)
             parts: roles
             roles: inference
-          - name: roles (monitoring, operator, model_gateway, downloads)
+          - name: roles (monitoring, operator, model_gateway, downloads, custom_service)
             parts: roles
-            roles: monitoring operator model_gateway downloads
+            roles: monitoring operator model_gateway downloads custom_service
           - name: roles (log_shipper, runner_dispatcher, pbs, forgejo, tls_cert)
             parts: roles
             roles: log_shipper runner_dispatcher pbs forgejo tls_cert

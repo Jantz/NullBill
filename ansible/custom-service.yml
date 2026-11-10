@@ -1,0 +1,8 @@
+# A service of the owner's own in its guest: one NullBill has no role for
+# (docs/adr/0015-custom-services.md). apply's custom stage runs this with
+# the service's setup script from beside config.yaml.
+- name: A service of the owner's own
+  hosts: all
+  become: false
+  roles:
+    - custom_service

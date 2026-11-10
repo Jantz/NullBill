@@ -1,0 +1,48 @@
+- name: A script from apply
+  ansible.builtin.assert:
+    that:
+      - custom_service_name is match('^[a-z][a-z0-9-]{0,30}$')
+      - custom_service_script is match('#!/')
+      - custom_service_sha256 == (custom_service_script | hash('sha256'))
+    fail_msg: the setup script and its SHA-256 are missing or do not match; run this through nullbill apply
+
+# What nearly every setup script starts by fetching something with.
+- name: Packages
+  ansible.builtin.apt:
+    name: [ca-certificates, curl]
+    install_recommends: false
+    update_cache: true
+
+- name: Directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - /usr/local/lib/nb-custom
+    - /var/lib/nb-custom
+
+- name: nb-custom-setup
+  ansible.builtin.copy:
+    src: nb-custom-setup
+    dest: /usr/local/sbin/nb-custom-setup
+    mode: "0755"
+
+- name: What the script runs with
+  ansible.builtin.template:
+    src: env.j2
+    dest: /usr/local/lib/nb-custom/env
+    mode: "0644"
+
+- name: The setup script
+  ansible.builtin.copy:
+    content: "{{ custom_service_script }}"
+    dest: /usr/local/lib/nb-custom/setup.sh
+    mode: "0700"
+
+# Once for each version of the script: nb-custom-setup keeps the SHA-256
+# of the one that last ran to its end, and runs again one that failed.
+- name: Run the setup script
+  ansible.builtin.command: /usr/local/sbin/nb-custom-setup
+  register: custom_service_run
+  changed_when: "'unchanged' not in custom_service_run.stdout"

@@ -79,8 +79,11 @@ $defs:
     additionalProperties: false
     properties:
       enabled: {type: boolean}
-      # Host part of the service address, so below the pool range at .128.
-      id: {type: integer, minimum: 1, maximum: 127}
+      # Host part of the service address: not in the pools' lease range,
+      # .128 to .191, and below the PVE host's .254.
+      id:
+        type: integer
+        anyOf: [{minimum: 1, maximum: 127}, {minimum: 192, maximum: 253}]
       kind: {enum: [lxc, vm, vm-pool]}
       zone: {$ref: "#/$defs/name"}
       workload: {$ref: "#/$defs/name"}

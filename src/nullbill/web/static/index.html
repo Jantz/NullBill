@@ -209,6 +209,7 @@
     <section class="view" id="view-services" data-title="Services" aria-labelledby="h-services" hidden>
       <header class="page-head">
         <div><h1 id="h-services" tabindex="-1">Services</h1><p class="page-sub" id="services-sub">Open these from a device on your Tailscale network. Select a row for addresses, sign-in and the steps to set it up.</p></div>
+        <label class="filter push" id="services-find" hidden><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><span class="sr-only">Find a service by name</span><input id="services-filter" type="search" placeholder="Find by name" autocomplete="off" spellcheck="false"></label>
       </header>
       <p id="services-unbuilt" class="note" hidden><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><span>Not built yet. This is what the plan makes; <a href="#setup/build">Run setup</a> builds it.</span></p>
       <div id="services-empty" class="empty" hidden>
@@ -220,6 +221,7 @@
         <caption class="sr-only">Services</caption>
         <thead><tr><th scope="col">Name</th><th scope="col">Status</th><th scope="col" class="hide-phone">Address</th><th scope="col" class="hide-narrow">Sign-in</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
         <tbody id="service-rows"></tbody></table></div>
+      <p id="services-none" class="foot-note" hidden>No service has that name.</p>
       <p id="services-background" class="foot-note"></p>
       <section class="block" id="demand" aria-labelledby="h-demand" hidden>
         <div class="block-head"><h2 id="h-demand">On demand</h2><span class="meta" id="demand-meta"></span></div>
@@ -325,9 +327,18 @@
               <h4>What to do</h4>
               <ul id="choices-advice"></ul>
             </div>
-            <fieldset class="group"><legend>Workloads</legend><div class="opts" id="workload-rows"></div></fieldset>
-            <fieldset class="group"><legend>Game servers</legend><div class="opts" id="game-rows"></div></fieldset>
-            <fieldset class="group"><legend>Extras</legend><div class="opts" id="extra-rows"></div></fieldset>
+            <div class="pick-tools" id="pick-tools" hidden>
+              <label class="filter"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><span class="sr-only">Find a choice by name</span><input id="pick-filter" type="search" placeholder="Find by name" autocomplete="off" spellcheck="false"></label>
+              <span class="meta" id="pick-count" role="status"></span>
+            </div>
+            <fieldset class="group" data-group="workloads"><legend>Workloads <span class="count"></span></legend><div class="opts" id="workload-rows"></div><button type="button" class="btn ghost small opts-more" hidden></button></fieldset>
+            <fieldset class="group" data-group="games"><legend>Game servers <span class="count"></span></legend><div class="opts" id="game-rows"></div><button type="button" class="btn ghost small opts-more" hidden></button></fieldset>
+            <fieldset class="group" data-group="own"><legend>Your own services <span class="count"></span></legend>
+              <p class="help">Programs NullBill has no built-in support for. Each gets a guest of its own with a firewall, updates, monitoring and backups from NullBill; a setup script you can read puts the program in. The agent writes both, and nothing is saved before you approve it. <button type="button" class="linkish" id="own-ask">Ask the agent to add one</button></p>
+              <div class="opts" id="own-rows"></div><button type="button" class="btn ghost small opts-more" hidden></button>
+            </fieldset>
+            <fieldset class="group" data-group="extras"><legend>Extras</legend><div class="opts" id="extra-rows"></div></fieldset>
+            <p class="foot-note" id="pick-none" hidden>Nothing has that name.</p>
             <fieldset class="group" id="when" hidden><legend>When it runs</legend>
               <p class="help">What always runs holds its memory all the time. What runs on demand stays installed and is off until you start it on the Services page, so it shares the memory the rest leaves and more fits in this server than runs at once. Setup starts one only while it configures it.</p>
               <div class="whens" id="when-rows"></div>

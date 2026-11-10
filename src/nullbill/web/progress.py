@@ -36,6 +36,7 @@ STAGE_TEXT = {
     "logs": "Send logs to the log store",
     "backups": "Set up backups",
     "vpn": "Join your Tailscale network",
+    "custom": "Set up your own services",
     "verify": "Run the checks",
     "upgrade": "Update NullBill",
 }

@@ -7,7 +7,7 @@ of them, so the owner sees every problem in one run.
 import ipaddress
 from typing import Any
 
-from nullbill import backups, ci, games, legacy, media, power
+from nullbill import backups, ci, custom, games, legacy, media, power
 from nullbill.errors import NullBillError
 from nullbill.flows import SHARED
 from nullbill.proxy import allows
@@ -598,6 +598,7 @@ def build_plan(model: dict, facts: dict) -> dict:
     engine = _engine(model, inference_gpus) if "inference" in planned else None
     llm = _model(model, gpu_section, inference_gpus, errors) if "inference" in planned and inference_gpus else None
     on_demand = power.groups(model, planned, errors)
+    errors.extend(custom.power_problems(model, planned))
     sizes, counts, capacity = _size(model, planned, facts, errors, on_demand)
     disk_section, pbs = _disks(model, facts, errors, want_pbs="pbs" in planned, capacity=capacity["disk"])
     errors.raise_if_any()
@@ -606,6 +607,7 @@ def build_plan(model: dict, facts: dict) -> dict:
     shares = [m["share"] for m in legacy.shares(strip_notes({"disks": disk_section}))]
     media_section = media.plan_section(model, facts, planned, shares, errors)
     games_section = games.plan_section(model, planned, sizes, errors)
+    custom_section = custom.plan_section(model, planned)
     errors.raise_if_any()
 
     zones = _zones(model, planned)
@@ -659,6 +661,7 @@ def build_plan(model: dict, facts: dict) -> dict:
         else Note({}, "Not planned."),
         "media": media_section,
         "games": games_section,
+        **({"custom": custom_section} if custom_section else {}),
         **({"power": demand} if demand else {}),
         "disks": disk_section,
         **_copies(facts),

@@ -5,7 +5,7 @@ Checks are built from the plan, so a service added by YAML is verified the
 same way as the catalog's. They run over SSH as `pct exec` in one container
 per zone; backups.py adds backup age and a restore test, llm.py the local
 model through the model gateway, media.py Jellyfin, games.py each game
-server. A check that cannot run reports SKIP, never PASS: so does every
+server, custom.py each service of the owner's own. A check that cannot run reports SKIP, never PASS: so does every
 check of a guest that runs on demand and is off (power.py), which verify
 never starts.
 
@@ -24,7 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from nullbill import agent, backups, browserca, ci, direct, forge, games, hostroot, lan, legacy, llm, media, names, power
+from nullbill import agent, backups, browserca, ci, custom, direct, forge, games, hostroot, lan, legacy, llm, media, names, power
 from nullbill.errors import NullBillError
 from nullbill.flows import HOST, HOST_PORTS, resolve_flows
 from nullbill.probe import Runner
@@ -322,6 +322,7 @@ def run_verify(
             *legacy.skipped(plan, reason),
             *media.skipped(plan, reason),
             *games.skipped(plan, model, reason),
+            *custom.skipped(plan, model, home, reason),
             *names.skipped(plan, reason),
             *power.skipped(plan, reason),
             *direct.skipped(plan, reason),
@@ -389,6 +390,7 @@ def run_verify(
     add(*legacy.check(plan, target, awake))
     add(*unless_off(lambda r: media.check(plan, target, r), media.skipped))
     add(*games.check(plan, model, target, awake))
+    add(*custom.check(plan, model, target, run, home, off))
     add(*names.check(plan, target, run))
     add(*power.check(plan, target, run, found))
     add(*direct.check(plan, model, target, run, home))

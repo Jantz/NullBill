@@ -568,6 +568,16 @@ input:not([type=checkbox]):not([type=radio])[readonly] { background: var(--bg-su
 .opt-note.why { color: var(--warn); }
 .opt-change { padding: 8px 10px; border: 1px solid var(--warn-line); border-radius: var(--radius); background: var(--warn-bg); color: var(--text); max-width: 80ch; }
 .opt[data-state="delete"] .opt-change { border-color: var(--bad-line); background: var(--bg); border-left: 3px solid var(--bad-dot); }
+/* Long lists: a filter above the groups, a count in each legend, rows that are off folded away. */
+.pick-tools { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.group > legend .count { margin-left: 6px; color: var(--text-3); font-weight: 400; font-size: 12px; }
+.opts-more { margin-top: 6px; }
+.opts .opt:not([hidden]):not(:has(~ .opt:not([hidden]))) { border-bottom: 0; }
+.linkish { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.linkish:hover { color: var(--text); }
+.own-tools { display: grid; gap: 8px; margin-top: 8px; max-width: 88ch; }
+.own-path { color: var(--text-3); font-size: 12px; margin: 4px 0 0; }
+pre.own-script { margin: 0; padding: 10px 12px; max-height: 420px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-sub); font-size: 12px; line-height: 1.5; white-space: pre; }
 .opt-details > summary { cursor: pointer; width: fit-content; color: var(--text-2); font-weight: 500; }
 .opt-details > summary:hover { color: var(--text); }
 .opt-facts { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 8px 16px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); max-width: 88ch; }

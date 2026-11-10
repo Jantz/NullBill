@@ -132,6 +132,15 @@ What is off holds no memory, so more fits on the server than runs at once.
 Choose it under **Setup**, **What to run**, **When it runs**;
 [on-demand.md](on-demand.md) has each step.
 
+## Run a program NullBill has no support for
+
+Under **Setup**, **What to run**, **Your own services**, press **Ask the
+agent to add one**. The agent proposes a guest for it, the ports it opens
+and a setup script; nothing is saved until you have read and approved
+them, and the next setup run builds it.
+[custom-services.md](custom-services.md) has each step and what such a
+script must do.
+
 ## Remove a workload
 
 On the **Setup** page, untick it under **What to run**. Its row turns red

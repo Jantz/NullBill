@@ -51,3 +51,29 @@ def games_config() -> dict:
             "factorio": {"admins": ["owner_a"], "settings": {"max_players": 8}},
         },
     }
+
+
+def custom_config() -> dict:
+    """The large class with two services of the owner's own, as the page's
+    agent adds them (custom.define): a container a friend is given, with
+    names of its own to fetch from, and a VM only the owner reaches."""
+    from nullbill import custom
+    from nullbill.model import build_model
+
+    config = fixture_config("large")
+    own = {
+        "paperless": {
+            "title": "Paperless",
+            "what": "Scanned documents, searchable",
+            "ports": [{"port": 8000, "from": ["role:owner", "shared"]}, {"port": 5353, "proto": "udp", "from": ["zone:apps"]}],
+            "proxy_allow": ["paperless.example.internal", ".example.org"],
+            "share": {"what": "Our documents", "open": "http://{host}:{port}/"},
+            "run": "on-demand",
+            "stop": "auto",
+        },
+        "dockerbox": {"title": "Docker box", "kind": "vm", "memory_mib": 4096, "disk_gib": 32, "ports": [{"port": 8080}]},
+    }
+    for name, want in own.items():
+        config = custom.define(config, build_model(config), name, want)
+    friend = {"role": "friend", "login": "friend-c@example.internal", "services": ["paperless"]}
+    return {**config, "people": {**config["people"], "friend-c": friend}}

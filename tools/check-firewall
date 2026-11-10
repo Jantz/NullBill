@@ -13,7 +13,7 @@ cp tools/pve-firewall/Dockerfile tools/pve-firewall/check.pl "$out/context/"
 cat "${EXTRA_CA_FILE:-/dev/null}" > "$out/context/extra-ca.crt"
 docker build -q -t nullbill-pve-firewall "$out/context" >/dev/null
 tools/render-fixtures "$out/build" >/dev/null
-for cls in small mid large large-legacy large-games; do
+for cls in small mid large large-legacy large-games large-custom; do
   echo "$cls:"
   docker run --rm -v "$out/build/$cls/firewall:/fw:ro" nullbill-pve-firewall /fw
 done

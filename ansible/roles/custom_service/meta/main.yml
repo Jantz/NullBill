@@ -1,0 +1,3 @@
+# apt retries on a flaky line, for this role's packages and the script's.
+dependencies:
+  - role: downloads

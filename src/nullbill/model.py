@@ -29,6 +29,12 @@ def _validator(definition: str) -> Draft202012Validator:
     return Draft202012Validator({**_parsed("schema.yaml"), "$ref": f"#/$defs/{definition}"})
 
 
+def shipped(section: str) -> frozenset[str]:
+    """The names catalog.yaml itself has under a section, such as services:
+    what config.yaml adds beside them is the owner's own (custom.py)."""
+    return frozenset(_parsed("catalog.yaml")[section])
+
+
 def _check(definition: str, doc: Any, source: str) -> None:
     errors = sorted(_validator(definition).iter_errors(doc), key=lambda e: list(e.absolute_path))
     if errors:
@@ -81,6 +87,19 @@ def _node_exporter(model: dict) -> None:
             svc["ports"] = [*svc.get("ports", []), copy.deepcopy(NODE_EXPORTER)]
 
 
+# apply reaches a Linux VM over SSH through the host (apply.connection).
+# The catalog's VMs say so in their ports; one config.yaml adds gets it here.
+VM_SSH = {"port": 22, "proto": "tcp", "from": ["host"]}
+
+
+def _own_vm_ssh(model: dict) -> None:
+    for name in model["services"].keys() - shipped("services"):
+        svc = model["services"][name]
+        reached = any(p["port"] == 22 and p["proto"] == "tcp" and "host" in p["from"] for p in svc.get("ports", []))
+        if svc["kind"] == "vm" and svc["zone"] != "windows" and not reached:
+            svc["ports"] = [*svc.get("ports", []), copy.deepcopy(VM_SSH)]
+
+
 # A workload config.yaml puts on demand without a rule of its own in the
 # catalog's `power`: it is named as the workload and never stops by itself.
 POWER_DEFAULTS = {"run": "always", "stop": "ask", "idle_minutes": 120}
@@ -99,6 +118,7 @@ def build_model(config: dict) -> dict:
     model = merge(catalog, config)
     _power_defaults(model)
     _check("model", model, "catalog.yaml + config.yaml")
+    _own_vm_ssh(model)
     _agent_ssh(model)
     _node_exporter(model)
     return model

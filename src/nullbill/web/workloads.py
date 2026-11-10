@@ -9,19 +9,25 @@ the server. Sizes come from the plan where it fits and from the catalog's
 floors and the owner's overrides where it does not, so a choice that does
 not fit still shows what it would take.
 
+Besides the catalog's workloads there are the owner's own: a workload only
+services config.yaml added have (nullbill/custom.py) is a choice like any
+other, with what NullBill knows of it in place of the catalog's text.
+
 `power` in its answer is When it runs: each planned workload that can be
 stopped (catalog.yaml's `power`, nullbill/power.py), whether it always runs
 or runs on demand and how it stops again. The memory meter counts what
 always runs and shows what runs on demand as sharing what that leaves.
 """
 
-from nullbill import games, power
+from pathlib import Path
+
+from nullbill import custom, games, power
 from nullbill import model as modelling
 from nullbill import plan as planning
 from nullbill.errors import NullBillError
 from nullbill.render import strip_notes
 
-# In the page's order.
+# NullBill's own, in the page's order; the owner's follow (custom.workloads).
 WORKLOADS = ["agents", "linux-ci", "inference", "media", "windows-ci", "windows-dev", "minecraft", "terraria", "factorio"]
 BACKUPS, CONSOLE = "backups", "console"
 PBS = "pbs"
@@ -173,11 +179,50 @@ TEXT = {
 }
 
 
-def option_of(name: str, svc: dict) -> str | None:
-    """The choice a service belongs to; None for what is always planned."""
+# A service of the owner's own: what turning it on and off does.
+OWN_ON = (
+    "Setup makes its guest and runs its setup script in it as root. The program is not NullBill's: NullBill keeps the guest "
+    "updated, watched and backed up, opens only the ports listed here, and its checks cover those and that the script ran."
+)
+OWN_OFF = (
+    "Deletes its guest and everything in it. What it is and its setup script stay with NullBill, so turning it on again "
+    "builds it anew; Remove takes those away too."
+)
+
+
+def option_of(name: str, svc: dict, own: list[str] = ()) -> str | None:
+    """The choice a service belongs to; None for what is always planned.
+    own: the workloads of the owner's own services."""
     if name == PBS:
         return BACKUPS
-    return svc["workload"] if svc["workload"] in WORKLOADS else None
+    return svc["workload"] if svc["workload"] in WORKLOADS or svc["workload"] in own else None
+
+
+def _text(model: dict, name: str) -> dict:
+    """A choice's row: the catalog's text, or for a workload of the owner's
+    own what config.yaml says of it."""
+    if name in TEXT:
+        return TEXT[name]
+    members = [n for n, svc in model["services"].items() if svc["workload"] == name]
+    rule = model["power"].get(name) or {}
+    one = members[0] if len(members) == 1 else None
+    return {
+        "title": rule.get("title") or (custom.title(model, one) if one else name),
+        "what": (model["services"][one].get("description") if one else "") or "A service of your own.",
+        "needs": [],
+        "on": OWN_ON,
+        "off": OWN_OFF,
+    }
+
+
+def _own(model: dict, members: list[str], home: Path | None) -> dict:
+    """What a row of the owner's own shows besides: each of its services
+    line by line, and which have a setup script to read."""
+    scripts = {n: custom.read_script(home, n) for n in members}
+    return {
+        "facts": [line for n in members for line in custom.describe(model, n, scripts[n])],
+        "scripts": [n for n in members if scripts[n] is not None],
+    }
 
 
 def _size(model: dict, name: str, guest: dict | None) -> dict:
@@ -252,6 +297,7 @@ def _when(model: dict, planned: dict, counted_for: dict[str, int]) -> list[dict]
     """When it runs: a row per planned workload other than core.
     counted_for: what the plan counts for each guest."""
     rows = []
+    own = custom.workloads(model)
     found = dict.fromkeys(svc["workload"] for svc in planned.values() if svc["workload"] != "core")
     # In the page's order, then what is not a choice there (the kept disks' shares).
     for workload in [*(w for w in WORKLOADS if w in found), *(w for w in found if w not in WORKLOADS)]:
@@ -266,6 +312,8 @@ def _when(model: dict, planned: dict, counted_for: dict[str, int]) -> list[dict]
         # A container says whether it is in use and a pool's clones show
         # it; a VM alone shows only its CPU (power.groups).
         sees_use = kinds != {"vm"} or "cpu_pct" in rule.get("busy", {})
+        # One of the owner's own that listens on no TCP port shows no use either.
+        blind = workload in own and not any(custom.shows_use(planned[n]) for n in members)
         rows.append(
             {
                 "name": workload,
@@ -276,8 +324,10 @@ def _when(model: dict, planned: dict, counted_for: dict[str, int]) -> list[dict]
                 "guests": members,
                 "memory_mib": sum(counted_for[n] for n in members),
                 "blocked": blocked,
-                "auto": sees_use,
-                "auto_why": None
+                "auto": sees_use and not blind,
+                "auto_why": "It listens on no TCP port, so nothing shows whether someone is using it, and it never stops by itself."
+                if blind
+                else None
                 if sees_use
                 else (
                     "A VM does not say whether someone is using it, so it never stops by itself. "
@@ -288,8 +338,9 @@ def _when(model: dict, planned: dict, counted_for: dict[str, int]) -> list[dict]
     return rows
 
 
-def options(model: dict, facts: dict | None, existing: set[str] | None) -> dict:
-    """Each choice and the memory they come to, for `model` (a merged config)."""
+def options(model: dict, facts: dict | None, existing: set[str] | None, home: Path | None = None) -> dict:
+    """Each choice and the memory they come to, for `model` (a merged config).
+    home: where the owner's own services keep their setup scripts."""
     errors: list[str] = []
     plan = None
     if facts:
@@ -307,8 +358,9 @@ def options(model: dict, facts: dict | None, existing: set[str] | None) -> dict:
     def known(names: list[str]) -> list[str] | None:
         return None if existing is None else [n for n in names if n in existing]
 
+    own = custom.workloads(model)
     items = []
-    for name in [*WORKLOADS, BACKUPS, CONSOLE]:
+    for name in [*WORKLOADS, *own, BACKUPS, CONSOLE]:
         if name == CONSOLE:
             members: list[str] = []
             chosen = console["enabled"]
@@ -321,17 +373,21 @@ def options(model: dict, facts: dict | None, existing: set[str] | None) -> dict:
         # The row's memory and disk are the least the choice takes: a pool
         # at one clone, plus its image on disk. The plan may give it more.
         least = [_size(model, n, None) for n in members]
+        game = _game(model, name)
+        here = known(members) if members else None
         items.append(
             {
                 "name": name,
+                "group": "extras" if name in (BACKUPS, CONSOLE) else "own" if name in own else "games" if game else "workloads",
                 "extra": name in (BACKUPS, CONSOLE),
-                "game": _game(model, name),
-                **TEXT[name],
+                "game": game,
+                "own": _own(model, members, home) | {"removable": not chosen and not here} if name in own else None,
+                **_text(model, name),
                 "chosen": chosen,
                 "guests": [_size(model, n, plan["guests"].get(n) if plan else None) for n in members],
                 "memory_mib": console["memory_mib"] if name == CONSOLE else sum(counted(s) for s in least),
                 "disk_gib": sum(s["disk_gib"] * ((s["count"] or 0) + 1) for s in least),
-                "on_server": known(members) if members else None,
+                "on_server": here,
                 "blocked": _blocked(name, facts),
                 "note": _note(name, plan) if chosen else None,
             }
@@ -345,8 +401,8 @@ def options(model: dict, facts: dict | None, existing: set[str] | None) -> dict:
     parked = {n for w in demand for n in w["guests"]}
     memory = None
     if facts:
-        base = [n for n, svc in planned.items() if option_of(n, svc) is None and n not in parked]
-        optional = [n for n, svc in planned.items() if option_of(n, svc) is not None and n not in parked]
+        base = [n for n, svc in planned.items() if option_of(n, svc, own) is None and n not in parked]
+        optional = [n for n, svc in planned.items() if option_of(n, svc, own) is not None and n not in parked]
         reserve_mib = planning.reserve(model, facts)[0]
         base_mib = sum(least[n] for n in base)
         chosen_mib = sum(least[n] for n in optional)
@@ -378,5 +434,5 @@ def options(model: dict, facts: dict | None, existing: set[str] | None) -> dict:
 def loss(name: str, model: dict) -> str:
     """What deleting a guest loses, for the page's question before it does."""
     svc = model["services"].get(name)
-    option = option_of(name, svc) if svc else None
-    return TEXT[option]["off"] if option else "Deletes the guest and everything on its disk."
+    option = option_of(name, svc, custom.workloads(model)) if svc else None
+    return _text(model, option)["off"] if option else "Deletes the guest and everything on its disk."

@@ -684,9 +684,54 @@ function optionRow(item) {
     make("p", {className: "opt-note", id: `${id}-note`, hidden: true}),
     item.game ? gameAsks(item) : null,
     make("p", {className: "opt-change", role: "status", hidden: true}),
-    make("details", {className: "opt-details"}, make("summary", {textContent: "What it makes, needs and deletes"}), make("dl", {className: "opt-facts"})));
+    make("details", {className: "opt-details"}, make("summary", {textContent: "What it makes, needs and deletes"}), make("dl", {className: "opt-facts"}),
+      item.own ? ownTools(item) : null));
   row.dataset.name = item.name;
+  row.dataset.find = `${item.title} ${item.name} ${item.what}`.toLowerCase();
   return row;
+}
+
+// A service of the owner's own (web/workloads.py's `own`): its setup
+// script to read, and Remove once it is off and its guest is gone.
+function ownTools(item) {
+  const said = make("p", {className: "feedback"});
+  said.setAttribute("role", "status");
+  const scripts = make("div", {className: "own-scripts"});
+  const showScript = make("button", {type: "button", className: "btn small"}, "Show its setup script");
+  showScript.dataset.role = "script";
+  showScript.setAttribute("aria-expanded", "false");
+  showScript.addEventListener("click", () => {
+    if (showScript.getAttribute("aria-expanded") === "true") {
+      scripts.replaceChildren();
+      showScript.setAttribute("aria-expanded", "false");
+      showScript.firstChild.textContent = "Show its setup script";
+      return;
+    }
+    press(showScript, said, "Reading…", async () => {
+      const names = (state.options.items.find((i) => i.name === item.name) || item).own.scripts;
+      const found = await Promise.all(names.map((name) => api(`/api/own-service?name=${encodeURIComponent(name)}`)));
+      scripts.replaceChildren(...found.flatMap((f) => [
+        make("p", {className: "own-path mono", textContent: `${f.path}, beside config.yaml on the NullBill container`}),
+        make("pre", {className: "own-script", tabIndex: 0, textContent: f.script || ""})]));
+      showScript.setAttribute("aria-expanded", "true");
+      showScript.firstChild.textContent = "Hide its setup script";
+      return "";
+    });
+  });
+  const remove = make("button", {type: "button", className: "btn small danger"}, "Remove", make("span", {className: "sr-only", textContent: ` ${item.title}`}));
+  remove.dataset.role = "remove";
+  remove.addEventListener("click", async () => {
+    const ok = await confirmDialog({title: `Remove ${item.title}?`,
+      text: "It leaves What to run. Its guest is gone already; its setup script is set aside in custom/.removed, not erased.", yes: "Remove", danger: true});
+    if (!ok) return;
+    press(remove, said, "Removing…", async () => {
+      await api("/api/own-service/remove", {name: item.name});
+      announce(`Removed ${item.title}`, true);
+      await refresh();
+      return "";
+    });
+  });
+  return make("div", {className: "own-tools"}, make("div", {className: "row"}, showScript, remove, said), scripts);
 }
 
 // What a game asks beside its tick (web/workloads.py's `game`): the
@@ -712,15 +757,68 @@ function optionsHead() {
     make("span", {className: "opt-num", textContent: "Memory"}), make("span", {className: "opt-num", textContent: "Disk"}), make("span", {textContent: "State"}));
 }
 
+const OPTION_GROUPS = {workloads: "workload-rows", games: "game-rows", own: "own-rows", extras: "extra-rows"};
+// A group with more rows than this folds away those that are off.
+const FOLD_OVER = 8;
+
+// Long lists: the filter narrows every group (and When it runs) by name;
+// without one, a long group shows what is on, chosen or on the server and
+// keeps the rest behind a button. A row the owner has ticked never hides.
+function foldOptions() {
+  const view = optionsView;
+  if (!view) return;
+  const q = $("pick-filter").value.trim().toLowerCase();
+  show("pick-tools", view.items.length > FOLD_OVER || Boolean(q));
+  const saved = new Map(view.items.map((i) => [i.name, i]));
+  let matched = 0;
+  for (const set of $("pick").querySelectorAll("fieldset[data-group]")) {
+    const rows = [...set.querySelectorAll(".opt")];
+    const more = set.querySelector(".opts-more");
+    const count = set.querySelector(".count");
+    const on = rows.filter((r) => r.querySelector(".opt-main input").checked).length;
+    if (count) count.textContent = rows.length > 1 ? `${on} of ${rows.length} on` : "";
+    const long = rows.length > FOLD_OVER;
+    const fold = long && !q && set.dataset.open !== "true";
+    let folded = 0;
+    let found = 0;
+    for (const row of rows) {
+      const item = saved.get(row.dataset.name) || {};
+      const match = !q || row.dataset.find.includes(q);
+      const quiet = !item.chosen && !(item.on_server || []).length && !row.querySelector(".opt-main input").checked;
+      const away = fold && quiet && !row.contains(document.activeElement);
+      row.hidden = !match || away;
+      if (match) found += 1;
+      if (match && away) folded += 1;
+    }
+    matched += found;
+    set.querySelector(".opts").hidden = found - folded === 0;
+    if (more) {
+      more.hidden = !long || Boolean(q);
+      more.textContent = fold ? `Show ${folded} more that ${folded === 1 ? "is" : "are"} off` : "Show only what is on";
+      more.setAttribute("aria-expanded", fold ? "false" : "true");
+      if (fold && !folded) more.hidden = true;
+    }
+    // The owner's own group stays, empty too: it says how to add one.
+    set.hidden = found === 0 && (Boolean(q) || set.dataset.group !== "own");
+  }
+  for (const row of $("when-rows").querySelectorAll(".when")) {
+    row.hidden = Boolean(q) && !`${row.getAttribute("aria-label")} ${row.dataset.name}`.toLowerCase().includes(q);
+  }
+  const whens = [...$("when-rows").querySelectorAll(".when")];
+  if (whens.length) $("when").hidden = whens.every((r) => r.hidden);
+  $("pick-count").textContent = q ? `${matched} of ${view.items.length}` : "";
+  show("pick-none", Boolean(q) && matched === 0);
+}
+
 // The rows are built once and then only repainted, so a refresh closes no
 // details and moves no focus.
 function renderOptions(st) {
   const items = st.options ? st.options.items : [];
-  const have = [...$("pick").querySelectorAll(".opt")].map((r) => r.dataset.name).join();
-  if (have !== items.map((i) => i.name).join()) {
-    $("workload-rows").replaceChildren(optionsHead(), ...items.filter((i) => !i.extra && !i.game).map(optionRow));
-    $("game-rows").replaceChildren(optionsHead(), ...items.filter((i) => i.game).map(optionRow));
-    $("extra-rows").replaceChildren(optionsHead(), ...items.filter((i) => i.extra).map(optionRow));
+  // Rows also carry their title and text: a service of the owner's own can change both.
+  const key = (list) => list.slice().sort().join("\n");
+  const have = key([...$("pick").querySelectorAll(".opt")].map((r) => `${r.dataset.name} ${r.dataset.find}`));
+  if (have !== key(items.map((i) => `${i.name} ${`${i.title} ${i.name} ${i.what}`.toLowerCase()}`))) {
+    for (const [group, id] of Object.entries(OPTION_GROUPS)) $(id).replaceChildren(optionsHead(), ...items.filter((i) => i.group === group).map(optionRow));
   }
   for (const item of items) {
     const input = $(`opt-${item.name}`);
@@ -875,12 +973,18 @@ function paintOptions() {
         make("p", {textContent: `The plan counts ${gib(item.memory_mib)} of memory for it: a VM holds all of its memory, a container counts at ${share}% of its limit because it takes memory only as it uses it.`})]
       : [make("p", {textContent: `No guest: it runs on Proxmox itself, in ${gib(item.memory_mib)} of the memory left to Proxmox.`})];
     const fact = (term, ...body) => [make("dt", {textContent: term}), make("dd", {}, ...body)];
+    if (item.own) {
+      row.querySelector("[data-role=script]").hidden = item.own.scripts.length === 0;
+      row.querySelector("[data-role=remove]").hidden = !item.own.removable || checked;
+    }
     row.querySelector(".opt-facts").replaceChildren(
+      ...(item.own ? fact("It is", make("ul", {}, ...item.own.facts.map((f) => li(f)))) : []),
       ...fact("It makes", ...makes),
       ...fact("You need", item.needs.length ? make("ul", {}, ...item.needs.map((n) => li(n))) : make("p", {textContent: "Nothing more."})),
       ...fact("Turning it on", make("p", {textContent: item.on})),
       ...fact("Turning it off", make("p", {textContent: item.off})));
   }
+  foldOptions();
   paintBudget(view);
 }
 
@@ -2347,6 +2451,7 @@ function renderServices(st) {
       make("td", {className: "actions"}, openLink(s)));
     row.dataset.watch = s.watch || "";
     row.dataset.guest = s.watch || s.name;
+    row.dataset.find = `${s.title} ${s.name}`.toLowerCase();
     const feedback = make("p", {className: "feedback"});
     feedback.setAttribute("role", "status");
     const detail = make("tr", {className: "detail", id: detailId, hidden: !open}, make("td", {colSpan: 5}, ...serviceDetail(s, feedback)));
@@ -2361,8 +2466,26 @@ function renderServices(st) {
     rows.push(row, detail);
   }
   $("service-rows").replaceChildren(...rows);
+  show("services-find", items.length > FOLD_OVER || Boolean($("services-filter").value));
+  filterServices();
   $("services-background").textContent = services.background.length ? `Also running, with nothing to open: ${services.background.join(", ")}.` : "";
   paintServices();
+}
+
+// A long list of services, and of what runs on demand, narrowed by name.
+function filterServices() {
+  const q = $("services-filter").value.trim().toLowerCase();
+  let found = 0;
+  for (const row of $("service-rows").querySelectorAll("tr.link-row")) {
+    const detail = row.nextElementSibling;
+    row.hidden = Boolean(q) && !row.dataset.find.includes(q);
+    detail.hidden = row.hidden || row.querySelector(".expand").getAttribute("aria-expanded") !== "true";
+    if (!row.hidden) found += 1;
+  }
+  for (const row of $("demand-rows").children) {
+    row.hidden = Boolean(q) && !`${row.querySelector(".name").textContent} ${row.dataset.name}`.toLowerCase().includes(q);
+  }
+  show("services-none", Boolean(q) && found === 0);
 }
 
 function paintServices() {
@@ -3376,6 +3499,8 @@ function requestCard(e) {
   }
   if (e.act === "write" && e.diff) body.append(diffView(e.diff));
   if (e.lines && e.lines.length) body.append(make("ul", {className: "says"}, ...e.lines.map((l) => li(l))));
+  // A service of the owner's own: what it is first, then its whole setup script.
+  if (e.act === "service" && e.diff) body.append(diffView(e.diff));
   if (e.why) body.append(make("p", {className: "says", textContent: e.why}));
   body.append(make("p", {className: "why", textContent: `Asked because of: ${e.reason}.`}));
   const approve = make("button", {type: "button", className: `btn ${e.tier === "risky" ? "danger" : "primary"} small`, textContent: "Approve"});
@@ -4074,6 +4199,23 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("log-refresh").addEventListener("click", loadAgentLog);
   $("log-filter").addEventListener("input", paintAgentLog);
+  $("pick-filter").addEventListener("input", foldOptions);
+  $("services-filter").addEventListener("input", filterServices);
+  for (const more of $("pick").querySelectorAll(".opts-more")) {
+    more.addEventListener("click", () => {
+      const set = more.closest("fieldset");
+      set.dataset.open = set.dataset.open === "true" ? "false" : "true";
+      foldOptions();
+    });
+  }
+  $("own-ask").addEventListener("click", () => {
+    openAgent(true);
+    const composer = $("composer-text");
+    if (!composer.value.trim()) {
+      composer.value = "Add a service of my own: ";
+      composer.dispatchEvent(new Event("input", {bubbles: true}));
+    }
+  });
 
   const powers = (on) => press($("agent-powers"), "agent-powers-result", on ? "Giving the operator root on Proxmox…" : "Taking its key off Proxmox…", async () => {
     try {

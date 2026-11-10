@@ -77,6 +77,13 @@ zones:
     index: 8
     description: Game servers, one container each, for the people the owner lets in.
     egress: proxy
+  # Where a service of the owner's own goes unless it names another zone
+  # (docs/adr/0015-custom-services.md). Its guests reach each other and the
+  # rest only on ports that name them, like every guest.
+  apps:
+    index: 9
+    description: Services of the owner's own, which NullBill has no role for.
+    egress: proxy
 
 roles:
   owner:
@@ -96,6 +103,10 @@ roles:
 # and open to SSH from the operator with a short-lived certificate. Guests
 # that hold credentials (dispatcher, gateway) or the owner's desktop stay out.
 # id: unique per service; sets the VMID and the host part of the address.
+# The catalog keeps to ids below 64. A service config.yaml adds takes one
+# from 64 to 127 or from 192 to 253 (custom.py picks the lowest free one
+# for those the page's agent adds), so a later catalog never collides with
+# it; 128 to 191 are the addresses pool clones lease.
 # workload: core services are always planned. Others are planned only when
 # intent.workloads lists their workload.
 # ports.from: who may open the port. A role is everyone who holds it;
@@ -136,7 +147,7 @@ services:
     workload: core
     floor: {cores: 1, memory_mib: 512, disk_gib: 4}
     ports:
-      - {port: 3128, proto: tcp, from: ["zone:mgmt", "zone:build", "zone:inference", "zone:windows", "zone:media", "zone:games"]}
+      - {port: 3128, proto: tcp, from: ["zone:mgmt", "zone:build", "zone:inference", "zone:windows", "zone:media", "zone:games", "zone:apps"]}
   vpn:
     id: 11
     kind: lxc
@@ -378,7 +389,9 @@ services:
       open: "https://{ip}:4000/v1"
       note: It asks for an API key, which I send you. Ask for the model as local.
     ports:
-      - {port: 4000, proto: tcp, from: ["zone:build", "role:owner", "shared", "service:monitoring"]}
+      # apps: a service of the owner's own may use the local model; it
+      # still needs the key.
+      - {port: 4000, proto: tcp, from: ["zone:build", "zone:apps", "role:owner", "shared", "service:monitoring"]}
   windows-runner:
     id: 31
     kind: vm-pool

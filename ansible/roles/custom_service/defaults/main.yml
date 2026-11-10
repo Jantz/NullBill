@@ -1,0 +1,10 @@
+# Runs a setup script the owner or the page's agent wrote, as root in a
+# guest of its own (docs/adr/0015-custom-services.md). apply passes the
+# script, its SHA-256 and what the script may read from its environment.
+#
+# The egress proxy's URL where the guest's zone goes out through it.
+custom_service_proxy: ""
+# The service's own ports, such as tcp/8080, for the script to read.
+custom_service_ports: []
+# A script still running after this many seconds is ended, and the run fails.
+custom_service_timeout_s: 3600

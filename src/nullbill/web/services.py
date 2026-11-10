@@ -367,6 +367,52 @@ def _entries(plan: dict, guests: dict, by_name: bool, forgejo_user: str | None, 
                 "watch": name,
             }
         )
+    for name, own in (plan.get("custom") or {}).items():
+        if not ip(name):
+            continue
+        ports = [port.partition("/")[2] for port in own["ports"]]
+        first = ports[0] if ports else ""
+        if own.get("open"):
+            fill = {"{host}": at(name), "{ip}": ip(name), "{port}": first}
+            where = own["open"]
+            for key, value in fill.items():
+                where = where.replace(key, value)
+            url = where if "://" in where else None
+            addresses = [*([] if url else [where]), *fallback(name, where)]
+        else:
+            url = None
+            addresses = [f"{at(name)}:{port}" for port in ports] + ([f"By address: {ip(name)}"] if by_name and ports else [])
+        steps = []
+        if own.get("shared"):
+            steps.append(
+                step(
+                    f"Tick {own['title']} for each person who may use it, and send them what the page writes.",
+                    href="#access/people",
+                    link="Access, People",
+                )
+            )
+        steps.append(
+            step(
+                "NullBill made this guest, its firewall, updates and backups. What runs inside came from its setup script, "
+                "which you can read there; to change it, ask the agent or edit the script, then press Run setup.",
+                href="#setup/choices",
+                link="Setup, What to run",
+            )
+        )
+        if guests[name]["kind"] == "lxc":
+            steps.append(step(f"To look inside. {shell}", code=f"pct enter {vmid(name)}"))
+        out.append(
+            {
+                "name": name,
+                "title": own["title"],
+                "what": own.get("what") or "A service of your own.",
+                **({"url": url} if url else {}),
+                "addresses": addresses if addresses or url else ["It opens no port to your devices."],
+                "steps": steps,
+                "own": True,
+                "watch": name,
+            }
+        )
     return out
 
 

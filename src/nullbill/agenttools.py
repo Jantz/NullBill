@@ -36,6 +36,7 @@ STAGES = [
     "logs",
     "backups",
     "vpn",
+    "custom",
     "verify",
 ]
 WHY = {"type": "string", "description": "One sentence for the owner: why you want this. Shown on their approval card."}
@@ -185,6 +186,82 @@ TOOLS = [
         },
     },
     {
+        "name": "read_service",
+        "description": "One of the owner's own services (status marks them own): what it is, what it opens, and its setup script.",
+        "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
+    },
+    {
+        "name": "add_service",
+        "description": "Add a program NullBill has no built-in support for as a service of the owner's own, or change "
+        "one (give only what changes). NullBill makes a Debian 12 guest of its own for it with an address and a name, "
+        "the firewall for exactly the ports listed, updates, monitoring, backups and on-demand power; the setup script "
+        "puts the program in, run as root inside the guest by the next setup run, and again whenever the script "
+        "changes. The owner reads the definition and the whole script before it is saved. Read "
+        "docs/runbooks/custom-services.md first.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Lowercase letters, digits and dashes; the guest's name.",
+                },
+                "title": {"type": "string", "description": "What the page calls it, such as Paperless."},
+                "what": {"type": "string", "description": "One line for the owner: what it is for."},
+                "setup": {
+                    "type": "string",
+                    "description": "The whole setup script (#!/bin/bash, set -eu). It runs as root with no terminal, "
+                    "must be safe to run again, and gets NB_SERVICE, NB_ADDRESS, NB_DOMAIN, NB_PORTS and the proxy "
+                    "variables (http_proxy, https_proxy). Leave out to keep the script it has.",
+                },
+                "kind": {
+                    "enum": ["lxc", "vm"],
+                    "description": "lxc (a container); vm when it needs its own kernel or runs Docker.",
+                },
+                "zone": {"type": "string", "description": "apps unless it is a game server (games)."},
+                "cores": {"type": "integer"},
+                "memory_mib": {"type": "integer"},
+                "disk_gib": {"type": "integer"},
+                "ports": {
+                    "type": "array",
+                    "description": "Each port the program listens on and who may reach it. from: role:owner (the "
+                    "owner's devices), shared (people the owner ticks it for), zone:<name>, service:<name>.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "port": {"type": "integer"},
+                            "proto": {"enum": ["tcp", "udp"]},
+                            "from": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "required": ["port"],
+                    },
+                },
+                "proxy_allow": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Names this guest may fetch from besides the server's usual list (Debian, GitHub, "
+                    "PyPI, npm, crates.io, Docker Hub, ghcr.io, Hugging Face); a leading dot takes subdomains too.",
+                },
+                "share": {
+                    "type": "object",
+                    "description": "How it reads to people it is shared with: what (one line), open (such as http://{host}:{port}/), note.",
+                    "properties": {"what": {"type": "string"}, "open": {"type": "string"}, "note": {"type": "string"}},
+                },
+                "run": {"enum": ["always", "on-demand"]},
+                "stop": {"enum": ["auto", "ask", "manual"]},
+                "idle_minutes": {"type": "integer"},
+                "on": {"type": "boolean", "description": "Whether it is ticked under Setup, What to run. A new one is on."},
+                "why": WHY,
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "remove_service",
+        "description": "Forget one of the owner's own services: only one that is turned off (set_choices) and whose "
+        "guest a setup run has deleted, which asks the owner first. Its setup script is set aside, not erased.",
+        "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}, "why": WHY}, "required": ["name"]},
+    },
+    {
         "name": "set_choices",
         "description": "Change what the server runs (the Setup page's choices); the next setup run builds it. Disks "
         "are the owner's to change on the Setup page.",
@@ -193,19 +270,9 @@ TOOLS = [
             "properties": {
                 "workloads": {
                     "type": "array",
-                    "items": {
-                        "enum": [
-                            "agents",
-                            "linux-ci",
-                            "inference",
-                            "media",
-                            "minecraft",
-                            "terraria",
-                            "factorio",
-                            "windows-ci",
-                            "windows-dev",
-                        ]
-                    },
+                    "items": {"type": "string"},
+                    "description": "Every workload that should run, by the names status lists under what_to_run "
+                    "(built-in ones and the owner's own); one left out is turned off.",
                 },
                 "backups": {"type": "boolean"},
                 "console": {"type": "boolean"},
