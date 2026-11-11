@@ -155,7 +155,7 @@ paused** tells you; delete or move files, or lower the number under
 | The file is refused: its Endpoint could not be looked up | The file names the server instead of giving its address. | Put the server's IPv4 address in the `Endpoint` line, or ask the provider for a file with one. |
 | Plan: downloads go to a kept disk that can be written to | No kept disk has **Let me change files on it**. | Tick it under **Other disks**; [legacy-disk.md](legacy-disk.md) says what Windows must have done first. |
 | Nothing downloads, the page works | Paused for room, or the tunnel is down. | In the Proxmox shell: `pct exec 2028 -- nb-torrents space` and `pct exec 2028 -- nb-torrents tunnel status`. |
-| A download stays in `incomplete` at 100 %; alert: a download is set to be saved outside /downloads, or qBittorrent could not move a finished download | Its save path lies outside `/downloads`, where the client cannot write. | In qBittorrent, right-click it, **Set location**, and choose a folder under `/downloads`. `pct exec 2028 -- nb-torrents paths` names each such download and shows qBittorrent's message. |
+| A download stays in `incomplete` at 100 %; alert: a download is set to be saved outside /downloads, or qBittorrent could not move a finished download | Its save path lies outside `/downloads`, where the client cannot write. | In qBittorrent, right-click it, **Set location**, and choose a folder under `/downloads`. `pct exec 2028 -- nb-torrents paths` names each such download and what qBittorrent could not move. The check and the alerts end once the download has a location under `/downloads` or is removed. |
 
 ## 8. Turning it off
 

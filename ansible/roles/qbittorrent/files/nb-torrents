@@ -33,6 +33,7 @@ import hmac
 import json
 import os
 import pwd
+import re
 import secrets
 import subprocess
 import sys
@@ -61,6 +62,10 @@ LOG_READ = STATE / "torrents-log.json"
 MOVE_FAILED = "Failed to move torrent"
 # A failed move is told for this long; qBittorrent does not try again.
 MOVE_TOLD_S = 24 * 3600
+# A failed move that no folder explains is told this long, as its alert is.
+MOVE_RECENT_S = 3600
+MOVE_LINE = re.compile(r'Torrent: "(?P<torrent>.*)"\. Source: ".*"\. Destination: "(?P<to>.*?)"\. Reason: "?(?P<reason>.*)')
+NAME_CHARS = 60
 TEXTFILES = Path("/var/lib/prometheus/node-exporter")
 NB_BUSY = "/usr/local/sbin/nb-busy"
 # The routing table of the client's user, and the rules that send it there.
@@ -321,13 +326,13 @@ def outside(cfg: dict) -> list[tuple[str, str]]:
     for t in torrents(cfg):
         for place in (t.get("save_path"), t.get("download_path")):
             if place and not inside(place, store):
-                found.append((t.get("name") or t["hash"], os.path.normpath(place)))
+                found.append((f'"{short(t.get("name") or t["hash"])}"', os.path.normpath(place)))
                 break
     for name, category in sorted(json.loads(api(cfg, "torrents/categories")).items()):
         place = category.get("savePath") or ""
         # A folder without a leading slash lies under the downloads folder.
         if place.startswith("/") and not inside(place, store):
-            found.append((f"the category {name}", os.path.normpath(place)))
+            found.append((f"the category {short(name)}", os.path.normpath(place)))
     return found
 
 
@@ -371,12 +376,47 @@ def failed_move(state: dict) -> dict | None:
     return failed if isinstance(failed, dict) and time.time() - failed.get("at", 0) < MOVE_TOLD_S else None
 
 
+def short(name: str) -> str:
+    """A download's name for one line of a check: no "; " (the page breaks
+    a check's lines there) and no longer than a line takes."""
+    name = " ".join(str(name).replace(";", ",").split())
+    return name if len(name) <= NAME_CHARS else name[: NAME_CHARS - 1].rstrip() + "…"
+
+
+def move_parts(message: str) -> dict | None:
+    """qBittorrent's failed-move line taken apart: torrent, destination and
+    the last words of its reason ("Permission denied")."""
+    found = MOVE_LINE.search(message)
+    if not found:
+        return None
+    reason = found["reason"].rstrip('". ').rsplit(". ", 1)[-1].rsplit(": ", 1)[-1]
+    return {"torrent": found["torrent"], "to": os.path.normpath(found["to"]), "reason": reason}
+
+
+def still_true(failed: dict, store: str, away: list[tuple[str, str]]) -> bool:
+    """Whether a failed move is still worth telling. One to a folder outside
+    the downloads folder is over once nothing is saved there any more (the
+    owner set another location, or removed the download); any other counts
+    for MOVE_RECENT_S, as its alert does."""
+    parts = move_parts(failed["message"])
+    if parts and not inside(parts["to"], store):
+        return any(place == parts["to"] for _, place in away)
+    return time.time() - failed["at"] < MOVE_RECENT_S
+
+
 def paths(cfg: dict) -> int:
+    """One short line per thing that is wrong now, or "inside"."""
     store = cfg["store"]
-    said = [f"{what} is saved to {place}, outside {store}" for what, place in outside(cfg)]
+    away = outside(cfg)
+    said = [f"{what} is set to save to {place}, outside {store}" for what, place in away]
     failed = failed_move(read_log(cfg))
-    if failed:
-        said.append(f"at {time.strftime('%H:%M on %d %b', time.localtime(failed['at']))} qBittorrent logged: {failed['message']}")
+    if failed and still_true(failed, store, away):
+        when = time.strftime("%H:%M on %d %b", time.localtime(failed["at"]))
+        parts = move_parts(failed["message"])
+        if parts:
+            said.append(f'at {when} qBittorrent could not move "{short(parts["torrent"])}" to {parts["to"]}: {short(parts["reason"])}')
+        else:
+            said.append(f"at {when} qBittorrent logged: {short(failed['message'])}")
     print("\n".join(said) if said else "inside")
     return 0
 
@@ -409,12 +449,14 @@ def tick(cfg: dict) -> int:
     try:
         guard(cfg, free)
         states = [t["state"] for t in torrents(cfg)]
+        away, failed = outside(cfg), failed_move(read_log(cfg))
         lines += [
             "nb_torrents_up 1",
             f"nb_torrents_downloading {sum(1 for s in states if s in WORKING)}",
             f"nb_torrents_seeding {sum(1 for s in states if s in SEEDING)}",
-            f"nb_torrents_outside_store {len(outside(cfg))}",
-            f"nb_torrents_move_failed_timestamp_seconds {(read_log(cfg).get('failed') or {}).get('at', 0)}",
+            f"nb_torrents_outside_store {len(away)}",
+            # 0 once a failed move is put right, so its alert ends with it.
+            f"nb_torrents_move_failed_timestamp_seconds {failed['at'] if failed and still_true(failed, cfg['store'], away) else 0}",
         ]
     except (NotAnswering, ValueError):
         lines.append("nb_torrents_up 0")

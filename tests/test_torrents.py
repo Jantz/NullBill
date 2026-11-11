@@ -186,11 +186,16 @@ def test_a_download_saved_outside_the_folder_is_named(facts):
     "mkdir (): Permission denied" in qBittorrent's log only, and the
     download sat in incomplete."""
     assert torrents.paths_result(0, "inside\n", "") == Result("PASS", torrents.PATHS_LABEL)
-    found = torrents.paths_result(
-        0, "Episode one is saved to /srv/films, outside /downloads\nthe category tv is saved to /tv, outside /downloads\n", ""
-    )
-    assert found.status == "DEGRADED" and found.detail.startswith("Episode one is saved to /srv/films, outside /downloads (and 1 more")
-    assert "set its location to a folder under /downloads" in found.detail
+    said = [f'"Film {n}" is set to save to /srv/films, outside /downloads' for n in range(1, 5)]
+    said.append('at 12:22 on 11 Nov qBittorrent could not move "Film 1" to /srv/films: Permission denied')
+    found = torrents.paths_result(0, "\n".join(said), "")
+    # The page shows a check's detail one line per "; ": each thing wrong now,
+    # the rest counted, why it matters, what to do. No line is a wall of log.
+    lines = found.detail.split("; ")
+    assert found.status == "DEGRADED" and lines[:3] == said[:3] and lines[3].startswith("and 2 more")
+    assert lines[4] == "qBittorrent can write under /downloads only, so such a download stays unfinished"
+    assert lines[5].startswith("to fix it, right-click the download in qBittorrent, Set location") and len(lines) == 6
+    assert max(map(len, lines)) < 120
     assert torrents.paths_result(1, "", "nb-torrents: Connection refused").status == "FAIL"
     plan, _ = planned(facts, torrents_config("home"))
     results = torrents.check(plan, "t", answers(paths="A is saved to /tmp, outside /downloads"), "198.51.100.80")

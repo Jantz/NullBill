@@ -182,27 +182,29 @@ for _ in $(seq 40); do
 done
 curl -sS 'http://127.0.0.1:8080/api/v2/log/main?last_known_id=-1' | grep -q "Failed to move torrent" \
   || { curl -sS 'http://127.0.0.1:8080/api/v2/log/main?last_known_id=-1'; echo; state "$film"; fail "qBittorrent logs a move it could not make"; }
-grep -q "^film.bin is saved to /srv/films, outside /downloads$" <<<"$(nb-torrents paths)" || { nb-torrents paths; fail "paths names the download saved outside"; }
-grep -q "qBittorrent logged: Failed to move torrent" <<<"$(nb-torrents paths)" || { nb-torrents paths; fail "paths shows qBittorrent's own message"; }
+grep -qx '"film.bin" is set to save to /srv/films, outside /downloads' <<<"$(nb-torrents paths)" || { nb-torrents paths; fail "paths names the download saved outside"; }
+grep -qx 'at [0-9:]* on [0-9]* [A-Za-z]* qBittorrent could not move "film.bin" to /srv/films: Permission denied' <<<"$(nb-torrents paths)" \
+  || { nb-torrents paths; fail "paths says in one short line what qBittorrent could not move, where to and why"; }
 nb-torrents tick
 [ "$(metric nb_torrents_outside_store)" = 1 ] || fail "the metric counts the download outside"
 [ "$(metric nb_torrents_move_failed_timestamp_seconds)" -gt 1700000000 ] || fail "the metric says when the move failed"
-# Put where the client can write, it is inside again; the failed move stays told for a day.
+# Once nothing is saved there any more, nothing is wrong now, and the old line of the log is no longer told.
 curl -sS -o /dev/null http://127.0.0.1:8080/api/v2/torrents/delete -d "hashes=$film" -d deleteFiles=false
 for _ in $(seq 20); do
-  nb-torrents paths | grep -q "^film.bin is saved" || break
+  [ "$(nb-torrents paths)" = inside ] && break
   sleep 0.5
 done
 nb-torrents tick
 [ "$(metric nb_torrents_outside_store)" = 0 ] || fail "nothing is outside once that download is gone"
-[ "$(nb-torrents paths | wc -l)" = 1 ] || { nb-torrents paths; fail "only the failed move is still told"; }
+[ "$(metric nb_torrents_move_failed_timestamp_seconds)" = 0 ] || fail "the failed move's metric ends with it, and so does its alert"
+[ "$(nb-torrents paths)" = inside ] || { nb-torrents paths; fail "a failed move to a folder nothing is saved to any more is no longer told"; }
 # The log is read from where it was left, and from its start when qBittorrent has started anew.
 python3 - <<'PY'
 import json
 state = json.load(open("/var/lib/nullbill/torrents-log.json"))
 assert state["last"] >= 0 and "Failed to move torrent" in state["failed"]["message"], state
 PY
-pass "a download saved outside /downloads is named, with qBittorrent's own word that it could not move it"
+pass "a download saved outside /downloads is named with what qBittorrent could not move, and neither is told once it is put right"
 
 # qBittorrent gone: the guest must not be stopped for want of an answer.
 # shellcheck disable=SC2046

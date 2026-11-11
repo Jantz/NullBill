@@ -421,6 +421,8 @@ DROP_LABEL = "a dropped tunnel stops the download client's traffic"
 SPACE_LABEL = "downloads are not paused for lack of room"
 PATHS_LABEL = "every download is saved inside the downloads folder"
 INSIDE = "inside"
+# How many of nb-torrents paths' lines a check shows before it counts the rest.
+PATHS_TOLD = 3
 # qBittorrent's word once a peer has connected to it from outside.
 REACHED = "connected"
 PORT_LABEL = "the home router sends the download client's port to it"
@@ -451,13 +453,14 @@ def paths_result(rc: int, out: str, err: str) -> Result:
         return Result("FAIL", PATHS_LABEL, (err.strip() or f"exit {rc}")[:160])
     if said == [INSIDE]:
         return Result("PASS", PATHS_LABEL)
-    more = f" (and {len(said) - 1} more: nb-torrents paths in the guest lists them)" if len(said) > 1 else ""
-    return Result(
-        "DEGRADED",
-        PATHS_LABEL,
-        f"{said[0][:300]}{more}. The client can write under {STORE} only, so such a download stays unfinished: "
-        f"in qBittorrent, set its location to a folder under {STORE}",
-    )
+    # One short line each (the page breaks a check's detail at "; "):
+    # what is wrong now, then why it matters and what to do.
+    told = said[:PATHS_TOLD]
+    if len(said) > PATHS_TOLD:
+        told.append(f"and {len(said) - PATHS_TOLD} more, which nb-torrents paths in the guest lists")
+    told.append(f"qBittorrent can write under {STORE} only, so such a download stays unfinished")
+    told.append(f"to fix it, right-click the download in qBittorrent, Set location, and choose a folder under {STORE}")
+    return Result("DEGRADED", PATHS_LABEL, "; ".join(told))
 
 
 def outside_test(port: int) -> str:
