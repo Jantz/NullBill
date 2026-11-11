@@ -124,7 +124,7 @@ def view(config: dict | None, model: dict | None, facts: dict | None, plan: dict
         "places": found,
         "system": {
             "allowed": own is None,
-            "why": None if own is None else f"{own['id']} is in the server for them: a disk of their own outlives the server's disk.",
+            "why": None if own is None else f"The backups have a disk of their own, {own['id']}.",
             "storage": disk.get("storage"),
             "free_gib": disk.get("free_gib"),
             "size_gib": pinned or (want or {}).get("size_gib") if (want or {}).get("kind", SYSTEM) == SYSTEM else pinned,

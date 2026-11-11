@@ -364,7 +364,7 @@ main { grid-area: main; container: main / inline-size; overflow-y: auto; padding
 .page-sub { color: var(--text-3); margin-top: 2px; }
 .block { margin-top: 28px; }
 .block:first-of-type, .page-head + .block { margin-top: 0; }
-.block-head { display: flex; align-items: center; gap: 10px; min-height: 28px; margin-bottom: 10px; }
+.block-head { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; min-height: 28px; margin-bottom: 10px; }
 .crumbs { display: flex; align-items: center; gap: 6px; margin-bottom: 14px; font-size: 13px; color: var(--text-3); }
 .crumbs .icon { width: 14px; height: 14px; }
 .empty { padding: 40px 16px; text-align: center; border: 1px dashed var(--line-strong); border-radius: var(--radius-lg); display: grid; gap: 6px; justify-items: center; color: var(--text-2); }
@@ -684,13 +684,19 @@ pre.own-script { margin: 0; padding: 10px 12px; max-height: 420px; overflow: aut
 .when-note { margin-top: 2px; }
 select:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
 select:disabled { color: var(--text-3); background: var(--bg-sub); cursor: not-allowed; }
-/* Services, On demand. */
-#demand { margin-top: 28px; }
-.demand .sub { white-space: normal; max-width: 56ch; }
-.demand td.actions .row { justify-content: flex-end; flex-wrap: nowrap; }
-.demand .btn[aria-pressed="true"] { background: var(--accent-bg); border-color: var(--accent); color: var(--text); }
-.demand .feedback, .services .svc-feedback { display: flex; margin-top: 2px; white-space: normal; }
-.demand .feedback:empty, .services .svc-feedback:empty { display: none; }
+/* Services: what runs on demand, in its own row. */
+#demand { margin-top: 16px; max-width: 720px; }
+.demand-more { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 20px; margin-top: 8px; font-size: 13px; }
+.demand-more .disclosure { flex: 1 1 260px; }
+.services .state-cell .sub { display: block; white-space: normal; max-width: 44ch; }
+.services td.actions { white-space: nowrap; }
+.services td.actions > * + * { margin-left: 6px; }
+.services .demand-acts { display: inline-flex; flex-wrap: nowrap; gap: 6px; vertical-align: middle; }
+.services .demand-acts[hidden] { display: none; }
+.services .btn[aria-pressed="true"] { background: var(--accent-bg); border-color: var(--accent); color: var(--text); }
+.services tr.bare .svc { padding-left: 38px; }
+.services .svc-feedback { display: flex; margin-top: 2px; white-space: normal; }
+.services .svc-feedback:empty { display: none; }
 .events { display: grid; gap: 4px; font-size: 12px; color: var(--text-2); }
 .events time { color: var(--text-3); font-variant-numeric: tabular-nums; margin-right: 8px; }
 .points { list-style: disc; padding-left: 18px; display: grid; gap: 6px; margin: 0 0 12px; color: var(--text-2); font-size: 13px; }
@@ -888,6 +894,8 @@ select:disabled { color: var(--text-3); background: var(--bg-sub); cursor: not-a
 .copy-line code { flex: 1; background: none; padding: 0; font-size: 12px; }
 .howto { list-style: decimal; padding-left: 20px; display: grid; gap: 8px; color: var(--text-2); max-width: 72ch; }
 .howto b { color: var(--text); }
+.howto-more { display: grid; gap: 6px; margin-top: 14px; max-width: 72ch; }
+.howto-more p + p { margin-top: 6px; }
 
 /* Services */
 .services .svc { display: flex; align-items: center; gap: 10px; }
@@ -1299,7 +1307,8 @@ dialog::backdrop { background: var(--scrim); }
   .whens-head { display: none; }
   .whens-head + .whens { border-radius: var(--radius-lg); }
   .when .when-stop > .label, .when .when-idle > .label { position: static; width: auto; height: auto; clip-path: none; }
-  .demand td.actions .row { flex-wrap: wrap; }
+  .services td.actions { white-space: normal; }
+  .services .demand-acts { flex-wrap: wrap; justify-content: flex-end; }
 }
 @container main (max-width: 560px) {
   .table .hide-phone { display: none; }

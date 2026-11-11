@@ -2861,9 +2861,9 @@ function renderOverview(items) {
     const checking = runningAction();
     const n = c ? c.counts : null;
     const found = !n ? "" : [n.FAIL ? `${n.FAIL} failed` : "", n.DEGRADED ? `${n.DEGRADED} degraded` : "", n.SKIP ? `${n.SKIP} skipped` : ""].filter(Boolean).join(", ");
-    cell("Checks", checking === "verify" ? "Running" : !c ? "Not run" : n.FAIL ? "Failed" : n.DEGRADED ? "Passed, with warnings" : "Passed",
+    cell("Checks", checking === "verify" ? "Running" : !c ? "Not run" : n.FAIL ? "Failed" : n.DEGRADED ? "Warnings" : "Passed",
       checking === "verify" ? "run" : !c ? "" : n.FAIL ? "bad" : n.DEGRADED ? "warn" : "good",
-      c ? [found || `${n.PASS} passed`, `${c.action === "verify" || c.only ? "run" : "in the setup run"} ${ago(c.at)}`].join(" · ") : "", c ? `#activity/${c.id}` : null);
+      c ? [found || `${n.PASS} passed`, ago(c.at)].join(" · ") : "", c ? `#activity/${c.id}` : null);
     $("stats").replaceChildren(...stats);
     $("health-meta").textContent = s && s.at ? `${s.monitoring === "ok" ? "From Prometheus, read" : "Asked"} ${readAt(s.at)}` : "";
   }
@@ -3576,6 +3576,7 @@ function renderServices(st) {
   }
   $("service-rows").replaceChildren(...rows);
   show("services-find", items.length > FOLD_OVER || Boolean($("services-filter").value));
+  paintDemand();
   filterServices();
   $("services-background").textContent = services.background.length ? `Also running, with nothing to open: ${services.background.join(", ")}.` : "";
   paintServices();
@@ -3597,28 +3598,72 @@ function filterServices() {
   show("services-none", Boolean(q) && found === 0);
 }
 
+// The live on-demand workload a service's guest belongs to.
+function groupOf(guest) {
+  if (!demand || !demand.live || !built()) return null;
+  return demand.groups.find((g) => g.guests.some((m) => m.name === guest)) || null;
+}
+
+// Keep on, Start and Stop for one workload, answered in `said`.
+function demandButtons(g, said) {
+  const button = (cls, text, body) => {
+    const b = make("button", {type: "button", className: `btn small ${cls}`}, text, make("span", {className: "sr-only", textContent: ` ${g.title}`}));
+    b.addEventListener("click", (event) => { event.stopPropagation(); demandAct(b, said, body(b)); });
+    return b;
+  };
+  const keep = button("keep", "Keep on", (b) => ({action: "keep", name: g.name, on: b.getAttribute("aria-pressed") !== "true"}));
+  keep.title = "Not stopped for being unused, and you are not asked, until you stop it";
+  return make("span", {className: "row demand-acts"}, keep,
+    button("start", "Start", () => ({action: "start", name: g.name})), button("stop", "Stop", () => ({action: "stop", name: g.name})));
+}
+
+function paintDemandButtons(box, g, live) {
+  const on = g.state === "on" || g.state === "partly";
+  const known = live && !["pending", "unknown", "missing"].includes(g.state);
+  box.querySelector(".start").hidden = !known || g.state === "on";
+  box.querySelector(".stop").hidden = !known || !on;
+  const keep = box.querySelector(".keep");
+  keep.hidden = !known || !on || g.stop === "manual" || Boolean(g.setup);
+  keep.setAttribute("aria-pressed", g.keep ? "true" : "false");
+  for (const b of box.querySelectorAll("button")) {
+    if (g.acting || g.setup) { b.setAttribute("aria-disabled", "true"); b.dataset.why = g.acting ? "Wait until it has finished." : "A setup run is using it."; }
+    else if (b.dataset.why) { b.removeAttribute("aria-disabled"); delete b.dataset.why; }
+  }
+}
+
+// A service that runs on demand says so in its own row: how it is used
+// under its status, and Start, Stop and Keep on beside Open.
 function paintServices() {
   for (const row of document.querySelectorAll("#service-rows tr.link-row")) {
-    const [kind, word] = serviceState(row.dataset.watch, row.dataset.guest);
-    const cell = row.querySelector(".state-cell");
-    if (cell.textContent !== word) cell.replaceChildren(status(kind, word));
-    // A service that is off on demand gets Start where Open would be.
+    let [kind, word] = serviceState(row.dataset.watch, row.dataset.guest);
+    const g = groupOf(row.dataset.guest);
     const d = built() ? demandOf(row.dataset.guest) : null;
     const off = Boolean(d && d.off);
+    let sub = "";
+    if (g) {
+      const [liveKind, liveWord, liveSub] = demandState(g);
+      sub = liveSub;
+      if (["Running", "On"].includes(word) && !["pending", "unknown", "missing", "off"].includes(g.state)) [kind, word] = [liveKind, liveWord];
+    }
+    const cell = row.querySelector(".state-cell");
+    if (cell.dataset.text !== word + sub) {
+      cell.dataset.text = word + sub;
+      cell.replaceChildren(status(kind, word), sub ? make("span", {className: "sub", textContent: sub}) : "");
+    }
     const actions = row.querySelector("td.actions");
     const open = actions.querySelector("a.btn");
-    let start = actions.querySelector("button.start");
-    if (off && !start) {
-      start = make("button", {type: "button", className: "btn small start"}, "Start", make("span", {className: "sr-only", textContent: ` ${d.title}`}));
-      start.addEventListener("click", (event) => {
-        event.stopPropagation();
-        demandAct(start, row.querySelector(".svc-feedback"), {action: "start", name: start.dataset.name});
-      });
-      actions.append(start);
+    // Without a live answer from the host, monitoring still knows what is off.
+    const group = g || (off ? {name: d.name, title: d.title, state: "off"} : null);
+    let box = actions.querySelector(".demand-acts");
+    if (group && (!box || box.dataset.name !== group.name)) {
+      if (box) box.remove();
+      box = demandButtons(group, row.querySelector(".svc-feedback"));
+      box.dataset.name = group.name;
+      actions.append(box);
     }
-    if (start) {
-      start.hidden = !off;
-      if (d) start.dataset.name = d.name;
+    if (box) {
+      box.hidden = !group;
+      if (group) paintDemandButtons(box, group, true);
     }
     if (open) open.hidden = off;
   }
@@ -3632,7 +3677,7 @@ function demandState(g) {
   if (g.state === "pending") return ["", "Not yet", "Runs on demand after the next setup run."];
   if (g.state === "unknown") return ["", "No status", ""];
   if (g.state === "missing") return ["", "Not made yet", "Run setup to make it."];
-  if (g.state === "off") return ["", "Off", changes];
+  if (g.state === "off") return ["", "Off, on demand", changes];
   if (g.setup) return ["run", "On for setup", "A setup run started it and stops it again when it is done."];
   if (g.state === "partly") {
     const down = g.guests.filter((m) => m.state && m.state !== "running").map((m) => m.name);
@@ -3649,22 +3694,17 @@ function demandState(g) {
   return ["good", "On", sub(sentence(idle), rule, changes)];
 }
 
+// A workload on demand with nothing to open has no service row: it gets a
+// plain one at the end of the same table.
 function demandRow(g) {
-  const said = make("p", {className: "feedback"});
+  const said = make("p", {className: "feedback svc-feedback"});
   said.setAttribute("role", "status");
-  const button = (cls, text, body) => {
-    const b = make("button", {type: "button", className: `btn small ${cls}`}, text, make("span", {className: "sr-only", textContent: ` ${g.title}`}));
-    b.addEventListener("click", () => demandAct(b, said, body(b)));
-    return b;
-  };
-  const keep = button("keep", "Keep on", (b) => ({action: "keep", name: g.name, on: b.getAttribute("aria-pressed") !== "true"}));
-  keep.title = "Not stopped for being unused, and you are not asked, until you stop it";
-  const row = make("tr", {},
-    make("td", {}, make("span", {className: "name", textContent: g.title}), make("span", {className: "sub demand-guests"}), said),
-    make("td", {className: "demand-state"}),
-    make("td", {className: "num hide-phone demand-memory"}),
-    make("td", {className: "actions"}, make("span", {className: "row"}, keep,
-      button("start", "Start", () => ({action: "start", name: g.name})), button("stop", "Stop", () => ({action: "stop", name: g.name})))));
+  const row = make("tr", {className: "bare"},
+    make("td", {}, make("div", {className: "svc"}, make("span", {className: "name", textContent: g.title})), said),
+    make("td", {className: "state-cell"}),
+    make("td", {className: "hide-phone"}),
+    make("td", {className: "hide-narrow"}),
+    make("td", {className: "actions"}, demandButtons(g, said)));
   row.dataset.name = g.name;
   return row;
 }
@@ -3674,33 +3714,23 @@ function demandRow(g) {
 function paintDemand() {
   const view = demand;
   const groups = view ? view.groups : [];
-  show("demand", groups.length > 0);
-  if (!groups.length) return;
+  const shown = new Set([...document.querySelectorAll("#service-rows tr.link-row")].map((r) => r.dataset.guest));
+  const rest = groups.filter((g) => !g.guests.some((m) => shown.has(m.name)));
   const body = $("demand-rows");
   const have = new Map([...body.children].map((r) => [r.dataset.name, r]));
-  if ([...have.keys()].join() !== groups.map((g) => g.name).join()) body.replaceChildren(...groups.map((g) => have.get(g.name) || demandRow(g)));
-  for (const g of groups) {
+  if ([...have.keys()].join() !== rest.map((g) => g.name).join()) body.replaceChildren(...rest.map((g) => have.get(g.name) || demandRow(g)));
+  for (const g of rest) {
     const row = body.querySelector(`tr[data-name="${g.name}"]`);
     const [kind, word, sub] = demandState(g);
-    const cell = row.querySelector(".demand-state");
+    const cell = row.querySelector(".state-cell");
     if (cell.dataset.text !== word + sub) {
       cell.dataset.text = word + sub;
       cell.replaceChildren(status(kind, word), sub ? make("span", {className: "sub", textContent: sub}) : "");
     }
-    row.querySelector(".demand-guests").textContent = andList(g.guests.map((m) => m.name));
-    row.querySelector(".demand-memory").textContent = gib(g.memory_mib);
-    const on = g.state === "on" || g.state === "partly";
-    const known = view.live && !["pending", "unknown", "missing"].includes(g.state);
-    row.querySelector(".start").hidden = !known || g.state === "on";
-    row.querySelector(".stop").hidden = !known || !on;
-    const keep = row.querySelector(".keep");
-    keep.hidden = !known || !on || g.stop === "manual" || Boolean(g.setup);
-    keep.setAttribute("aria-pressed", g.keep ? "true" : "false");
-    for (const b of row.querySelectorAll("button")) {
-      if (g.acting || g.setup) { b.setAttribute("aria-disabled", "true"); b.dataset.why = g.acting ? "Wait until it has finished." : "A setup run is using it."; }
-      else if (b.dataset.why) { b.removeAttribute("aria-disabled"); delete b.dataset.why; }
-    }
+    paintDemandButtons(row.querySelector(".demand-acts"), g, view.live);
   }
+  show("demand", groups.length > 0);
+  if (!groups.length) return;
   show("demand-why", Boolean(view.why));
   $("demand-why-text").textContent = view.why || "";
   const used = view.used_mib;
@@ -3746,7 +3776,7 @@ function backupsWord(b) {
   if (!b || !b.ready) return ["", "Not set up", ""];
   if (!b.on) return b.built ? ["warn", "Being turned off", "The next setup run deletes them"] : ["warn", "Off", "Nothing is backed up"];
   if (!b.built) return ["warn", b.where ? "Chosen, not built" : "No room", b.where ? "The next setup run makes them" : "Nothing is backed up"];
-  return b.built.kind === "disk" ? ["good", "On a disk of their own", `Nightly at ${b.schedule}`] : ["warn", "On the server's disk", "Lost if this disk fails"];
+  return b.built.kind === "disk" ? ["good", "Own disk", `Nightly at ${b.schedule}`] : ["warn", "Server's disk", "Lost if this disk fails"];
 }
 
 async function loadBackups() {
@@ -3761,9 +3791,9 @@ function backupPlace(p, b) {
   const size = `${p.size_gib} GiB ${p.rotational ? "hard disk" : "SSD"}`;
   const failing = p.health === "FAILED" ? " It reports that it is failing." : "";
   switch (p.kind) {
-    case "blank": return [p.id, `${size}, blank. A disk of their own: the backups outlive the server's disk.${failing}`, "", ""];
+    case "blank": return [p.id, `${size}, blank. The backups outlive the server's disk.${failing}`, "", ""];
     case "erase": return [p.id, `${size}, holding ${andList(p.holds)}. Erased for the backups: everything on it is lost.${failing}`, "", "danger-option"];
-    case "kept": return [p.id, `${size}, with files you keep.`, "Not offered: NullBill puts no backups on a disk it shares. Setup, What to run, Disks can copy its files off and erase it.", ""];
+    case "kept": return [p.id, `${size}, with files you keep.`, "Not offered: it holds files you keep.", ""];
     case "storage": return [p.id, `${size}, extra storage in Proxmox.`, "Not offered while it is storage.", ""];
     default: return [p.id, `${size}. The backups' own disk.`, "", ""];
   }
@@ -3866,8 +3896,8 @@ function renderBackups() {
     const room = system.free_gib === null || system.free_gib === undefined ? "" : ` ${system.free_gib} GiB are free on it.`;
     list.replaceChildren(
       option(radio("system", !system.allowed), "On the disk the server runs from",
-        `Nothing to plug in.${room} Brings back a broken service, a bad update or a mistake; lost if this disk fails.`,
-        system.allowed ? "" : `Not offered: ${system.why}`),
+        `Nothing to plug in.${room} Lost if this disk fails.`,
+        system.allowed ? "" : `Not offered: ${system.why.charAt(0).toLowerCase()}${system.why.slice(1)}`),
       ...b.places.map((p) => {
         const [title, desc, why, cls] = backupPlace(p, b);
         return option(radio(p.id, Boolean(why)), title, desc, why, cls);

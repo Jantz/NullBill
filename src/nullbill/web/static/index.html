@@ -224,23 +224,18 @@
       <div class="table-wrap" id="services-table" hidden><table class="table services">
         <caption class="sr-only">Services</caption>
         <thead><tr><th scope="col">Name</th><th scope="col">Status</th><th scope="col" class="hide-phone">Address</th><th scope="col" class="hide-narrow">Sign-in</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
-        <tbody id="service-rows"></tbody></table></div>
+        <tbody id="service-rows"></tbody><tbody id="demand-rows"></tbody></table></div>
       <p id="services-none" class="foot-note" hidden>No service has that name.</p>
-      <p id="services-background" class="foot-note"></p>
-      <section class="block" id="demand" aria-labelledby="h-demand" hidden>
-        <div class="block-head"><h2 id="h-demand">On demand</h2><span class="meta" id="demand-meta"></span></div>
-        <p class="help">Installed, but running only while you want them. Which ones, and how each stops, is set under <a href="#setup/choices/when">Setup, What to run</a>.</p>
+      <section class="demand-foot" id="demand" aria-label="On demand" hidden>
         <p class="note" id="demand-why" hidden><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><span id="demand-why-text"></span></p>
         <div class="memory-block" id="demand-memory" hidden>
-          <div class="memory-head"><span class="label">Memory shared by what runs on demand</span><span class="push meta" id="demand-fit" role="status"></span></div>
+          <div class="memory-head"><span class="label">Memory for what runs on demand</span><span class="meta" id="demand-meta"></span><span class="push meta" id="demand-fit" role="status"></span></div>
           <div id="demand-bar" class="memory" aria-hidden="true"><span class="m-chosen"></span><span class="m-free"></span></div>
         </div>
-        <div class="table-wrap"><table class="table demand">
-          <caption class="sr-only">What runs on demand</caption>
-          <thead><tr><th scope="col">Name</th><th scope="col">State</th><th scope="col" class="num hide-phone">Memory</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
-          <tbody id="demand-rows"></tbody></table></div>
-        <details class="disclosure small" id="demand-log" hidden><summary>What was started and stopped lately</summary><ul class="events" id="demand-events"></ul></details>
+        <div class="demand-more"><a class="link" href="#setup/choices/when">Change what runs on demand</a>
+          <details class="disclosure small" id="demand-log" hidden><summary>Started and stopped lately</summary><ul class="events" id="demand-events"></ul></details></div>
       </section>
+      <p id="services-background" class="foot-note"></p>
     </section>
 
     <!-- Backups -->
@@ -749,7 +744,7 @@
 
       <section class="tabpanel" id="sec-trust" role="tabpanel" aria-labelledby="tab-trust" hidden>
         <dl class="props compact"><div><dt>Status</dt><dd id="trust-state"></dd></div></dl>
-        <p class="help">Install the server's root certificate once on each device. Browser warnings stop, and a phone can install this page as an app. The certificate is valid for your server's addresses only.</p>
+        <p class="help">Install the server's certificate once on each device. Browser warnings stop, and a phone can install this page as an app. It is valid for your server's addresses only.</p>
         <div class="row">
           <a id="trust-download" class="btn primary" href="/nullbill-root.crt" download="nullbill-root.crt" hidden><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Download root certificate</a>
           <button type="button" id="install-app-2" class="btn" hidden><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Install the app</button>
@@ -763,21 +758,32 @@
           <button type="button" role="tab" id="tab-apple" aria-controls="howto-apple" data-tab="apple">iPhone and iPad</button>
         </div>
         <div id="howto-android" role="tabpanel" aria-labelledby="tab-android"><ol class="howto">
-          <li>Install <b>Tailscale</b> from Google Play, sign in with the server's Tailscale login and turn it on. For the app to reach the server whenever you open it, turn on <b>Always-on VPN</b> for Tailscale under <b>Settings, Network and internet, VPN</b>.</li>
-          <li>In Chrome on the phone, open <code class="page-origin">this page</code> and press <b>Download root certificate</b>.</li>
-          <li>Open <b>Settings</b> and search for <b>CA certificate</b> (Pixel: <b>Security and privacy, More security and privacy, Encryption and credentials, Install a certificate</b>; Samsung: <b>Security and privacy, More security settings, Install from device storage</b>). Tap <b>CA certificate</b>, then <b>Install anyway</b>, confirm with your screen lock, and pick <b>nullbill-root.crt</b> from Downloads.</li>
-          <li>Close Chrome, open this page again and press <b>Install the app</b> here, or tap the menu, <b>Install app</b>. If Chrome offers only <b>Create shortcut</b>, it does not trust the certificate yet: repeat step 3.</li>
-          <li>Firefox instead? It ignores the certificate until you open <b>Settings, About Firefox</b> and tap the Firefox logo until it says the debug menu is on. Back in <b>Settings</b>, open <b>Secret Settings</b>, turn on <b>Use third party CA certificates</b>, close Firefox and open it again. Then the menu, <b>Add app to Home screen</b>.</li>
-        </ol><p class="help">The app opens the page full screen and follows each update by itself; alerts still arrive in ntfy. If it says it cannot reach the server, Tailscale is off on the phone. The NullBill repository's <code>docs/runbooks/android-app.md</code> has these steps with what to do when one fails.</p></div>
+          <li>Install <b>Tailscale</b> from Google Play and sign in with the server's Tailscale login.</li>
+          <li>In Chrome, open <code class="page-origin">this page</code> and press <b>Download root certificate</b>.</li>
+          <li>In <b>Settings</b>, search for <b>CA certificate</b>. Tap it, then <b>Install anyway</b>, and pick <b>nullbill-root.crt</b> from Downloads.</li>
+          <li>Close Chrome, open this page again and press <b>Install the app</b>.</li>
+        </ol><div class="howto-more">
+          <details class="disclosure small"><summary>Where the setting is on Pixel and Samsung</summary>
+            <p><b>Pixel:</b> Security and privacy, More security and privacy, Encryption and credentials, Install a certificate.</p>
+            <p><b>Samsung:</b> Security and privacy, More security settings, Install from device storage.</p></details>
+          <details class="disclosure small"><summary>If a step fails</summary>
+            <p><b>Chrome offers only Create shortcut:</b> it does not trust the certificate yet. Repeat step 3.</p>
+            <p><b>The app cannot reach the server:</b> Tailscale is off on the phone. To keep it on, turn on <b>Always-on VPN</b> for Tailscale under <b>Settings, Network and internet, VPN</b>.</p>
+            <p>More in the NullBill repository's <code>docs/runbooks/android-app.md</code>.</p></details>
+          <details class="disclosure small"><summary>Firefox instead of Chrome</summary>
+            <p>Open <b>Settings, About Firefox</b> and tap the Firefox logo until it says the debug menu is on. Back in <b>Settings</b>, open <b>Secret Settings</b> and turn on <b>Use third party CA certificates</b>. Close Firefox, open it again, then the menu, <b>Add app to Home screen</b>.</p></details>
+        </div></div>
         <div id="howto-windows" role="tabpanel" aria-labelledby="tab-windows" hidden><ol class="howto">
           <li>Press <b>Download root certificate</b> and open the file.</li>
-          <li>Press <b>Install Certificate</b>, choose <b>Current User</b>, then <b>Place all certificates in the following store</b>, <b>Browse</b>, <b>Trusted Root Certification Authorities</b>. Press <b>Next</b>, <b>Finish</b>, and <b>Yes</b> to the warning.</li>
-          <li>Close the browser and open it again. Edge, Chrome and Firefox all use it.</li>
+          <li>Press <b>Install Certificate</b> and choose <b>Current User</b>.</li>
+          <li>Choose <b>Place all certificates in the following store</b>, <b>Browse</b>, <b>Trusted Root Certification Authorities</b>.</li>
+          <li>Press <b>Next</b>, <b>Finish</b>, and <b>Yes</b> to the warning. Close the browser and open it again.</li>
         </ol></div>
         <div id="howto-apple" role="tabpanel" aria-labelledby="tab-apple" hidden><ol class="howto">
-          <li>Open this page in Safari, press <b>Download root certificate</b> and allow the download.</li>
+          <li>In Safari, open this page, press <b>Download root certificate</b> and allow the download.</li>
           <li>Open <b>Settings, Profile Downloaded</b> and press <b>Install</b>.</li>
-          <li>Open <b>Settings, General, About, Certificate Trust Settings</b> and turn on <b>NullBill browser CA</b>. Add the page to the Home Screen from the share menu.</li>
+          <li>Open <b>Settings, General, About, Certificate Trust Settings</b> and turn on <b>NullBill browser CA</b>.</li>
+          <li>Back in Safari, add this page to the Home Screen from the share menu.</li>
         </ol></div>
         <details class="disclosure"><summary>Proxmox, Page Assist and Jellyfin</summary><p class="help">Proxmox gets this certificate at the first setup run after you close the server to the home network. For the local AI model in a browser extension such as Page Assist, use the gateway's address from Services, not its name. Jellyfin uses plain HTTP inside Tailscale's encryption, so browsers mark it "Not secure" but show no warning page.</p></details>
       </section>

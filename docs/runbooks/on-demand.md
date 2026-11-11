@@ -9,7 +9,7 @@ built this way: [ADR 0013](../adr/0013-on-demand.md).
 | What | Where |
 |---|---|
 | Which workloads run on demand, and how each stops | the page's **Setup**, **What to run**, **When they run** |
-| Start, stop, keep on; what is in use | the page's **Services**, **On demand** |
+| Start, stop, keep on; what is in use | the page's **Services**, in each service's row |
 | The same from a shell | `nb-power` on the Proxmox host |
 
 How each workload stops again, unless you change it:
@@ -58,9 +58,9 @@ always run. A workload that only makes VMs per job has nothing to stop.
 **You need:** the page, from a device on your tailnet.
 
 1. Open **Services**. A service that is off says **Off, on demand** and has
-   **Start** where **Open** would be. Under the list, **On demand** shows
-   every such workload, why one is in use, when an unused one stops, and
-   how much of the shared memory is taken.
+   **Start** where **Open** would be. One that is on says under its status
+   why it is in use or when it stops, with **Stop** and **Keep on** beside
+   it. Under the list a bar shows how much of the shared memory is taken.
 2. Press **Start**. A container is up in well under a minute; the local
    model then loads into the graphics card, and Windows boots.
 3. When it does not fit beside what is running, NullBill first stops
@@ -138,8 +138,8 @@ for a VM where that is acceptable.
 
 | You see | Do |
 |---|---|
-| **No status** in **On demand**, or "the server does not say what is on" | Run setup: the host gets `nb-power` and its rules with the first run after you chose something on demand. |
-| A workload never stops by itself | **On demand** says why it is in use. A phone with the Jellyfin app open, a mounted share or a forgotten SSH session all count. |
+| **No status** on a service that runs on demand, or "the server does not say what is on" | Run setup: the host gets `nb-power` and its rules with the first run after you chose something on demand. |
+| A workload never stops by itself | Its row on **Services** says why it is in use. A phone with the Jellyfin app open, a mounted share or a forgotten SSH session all count. |
 | "needs N MiB and does not fit, even with everything else on demand stopped" | The host's rules are older than your choices: run setup. If it stays, let more run on demand. |
 | Setup stops with "setup has to start ... to configure it" | Stop one of the workloads it names on the **Services** page and run setup again. |
 | A started service answers with a certificate error for a minute | Its certificate ran out while it was off; starting it gets a new one. If it stays, run setup. |

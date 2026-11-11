@@ -69,7 +69,7 @@ def test_disks_are_offered_by_what_they_hold(facts):
     assert kinds == {KEPT: "erase", BLANK: "blank"}
     # A blank disk is in the server: the system disk is not offered beside it.
     assert not view["system"]["allowed"] and BLANK in view["system"]["why"]
-    with pytest.raises(NullBillError, match="a disk of their own outlives"):
+    with pytest.raises(NullBillError, match="have a disk of their own"):
         backupview.save(config, view, {"place": "system", "size_gib": 64}, no_erase)
     assert backupview.save(config, view, {"place": BLANK}, no_erase)["disks"] == {BLANK: {"use": "pbs"}}
     # One that holds something goes through the page's own erase, typed word and all.
