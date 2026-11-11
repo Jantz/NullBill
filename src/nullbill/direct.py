@@ -72,7 +72,7 @@ MOST = 8
 PONG = re.compile(r"^(\S+) pong from .* via (\S+) in \S+$")
 # nb-portmap's words: a home router that says it is not on the internet
 # itself, one that refuses this device, and a port that is another device's.
-NO_PUBLIC_ADDRESS = "it has no public address of its own"
+NO_PUBLIC_ADDRESS = "it says it has no public address of its own"
 REFUSED = "it does not let this device open ports"
 OTHER_DEVICE = "another device"
 # The page's switch for tailnet.port_mapping.
@@ -283,8 +283,8 @@ def judge(asked: bool, state: dict, clock: int, seen: list[tuple[str, int]]) -> 
         the router before it does with the port cannot be seen from here."""
         inner = "" if opened else f", and on the home router to {address or 'the NullBill router'}"
         return (
-            "the home router's own outside address is not a public one, so another router stands between it and the internet, "
-            "and the server can neither open a port on that one nor see whether one is open; "
+            "the home router says its own outside address is not a public one: then another router stands between it and the internet, "
+            "and the server can neither open a port on that one nor see whether one is open, so the port may be open all the same; "
             f"if that router is a second box at home, forward UDP {port} on it to the home router{inner}; "
             "if it is your provider's, only the provider can"
         )

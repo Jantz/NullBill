@@ -8,6 +8,10 @@ own systemd units and the owner (docs/adr/0020-download-client.md).
     nb-torrents busy              why this guest is in use, or nothing when it is not
     nb-torrents tick              pause or resume for room on the disk, write metrics
     nb-torrents space             room, or why downloads are paused
+    nb-torrents paths             inside, or a line per download that is saved outside
+                                  the downloads folder or that qBittorrent could not move
+    nb-torrents reached           connected once another peer has connected to this
+                                  client from outside, else what qBittorrent says
     nb-torrents tunnel up         the VPN: interface, address, and the routes that send
                                   the client's user through it and nowhere else
     nb-torrents tunnel down       take the interface away; the client's user then
@@ -49,6 +53,14 @@ STATE = Path("/var/lib/nullbill")
 PAUSED = STATE / "torrents-paused.json"
 # A digest of the password the client's page has now.
 PASSWORD_SET = STATE / "torrents-password.mark"
+# Where in qBittorrent's log this script has read to, and the last
+# download it said it could not move.
+LOG_READ = STATE / "torrents-log.json"
+# qBittorrent's words (sessionimpl.cpp) when a finished download cannot be
+# moved to where it is to be saved: mostly a folder its user cannot make.
+MOVE_FAILED = "Failed to move torrent"
+# A failed move is told for this long; qBittorrent does not try again.
+MOVE_TOLD_S = 24 * 3600
 TEXTFILES = Path("/var/lib/prometheus/node-exporter")
 NB_BUSY = "/usr/local/sbin/nb-busy"
 # The routing table of the client's user, and the rules that send it there.
@@ -294,6 +306,88 @@ def guard(cfg: dict, free: int | None) -> None:
         PAUSED.unlink(missing_ok=True)
 
 
+def inside(path: str, store: str) -> bool:
+    found = os.path.normpath(path)
+    return found == store or found.startswith(store + "/")
+
+
+def outside(cfg: dict) -> list[tuple[str, str]]:
+    """(what, folder) for every download, and every category new downloads
+    may take their folder from, that is saved outside the downloads folder:
+    the client's user can write nowhere else in this guest, so such a
+    download fetches into incomplete and stays there."""
+    store = cfg["store"]
+    found = []
+    for t in torrents(cfg):
+        for place in (t.get("save_path"), t.get("download_path")):
+            if place and not inside(place, store):
+                found.append((t.get("name") or t["hash"], os.path.normpath(place)))
+                break
+    for name, category in sorted(json.loads(api(cfg, "torrents/categories")).items()):
+        place = category.get("savePath") or ""
+        # A folder without a leading slash lies under the downloads folder.
+        if place.startswith("/") and not inside(place, store):
+            found.append((f"the category {name}", os.path.normpath(place)))
+    return found
+
+
+def log_read() -> dict:
+    try:
+        found = json.loads(LOG_READ.read_text())
+    except (OSError, ValueError):
+        return {}
+    return found if isinstance(found, dict) else {}
+
+
+def read_log(cfg: dict) -> dict:
+    """Read what qBittorrent logged since the last call and keep the newest
+    failed move ({"at", "message"} under "failed"). Its log starts again
+    from 0 with qBittorrent, so the line read last is asked for again: when
+    it is not the same line, the log is read from its start."""
+    state = log_read()
+    last, stamp = state.get("last", -1), state.get("stamp")
+
+    def since(known: int) -> list[dict]:
+        lines = json.loads(api(cfg, f"log/main?normal=true&info=true&warning=true&critical=true&last_known_id={known}"))
+        return sorted((x for x in lines if isinstance(x, dict) and "id" in x), key=lambda x: x["id"])
+
+    lines = since(last - 1) if last >= 0 else since(-1)
+    if last >= 0:
+        if lines and lines[0]["id"] == last and lines[0].get("timestamp") == stamp:
+            lines = lines[1:]
+        else:
+            lines = since(-1)
+    for line in lines:
+        if MOVE_FAILED in str(line.get("message", "")):
+            state["failed"] = {"at": int(line.get("timestamp") or time.time()), "message": str(line["message"])[:400]}
+    if lines:
+        state["last"], state["stamp"] = lines[-1]["id"], lines[-1].get("timestamp")
+        write_private(LOG_READ, json.dumps(state) + "\n")
+    return state
+
+
+def failed_move(state: dict) -> dict | None:
+    failed = state.get("failed")
+    return failed if isinstance(failed, dict) and time.time() - failed.get("at", 0) < MOVE_TOLD_S else None
+
+
+def paths(cfg: dict) -> int:
+    store = cfg["store"]
+    said = [f"{what} is saved to {place}, outside {store}" for what, place in outside(cfg)]
+    failed = failed_move(read_log(cfg))
+    if failed:
+        said.append(f"at {time.strftime('%H:%M on %d %b', time.localtime(failed['at']))} qBittorrent logged: {failed['message']}")
+    print("\n".join(said) if said else "inside")
+    return 0
+
+
+def reached(cfg: dict) -> int:
+    """qBittorrent's own word on whether anyone got in: connected once a
+    peer connected to it from outside, firewalled while none has."""
+    print(json.loads(api(cfg, "transfer/info")).get("connection_status") or "unknown")
+    return 0
+
+
 def handshake_age(cfg: dict) -> float | None:
     """Seconds since the tunnel's last handshake; None when there was none."""
     ask = ["wg", "show", cfg["tunnel"]["interface"], "latest-handshakes"]
@@ -319,6 +413,8 @@ def tick(cfg: dict) -> int:
             "nb_torrents_up 1",
             f"nb_torrents_downloading {sum(1 for s in states if s in WORKING)}",
             f"nb_torrents_seeding {sum(1 for s in states if s in SEEDING)}",
+            f"nb_torrents_outside_store {len(outside(cfg))}",
+            f"nb_torrents_move_failed_timestamp_seconds {(read_log(cfg).get('failed') or {}).get('at', 0)}",
         ]
     except (NotAnswering, ValueError):
         lines.append("nb_torrents_up 0")
@@ -476,7 +572,7 @@ def status(cfg: dict) -> int:
     return 0
 
 
-USAGE = "usage: nb-torrents first-config | wait [SECONDS] | settings | busy | tick | space | tunnel up|down|off|status|through IP|drop IP"
+USAGE = "usage: nb-torrents first-config | wait [SECONDS] | settings | busy | tick | space | paths | reached | tunnel ..."
 
 
 def main(argv: list[str]) -> int:
@@ -498,6 +594,10 @@ def main(argv: list[str]) -> int:
             return tick(cfg)
         if command == "space":
             return space(cfg)
+        if command == "paths":
+            return paths(cfg)
+        if command == "reached":
+            return reached(cfg)
         if command == "tunnel" and rest and rest[0] == "off":
             return off(cfg)
         if command == "tunnel" and rest and cfg["route"] != "vpn":
@@ -513,7 +613,7 @@ def main(argv: list[str]) -> int:
             return through(cfg, rest[1])
         if command == "tunnel" and len(rest) == 2 and rest[0] == "drop":
             return drop(cfg, rest[1])
-    except (NotAnswering, RuntimeError) as exc:
+    except (NotAnswering, RuntimeError, ValueError) as exc:
         print(f"nb-torrents: {exc}", file=sys.stderr)
         return 1
     print(USAGE, file=sys.stderr)

@@ -157,8 +157,17 @@ def test_verify_says_whether_the_home_router_opened_the_port(facts):
     assert torrents.port_result(plan, *router_says({"torrents": entry})) == Result("PASS", torrents.PORT_LABEL)
     shut = entry | {"open": {"tcp": None, "udp": None}, "why": {"tcp": {"NAT-PMP": "not offered", "UPnP": "no answer"}}}
     found = torrents.port_result(plan, *router_says({"torrents": shut}))
-    assert found.status == "DEGRADED" and "it did not open TCP and UDP 41643 (NAT-PMP: not offered; UPnP: no answer)" in found.detail
+    assert found.status == "DEGRADED"
+    assert "it did not open TCP and UDP 41643 when asked (NAT-PMP: not offered; UPnP: no answer)" in found.detail
     assert "forward TCP and UDP 41643 to 192.168.1.57 yourself" in found.detail
+    # The home router's answer is evidence, never proof: the owner's own home router said it had no public
+    # address while a forward made by hand let the internet in. "may", and how to test from outside.
+    assert "so the port may be shut. That answer is no proof" in found.detail and "port checking website" in found.detail
+    # Measured beats said: once a peer got in from outside, it is open whatever the home router answered.
+    reached = Result("PASS", torrents.PORT_LABEL, "others have connected to it from outside")
+    assert torrents.port_result(plan, *router_says({"torrents": shut}), "connected") == reached
+    assert torrents.port_result(plan, 255, "", "VM 2001 is not running", "connected") == reached
+    assert torrents.port_result(plan, *router_says({"torrents": shut}), "firewalled").status == "DEGRADED"
     # Not asked yet, or nothing to read: no finding either way.
     assert torrents.port_result(plan, *router_says()).status == "SKIP"
     assert torrents.port_result(plan, 255, "", "VM 2001 is not running").status == "SKIP"
@@ -168,6 +177,36 @@ def test_verify_says_whether_the_home_router_opened_the_port(facts):
     plan, _ = planned(facts, config)
     found = torrents.port_result(plan, *router_says({"torrents": entry}))
     assert found.status == "SKIP" and "made by hand cannot be seen from here" in found.detail
+    assert "run the checks again, which pass once anyone has connected from outside" in found.detail
+    assert torrents.port_result(plan, *router_says({"torrents": entry}), "connected") == reached
+
+
+def test_a_download_saved_outside_the_folder_is_named(facts):
+    """The owner's server: a save path outside /downloads failed with
+    "mkdir (): Permission denied" in qBittorrent's log only, and the
+    download sat in incomplete."""
+    assert torrents.paths_result(0, "inside\n", "") == Result("PASS", torrents.PATHS_LABEL)
+    found = torrents.paths_result(
+        0, "Episode one is saved to /srv/films, outside /downloads\nthe category tv is saved to /tv, outside /downloads\n", ""
+    )
+    assert found.status == "DEGRADED" and found.detail.startswith("Episode one is saved to /srv/films, outside /downloads (and 1 more")
+    assert "set its location to a folder under /downloads" in found.detail
+    assert torrents.paths_result(1, "", "nb-torrents: Connection refused").status == "FAIL"
+    plan, _ = planned(facts, torrents_config("home"))
+    results = torrents.check(plan, "t", answers(paths="A is saved to /tmp, outside /downloads"), "198.51.100.80")
+    assert [(r.status, r.name) for r in results][3] == ("DEGRADED", torrents.PATHS_LABEL)
+
+
+def test_downloads_may_go_to_a_kept_disk_that_is_not_shared(facts):
+    config = torrents_config()
+    config["disks"][DISK] = {"use": "legacy", "mode": "rw", "share": False}
+    bare, model = planned(facts, config)
+    assert bare["torrents"]["store"] == {"share": "data", "folder": "Downloads"}
+    text = plan_text(model, json.dumps(facts("large"), sort_keys=True).encode())
+    assert "neither the file share nor Jellyfin" in " ".join(text.split()).replace(" # ", " ")
+    found = torrents.store(bare)
+    assert found["path"] == "/mnt/nb-legacy/data/Downloads" and found["shared"] is False
+    assert "files" not in bare["guests"] or not [m for m in bare["disks"][DISK]["partitions"] if "share" in m]
 
 
 def test_the_way_downloads_go_is_never_chosen_for_the_owner(facts):
@@ -194,7 +233,7 @@ def test_downloads_need_a_kept_disk_that_can_be_written_to(facts):
     assert "torrents: downloads go to a kept disk that can be written to, and no disk is kept" in errors(facts, config)
     config = torrents_config()
     config["torrents"]["share"] = "films"
-    assert "torrents.share: no kept disk is shared as 'films'; shared are: data" in errors(facts, config)
+    assert "torrents.share: no kept disk is called 'films'; kept are: data" in errors(facts, config)
 
 
 def test_jellyfin_sees_the_downloads_through_the_disk_it_already_reads(facts):
@@ -375,6 +414,8 @@ def answers(**over):
         "sign-in": "sign-in",
         "writable": "writable",
         "space": "room",
+        "paths": "inside",
+        "reached": "firewalled",
         "status": "up",
         "through": "through the tunnel only",
         "drop": "stopped",
@@ -389,6 +430,8 @@ def answers(**over):
             ("sign-in", "app/version"),
             ("writable", "findmnt"),
             ("space", "nb-torrents space"),
+            ("paths", "nb-torrents paths"),
+            ("reached", "nb-torrents reached"),
             ("status", "tunnel status"),
             ("through", "tunnel through"),
             ("drop", "tunnel drop"),
@@ -407,7 +450,7 @@ def test_verify_proves_the_tunnel_and_that_dropping_it_stops_the_client(facts):
     plan, _ = planned(facts)
     run = answers()
     results = torrents.check(plan, "root@192.0.2.10", run, "198.51.100.80")
-    assert [r.status for r in results] == ["PASS"] * 6
+    assert [r.status for r in results] == ["PASS"] * 7
     assert [r.name for r in results][-3:] == [torrents.TUNNEL_LABEL, torrents.THROUGH_LABEL, torrents.DROP_LABEL]
     assert any(a.endswith("tunnel drop 198.51.100.80") for a in run.asked)
     assert results[1].name == "the download client writes to Downloads on the kept disk data"
@@ -431,8 +474,10 @@ def test_a_tunnel_that_is_down_is_a_failure_and_the_rest_cannot_be_judged(facts)
 def test_downloads_from_home_are_degraded_and_say_what_others_see(facts):
     plan, _ = planned(facts, torrents_config("home"))
     results = torrents.check(plan, "t", answers(), "198.51.100.80")
-    assert [r.status for r in results] == ["PASS", "PASS", "PASS", "DEGRADED", "SKIP"]
-    assert "sees your home's public address" in results[3].detail and results[4].name == torrents.PORT_LABEL
+    assert [r.status for r in results] == ["PASS", "PASS", "PASS", "PASS", "DEGRADED", "SKIP"]
+    assert "sees your home's public address" in results[4].detail and results[5].name == torrents.PORT_LABEL
+    results = torrents.check(plan, "t", answers(reached="connected"), "198.51.100.80")
+    assert results[5] == Result("PASS", torrents.PORT_LABEL, "others have connected to it from outside")
 
 
 def test_paused_for_room_is_degraded_and_a_guest_that_is_off_is_skipped(facts):
@@ -440,7 +485,7 @@ def test_paused_for_room_is_degraded_and_a_guest_that_is_off_is_skipped(facts):
     results = torrents.check(plan, "t", answers(space="paused: 3 GiB free, 25 GiB kept free"), "198.51.100.80")
     assert results[2] == Result("DEGRADED", torrents.SPACE_LABEL, "paused: 3 GiB free, 25 GiB kept free")
     results = torrents.check(plan, "t", answers(**{"sign-in": power.Off("qbittorrent", "Downloads")}), "198.51.100.80")
-    assert [r.status for r in results] == ["SKIP"] * 6 and len({r.name for r in results}) == 6
+    assert [r.status for r in results] == ["SKIP"] * 7 and len({r.name for r in results}) == 7
 
 
 def test_the_fixtures_copy_of_the_plan_is_what_the_checks_render(facts):
@@ -470,7 +515,7 @@ def test_a_setup_run_gives_the_client_its_folder_while_stopped_and_sets_it_up_af
     apply.run_apply(c)
     ct = reach.torrents_ct
     assert ct["mps"] == {"mp0": "/mnt/nb-legacy/data/Downloads,mp=/downloads,backup=0,ro=0"} and ct["status"] == "running"
-    assert reach.torrents_asked == [["wait"], ["settings"]]
+    assert reach.torrents_asked == [["wait"], ["settings"], ["paths"]]
     restarts = ct["restarts"]
     apply.run_apply(c)
     assert ct["restarts"] == restarts, "a second run leaves the guest running"

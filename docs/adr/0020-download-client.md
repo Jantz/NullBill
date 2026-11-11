@@ -155,8 +155,11 @@ point), and a real VPN provider's file and server.
 ## Consequences
 
 - Without a kept disk that may be changed there is nothing to tick yet. A
-  store of its own (a volume on a storage disk) is not built; it would
-  need a second way for Jellyfin to see it.
+  kept disk that is not shared can take the downloads (2026-11-11); they
+  are then on the server only. A store of its own (a volume on a storage
+  disk) is not built: a volume belongs to one container, so Jellyfin and
+  the file share could not see it unless the host mounted it and handed
+  it to all three, as it does a kept disk.
 - The VPN's server must be an IPv4 address the firewall can name. A file
   that gives a name is looked up once, when it is saved; the NullBill
   container resolves no outside names today, so such a file is refused
@@ -174,6 +177,21 @@ point), and a real VPN provider's file and server.
 - A home router without a public address of its own (a provider's shared
   address, a second router) cannot open the port; `verify` says so with
   the home router's words.
+- What the home router answers is evidence, not proof (2026-11-11, the
+  first real run: it said it had no public address while forwards made by
+  hand on two routers let the internet in). So the port's check is
+  measured where it can be: qBittorrent says `connected` once a peer got
+  in from outside (`nb-torrents reached`), and that passes whatever the
+  home router said. Without it the check says the port "may be shut" and
+  how to test from outside. The server never probes its own port from the
+  internet: that would need a third party.
+- The client's user can write under `/downloads` only. A download given
+  another save path fails when it is moved, in qBittorrent's log alone, so
+  `nb-torrents paths` (setup, the checks, alerts `DownloadSavedOutsideFolder`
+  and `DownloadMoveFailed`) names it.
+- Having the server ask the home router for a port is the owner's
+  decision: for the page agent it is `risky` with a typed word, as the
+  route is. On the first real run the agent switched it on unasked.
 - WireGuard's module is loaded on the Proxmox host
   (`/etc/modules-load.d/nullbill-wireguard.conf`), only with `route: vpn`.
 - While the tunnel is down the client sends nothing and its page still

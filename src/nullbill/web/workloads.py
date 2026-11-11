@@ -360,7 +360,11 @@ def _torrents(model: dict, facts: dict | None) -> dict:
         "vpn": f"{torrents.WHAT_VPN} The firewall lets its container reach the VPN's server and nothing else outside.",
         "home": f"{torrents.WHAT_HOME} The checks then report it as degraded.",
         "shares": can,
-        "read_only": [m["share"] for m in shares if m["share"] not in can],
+        "read_only": [m["name"] for m in shares if m["name"] not in can],
+        # Kept without being shared (disks.<id>.share: false): downloads
+        # may go there, and neither the file share nor Jellyfin shows them.
+        "unshared": [m["name"] for m in shares if "share" not in m],
+        "guide": torrents.RUNBOOK,
         "share": chosen.get("share") or (can[0] if len(can) == 1 else None),
         "folder": chosen["folder"],
         "keep_free_gib": chosen["keep_free_gib"],

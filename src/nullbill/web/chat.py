@@ -43,7 +43,7 @@ from typing import TYPE_CHECKING
 
 import yaml
 
-from nullbill import custom, direct, people
+from nullbill import custom, direct, people, torrents
 from nullbill.errors import NullBillError
 from nullbill.model import build_model
 from nullbill.secretfile import Secrets
@@ -95,6 +95,8 @@ MAX_FILE = 200_000
 BACKGROUND_DIR = "/var/log/nb-agent"
 # Jobs the agent may start, and their tier. probe and verify only read.
 JOB_TIERS = {"probe": gate.READ, "verify": gate.READ, "apply": gate.CHANGE, "upgrade": gate.CHANGE}
+# The home router is the owner's, and a port it opens faces the internet.
+OPENS_A_PORT = "has the server ask your home router to open a port to the internet"
 CHOICE_KEYS = {"workloads", "backups", "console", "owner_login", "gpus", "games", "power", "torrents"}
 # What add_game_server takes for the new server, as the page's form does.
 GAME_KEYS = {"settings", "admins", "memory_mib"}
@@ -143,7 +145,10 @@ Bigger jobs, done in one go:
 - The download client (workload torrents): you may tick it and set its folder, kept disk and room to keep free
   (set_choices, torrents). Which way downloads go, through the owner's VPN or from their home connection, decides
   whose address others see: tell the owner both and let them choose on the page; never pick one for them, and never
-  ask for, read or repeat their VPN's WireGuard file, which holds a key.
+  ask for, read or repeat their VPN's WireGuard file, which holds a key. Having the server ask the home router for a
+  port (port_mapping, and torrents.port_mapping in set_choices) opens a way in from the internet: say so and let the
+  owner approve it; a port the owner forwarded by hand needs no such request, and the home router's answer is no
+  proof that a port is shut.
 - A program NullBill has no built-in support for can still run here, as a service of the owner's own (status,
   what_to_run, lists what there is; a built-in one that fits comes first, with set_choices). Read
   docs/runbooks/custom-services.md, then add_service with build=true: its definition (a guest of its own, the ports
@@ -1809,6 +1814,10 @@ class Tools:
                 lines += changed_lines(f"When {name} runs", old.get("power", {}).get(name) or {}, new.get("power", {}).get(name) or {})
             was, now_ = old.get("torrents") or {}, new.get("torrents") or {}
             lines += changed_lines("Downloads", was, now_)
+            asks = build_model(new)["torrents"]["port_mapping"] and now_.get("route") == torrents.HOME
+            asked_before = build_model(old)["torrents"]["port_mapping"] and was.get("route") == torrents.HOME
+            if asks and not asked_before:
+                verdict = gate.risky(OPENS_A_PORT, "open")
             if now_.get("route") and now_.get("route") != was.get("route"):
                 # The owner's answer to the client's notice, and whose address a download shows.
                 verdict = gate.risky("chooses in your name the way downloads leave your home", "route")
@@ -1939,7 +1948,13 @@ class Tools:
             if enabled
             else "The router stops asking your home router for Tailscale's port and gives back what it holds"
         )
-        verdict = gate.change("changes whether a port is asked of the home router; the next setup run tells the router")
+        # Asking opens a way in from the internet on a router that is not
+        # NullBill's: the owner's own yes, in every mode but the one that asks nothing.
+        verdict = (
+            gate.risky(OPENS_A_PORT, "open")
+            if enabled
+            else gate.change("stops asking the home router for a port; the next setup run tells the router")
+        )
         title = f"Ask the home router for the port: {'on' if enabled else 'off'}"
         return self.gated({"act": "portmap", "enabled": enabled, "lines": [line]}, verdict, why, title)
 

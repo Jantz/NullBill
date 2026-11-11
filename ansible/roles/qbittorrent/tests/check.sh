@@ -155,6 +155,55 @@ nb-torrents tick
 [ "$(metric nb_torrents_paused_for_space)" = 0 ] || fail "the metric says not paused"
 pass "downloads pause while the disk has less free than is kept, and exactly those go on afterwards"
 
+# Where downloads are saved. The client's user owns /downloads and nothing
+# else here, so a download told to go elsewhere fetches into incomplete and
+# cannot be moved when it is done; qBittorrent says so in its log only.
+nb-torrents tick
+[ "$(nb-torrents paths)" = inside ] || { nb-torrents paths; fail "every download is inside /downloads at first"; }
+[ "$(metric nb_torrents_outside_store)" = 0 ] || fail "the metric counts no download outside"
+[ "$(metric nb_torrents_move_failed_timestamp_seconds)" = 0 ] || fail "no failed move yet"
+[ "$(nb-torrents reached)" = firewalled ] || { nb-torrents reached; fail "nobody has connected from outside in this check"; }
+# A whole download, already in incomplete: qBittorrent checks it, finds it
+# complete and moves it to where it is to be saved.
+runuser -u qbt -- python3 - /downloads/incomplete/film.bin /tmp/film.torrent <<'PY'
+import hashlib, os, sys
+data = os.urandom(70000)
+open(sys.argv[1], "wb").write(data)
+size = 16384
+pieces = b"".join(hashlib.sha1(data[i : i + size]).digest() for i in range(0, len(data), size))
+info = b"d6:lengthi%de4:name8:film.bin12:piece lengthi%de6:pieces%d:" % (len(data), size, len(pieces)) + pieces + b"e"
+open(sys.argv[2], "wb").write(b"d4:info" + info + b"e")
+PY
+film=$(python3 -c 'import hashlib, sys; d = open(sys.argv[1], "rb").read(); print(hashlib.sha1(d[7:-1]).hexdigest())' /tmp/film.torrent)
+curl -sS -o /dev/null http://127.0.0.1:8080/api/v2/torrents/add -F "torrents=@/tmp/film.torrent" -F savepath=/srv/films
+for _ in $(seq 40); do
+  curl -sS 'http://127.0.0.1:8080/api/v2/log/main?last_known_id=-1' | grep -q "Failed to move torrent" && break
+  sleep 0.5
+done
+curl -sS 'http://127.0.0.1:8080/api/v2/log/main?last_known_id=-1' | grep -q "Failed to move torrent" \
+  || { curl -sS 'http://127.0.0.1:8080/api/v2/log/main?last_known_id=-1'; echo; state "$film"; fail "qBittorrent logs a move it could not make"; }
+grep -q "^film.bin is saved to /srv/films, outside /downloads$" <<<"$(nb-torrents paths)" || { nb-torrents paths; fail "paths names the download saved outside"; }
+grep -q "qBittorrent logged: Failed to move torrent" <<<"$(nb-torrents paths)" || { nb-torrents paths; fail "paths shows qBittorrent's own message"; }
+nb-torrents tick
+[ "$(metric nb_torrents_outside_store)" = 1 ] || fail "the metric counts the download outside"
+[ "$(metric nb_torrents_move_failed_timestamp_seconds)" -gt 1700000000 ] || fail "the metric says when the move failed"
+# Put where the client can write, it is inside again; the failed move stays told for a day.
+curl -sS -o /dev/null http://127.0.0.1:8080/api/v2/torrents/delete -d "hashes=$film" -d deleteFiles=false
+for _ in $(seq 20); do
+  nb-torrents paths | grep -q "^film.bin is saved" || break
+  sleep 0.5
+done
+nb-torrents tick
+[ "$(metric nb_torrents_outside_store)" = 0 ] || fail "nothing is outside once that download is gone"
+[ "$(nb-torrents paths | wc -l)" = 1 ] || { nb-torrents paths; fail "only the failed move is still told"; }
+# The log is read from where it was left, and from its start when qBittorrent has started anew.
+python3 - <<'PY'
+import json
+state = json.load(open("/var/lib/nullbill/torrents-log.json"))
+assert state["last"] >= 0 and "Failed to move torrent" in state["failed"]["message"], state
+PY
+pass "a download saved outside /downloads is named, with qBittorrent's own word that it could not move it"
+
 # qBittorrent gone: the guest must not be stopped for want of an answer.
 # shellcheck disable=SC2046
 kill $(pidof qbittorrent-nox)

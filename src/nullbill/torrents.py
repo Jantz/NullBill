@@ -104,21 +104,22 @@ def port_request(plan: dict) -> dict | None:
 
 def store(plan: dict) -> dict | None:
     """The kept partition the downloads go to (legacy.mounts' entry, with
-    `folder` and `path`, the folder on the host)."""
+    `folder` and `path`, the folder on the host). `share` is the kept
+    disk's name, whether the files guest shares it or not (`shared`)."""
     found = (plan.get("torrents") or {}).get("store")
     if not found:
         return None
-    m = next(m for m in legacy.shares(plan) if m["share"] == found["share"])
-    return {**m, "folder": found["folder"], "path": f"{m['mount']}/{found['folder']}"}
+    m = next(m for m in legacy.mounts(plan) if m["name"] == found["share"])
+    return {**m, "share": m["name"], "shared": "share" in m, "folder": found["folder"], "path": f"{m['mount']}/{found['folder']}"}
 
 
 def writable(mounts: list[dict]) -> list[str]:
-    """The share names of the kept disks that can be written to."""
-    return [m["share"] for m in mounts if m["mode"] == "rw"]
+    """The names of the kept disks that can be written to."""
+    return [m["name"] for m in mounts if m["mode"] == "rw"]
 
 
 def kept(model: dict, facts: dict | None) -> list[dict]:
-    """The kept disks' shares as config.yaml pins them, for the page: it
+    """The kept disks' partitions as config.yaml pins them, for the page: it
     asks before a plan exists, and a plan that fails for another reason
     names none."""
     found = {}
@@ -126,7 +127,7 @@ def kept(model: dict, facts: dict | None) -> list[dict]:
         pin = model.get("disks", {}).get(disk["id"])
         if pin and pin.get("use") == "legacy" and not disk.get("system"):
             found[disk["id"]] = {"use": "legacy", "partitions": legacy.plan_disk(disk["id"], disk, pin, [])[0]}
-    return legacy.shares({"disks": found})
+    return legacy.mounts({"disks": found})
 
 
 def _endpoint_problem(text: str, base: str) -> str | None:
@@ -145,7 +146,8 @@ def _endpoint_problem(text: str, base: str) -> str | None:
 
 def plan_section(model: dict, planned: dict, mounts: list[dict], media_planned: bool, errors: list[str]) -> Note | dict:
     """Which way the client's traffic goes and where its downloads land.
-    mounts: the kept partitions that are shared (legacy.shares)."""
+    mounts: the kept partitions (legacy.mounts), shared by the files guest
+    or only mounted on the host (disks.<id>.share: false)."""
     if QBITTORRENT not in planned:
         return Note({}, "Not planned.")
     chosen = model["torrents"]
@@ -182,11 +184,11 @@ def plan_section(model: dict, planned: dict, mounts: list[dict], media_planned: 
             else "Nobody asks the home router: forward the port to the router's address on the home network yourself, or leave it shut.",
         )
     can = writable(mounts)
-    names = [m["share"] for m in mounts]
+    names = [m["name"] for m in mounts]
     share = chosen.get("share")
     where = "editable under Setup, Hardware, Other disks (disks.<id>.mode: rw)"
     if share and share not in names:
-        errors.append(f"torrents.share: no kept disk is shared as {share!r}; shared are: {', '.join(names) or 'none'}")
+        errors.append(f"torrents.share: no kept disk is called {share!r}; kept are: {', '.join(names) or 'none'}")
     elif share and share not in can:
         errors.append(f"torrents.share: the kept disk {share} is read-only, so nothing can be downloaded to it; make it {where}")
     elif not share and not can:
@@ -200,7 +202,11 @@ def plan_section(model: dict, planned: dict, mounts: list[dict], media_planned: 
         share = share or can[0]
         folder = chosen["folder"]
         why = f"Downloads land in the folder {folder} of the kept disk {share}; the client sees that folder and nothing else of the disk."
-        why += f" Jellyfin shows them under /media/{share}/{folder}." if media_planned else ""
+        if any(m["name"] == share and "share" not in m for m in mounts):
+            # disks.<id>.share: false. Jellyfin's library and the file share are the shared disks.
+            why += " That disk is not shared, so neither the file share nor Jellyfin shows them: they are reached on the server only."
+        elif media_planned:
+            why += f" Jellyfin shows them under /media/{share}/{folder}."
         why += " Not backed up, like the rest of a kept disk."
         section["store"] = Note({"share": share, "folder": folder}, why)
     section["keep_free_gib"] = Note(
@@ -413,6 +419,10 @@ TUNNEL_LABEL = "the download client's tunnel to the VPN is up"
 THROUGH_LABEL = "the download client sends through the tunnel, and its guest reaches nothing outside by itself"
 DROP_LABEL = "a dropped tunnel stops the download client's traffic"
 SPACE_LABEL = "downloads are not paused for lack of room"
+PATHS_LABEL = "every download is saved inside the downloads folder"
+INSIDE = "inside"
+# qBittorrent's word once a peer has connected to it from outside.
+REACHED = "connected"
 PORT_LABEL = "the home router sends the download client's port to it"
 
 
@@ -422,6 +432,7 @@ def _labels(plan: dict) -> list[str]:
     if found:
         labels.append(f"the download client writes to {found['folder']} on the kept disk {found['share']}")
         labels.append(SPACE_LABEL)
+        labels.append(PATHS_LABEL)
     labels += [HOME_LABEL, PORT_LABEL] if route(plan) == HOME else [TUNNEL_LABEL, THROUGH_LABEL, DROP_LABEL]
     return labels
 
@@ -431,16 +442,51 @@ def skipped(plan_with_notes: dict, reason: str) -> list[Result]:
     return [Result("SKIP", label, reason) for label in _labels(plan)] if enabled(plan) else []
 
 
-def port_result(plan: dict, rc: int, out: str, err: str) -> Result:
-    """Whether others can connect to the client, as far as the server sees
-    it: what the home router answered nb-portmap about the client's port.
-    A port forwarded by hand cannot be seen from in here, so that is SKIP,
-    never PASS; a port the home router did not open is DEGRADED, since
-    downloads work without it and only seeding to others suffers."""
+def paths_result(rc: int, out: str, err: str) -> Result:
+    """nb-torrents paths: a download whose folder lies outside STORE cannot
+    be written (the client's user owns nothing else), which qBittorrent
+    shows only in its log; DEGRADED, since the other downloads work."""
+    said = [line.strip() for line in out.splitlines() if line.strip()]
+    if rc != 0 or not said:
+        return Result("FAIL", PATHS_LABEL, (err.strip() or f"exit {rc}")[:160])
+    if said == [INSIDE]:
+        return Result("PASS", PATHS_LABEL)
+    more = f" (and {len(said) - 1} more: nb-torrents paths in the guest lists them)" if len(said) > 1 else ""
+    return Result(
+        "DEGRADED",
+        PATHS_LABEL,
+        f"{said[0][:300]}{more}. The client can write under {STORE} only, so such a download stays unfinished: "
+        f"in qBittorrent, set its location to a folder under {STORE}",
+    )
+
+
+def outside_test(port: int) -> str:
+    """How the owner finds out for themselves: the server sees its home
+    router's answers, never the port from the internet's side."""
+    return (
+        f"To find out: start a download with many peers and run the checks again, which pass once anyone has connected from outside; "
+        f"or ask a port checking website for TCP {port} from a device at home"
+    )
+
+
+def port_result(plan: dict, rc: int, out: str, err: str, reached: str | None = None) -> Result:
+    """Whether others can connect to the client. Measured when it can be:
+    qBittorrent says `connected` once a peer got in from outside, and that
+    is PASS whatever the home router said. Without it there is only what
+    the home router answered nb-portmap, which is evidence and no proof (a
+    forward made by hand, or on a second router, cannot be seen from in
+    here, and some home routers answer wrongly about their own address): a
+    port it did not open is DEGRADED with "may", a port nobody asks for is
+    SKIP, and both say how to test from outside."""
     port = peer_port(plan)
     what = f"TCP and UDP {port}"
+    if reached == REACHED:
+        return Result("PASS", PORT_LABEL, "others have connected to it from outside")
     if not plan["torrents"]["port_mapping"]:
-        return Result("SKIP", PORT_LABEL, f"the server does not ask; a forward of {what} made by hand cannot be seen from here")
+        why = (
+            f"the server does not ask, and nobody has connected from outside yet; a forward of {what} made by hand cannot be seen from here"
+        )
+        return Result("SKIP", PORT_LABEL, f"{why}. {outside_test(port)}")
     state, _, why = direct.router_state(rc, out, err)
     if state is None:
         return Result("SKIP", PORT_LABEL, why)
@@ -456,8 +502,10 @@ def port_result(plan: dict, rc: int, out: str, err: str) -> Result:
     return Result(
         "DEGRADED",
         PORT_LABEL,
-        f"it did not open {' and '.join(p.upper() for p in shut)} {port} ({heard}). Downloads work; others cannot connect to you. "
-        f"On the home router turn on UPnP or NAT-PMP, or forward {what} to {to} yourself",
+        f"it did not open {' and '.join(p.upper() for p in shut)} {port} when asked ({heard}), and nobody has connected from outside yet, "
+        f"so the port may be shut. That answer is no proof: a forward made by hand may work all the same. {outside_test(port)}. "
+        f"Downloads work either way; with the port shut, others cannot connect to you. "
+        f"To open it: on the home router turn on UPnP or NAT-PMP, or forward {what} to {to} yourself",
     )
 
 
@@ -500,9 +548,11 @@ def check(plan_with_notes: dict, target: str, run: Runner, public_ip: str) -> li
                 results.append(Result("PASS", SPACE_LABEL))
             else:
                 results.append(Result("DEGRADED", SPACE_LABEL, out.strip()[:160]))
+            results.append(paths_result(*ask(f"{NB_TORRENTS} paths")))
         if route(plan) == HOME:
             results.append(Result("DEGRADED", HOME_LABEL, f"they leave from the home connection, as chosen. {WHAT_HOME}"))
-            results.append(port_result(plan, *run(target, direct.router_command(plan))))
+            rc, out, _ = ask(f"{NB_TORRENTS} reached")
+            results.append(port_result(plan, *run(target, direct.router_command(plan)), out.strip() if rc == 0 else None))
             return results
         up = judge(TUNNEL_LABEL, f"{NB_TORRENTS} tunnel status", "up")
         if not up:

@@ -262,6 +262,11 @@ tests:
         values: "0x10 1x40"
       - series: 'nb_torrents_tunnel_up{job="node",instance="qbittorrent:9100"}'
         values: "1x10 0x40"
+      - series: 'nb_torrents_outside_store{job="node",instance="qbittorrent:9100"}'
+        values: "0x10 1x90"
+      # A move that failed ten minutes into the test's clock.
+      - series: 'nb_torrents_move_failed_timestamp_seconds{job="node",instance="qbittorrent:9100"}'
+        values: "600x100"
       - series: 'node_filesystem_avail_bytes{instance="qbittorrent:9100",mountpoint="/downloads",fstype="fuseblk"}'
         values: "5x50"
       - series: 'node_filesystem_size_bytes{instance="qbittorrent:9100",mountpoint="/downloads",fstype="fuseblk"}'
@@ -283,6 +288,19 @@ tests:
         exp_alerts:
           - exp_labels: {severity: warn, job: node, instance: "qbittorrent:9100"}
             exp_annotations: {summary: "downloads are paused, because the kept disk has less room than you keep free; delete or move files, or lower the room to keep free under Setup, What to run, and they go on by themselves"}
+      - eval_time: 30m
+        alertname: DownloadSavedOutsideFolder
+        exp_alerts:
+          - exp_labels: {severity: warn, job: node, instance: "qbittorrent:9100"}
+            exp_annotations: {summary: "a download is set to be saved outside /downloads, where the download client cannot write, so it will not finish; in qBittorrent set its location to a folder under /downloads (nb-torrents paths in the guest names it)"}
+      - eval_time: 30m
+        alertname: DownloadMoveFailed
+        exp_alerts:
+          - exp_labels: {severity: warn, job: node, instance: "qbittorrent:9100"}
+            exp_annotations: {summary: "qBittorrent could not move a finished download to its folder; nb-torrents paths in the download client's guest shows its message, and a folder under /downloads always works"}
+      - eval_time: 90m
+        alertname: DownloadMoveFailed
+        exp_alerts: []
       - eval_time: 30m
         alertname: DownloadTunnelDown
         exp_alerts:

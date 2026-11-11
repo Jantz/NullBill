@@ -860,7 +860,8 @@ function torrentAsks(item) {
   const port = make("div", {className: "torrents-vpn torrents-port", hidden: true},
     make("label", {className: "opt-ask check"}, ask, make("span", {className: "way"},
       make("span", {className: "way-title", textContent: `Ask my home router to open port ${t.port} for it`}),
-      make("span", {className: "hint", textContent: `So that others can connect to you, which seeding and private trackers need. The server asks every 15 minutes (UPnP or NAT-PMP), as it does for Tailscale, and only the download client answers on that port. Without the tick, forward TCP and UDP ${t.port} to the server yourself, or leave it shut: downloads work either way. The checks say whether the home router opened it.`}))));
+      make("span", {className: "hint", textContent: "So that others can connect to you, which seeding and private trackers need. The server asks every 15 minutes (UPnP or NAT-PMP), as it does for Tailscale, and only the download client answers on that port. Downloads work either way."}))),
+    make("p", {className: "opt-note forward"}));
   const field = (label, control, hint) => {
     control.id = `${id}-${control.dataset.role}`;
     const note = make("span", {className: "hint", id: `${control.id}-hint`, textContent: hint});
@@ -879,7 +880,30 @@ function torrentAsks(item) {
     field("Room to keep free, in GiB", room, "Downloads pause while the disk has less free, and go on once it has more."));
   return make("div", {className: "opt-asks", hidden: true},
     make("p", {className: "opt-ask", textContent: t.notice}), routes, vpn, port,
-    make("p", {className: "opt-note why no-disk", hidden: true}), where);
+    make("p", {className: "opt-note why no-disk", hidden: true}), where, torrentGuide(t));
+}
+
+// The guide's steps beside the choices they belong to, closed until asked for.
+function torrentGuide(t) {
+  const steps = (title, items) => [make("h4", {textContent: title}), make("ol", {}, ...items.map((text) => li(text)))];
+  return make("details", {className: "opt-guide"}, make("summary", {textContent: "How to set this up"}),
+    ...steps("Through a VPN", [
+      "Sign in on your VPN provider's site and make a WireGuard configuration for one server: a .conf file. The provider must offer WireGuard; OpenVPN files do not work.",
+      "Choose Through a VPN of my own above, paste the whole file and save. Its key is kept with NullBill's secrets and never shown again.",
+      "Open Review and run and start setup, then run the checks: they take the tunnel down for a moment and show that nothing gets out without it.",
+      "No port is opened at home, and a provider's own port forwarding is not used: downloads work, and others behind routers of their own connect to you less easily.",
+    ]),
+    ...steps("From home, with an open port", [
+      `Choose From my home connection above and leave Ask my home router to open port ${t.port} ticked. Save, then start setup under Review and run.`,
+      `If your home router has UPnP and NAT-PMP off, or stands behind a second router, forward TCP and UDP ${t.port} yourself, on each router in turn, to the address named above, and untick the box.`,
+      "Run the checks. The home router's answer is no proof either way: the check passes once anyone has connected to qBittorrent from outside, so start a download with many peers first.",
+      `Do not change the listening port in qBittorrent's options: ${t.port} is the only one the firewall passes on.`,
+    ]),
+    ...steps("In qBittorrent", [
+      "Leave a download's save path as it is, or choose a folder under /downloads. The client can write nowhere else, and a download saved elsewhere stays unfinished; the checks name it.",
+      "Feeds (RSS) and their download rules are on. For a private tracker, switch off DHT, PeX and local peer discovery under Options, BitTorrent, if the tracker asks for it.",
+    ]),
+    make("p", {className: "hint"}, "All of it, with what to do when something is wrong: ", make("code", {textContent: t.guide}), " in the NullBill repository."));
 }
 
 // The saved choices, into the controls.
@@ -910,6 +934,14 @@ function paintTorrentsView(item, row) {
   share.disabled = names.length === 0;
   const none = row.querySelector(".no-disk");
   none.hidden = t.shares.length > 0;
+  const forward = row.querySelector(".forward");
+  const at = (pathNow() || {}).address;
+  forward.textContent = `To forward by hand instead, untick the box and send TCP and UDP ${t.port} to ${at ? `${at}, the server's address on your home network` : "the server's address on your home network, which Access, Tailscale shows once setup has run"}.`;
+  const picked = share.value || want;
+  const hint = row.querySelector(`#${share.id}-hint`);
+  if (hint) hint.textContent = t.unshared.includes(picked)
+    ? "This disk is kept but not shared, so neither the file share nor Jellyfin shows what is downloaded to it."
+    : "Downloads go to a kept disk you may change files on. Jellyfin and the file share see them there.";
   none.textContent = t.read_only.length
     ? `No kept disk can be changed yet: ${andList(t.read_only)} ${t.read_only.length === 1 ? "is" : "are"} read-only. Under Other disks below, tick Let me change files on it.`
     : "No disk is kept yet. Under Other disks below, keep the disk downloads should go to and tick Let me change files on it.";

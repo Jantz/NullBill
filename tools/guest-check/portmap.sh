@@ -250,9 +250,9 @@ CONF
 home_router miniupnpd -f /tmp/miniupnpd.conf -P /tmp/miniupnpd.pid -d
 portmap
 # Not "no answer": the search was answered, through the router's input chain.
-want='{"NAT-PMP": "it has no public address of its own", "UPnP": "it has no public address of its own"}'
+want='{"NAT-PMP": "it says it has no public address of its own", "UPnP": "it says it has no public address of its own"}'
 [[ $(field method) == null && $(field why) == "$want" ]] || fail "miniupnpd on a shared address: $(field why)"
-ok "miniupnpd on a provider's shared address answers over NAT-PMP and UPnP, and nb-portmap reports that no port can be opened"
+ok "miniupnpd on a provider's shared address answers over NAT-PMP and UPnP, and nb-portmap reports its answer: no public address of its own"
 
 # The UPnP answer is a new packet to the port the search left from: the
 # ruleset lets in SSDP_REPLY_PORT and nothing else, so a search from any

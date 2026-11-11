@@ -637,8 +637,8 @@ def build_plan(model: dict, facts: dict) -> dict:
     errors.raise_if_any()
 
     console = _console(model, facts, gpu_section, errors)
-    kept = legacy.shares(strip_notes({"disks": disk_section}))
-    shares = [m["share"] for m in kept]
+    kept = legacy.mounts(strip_notes({"disks": disk_section}))
+    shares = [m["share"] for m in kept if "share" in m]
     media_section = media.plan_section(model, facts, planned, shares, errors)
     torrents_section = torrents.plan_section(model, planned, kept, media.JELLYFIN in planned, errors)
     games_section = games.plan_section(model, planned, sizes, errors)

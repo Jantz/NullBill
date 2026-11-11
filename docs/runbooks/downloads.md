@@ -65,7 +65,13 @@ it again; **Forget the saved file** drops it.
 
 1. On the **Services** page open **Downloads** and sign in as
    `nullbill-admin` with the password shown there.
-2. Add a torrent file or a magnet link. Leave the save path as it is.
+2. Add a torrent file or a magnet link. Leave the save path as it is, or
+   choose a folder under `/downloads`. The client can write nowhere else:
+   a download told to go to another path fetches into `incomplete` and
+   stays there, and qBittorrent says so only in its log ("Failed to move
+   torrent"). The checks (**every download is saved inside the downloads
+   folder**) and an alert name such a download; **Set location** to a
+   folder under `/downloads` finishes it.
 3. A finished download is in Jellyfin after its next library scan
    (**Dashboard**, **Libraries**, **Scan All Libraries** does it at once),
    and in the file share under the same folder.
@@ -116,10 +122,18 @@ client's port to it**:
 
 | It says | Meaning | What to do |
 |---|---|---|
-| passed | Your home router opened the port. | Nothing. The connection icon at the bottom of qBittorrent's page turns green once peers connect. |
-| degraded, with what the home router answered | It did not open the port. Downloads work; others cannot connect to you. | On the home router turn on UPnP or NAT-PMP. Or forward TCP and UDP 41643 to the address the check names (the NullBill router on your home network) and untick the box. |
-| degraded: it has no public address of its own | Your provider shares one address between customers, or there is a second router in front. | No port can be opened from in here. Ask the provider for a public address, or use the VPN way. |
-| skipped | You unticked the box. A port forwarded by hand cannot be seen from the server. | Look at that connection icon, or your tracker's "connectable" mark. |
+| passed: others have connected to it from outside | Measured: qBittorrent has taken a connection from the internet. This counts whatever the home router answered. | Nothing. |
+| passed | Your home router said it opened the port. | Nothing. |
+| degraded, with what the home router answered | It did not open the port when asked, and nobody has connected from outside yet. The port may be shut. The answer is no proof: a forward you made by hand may work all the same. | Test from outside (below). If it is shut: on the home router turn on UPnP or NAT-PMP, or forward TCP and UDP 41643 to the address the check names and untick the box. |
+| degraded: it says it has no public address of its own | The home router says it is not on the internet itself: a second router stands in front, or your provider shares one address between customers. The server cannot open a port on that other router, or see one. | With a second router of your own, forward TCP and UDP 41643 on it to the home router, and on the home router to the address the check names; then test from outside. With a provider's shared address, ask for a public one, or use the VPN way. |
+| skipped | You unticked the box. A port forwarded by hand cannot be seen from the server. | Test from outside. |
+
+**To test from outside:** start a download that has many peers and run the
+checks again; they pass once anyone has connected to qBittorrent from the
+internet (the connection sign in the bar at the bottom of its page then
+reads Connected). Or, from a device at home, ask a port checking website
+for TCP 41643. The row under **Setup**, **What to run**, **Downloads**
+names the address a forward made by hand goes to.
 
 Do not change the listening port in qBittorrent's options: setup sets it
 back to 41643, the only port the firewall passes on.
@@ -141,6 +155,7 @@ paused** tells you; delete or move files, or lower the number under
 | The file is refused: its Endpoint could not be looked up | The file names the server instead of giving its address. | Put the server's IPv4 address in the `Endpoint` line, or ask the provider for a file with one. |
 | Plan: downloads go to a kept disk that can be written to | No kept disk has **Let me change files on it**. | Tick it under **Other disks**; [legacy-disk.md](legacy-disk.md) says what Windows must have done first. |
 | Nothing downloads, the page works | Paused for room, or the tunnel is down. | In the Proxmox shell: `pct exec 2028 -- nb-torrents space` and `pct exec 2028 -- nb-torrents tunnel status`. |
+| A download stays in `incomplete` at 100 %; alert: a download is set to be saved outside /downloads, or qBittorrent could not move a finished download | Its save path lies outside `/downloads`, where the client cannot write. | In qBittorrent, right-click it, **Set location**, and choose a folder under `/downloads`. `pct exec 2028 -- nb-torrents paths` names each such download and shows qBittorrent's message. |
 
 ## 8. Turning it off
 
@@ -154,7 +169,9 @@ the saved file**.
 - A VPN provider's port forwarding: behind a VPN others cannot open
   connections to the client, so seeding is slower there. From home the
   port is open (part 5).
-- A place for downloads other than a kept disk.
+- A place for downloads other than a kept disk. A kept disk that is not
+  shared (`disks.<id>.share: false`) can take them; then neither the file
+  share nor Jellyfin shows them.
 - HTTPS for the client's page; it is reached over Tailscale only, as
   Jellyfin is.
 
@@ -163,3 +180,8 @@ tunnel and both firewall layers is tested in containers and network
 namespaces, and so is the open port, against a stand-in home router;
 Proxmox itself, your home router, a real provider and a real kept disk
 are not.
+
+First run on real hardware, 2026-11-11: the client ran and downloaded. It
+showed that a save path outside `/downloads` failed without a word, and
+that the home router's answer about the port was taken as proof when a
+forward made by hand worked; both are changed as described above.

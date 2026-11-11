@@ -244,6 +244,19 @@ groups:
         labels: {severity: warn}
         annotations:
           summary: "downloads are paused, because the kept disk has less room than you keep free; delete or move files, or lower the room to keep free under Setup, What to run, and they go on by themselves"
+      # A folder the client's user cannot write: qBittorrent says so only
+      # in its log, and the download stays in incomplete.
+      - alert: DownloadSavedOutsideFolder
+        expr: nb_torrents_outside_store > 0
+        for: 10m
+        labels: {severity: warn}
+        annotations:
+          summary: "a download is set to be saved outside /downloads, where the download client cannot write, so it will not finish; in qBittorrent set its location to a folder under /downloads (nb-torrents paths in the guest names it)"
+      - alert: DownloadMoveFailed
+        expr: time() - nb_torrents_move_failed_timestamp_seconds < 3600
+        labels: {severity: warn}
+        annotations:
+          summary: "qBittorrent could not move a finished download to its folder; nb-torrents paths in the download client's guest shows its message, and a folder under /downloads always works"
       - alert: DownloadTunnelDown
         expr: nb_torrents_tunnel_up == 0
         for: 15m

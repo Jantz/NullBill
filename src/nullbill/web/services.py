@@ -237,7 +237,7 @@ def _entries(plan: dict, guests: dict, by_name: bool, forgejo_user: str | None, 
                         f"Add a torrent file or a magnet link. It downloads into {where['folder']} on the kept disk {where['share']}"
                         + (
                             f", which Jellyfin shows under {media.MEDIA_ROOT}/{where['share']}/{where['folder']}."
-                            if ip(media.JELLYFIN)
+                            if ip(media.JELLYFIN) and where["share"] in media.library(plan)
                             else "."
                         )
                         if where

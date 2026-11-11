@@ -531,6 +531,8 @@ class FakeReach:
             return 0, "jellyfin-password\n", ""
         if vmid == "2028" and argv[0] == torrents.NB_TORRENTS:
             self.torrents_asked.append(argv[1:])
+            if argv[1:] == ["paths"]:
+                return 0, "inside\n", ""
             return 0, "changed\n" if argv[1:] == ["settings"] and self.torrents_asked.count(["settings"]) == 1 else "", ""
         if argv[0] == games.NB_GAME:
             server = self.game_servers.setdefault(vmid, {"admins": [], "typed": [], "asked": []})

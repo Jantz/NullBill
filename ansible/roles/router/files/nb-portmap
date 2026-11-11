@@ -49,7 +49,8 @@ PMP_FAILED = re.compile(r"^readnatpmpresponseorretry\(\) failed : (.+)$", re.M)
 # upnpc prints this line from what the router reads back, not from its own request.
 UPNP_MAPPED = re.compile(r"^external (\S*):(\d+) (?:UDP|TCP) is redirected to internal (\S+):(\d+)", re.M)
 UPNP_FAILED = re.compile(r"AddPortMapping\(.*\) failed with code (-?\d+) \((.*)\)")
-NO_PUBLIC_ADDRESS = "it has no public address of its own"
+# Its answer, not a finding: a port forwarded by hand past it may be open all the same.
+NO_PUBLIC_ADDRESS = "it says it has no public address of its own"
 # Nothing to set against what Tailscale offers: such a mapping is given back.
 UNNAMED = "it mapped the port without saying its public address"
 REFUSED = "it does not let this device open ports"

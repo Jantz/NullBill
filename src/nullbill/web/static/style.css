@@ -604,6 +604,13 @@ ul.notes[hidden] { display: none; }
 .torrents-vpn .status { white-space: normal; align-items: baseline; }
 .torrents-vpn textarea { width: 100%; max-width: 100%; box-sizing: border-box; }
 .torrents-vpn .hint { overflow-wrap: anywhere; }
+.torrents-vpn > .opt-note { margin: 0; }
+.opt-guide { min-width: 0; }
+.opt-guide summary { cursor: pointer; color: var(--text-2); }
+.opt-guide h4 { margin: 10px 0 4px; font-size: 12px; font-weight: 600; }
+.opt-guide ol { margin: 0; padding-left: 20px; display: grid; gap: 4px; list-style: decimal; }
+.opt-guide li { display: list-item; }
+.opt-guide .hint { margin: 10px 0 0; }
 .opt-asks > .opt-note { margin: 0; }
 /* A game server's settings (app.js gameSettings) and Add a game server. */
 .game-settings > summary { cursor: pointer; width: fit-content; color: var(--text-2); font-weight: 500; }

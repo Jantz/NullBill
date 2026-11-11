@@ -556,6 +556,12 @@ def test_metrics_services_and_the_small_switches(agent):
     view = call(client, "port_mapping", enabled=False)
     assert kinds(view, "ran")[-1]["title"] == "Ask the home router for the port: off" and app.port_mapping() is False
     assert "off already" in result(call(client, "port_mapping", enabled=False))
+    # Switching it on has the server ask the owner's home router for a way in
+    # from the internet: on the owner's server the agent did that unasked.
+    view = call(client, "port_mapping", enabled=True)
+    card = kinds(view, "proposal")[-1]
+    assert (card["tier"], card["word"]) == ("risky", "open") and "open a port to the internet" in card["reason"]
+    assert app.port_mapping() is False
     # Without `enabled` it reads how devices reach the server, as the page
     # measures it: the owner's phone was direct while the agent, with nothing
     # to read, switched the asking off to change a label.

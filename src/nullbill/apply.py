@@ -2005,6 +2005,11 @@ def stage_torrents(ctx: Context) -> None:
     guest_out(ctx, "torrents", name, [torrents.NB_TORRENTS, "wait"])
     if guest_out(ctx, "torrents", name, [torrents.NB_TORRENTS, "settings"]).strip() == "changed":
         ctx.say("torrents: set where qBittorrent saves, how it sends and its sign-in")
+    # A download saved outside the folder cannot be written, and qBittorrent
+    # says so only in its log.
+    for line in guest_out(ctx, "torrents", name, [torrents.NB_TORRENTS, "paths"]).splitlines():
+        if line.strip() and line.strip() != torrents.INSIDE:
+            ctx.say(f"torrents: {line.strip()[:300]}; the client can write under {torrents.STORE} only, so set its location there")
     found = torrents.store(ctx.bare)
     how = "through your VPN only" if way == torrents.VPN else "from the home connection, whose address others in a download see"
     ctx.say(f"torrents: downloads go to {found['folder']} on the kept disk {found['share']}, {how}")
