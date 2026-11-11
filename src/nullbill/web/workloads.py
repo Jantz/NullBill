@@ -89,7 +89,7 @@ TEXT = {
     "media": {
         "title": "Media server (Jellyfin)",
         "what": "Plays the films, series and music on the disks you keep, in the browser and in Jellyfin's apps.",
-        "needs": ["A disk with your media, kept under Other disks. Without one Jellyfin starts with an empty library."],
+        "needs": ["A disk with your media, kept under Disks. Without one Jellyfin starts with an empty library."],
         "on": (
             "Setup installs Jellyfin, finishes its first-run setup and makes its admin. "
             "Then add your folders as libraries in Jellyfin; its sign-in is on the Services page. "
@@ -101,7 +101,7 @@ TEXT = {
         "title": "Downloads (qBittorrent)",
         "what": "A BitTorrent client whose finished downloads land on a kept disk, where Jellyfin and the file share see them.",
         "needs": [
-            "A kept disk you may change files on (Setup, Hardware, Other disks): downloads go into one folder of it.",
+            "A kept disk you may change files on (Setup, What to run, Disks): downloads go into one folder of it.",
             "Your choice of the way downloads go, beside this tick: through a WireGuard VPN of your own, or from your home connection.",
         ],
         "on": (
@@ -288,14 +288,12 @@ def _note(name: str, plan: dict | None) -> str | None:
         return how if plan["media"]["library"] else f"No kept disk yet, so its library starts empty. {how}"
     if name == torrents.WORKLOAD and plan["torrents"]:
         found = plan["torrents"]
-        way = torrents.WHAT_VPN if found["route"] == torrents.VPN else f"From your home connection. {torrents.WHAT_HOME}"
-        if "port" in found:
-            way += (
-                f" The server asks your home router to open port {found['port']} for it."
-                if found["port_mapping"]
-                else f" Forward port {found['port']} (TCP and UDP) on your home router yourself, or others cannot connect to it."
-            )
-        return f"Downloads land in {found['store']['folder']} on the kept disk {found['store']['share']}. {way}"
+        # Where downloads land is the row's Settings line; this is what the way chosen means.
+        if found["route"] == torrents.VPN:
+            return torrents.WHAT_VPN
+        if "port" in found and not found["port_mapping"]:
+            return f"{torrents.WHAT_HOME} Forward port {found['port']} (TCP and UDP) on your home router, or others cannot connect."
+        return torrents.WHAT_HOME
     if name in plan["games"]:
         game = plan["games"][name]
         note = f"Players need {games.CLIENT[game.get('game', name)]} {game['version']}, the same version as the server."
@@ -385,7 +383,7 @@ def _when(model: dict, planned: dict, counted_for: dict[str, int]) -> list[dict]
     # In the page's order, then what is not a choice there (the kept disks' shares).
     for workload in [*(w for w in order if w in found), *(w for w in found if w not in order)]:
         members = [n for n, svc in planned.items() if svc["workload"] == workload]
-        rule = {"title": workload, **modelling.POWER_DEFAULTS, **model["power"].get(workload, {})}
+        rule = {"title": TEXT.get(workload, {}).get("title", workload), **modelling.POWER_DEFAULTS, **model["power"].get(workload, {})}
         kinds = {planned[n]["kind"] for n in members}
         blocked = None
         if kinds == {"vm-pool"}:

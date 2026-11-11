@@ -359,7 +359,7 @@ input[type=checkbox], input[type=radio] { width: 16px; height: 16px; margin: 2px
 
 main { grid-area: main; container: main / inline-size; overflow-y: auto; padding: 24px 32px 48px; outline: none; }
 .view { max-width: 1080px; margin: 0 auto; }
-#view-setup, #view-access, #view-agent, #view-alerts { max-width: 880px; }
+#view-setup, #view-access, #view-agent, #view-alerts, #view-updates, #view-backups { max-width: 880px; }
 .page-head { display: flex; align-items: flex-end; gap: 16px; margin-bottom: 20px; }
 .page-sub { color: var(--text-3); margin-top: 2px; }
 .block { margin-top: 28px; }
@@ -470,6 +470,8 @@ main { grid-area: main; container: main / inline-size; overflow-y: auto; padding
 .setting-text p { color: var(--text-2); font-size: 13px; margin-top: 4px; }
 .setting-text .hard-blocks { display: flex; gap: 8px; margin-top: 10px; color: var(--text-3); font-size: 12px; }
 .setting-text .hard-blocks .icon { margin-top: 1px; }
+.mini-steps { list-style: decimal; margin: 6px 0 0; padding-left: 18px; display: grid; gap: 3px; color: var(--text-2); font-size: 13px; }
+.mini-steps li { display: list-item; }
 .setting-control { display: grid; gap: 10px; align-content: start; min-width: 0; }
 .num-mark { display: inline-grid; place-items: center; width: 18px; height: 18px; margin-right: 8px; border-radius: 50%; border: 1px solid var(--line-strong); font-size: 11px; color: var(--text-3); vertical-align: 1px; }
 .num-mark.done { background: var(--good-dot); border-color: var(--good-dot); color: #fff; }
@@ -633,8 +635,22 @@ ul.notes[hidden] { display: none; }
 .opt-note.why { color: var(--warn); }
 .opt-change { padding: 8px 10px; border: 1px solid var(--warn-line); border-radius: var(--radius); background: var(--warn-bg); color: var(--text); max-width: 80ch; }
 .opt[data-state="delete"] .opt-change { border-color: var(--bad-line); background: var(--bg); border-left: 3px solid var(--bad-dot); }
+/* What to run in parts (app.js showPart): one shows at a time, under one Save. */
+.segmented button[aria-selected="true"] { background: var(--bg); color: var(--text); font-weight: 600; box-shadow: 0 0 0 1px var(--line); }
+.segmented.parts { margin: 4px 0 12px; max-width: 100%; overflow-x: auto; }
+.segmented.parts button { white-space: nowrap; }
+.part > .group:last-child { margin-bottom: 8px; }
+/* A row's own settings, closed under a line that says what is chosen. */
+.opt-settings { min-width: 0; }
+.opt-settings > summary { cursor: pointer; width: fit-content; max-width: 100%; color: var(--text-2); font-weight: 500; }
+.opt-settings > summary:hover { color: var(--text); }
+.opt-settings .set-now { margin-left: 8px; font-weight: 400; color: var(--text-3); }
+.opt-settings .set-now.why { color: var(--warn); }
+.opt-settings-body { display: grid; gap: 12px; margin-top: 10px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); min-width: 0; }
+.opt-settings-body > .opt-note { margin: 0; }
 /* Long lists: a filter above the groups, a count in each legend, rows that are off folded away. */
 .pick-tools { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.group > legend .count:empty { display: none; }
 .group > legend .count { margin-left: 6px; color: var(--text-3); font-weight: 400; font-size: 12px; }
 .opts-more { margin-top: 6px; }
 .opts .opt:not([hidden]):not(:has(~ .opt:not([hidden]))) { border-bottom: 0; }
@@ -659,6 +675,13 @@ pre.own-script { margin: 0; padding: 10px 12px; max-height: 420px; overflow: aut
 .when-field[hidden] { display: none; }
 .when-note { grid-column: 1 / -1; margin-top: 6px; font-size: 12px; color: var(--text-2); max-width: 88ch; }
 .when-note .why { color: var(--warn); }
+.when-note[hidden] { display: none; }
+/* Wide: one line per row under one head, so the labels need not repeat. */
+.whens-head { display: grid; grid-template-columns: minmax(0, 1fr) 132px 236px 92px; column-gap: 12px; padding: 7px 14px; border: 1px solid var(--line); border-bottom: 0; border-radius: var(--radius-lg) var(--radius-lg) 0 0; background: var(--bg-sub); color: var(--text-3); font-size: 12px; font-weight: 500; }
+.whens-head + .whens { border-radius: 0 0 var(--radius-lg) var(--radius-lg); }
+.when { align-items: center; padding-block: 8px; }
+.when .when-field > .label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.when-note { margin-top: 2px; }
 select:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
 select:disabled { color: var(--text-3); background: var(--bg-sub); cursor: not-allowed; }
 /* Services, On demand. */
@@ -817,6 +840,7 @@ select:disabled { color: var(--text-3); background: var(--bg-sub); cursor: not-a
 .table.review tr.detail > td { padding: 8px 16px 10px 46px; }
 .review-lines { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; max-width: 76ch; color: var(--text-2); font-size: 12.5px; white-space: normal; }
 .review-names { margin-top: 14px; }
+.block > .review-names { margin-top: 0; }
 .review-names > h4 { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--text); }
 .review-names > ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 6px; }
 .review-names > ul > li { padding: 2px 8px; border: 1px solid var(--line); border-radius: 6px; font-size: 12.5px; color: var(--text-2); background: var(--bg-sub); }
@@ -1271,8 +1295,10 @@ dialog::backdrop { background: var(--scrim); }
   .opt-num::before { content: attr(data-label) " " / ""; color: var(--text-3); }
   .opt-facts { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   .opt-facts dd { margin-bottom: 8px; }
-  .when { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); row-gap: 8px; }
-  .when-main, .when-stop { grid-column: 1 / -1; }
+  .when { grid-template-columns: minmax(0, 1fr) 132px; row-gap: 8px; }
+  .whens-head { display: none; }
+  .whens-head + .whens { border-radius: var(--radius-lg); }
+  .when .when-stop > .label, .when .when-idle > .label { position: static; width: auto; height: auto; clip-path: none; }
   .demand td.actions .row { flex-wrap: wrap; }
 }
 @container main (max-width: 560px) {

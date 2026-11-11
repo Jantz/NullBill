@@ -531,9 +531,11 @@ function route(focus) {
   let title = $(`view-${view}`).dataset.title;
   let heading = $(`h-${view}`);
   if (view === "setup") {
-    const step = STEPS.includes(sub) ? sub : defaultStep();
+    const [stepName, part] = sub.split("/");
+    const step = STEPS.includes(stepName) ? stepName : defaultStep();
     const stepChanged = step !== currentStep;
     showStep(step);
+    if (step === "choices" && (part || stepChanged)) showPart(part);
     if (stepChanged || changed) heading = $(`h-step-${step}`);
     const stepLink = document.querySelector(`#stepper a[data-step="${step}"]`);
     if (stepLink) title = `${stepLink.textContent.replace(/,.*$/s, "").trim()} · Setup`;
@@ -585,6 +587,16 @@ function showStep(step) {
     if (a.dataset.step === step) a.setAttribute("aria-current", "step");
     else a.removeAttribute("aria-current");
   }
+}
+
+// What to run is four parts under one Save: one shows at a time.
+const PARTS = ["services", "when", "disks", "login"];
+function showPart(part) {
+  const name = PARTS.includes(part) ? part : "services";
+  for (const p of PARTS) show(`part-${p}`, p === name);
+  selectTab("choice-parts", name);
+  // The meter counts services and when they run; disks and the login take no memory.
+  show("budget", name === "services" || name === "when");
 }
 
 function selectTab(listId, tab) {
@@ -764,7 +776,7 @@ function optionRow(item) {
     make("p", {className: "opt-note", id: `${id}-note`, hidden: true}),
     item.game ? gameAsks(item) : item.torrents ? torrentAsks(item) : null,
     make("p", {className: "opt-change", role: "status", hidden: true}),
-    make("details", {className: "opt-details"}, make("summary", {textContent: "What it makes, needs and deletes"}), make("dl", {className: "opt-facts"}),
+    make("details", {className: "opt-details"}, make("summary", {textContent: "Details"}), make("dl", {className: "opt-facts"}),
       item.own ? ownTools(item) : null,
       item.game && item.game.more ? gameTools(item) : null));
   row.dataset.name = item.name;
@@ -828,7 +840,7 @@ function torrentAsks(item) {
     return make("label", {className: "opt-ask check"}, input,
       make("span", {className: "way"}, make("span", {className: "way-title", textContent: title}), make("span", {className: "hint", textContent: hint})));
   };
-  const routes = make("fieldset", {className: "ways"}, make("legend", {className: "label", textContent: "Which way downloads go. Nothing is chosen for you."}),
+  const routes = make("fieldset", {className: "ways"}, make("legend", {className: "label", textContent: "Which way downloads go"}),
     way("vpn", "Through a VPN of my own", t.vpn), way("home", "From my home connection, without a VPN", t.home));
   const conf = make("textarea", {id: `${id}-conf`, rows: 6, spellcheck: false, autocomplete: "off", autocapitalize: "off",
     placeholder: "[Interface]\nPrivateKey = …\nAddress = …\nDNS = …\n\n[Peer]\nPublicKey = …\nAllowedIPs = 0.0.0.0/0\nEndpoint = …"});
@@ -860,7 +872,7 @@ function torrentAsks(item) {
   const port = make("div", {className: "torrents-vpn torrents-port", hidden: true},
     make("label", {className: "opt-ask check"}, ask, make("span", {className: "way"},
       make("span", {className: "way-title", textContent: `Ask my home router to open port ${t.port} for it`}),
-      make("span", {className: "hint", textContent: "So that others can connect to you, which seeding and private trackers need. The server asks every 15 minutes (UPnP or NAT-PMP), as it does for Tailscale, and only the download client answers on that port. Downloads work either way."}))),
+      make("span", {className: "hint", textContent: "Lets others connect to you, which seeding and private trackers need. Only the download client answers on that port. Downloads work either way."}))),
     make("p", {className: "opt-note forward"}));
   const field = (label, control, hint) => {
     control.id = `${id}-${control.dataset.role}`;
@@ -875,12 +887,15 @@ function torrentAsks(item) {
   const room = make("input", {type: "number", min: "1", step: "1", inputMode: "numeric"});
   room.dataset.role = "room";
   const where = make("div", {className: "game-fields"},
-    field("Kept disk", share, "Downloads go to a kept disk you may change files on. Jellyfin and the file share see them there."),
-    field("Folder on it", folder, "Made if it is not there. The client sees this folder and nothing else of the disk."),
-    field("Room to keep free, in GiB", room, "Downloads pause while the disk has less free, and go on once it has more."));
+    field("Kept disk", share, "Jellyfin and the file share see the downloads there."),
+    field("Folder on it", folder, "The client sees only this folder."),
+    field("Keep free, in GiB", room, "Downloads pause while the disk has less free."));
+  const summary = make("summary", {}, "Settings", make("span", {className: "set-now"}));
   return make("div", {className: "opt-asks", hidden: true},
-    make("p", {className: "opt-ask", textContent: t.notice}), routes, vpn, port,
-    make("p", {className: "opt-note why no-disk", hidden: true}), where, torrentGuide(t));
+    make("details", {className: "opt-settings"}, summary,
+      make("div", {className: "opt-settings-body"}, routes, vpn, port,
+        make("p", {className: "opt-note why no-disk", hidden: true}), where,
+        make("p", {className: "hint", textContent: t.notice}), torrentGuide(t))));
 }
 
 // The guide's steps beside the choices they belong to, closed until asked for.
@@ -932,20 +947,27 @@ function paintTorrentsView(item, row) {
     if (names.includes(want)) share.value = want;
   }
   share.disabled = names.length === 0;
+  const picked = share.value || want;
   const none = row.querySelector(".no-disk");
   none.hidden = t.shares.length > 0;
   const forward = row.querySelector(".forward");
   const at = (pathNow() || {}).address;
   forward.textContent = `To forward by hand instead, untick the box and send TCP and UDP ${t.port} to ${at ? `${at}, the server's address on your home network` : "the server's address on your home network, which Access, Tailscale shows once setup has run"}.`;
-  const picked = share.value || want;
   const hint = row.querySelector(`#${share.id}-hint`);
   if (hint) hint.textContent = t.unshared.includes(picked)
     ? "This disk is kept but not shared, so neither the file share nor Jellyfin shows what is downloaded to it."
-    : "Downloads go to a kept disk you may change files on. Jellyfin and the file share see them there.";
+    : "Jellyfin and the file share see the downloads there.";
   none.textContent = t.read_only.length
-    ? `No kept disk can be changed yet: ${andList(t.read_only)} ${t.read_only.length === 1 ? "is" : "are"} read-only. Under Other disks below, tick Let me change files on it.`
-    : "No disk is kept yet. Under Other disks below, keep the disk downloads should go to and tick Let me change files on it.";
+    ? `No kept disk can be changed yet: ${andList(t.read_only)} ${t.read_only.length === 1 ? "is" : "are"} read-only. Under Disks, tick Let me change files on it.`
+    : "No disk is kept yet. Under Disks, keep the disk downloads should go to and tick Let me change files on it.";
   const chosen = row.querySelector("[data-role=route]:checked");
+  // Closed, the line says what is chosen; it opens by itself only while an answer is missing.
+  const box = row.querySelector(".opt-settings");
+  const missing = !chosen ? "Choose which way downloads go" : !picked ? "Choose a kept disk" : "";
+  const now = row.querySelector(".set-now");
+  now.textContent = missing || `${chosen.value === "vpn" ? "Through your VPN" : "From your home connection"}, into ${picked}/${row.querySelector("[data-role=folder]").value}`;
+  now.classList.toggle("why", Boolean(missing));
+  if (missing && box.dataset.asked !== missing) { box.open = true; box.dataset.asked = missing; }
   row.querySelector(".torrents-vpn").hidden = !chosen || chosen.value !== "vpn";
   row.querySelector(".torrents-port").hidden = !chosen || chosen.value !== "home";
   const pasted = row.querySelector("[data-role=conf]").value.trim() !== "";
@@ -972,12 +994,16 @@ function gameAsks(item) {
     asks.append(make("label", {className: "opt-ask check"}, agree, make("span", {}, `${item.game.eula.text} (`,
       make("a", {href: item.game.eula.url, target: "_blank", rel: "noopener noreferrer", textContent: "read it"}), "). Its server does not start without.")));
   }
+  let admins = null;
   if (item.game.admins) {
-    const admins = make("input", {type: "text", id: `opt-${item.name}-admins`, autocomplete: "off", spellcheck: false, placeholder: "none"});
+    admins = make("input", {type: "text", id: `opt-${item.name}-admins`, autocomplete: "off", spellcheck: false, placeholder: "none"});
     admins.dataset.role = "admins";
-    asks.append(make("label", {className: "opt-ask field"}, make("span", {className: "label", textContent: "Admins: player names as shown in the game, separated by commas"}), admins));
   }
-  asks.append(gameSettings(item));
+  const settings = gameSettings(item);
+  // Admins sit with the server's other settings; the EULA stays in sight, since the server waits for it.
+  if (item.game.admins) settings.querySelector(".game-fields").prepend(make("label", {className: "game-field"}, make("span", {className: "label", textContent: "Admins"}),
+    admins, make("span", {className: "hint", textContent: "Player names as shown in the game, separated by commas."})));
+  asks.append(settings);
   return asks;
 }
 
@@ -1022,7 +1048,7 @@ function gameSettings(item) {
   other.dataset.role = "other";
   const more = field("Other settings, one on each line", other,
     `Any other option of the server's own, by its name in ${g.file}. NullBill keeps the port and who may connect to itself.`, "wide");
-  return make("details", {className: "game-settings"}, make("summary", {textContent: "Settings of this server"}), fields, more);
+  return make("details", {className: "game-settings"}, make("summary", {textContent: "Settings"}), fields, more);
 }
 
 // The value a setting's control holds, as the server takes it.
@@ -1176,6 +1202,7 @@ function foldOptions() {
   }
   const whens = [...$("when-rows").querySelectorAll(".when")];
   if (whens.length) $("when").hidden = whens.every((r) => r.hidden);
+  show("when-none", $("when").hidden);
   $("pick-count").textContent = q ? `${matched} of ${view.items.length}` : "";
   show("pick-none", Boolean(q) && matched === 0);
 }
@@ -1207,7 +1234,7 @@ function renderOptions(st) {
 // controls are set when a row is made and when the saved choices are shown;
 // a preview only repaints what follows from them, so nothing the owner is
 // typing is overwritten.
-const STOPS = {auto: "By itself when unused", ask: "Only by me, with a reminder", manual: "Only by me"};
+const STOPS = {auto: "By itself when unused", ask: "When I stop it, with a reminder", manual: "When I stop it"};
 
 function whenRow(w) {
   const id = `when-${w.name}`;
@@ -1222,7 +1249,7 @@ function whenRow(w) {
     make("div", {className: "when-main"}, make("span", {className: "opt-title", textContent: w.title}), make("span", {className: "opt-desc when-size"})),
     make("label", {className: "when-field"}, make("span", {className: "label", textContent: "Runs"}), run),
     make("label", {className: "when-field when-stop"}, make("span", {className: "label", textContent: "Stops"}), stop),
-    make("label", {className: "when-field when-idle"}, make("span", {className: "label", textContent: "Unused for, min"}), idle),
+    make("label", {className: "when-field when-idle"}, make("span", {className: "label", textContent: "After, min"}), idle),
     make("p", {className: "when-note", id: `${id}-note`}));
   row.dataset.name = w.name;
   setWhen(row, w);
@@ -1267,17 +1294,18 @@ function paintWhen(view, reset) {
     const onDemand = run.value === "on-demand" && !w.blocked;
     row.querySelector(".when-stop").hidden = !onDemand;
     row.querySelector(".when-idle").hidden = !onDemand || stop.value === "manual";
-    row.querySelector(".when-size").textContent = `${andList(w.guests)} · ${gib(w.memory_mib)} while it runs`;
+    row.querySelector(".when-size").textContent = `${gib(w.memory_mib)} while it runs`;
     const after = span(Number(idle.value));
     const text = w.blocked ? w.blocked
-      : !onDemand ? `Always on: it holds its ${gib(w.memory_mib)} all the time.`
-        : `Off until you start it on the Services page. ${{
-          auto: `Stops by itself once nobody has used it for ${after}.`,
-          ask: `Never stops by itself; you are told once nobody has used it for ${after}.`,
-          manual: "Runs until you stop it.",
-        }[stop.value]}`;
+      : !onDemand ? ""
+        : {
+          auto: `Stops by itself after ${after} without use.`,
+          ask: `Stays on until you stop it. You get a reminder after ${after} without use.`,
+          manual: "Stays on until you stop it.",
+        }[stop.value];
     const note = row.querySelector(".when-note");
     const why = onDemand && !w.auto ? w.auto_why : "";
+    note.hidden = !(text || why);
     if (note.dataset.text !== text + why) {
       note.dataset.text = text + why;
       note.replaceChildren(text, why ? make("span", {className: "why", textContent: ` ${why}`}) : "");
@@ -1469,6 +1497,7 @@ function renderDisks(disks) {
   const list = $("disk-list");
   list.replaceChildren();
   show("disks", disks.length > 0);
+  show("disks-none", disks.length === 0);
   for (const disk of disks) {
     const box = make("fieldset", {className: "disk"});
     box.dataset.id = disk.id;
@@ -3734,7 +3763,7 @@ function backupPlace(p, b) {
   switch (p.kind) {
     case "blank": return [p.id, `${size}, blank. A disk of their own: the backups outlive the server's disk.${failing}`, "", ""];
     case "erase": return [p.id, `${size}, holding ${andList(p.holds)}. Erased for the backups: everything on it is lost.${failing}`, "", "danger-option"];
-    case "kept": return [p.id, `${size}, with files you keep.`, "Not offered: NullBill puts no backups on a disk it shares. Setup, What to run, Other disks can copy its files off and erase it.", ""];
+    case "kept": return [p.id, `${size}, with files you keep.`, "Not offered: NullBill puts no backups on a disk it shares. Setup, What to run, Disks can copy its files off and erase it.", ""];
     case "storage": return [p.id, `${size}, extra storage in Proxmox.`, "Not offered while it is storage.", ""];
     default: return [p.id, `${size}. The backups' own disk.`, "", ""];
   }
@@ -3856,7 +3885,13 @@ function renderBackups() {
   // What is backed up, and what is not.
   const rows = live && live.state === "ok" ? live.guests : b.covered.map((name) => ({name}));
   show("backups-what", rows.length > 0);
-  $("backups-schedule").textContent = `Each night at ${b.schedule} · kept: ${keepsText(b.keeps)}`;
+  // Without a reading there is nothing to say per service: the names alone, not a column of "no reading".
+  const read = Boolean(live && live.state === "ok");
+  show("backups-table", read);
+  show("backups-names", !read);
+  $("backups-names").querySelector("ul").replaceChildren(...rows.map((g) => li(g.name)));
+  $("backups-schedule").textContent = read ? `${count(rows.length, "service")}, each night at ${b.schedule}`
+    : `${count(rows.length, "service")} · ${has ? "no reading of their backups yet" : b.on ? "first backups with the next setup run" : "once backups are on"}`;
   $("backups-rows").replaceChildren(...rows.map((g) => {
     const late = live && live.state === "ok" && live.late.includes(g.name);
     const when = g.last ? status(late ? "bad" : "good", clock(g.last), ago(g.last))
@@ -4266,6 +4301,8 @@ function failItems(items) {
 function drawJob(current, view) {
   const node = current.node;
   const p = view.progress;
+  // A run that went well folds its stages and log away; a live or failed one shows them.
+  if (node.dataset.state !== view.state) node.querySelector(".job-more").open = view.state !== "done";
   node.dataset.state = view.state;
   paintPill(view);
   node.querySelector(".job-title").textContent = p.title;
@@ -5865,6 +5902,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Setup.
   const choices = $("choices-form");
+  wireTabs("choice-parts", (part) => { showPart(part); history.replaceState(null, "", `#setup/choices${part === "services" ? "" : `/${part}`}`); currentSub = location.hash.slice("#setup/".length); });
   choices.addEventListener("change", onChoicesChanged);
   choices.addEventListener("input", onChoicesChanged);
   $("choices-discard").addEventListener("click", () => {
@@ -5879,13 +5917,14 @@ document.addEventListener("DOMContentLoaded", () => {
     field.removeAttribute("aria-invalid");
     // Only a refusal about the login marks its field; one about a game
     // server opens that server's settings instead.
-    const login = (error) => { field.setAttribute("aria-invalid", "true"); field.focus(); return error; };
+    const login = (error) => { showPart("login"); field.setAttribute("aria-invalid", "true"); field.focus(); return error; };
     press(submitter(event), "choices-result", "Saving and making the plan…", async () => {
       if (!field.value.trim()) throw login(new ApiError("Enter the email address you sign in to Tailscale with.", 400));
       let result;
       try { result = await api("/api/choices", choicesBody()); } catch (error) {
         if (/Tailscale login/.test(error.message)) login(error);
         const shown = openRefusedGames(error.list || [error.message]);
+        if (shown) showPart("services");
         // Several refusals are a list above the bar, a line each.
         if (!showProblem("choices-refused", error) && shown) shown.scrollIntoView({block: "nearest"});
         throw error;

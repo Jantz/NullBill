@@ -27,7 +27,7 @@ KEEPS = {"keep-daily": 7, "keep-weekly": 4, "keep-monthly": 6}
 
 KEPT_WHY = (
     "It holds files you keep, and NullBill puts no backups on a disk it shares. "
-    "Setup, What to run, Other disks can copy its files off and erase it."
+    "Setup, What to run, Disks can copy its files off and erase it."
 )
 
 
@@ -176,7 +176,7 @@ def save(config: dict, shown: dict, body: dict, erase: Callable[[dict, dict], di
     if disk["kind"] == "kept":
         raise NullBillError(f"{place}: {KEPT_WHY}")
     if disk["kind"] == "storage":
-        raise NullBillError(f"{place}: it is extra storage in Proxmox; Setup, What to run, Other disks changes that")
+        raise NullBillError(f"{place}: it is extra storage in Proxmox; Setup, What to run, Disks changes that")
     if disk["kind"] == "blank":
         config["disks"] = {**(config.get("disks") or {}), place: {"use": "pbs"}}
     elif disk["kind"] == "erase":

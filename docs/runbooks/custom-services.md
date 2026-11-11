@@ -69,7 +69,7 @@ later, a changed script is a card you approve like the first.
 - **Remove:** once it is off and its guest is gone, the row has
   **Remove**. The script is set aside in `custom/.removed` beside
   `config.yaml`, not erased.
-- **When it runs:** like every workload, under **When it runs**
+- **When it runs:** like every workload, under **When they run**
   ([on demand](on-demand.md)). A container that listens on no TCP port
   cannot stop by itself: nothing shows NullBill that it is in use.
 

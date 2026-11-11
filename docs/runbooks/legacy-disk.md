@@ -36,7 +36,7 @@ left the disk and what can be done.
 
 1. Put the disk in the server and start it. Proxmox leaves it alone.
 2. On the page's **Setup** page, press **Read the hardware** again. The
-   **What to run** card lists the disk under **Other disks** with its
+   **What to run** card lists the disk under **Disks** with its
    partitions, labels, sizes and health.
 3. Choose **Keep its files and share them to me**. Tick **Let me change
    files on it** only if you need to (see [Change files on

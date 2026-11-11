@@ -278,8 +278,10 @@ made one.
 5. **Setup** page, **Hardware** tab: press **Read the hardware**. It only
    reads.
 6. **Setup** page, **What to run** tab:
+   It has four parts under one **Save and plan**: **Services**, **When
+   they run**, **Disks** and **Your login**.
    - Each row is something the server can run, with the memory and disk
-     it takes; **What it makes, needs and deletes** under a row says what
+     it takes; **Details** under a row says what
      you supply and what turning it off would delete. The meter above the
      rows follows every tick and says whether your choices fit, before
      you save. Any of **Workspace**, **Linux CI runners**, **Local AI
@@ -296,13 +298,13 @@ made one.
      **Backups** ([backups.md](backups.md)).
    - Tick **On-site screen** only if you plugged the monitor into the
      motherboard (part 3) and turned on iGPU Multi-Monitor (part 4).
-   - **Other disks**: each disk besides the system disk, with its
+   - **Disks**: each disk besides the system disk, with its
      partitions, labels, sizes and health. A blank one is used for backups.
      For a kept disk choose **Keep its files and share them to me**; tick
      **Let me change files on it** only if you need to. Once the server
      keeps the disk, its card says whether Windows shut it down fully
      (part 2) and what to do if not.
-   - **Your Tailscale login**: exactly as noted in part 1.
+   - **Your login**: your Tailscale login, exactly as noted in part 1.
    - Press **Save and plan**.
 7. **Setup** page, **Plan** tab: **Fits** and a memory bar show how the
    memory is shared out; a red block lists what does not fit and what to

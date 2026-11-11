@@ -1992,7 +1992,7 @@ def test_a_vm_alone_never_stops_by_itself_and_a_pool_alone_cannot_run_on_demand(
     rows = {w["name"]: w for w in view["power"]}
     assert rows["windows-dev"]["auto"] is False and "busy.cpu_pct" in rows["windows-dev"]["auto_why"]
     assert rows["windows-dev"]["stop"] == "ask" and rows["windows-dev"]["blocked"] is None
-    assert rows["windows-ci"]["blocked"] and rows["windows-ci"]["title"] == "windows-ci"
+    assert rows["windows-ci"]["blocked"] and rows["windows-ci"]["title"] == "Windows CI runners"
 
 
 class PowerHost:

@@ -59,7 +59,7 @@ the server.
 
 **You need:** the game ticked under **Setup**, **What to run**.
 
-1. In the game's row, open **Settings of this server**.
+1. In the game's row, open **Settings**.
 2. Change what you want. The fields are the settings most people change,
    in the game's own words: game mode, difficulty, players at once, world
    size and seed, a password. **Memory** is the container's; give it more
@@ -116,7 +116,7 @@ overrides:
   **Memory** in the server's settings (`overrides.<name>.memory_mib`) when
   the server lags or its log says it ran out of memory; the meter above
   the list shows at once whether that fits.
-- **Only while someone plays.** Under **When it runs**, set a game to
+- **Only while someone plays.** Under **When they run**, set a game to
   **On demand** and it holds no memory while off. You start it on the
   **Services** page; it stops by itself once nobody has played for 30
   minutes, saving its world. A friend cannot start it, so start it before
@@ -155,7 +155,7 @@ agrees to an EULA for you.
 
 **To remove one:** untick it, **Save and plan**, **Run setup** (which asks
 before it deletes the server and its world), then **Remove** under the
-row's **What it makes, needs and deletes**. The first server of a game is
+row's **Details**. The first server of a game is
 only ever turned off.
 
 In `config.yaml` a further server is an entry under `games` with the game

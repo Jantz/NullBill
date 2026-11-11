@@ -149,7 +149,7 @@ A workload you use now and then can run **on demand**: it stays installed,
 is off until you press **Start** on the **Services** page, and stops again
 by the rule you give it (by itself when unused, or only when you say).
 What is off holds no memory, so more fits on the server than runs at once.
-Choose it under **Setup**, **What to run**, **When it runs**;
+Choose it under **Setup**, **What to run**, **When they run**;
 [on-demand.md](on-demand.md) has each step.
 
 ## Run a program NullBill has no support for

@@ -186,7 +186,7 @@ def plan_section(model: dict, planned: dict, mounts: list[dict], media_planned: 
     can = writable(mounts)
     names = [m["name"] for m in mounts]
     share = chosen.get("share")
-    where = "editable under Setup, Hardware, Other disks (disks.<id>.mode: rw)"
+    where = "editable under Setup, What to run, Disks (disks.<id>.mode: rw)"
     if share and share not in names:
         errors.append(f"torrents.share: no kept disk is called {share!r}; kept are: {', '.join(names) or 'none'}")
     elif share and share not in can:

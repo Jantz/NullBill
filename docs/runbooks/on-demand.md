@@ -8,7 +8,7 @@ built this way: [ADR 0013](../adr/0013-on-demand.md).
 
 | What | Where |
 |---|---|
-| Which workloads run on demand, and how each stops | the page's **Setup**, **What to run**, **When it runs** |
+| Which workloads run on demand, and how each stops | the page's **Setup**, **What to run**, **When they run** |
 | Start, stop, keep on; what is in use | the page's **Services**, **On demand** |
 | The same from a shell | `nb-power` on the Proxmox host |
 
@@ -32,7 +32,7 @@ it is in use, it counts as in use: nothing is stopped on a guess.
 
 **You need:** the setup page.
 
-1. Open **Setup**, **What to run**, and scroll to **When it runs**. Each
+1. Open **Setup**, **What to run**, **When they run**. Each
    workload you ticked has a row.
 2. Set **Runs** to **On demand** for what you do not need all the time.
    The memory meter at the top moves what it takes out of **Your choices**
@@ -42,10 +42,10 @@ it is in use, it counts as in use: nothing is stopped on a guess.
 3. Choose under **Stops** how it stops again:
    - **By itself when unused** stops it once nobody has used it for the
      minutes beside it.
-   - **Only by me, with a reminder** never stops it; you get one alert in
+   - **When I stop it, with a reminder** never stops it; you get one alert in
      ntfy, and a line on the **Overview** page, once it has gone unused
      that long.
-   - **Only by me** runs until you stop it.
+   - **When I stop it** runs until you stop it.
 4. Press **Save and plan**, then **Run setup**. A workload that was
    running stays on after the run and stops by its rule; one that setup
    makes new is left off.
