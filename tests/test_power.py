@@ -330,3 +330,16 @@ def test_the_agents_ssh_check_uses_a_guest_that_runs(facts):
     assert agent.ssh_guest(plan) == "workspace"
     assert agent.ssh_guest(plan, {"workspace": "Workspace"}) == "inference"
     assert agent.ssh_guest(plan, {"workspace": "Workspace", "inference": "Local AI models"}) == "workspace"
+
+
+def test_verify_runs_while_a_ci_pool_that_runs_on_demand_is_off(facts):
+    # A pool has template_vmid and clone_vmids, no vmid: guard() once
+    # raised KeyError 'vmid' here and verify stopped.
+    plan, model = on_demand_mid(facts, "linux-ci")
+    assert "vmid" not in strip_notes(plan)["guests"]["linux-runner"]
+    run = host(plan, model, nb_power(plan))
+    by = statuses(verify(plan, model, run))
+    assert by["FAIL"] == []
+    assert not set(run.reached) & run.off
+    why = "Linux CI runners is off (it runs on demand); start it on the page, under Services, to check it"
+    assert [r for r in by["SKIP"] if r.detail == why]

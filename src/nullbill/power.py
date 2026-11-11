@@ -200,8 +200,9 @@ class Off(Exception):
 def guard(plan: dict, run: Runner, off: dict[str, str]) -> Runner:
     """run, except that a command into a container that is off (`pct exec
     <vmid> ...`) raises Off instead of failing there: verify then reports
-    that check SKIP with the reason."""
-    asleep = {str(plan["guests"][name]["vmid"]): name for name in off if name in plan["guests"]}
+    that check SKIP with the reason. A CI pool has no vmid of its own (its
+    clones are VMs, never `pct exec`'s target), so it is left out."""
+    asleep = {str(plan["guests"][name]["vmid"]): name for name in off if "vmid" in plan["guests"].get(name, {})}
 
     def guarded(target: str, command: str) -> tuple[int, str, str]:
         words = command.split(None, 3)
