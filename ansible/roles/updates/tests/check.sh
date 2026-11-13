@@ -103,7 +103,7 @@ bash -c 'exec -a "tmux: server" sleep 30' &
 sleep 0.5
 [ "$(nb-busy)" = "2 SSH sessions
 a tmux or screen session is open" ] || { nb-busy; fail "sessions reported"; }
-kill $(jobs -p)
+jobs -p | xargs -r kill 2>/dev/null || true
 wait 2>/dev/null || true
 [ -z "$(nb-busy)" ] || fail "idle again once the sessions end"
 # apt at work, from its timer or by hand; not the helper that waits for the
@@ -115,7 +115,7 @@ bash -c 'exec -a "/usr/bin/python3 /usr/bin/unattended-upgrade" sleep 30' &
 bash -c 'exec -a "/usr/bin/dpkg --status-fd 10 --configure --pending" sleep 30' &
 sleep 0.5
 [ "$(nb-busy)" = "updates are installing" ] || { nb-busy; fail "installing updates counts as use"; }
-kill $(jobs -p)
+jobs -p | xargs -r kill 2>/dev/null || true
 wait 2>/dev/null || true
 pass "nb-busy: an idle guest says nothing; SSH sessions, a tmux session and installing updates count as use"
 
