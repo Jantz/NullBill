@@ -69,15 +69,36 @@ jobs:
           git push -f origin HEAD:refs/heads/pins
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+  # check.yml runs on the branch, as a run of its own (a workflow started by
+  # hand is the one kind this workflow's token may start): what the new
+  # versions do there stays with that branch.
   check:
+    name: run every check on it
     needs: bump
     if: needs.bump.outputs.sha != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
     permissions:
-      contents: read
-      actions: read
-    uses: ./.github/workflows/check.yml
-    with:
-      ref: ${{ needs.bump.outputs.sha }}
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SHA: ${{ needs.bump.outputs.sha }}
+    steps:
+      - name: Start check.yml on the pins branch
+        run: gh workflow run check.yml -R "$GITHUB_REPOSITORY" --ref pins
+      - name: Wait for it
+        run: |
+          run=""
+          for _ in $(seq 30); do
+            run=$(gh run list -R "$GITHUB_REPOSITORY" --workflow check.yml --branch pins --event workflow_dispatch \
+              --commit "$SHA" --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+            [ -n "$run" ] && break
+            sleep 10
+          done
+          [ -n "$run" ] || { echo "check.yml did not start on $SHA"; exit 1; }
+          echo "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$run"
+          # Exits non-zero when the run failed.
+          gh run watch "$run" -R "$GITHUB_REPOSITORY" --exit-status --interval 60 > /dev/null
 
   land:
     name: give it to main

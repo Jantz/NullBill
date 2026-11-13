@@ -4,12 +4,10 @@ on:
     branches: [main]
   pull_request:
     types: [opened, synchronize, reopened, edited]
-  # pins.yml checks the commit that moves the pins before main gets it.
-  workflow_call:
-    inputs:
-      ref:
-        type: string
-        required: true
+  # pins.yml starts this on its branch `pins`, to check the commit that moves
+  # the pins before main gets it. Started this way the run belongs to that
+  # branch, not to main: the new versions it runs can reach nothing of main's.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -64,7 +62,6 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
-          ref: ${{ inputs.ref }}
       # Pushes to main run every check, except a job that a pull request run
       # already passed on this same commit with nothing left out.
       - name: Look for a pull request run that passed this job

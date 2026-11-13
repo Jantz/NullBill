@@ -66,10 +66,11 @@ One mechanism, in three places.
 it, and how big a step waits for the owner. `tools/pins bump` asks each
 vendor for its newest stable release and writes version and checksum into
 the place the pin lives. `.github/workflows/pins.yml` runs it once a day,
-regenerates what the tests keep equal to the pins, commits to a branch,
-runs the whole of `check.yml` on that commit (every role's container
-check installs and runs the new versions for real) and only then
-fast-forwards main. If a check fails, main keeps yesterday's pins and an
+regenerates what the tests keep equal to the pins, commits to the branch
+`pins`, starts the whole of `check.yml` there as a run of that branch
+(every role's container check installs and runs the new versions for
+real; a run of the branch shares no cache or token with main's runs),
+waits for it and only then fast-forwards main. If a check fails, main keeps yesterday's pins and an
 issue says so. A vendor that cannot be read keeps its pin; the others
 move. Nothing ever moves back.
 
