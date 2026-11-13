@@ -31,6 +31,9 @@ class Server:
         self.no_snapshot = set()  # guests PVE cannot snapshot
         self.no_backup = set()  # storages vzdump fails on
         self.breaks = set()  # guests whose upgrade fails
+        self.silent = set()  # guests that do not answer after their restart
+        self.left = {}  # guest: the last line of an upgrade's result file found in it
+        self.asked = []  # guests asked which Debian they run
         self.results = {}
         self.done = []  # (what, guest name, more)
         self.local_calls = []
@@ -40,8 +43,11 @@ class Server:
         self.done.append((what, self.names[int(vmid)], *more))
 
     def inside(self, vmid, command, stdin):
+        if command == apply.LOOK:
+            self.asked.append(self.names[vmid])
+            return 0, self.runs[vmid] + "\n" + self.left.get(vmid, "")
         if command == apply.CODENAME:
-            return 0, self.runs[vmid] + "\n"
+            return (1, "") if vmid in self.silent else (0, self.runs[vmid] + "\n")
         if command.startswith("install -m 0755 /dev/stdin"):
             assert stdin == release.script()
             return 0, ""
@@ -152,18 +158,70 @@ def test_guests_from_before_are_copied_upgraded_and_restarted_one_at_a_time(serv
     assert host.done == []
 
 
-def test_a_guest_this_run_made_and_one_already_there_are_only_written_down(server):
-    ctx, host = server(built=False)
-    assert release.unknown(ctx.home, ctx.bare, ctx.model, None) == []
-    apply.stage_release(ctx)
-    assert host.done == [] and release.read(ctx.home)["forgejo"]["release"] == "trixie"
-    assert "copy" not in release.read(ctx.home)["forgejo"]
+def test_a_guest_opentofu_made_is_written_down_and_every_other_is_asked(server):
+    # What a saved plan creates, also in place of a guest it deletes.
+    change = lambda name, *actions: {"type": apply.GUEST_RESOURCES[1], "name": name, "change": {"actions": list(actions)}}  # noqa: E731
+    shown = {"resource_changes": [change("forgejo", "create"), change("vpn", "delete", "create"), change("router", "update")]}
+    shown["resource_changes"].append({"type": "proxmox_virtual_environment_download_file", "name": "x", "change": {"actions": ["create"]}})
+    assert apply.guests_made(shown) == ["forgejo", "vpn"] and apply.guests_made({"resource_changes": None}) == []
 
+    # A server whose list of guests is gone (built by a version that kept
+    # none): nothing is taken as new, each guest says what it runs.
+    ctx, host = server(built=False)
+    assert apply.built_guests(ctx.home, ctx.bare) is None
+    (ctx.home / "tofu").mkdir()
+    (ctx.home / "tofu/main.tf.json").write_text("{}")
+    assert apply.built_guests(ctx.home, ctx.bare) == sorted(ctx.bare["guests"])
+    assert release.unknown(ctx.home, ctx.bare, ctx.model, apply.built_guests(ctx.home, ctx.bare))[0] == "router"
+    release.note(ctx.home, "forgejo", "trixie")
+    apply.stage_release(ctx)
+    upgraded = {name for what, name, *_ in host.done if what == "upgrade"}
+    assert "forgejo" not in host.asked and "forgejo" not in upgraded
+    assert set(host.asked) == upgraded == set(release.candidates(ctx.bare, ctx.model)) - {"forgejo"}
+
+    # Guests already on today's release are only written down.
     ctx, host = server()
     (ctx.home / release.RECORD).unlink()
     host.runs = dict.fromkeys(host.runs, "trixie")
     apply.stage_release(ctx)
     assert host.done == [] and release.read(ctx.home)["router"]["release"] == "trixie"
+    assert "copy" not in release.read(ctx.home)["router"]
+
+
+def test_a_guest_that_does_not_come_back_from_its_restart_is_put_back(server, monkeypatch):
+    ctx, host = server()
+    monkeypatch.setattr(apply, "RESTART_S", 0)
+    host.silent = {ctx.bare["guests"]["egress-proxy"]["vmid"]}
+    with pytest.raises(ApplyError) as stopped:
+        apply.stage_release(ctx)
+    assert "egress-proxy: the upgrade to Debian 13 failed: no answer within 0 minutes of its restart" in str(stopped.value)
+    assert str(stopped.value).endswith("It is back as it was before, from its snapshot")
+    assert [what for what, name, *_ in host.done if name == "egress-proxy"] == ["snapshot", "upgrade", "reboot", "rollback"]
+    assert "egress-proxy" not in release.read(ctx.home)
+
+
+def test_a_guest_left_half_upgraded_stops_the_run_before_its_copy_is_replaced(server):
+    # A backup was the copy and the upgrade failed: nothing put the guest back.
+    ctx, host = server()
+    router = ctx.bare["guests"]["router"]["vmid"]
+    host.no_snapshot, host.breaks = {router}, {router}
+    with pytest.raises(ApplyError) as stopped:
+        apply.stage_release(ctx)
+    assert "Its backup from before is on" in str(stopped.value)
+    host.left[router] = "failed: E: Sub-process /usr/bin/dpkg returned an error code (1)\n"
+    for runs in ("bookworm", "trixie"):
+        host.runs[router] = runs
+        host.done.clear()
+        with pytest.raises(ApplyError) as stopped:
+            apply.stage_release(ctx)
+        assert "router: an upgrade to Debian 13 began in it and was neither finished nor put back" in str(stopped.value)
+        assert "it stopped at: failed: E: Sub-process" in str(stopped.value) and "Put router back from its copy" in str(stopped.value)
+        assert host.done == [] and "router" not in release.read(ctx.home)
+    # Put back by the owner, the next run upgrades it; a finished upgrade's file is no stop.
+    host.left[router], host.runs[router] = "done trixie\n", "trixie"
+    host.breaks = set()
+    apply.stage_release(ctx)
+    assert release.read(ctx.home)["router"]["release"] == "trixie"
 
 
 def test_a_failed_upgrade_puts_the_guest_back_and_stops_before_the_next(server):
@@ -260,10 +318,29 @@ def test_nullbills_own_container_is_upgraded_last_by_a_unit_of_its_own(server):
     assert unit[5].endswith("tools/upgrade-controller") and unit[6:] == ["bookworm", "trixie", TARGET, str(own), SNAP]
     assert "This page is away for about ten minutes" in ctx.log[-1]
 
+    # The try is written down before the snapshot, so a container the host
+    # put back holds it: no second try by itself.
+    tried = ctx.home / apply.CONTROLLER_TRIED
+    assert json.loads(tried.read_text())["snapshot"] == SNAP
+    before = len(host.local_calls)
+    host.done.clear()
+    apply.controller_release(ctx)
+    assert host.done == [] and [c for c in host.local_calls[before:] if c[0] == "systemd-run"] == []
+    assert "its upgrade failed before and the host put it back" in ctx.log[-1] and "controller-upgrade.log" in ctx.log[-1]
+
+    # On the new release the snapshot goes after its week, as the guests' do.
+    host.controller = "trixie"
+    apply.controller_release(ctx)
+    assert host.done == [] and tried.exists()
+    tried.write_text(json.dumps(json.loads(tried.read_text()) | {"at": time.time() - release.KEEP_COPY_S - 1}))
+    apply.controller_release(ctx)
+    assert host.done == [("delsnapshot", "nullbill")] and not tried.exists()
+
+    host.controller = "bookworm"
     host.no_snapshot = {own}
     before = len(host.local_calls)
     apply.controller_release(ctx)
-    assert "stays on Debian bookworm: no snapshot could be made" in ctx.log[-1]
+    assert "stays on Debian bookworm: no snapshot could be made" in ctx.log[-1] and not tried.exists()
     assert [c for c in host.local_calls[before:] if c[0] == "systemd-run"] == []
 
 

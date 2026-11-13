@@ -65,7 +65,7 @@ from nullbill import (
     torrents,
     version,
 )
-from nullbill.apply import DISKS_FILE, FULL_NEXT, GUESTS, NTFY, REMOVALS, SPKI, STAGES, Context, split_target
+from nullbill.apply import DISKS_FILE, FULL_NEXT, GUESTS, NTFY, REMOVALS, SPKI, STAGES, Context, built_guests, split_target
 from nullbill.artifacts import render_all
 from nullbill.cli import plan_text, reach_target
 from nullbill.errors import NullBillError, Refused
@@ -1218,13 +1218,14 @@ class App:
         guests run now: those of the last finished OpenTofu apply that no
         run has found on it yet (release.unknown). Read from what the page
         has; the server is not asked."""
-        config, plan, record = self.config(), self.home / "plan.yaml", self.home / GUESTS
-        if config is None or not plan.is_file() or not record.is_file():
+        config, plan = self.config(), self.home / "plan.yaml"
+        if config is None or not plan.is_file():
             return []
         try:
             model = build_model(config)
-            existing = [str(n) for n in json.loads(record.read_text())["guests"]]
-            return release.unknown(self.home, yaml.safe_load(plan.read_text()) or {"guests": {}}, model, existing)
+            planned = yaml.safe_load(plan.read_text()) or {"guests": {}}
+            # A server built by a version that kept no list of its guests has them all the same.
+            return release.unknown(self.home, planned, model, built_guests(self.home, planned))
         except (NullBillError, ValueError, KeyError, TypeError):
             return []
 
@@ -2454,8 +2455,8 @@ class App:
         def end(how: str, text: str, tell: bool = False) -> None:
             said = record.get("said")
             keep(step="done", ended={"how": how, "text": text, "at": now})
-            # Once per thing to say, not every night it stays true.
-            if tell and said != text:
+            # Once per thing that stays true night after night; a night's work each time.
+            if tell and (said != text or how == "done"):
                 try:
                     self.tell(text, "arrows_counterclockwise" if how == "waits" else "warning", "NullBill updates")
                     keep(said=text)
@@ -2479,22 +2480,38 @@ class App:
             if not newest or not version.behind(self.repo, head, newest):
                 keep(step="updated")
                 return None
-            asks = [s for s in self.update_steps(head, newest) if s["asks"]]
+            steps = self.update_steps(head, newest)
+            asks = [s for s in steps if s["asks"]]
             if asks:
                 names = ", ".join(f"{s['title']} {s['from']} to {s['to']}" for s in asks)
                 end("waits", f"An update waits for your yes: {names}. Open Updates on the page.", tell=True)
                 return None
-            job = self.start("upgrade", by=NIGHTLY_BY)
-            keep(step="updating", job=job.id)
+            try:
+                job = self.start("upgrade", by=NIGHTLY_BY)
+            except NullBillError:
+                # Something else began this minute; the next one looks again.
+                return None
+            keep(step="updating", job=job.id, to=newest, moves=[f"{s['title']} {s['to']}" for s in steps])
             return job
         if step == "updating":
             if not failed("update of NullBill"):
-                keep(step="updated")
+                # Setup follows only an update this job installed itself.
+                keep(step="updated", installed=record.get("to"))
             return None
         if step == "updated":
             follows = (self.version_view() or {}).get("server", {}).get("follows")
+            head = version.head(self.repo)
             if follows is not False:
                 end("same", "Nothing to set up.")
+            elif record.get("installed") != head:
+                # An update the owner installed, or a run that failed or was
+                # stopped: starting setup for it is theirs, not the night's.
+                end(
+                    "waits",
+                    "Setup did not run by itself: no night's update installed this version. Start it under Setup, Review and run.",
+                )
+            elif record.get("tried") == head:
+                end("waits", "Setup for this version failed on an earlier night and was not started again. Open Activity.")
             elif self.config_changed() or self.removals() or self.planned_removals():
                 # Choices the owner saved and has not reviewed are theirs to start.
                 end("waits", "Setup did not run by itself: your saved choices wait for you under Setup, Review and run.")
@@ -2502,12 +2519,16 @@ class App:
                 # Every guest is away in turn, and the page at the end.
                 end("waits", "Setup did not run by itself: it upgrades Debian in every guest, which waits for you under Setup, Review.")
             else:
-                job = self.start("apply", by=NIGHTLY_BY)
-                keep(step="setup", job=job.id)
+                try:
+                    job = self.start("apply", by=NIGHTLY_BY)
+                except NullBillError:
+                    return None
+                keep(step="setup", job=job.id, tried=head)
                 return job
             return None
         if step == "setup" and not failed("setup run"):
-            end("done", "Setup ran with the update.")
+            moved = ", ".join(record.get("moves") or [])
+            end("done", f"NullBill installed an update tonight and ran setup with it{': ' + moved if moved else ''}.", tell=True)
         return None
 
     def job_view(self, job: Job, offset: int = 0) -> dict:

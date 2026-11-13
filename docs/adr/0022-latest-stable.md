@@ -79,17 +79,24 @@ the page looks for an update, installs it (`nullbill upgrade`) and, when
 the update changes what setup builds, runs setup. The owner gets one ntfy
 message when something was installed or something waits. A switch on the
 Updates page turns it off. It does not run setup over choices the owner
-saved and has not started, or over guests waiting to be deleted.
+saved and has not started, or over guests waiting to be deleted, and it
+sets up only an update it installed itself that night: after the owner's
+own update, a failed or stopped run, or a setup run that failed on an
+earlier night, setup is the owner's to start. The hours are the NullBill
+container's local time.
 
 **3. Big steps wait for a yes.** `hold` in the table is the number of
 leading version numbers that may not change by themselves: 1 for most
 (Forgejo 17 to 18 waits, 17.0 to 17.1 does not), 2 where the second
-number is the breaking one (Minecraft 26.3 to 26.4, step-ca 0.x), `all`
-for Terraria, whose players need the exact version. A held step that
+number is the breaking one (step-ca 0.x), `all` for Terraria and
+Minecraft, whose players need the exact version (and every plugin and mod
+names one Minecraft; a new Minecraft is not even offered until Paper and
+Fabric have a build for it). A held step that
 touches a service this server runs stops the night before anything is
 installed; the Updates page lists it as "Waits for your yes" and **Update
 NullBill** is that yes. A server that does not run the service is not
-asked.
+asked; one whose last run left no plan to tell is asked about every held
+step.
 
 Debian in the guests is such a step, moved by hand in the table
 (`by_hand`), since it needs work each time:
@@ -103,13 +110,25 @@ Debian in the guests is such a step, moved by hand in the table
   backup where PVE cannot snapshot (a bind mount), and no upgrade without
   one; packages downloaded before any is installed; a unit of its own
   inside the guest; a restart; then a look at what the guest says it
-  runs. A failed upgrade puts the guest back from its snapshot and stops
-  the run. Snapshots are deleted a week later by the next run.
+  runs. A failed upgrade, or a guest that does not answer after its
+  restart, puts the guest back from its snapshot and stops the run. A
+  guest whose copy is a backup is not put back by NullBill; a run refuses
+  to go on while a guest holds an upgrade that began and neither finished
+  nor was put back, and leaves its copy alone. Snapshots are deleted a
+  week later by the next run.
+- Which guests are from before is asked of the guests, never taken from a
+  file: a guest OpenTofu makes is written down as new when it is made,
+  every other is asked once which Debian it runs.
+- Only Debian's packages move in that step. Packages from a vendor's
+  repository are held while it runs and let go after, so a vendor's
+  newest does not come in past its pin; the role moves it afterwards.
 - PostgreSQL 15's cluster is moved to 17 by Debian's `pg_upgradecluster`
   in the same step; the old cluster stays on disk, stopped.
 - The container NullBill itself runs in goes last, after the run ended
   well, as a unit of its own (`tools/upgrade-controller`); the page is
-  away for about ten minutes. A failure has the host roll it back.
+  away for about ten minutes. A failure has the host roll it back, with
+  the log kept on the host; it is not tried again by itself
+  (`controller-release.json`), and its snapshot goes after a week too.
 - A CI pool's image is made again from the new image by the ci stage.
 - Services of the owner's own stay on the Debian they were made with:
   NullBill does not know their programs.
@@ -157,6 +176,29 @@ a version.
   says which guests are upgraded, and that run takes much longer than
   usual: every guest is away in turn for some minutes.
 
+## Known limits of the Debian upgrade
+
+Found by a review of the first version (2026-11-13) and left as they are:
+
+- A guest's free room is not measured before its upgrade. A full disk
+  fails the upgrade, which is put back; the package cache is emptied
+  between the two releases to make that less likely.
+- Every guest's snapshot is kept for a week, on a thin pool that shows
+  less room than the snapshots can come to need. `DiskAlmostFull` is the
+  only guard.
+- A vendor's repository in a guest that has no suite for the new release
+  fails `apt update`, and with it that guest's upgrade.
+- The file shares' backup before the upgrade includes the copies of kept
+  disks that are that guest's own volumes, so it can be large and slow.
+- The review's rows per machine (ADR 0018) do not know the release
+  stage: the review's reason says that guests are upgraded, the rows do
+  not say "restarts".
+- A guest with a backup as its copy is restored by the owner, by hand.
+- Forgejo goes from 15 to 17 in one step. Forgejo migrates its database
+  at start and the role check passes on 17 with a new database; a
+  database from 15 was not moved in a check. The postgres guest's
+  snapshot from the same run is the way back.
+
 ## Not tested on Proxmox VE
 
 The upgrade script is tested in a Debian 12 container, the stage against
@@ -167,6 +209,9 @@ unit, the router's interfaces after its restart, and the NullBill
 container restarting itself. The router role was not run on a VM made
 from the Debian 13 image; its check runs in a container. qBittorrent's
 build was run in a container, not in a guest with the catalog's 4 GiB
-disk beside everything else a guest holds. The first real
+disk beside everything else a guest holds. Holding vendors' packages
+through the upgrade was tried once by hand in a Debian 12 container with
+Jellyfin's and Tailscale's real packages; the check uses a stand-in
+repository. The first real
 run is the owner's, and docs/runbooks/debian-upgrade.md says how to go
 back.

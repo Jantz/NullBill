@@ -2532,7 +2532,11 @@ def test_each_night_the_page_installs_what_is_new_and_a_big_step_waits_for_the_o
     assert a_night(app, client, night(3))["how"] == "done"
     about = app.version_view()
     assert about["current"]["id"] == small[:12] and about["server"]["follows"] is True and about["available"] == []
-    assert [(j.action, j.by) for j in app.setup_runs()][-1] == ("apply", "nightly") and told == []
+    assert [(j.action, j.by) for j in app.setup_runs()][-1] == ("apply", "nightly")
+    # Each such night says so, with what moved.
+    done = "NullBill installed an update tonight and ran setup with it"
+    assert told == [f"{done}.", f"{done}: Forgejo 15.0.12."]
+    told.clear()
     # A big step: nothing is installed, the owner is told once, and the page says what waits.
     commit(work, "forgejo_version: 17.0.1\n", "Forgejo 17.0.1", "ansible/roles/forgejo/defaults/main.yml")
     ended = a_night(app, client, night(4))
@@ -2549,10 +2553,15 @@ def test_each_night_the_page_installs_what_is_new_and_a_big_step_waits_for_the_o
     client.call("/api/updates/nightly", {"enabled": True})
     wait(client, client.call("/api/jobs", {"action": "upgrade"})[1]["id"])
     restarted(app)
+    # Setup for an update the owner installed is the owner's to start.
+    runs = len(app.setup_runs())
+    ended = a_night(app, client, night(7))
+    assert ended["how"] == "waits" and "no night's update installed this version" in ended["text"] and len(app.setup_runs()) == runs
+    commit(work, "forgejo_version: 17.0.2\n", "Forgejo 17.0.2", "ansible/roles/forgejo/defaults/main.yml")
     config = app.home / "config.yaml"
     os.utime(config, (time.time() + 5, time.time() + 5))
-    ended = a_night(app, client, night(7))
-    assert ended["how"] == "waits" and "saved choices" in ended["text"]
+    ended = a_night(app, client, night(8))
+    assert ended["how"] == "waits" and "saved choices" in ended["text"] and len(app.setup_runs()) == runs
     assert app.version_view()["server"]["follows"] is False
 
 
@@ -2575,8 +2584,39 @@ def test_a_night_whose_setup_run_fails_tells_the_owner(installed, monkeypatch):
     app.scheduled(night(1))
     ended = app.nightly()["ended"]
     assert ended["how"] == "failed" and told == [ended["text"]] and "setup run failed" in ended["text"]
-    # The same night does not try again.
+    # The same night does not try again, and no later night by itself:
+    # that setup run is the owner's to look at and start.
     assert app.scheduled(night(1)) is None
+    app.command = [sys.executable, "-c", "pass"]
+    runs = len(app.setup_runs())
+    ended = a_night(app, client, night(2))
+    assert ended["how"] == "waits" and "failed on an earlier night" in ended["text"] and len(app.setup_runs()) == runs
+
+
+def test_the_night_sets_up_only_what_the_night_installed(installed, monkeypatch):
+    app, client, work = installed
+    sign_in(app, client)
+    monkeypatch.setattr(app, "tell", lambda text, tag, title="": None)
+    wait(client, client.call("/api/jobs", {"action": "probe"})[1]["id"])
+    client.call("/api/choices", {"workloads": ["agents"], "backups": False, "owner_login": "owner-a@example.internal"})
+    wait(client, setup(client)[1]["id"])
+    # The owner installed an update and has not run setup: the night leaves it.
+    commit(work, "- name: install\n", "Forgejo: a newer release", "ansible/roles/forgejo/tasks/main.yml")
+    wait(client, client.call("/api/jobs", {"action": "upgrade"})[1]["id"])
+    restarted(app)
+    assert app.version_view()["server"]["follows"] is False
+    runs = len(app.setup_runs())
+    ended = a_night(app, client, night(1))
+    assert ended["how"] == "waits" and "no night's update installed this version" in ended["text"] and len(app.setup_runs()) == runs
+    # A job that began in the same minute is no error: the next minute looks again.
+    commit(work, "- name: install again\n", "Forgejo: newer still", "ansible/roles/forgejo/tasks/main.yml")
+
+    def taken(action, **more):
+        raise web.NullBillError("another job is running")
+
+    monkeypatch.setattr(app, "start", taken)
+    assert app.scheduled(night(2)) is None
+    assert app.nightly()["day"] != time.strftime("%Y-%m-%d", time.localtime(night(2)))
 
 
 def test_a_setup_run_from_before_the_page_noted_its_version_is_found_in_gits_record(installed):

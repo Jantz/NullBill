@@ -123,11 +123,52 @@ def test_an_update_asks_only_about_big_steps_of_what_the_server_runs():
     # A further Minecraft server counts as Minecraft.
     plan = {"guests": {"skyblock": {}}, "games": {"skyblock": {"game": "minecraft"}}}
     assert [s["name"] for s in pins.asks(found, plan)] == ["minecraft"]
-    # A pin for every server asks every server; nothing built, nothing asked.
+    # A pin for every server asks every server.
     big = pins.steps(old, tree("15.0.11", "26.3", "2.0.0"))
-    assert [s["name"] for s in pins.asks(big, {"guests": {}})] == ["tailscale"] and pins.asks(big, None) == []
+    assert [s["name"] for s in pins.asks(big, {"guests": {}})] == ["tailscale"]
+    # No plan to say what the server runs: every big step is asked, none let through.
+    assert [s["name"] for s in pins.asks(found, None)] == ["forgejo", "minecraft"]
     # An older version without the table, or without a pin, is no step.
     assert pins.steps(lambda path: None, new) == [] and pins.steps(old, lambda path: None) == []
+
+
+def test_a_new_minecraft_waits_for_its_paper_and_fabric_and_then_for_the_owner(monkeypatch):
+    sources, now = tool(), pins.current(pins.checkout(ROOT))
+    table = pins.table()
+    assert table["minecraft"]["hold"] == pins.ALL  # every plugin and mod names one Minecraft
+    newer = "99.1"
+    moved = [(table["minecraft"]["file"], table["minecraft"]["key"], newer)]
+    monkeypatch.setitem(sources.SOURCES, "minecraft", lambda: moved)
+    asked = []
+
+    def follows(name, ready):
+        def source(version):
+            asked.append((name, version))
+            if not ready:
+                raise SystemExit(f"{name}: nothing for Minecraft {version} yet")
+            return [(table[name]["file"], table[name]["key"], "9999")]
+
+        return source
+
+    monkeypatch.setitem(sources.FOLLOW_MINECRAFT, "paper", follows("paper", False))
+    monkeypatch.setitem(sources.FOLLOW_MINECRAFT, "fabric", follows("fabric", True))
+    unread = {}
+    assert sources.offered(["minecraft", "paper", "fabric"], False, unread) == {}
+    assert asked == [("paper", newer), ("fabric", newer)] and unread["minecraft"] == "waits for paper"
+    monkeypatch.setitem(sources.FOLLOW_MINECRAFT, "paper", follows("paper", True))
+    unread = {}
+    assert set(sources.offered(["minecraft", "paper", "fabric"], False, unread)) == {"minecraft", "paper", "fabric"} and unread == {}
+    assert pins.held(table["minecraft"], now["minecraft"], newer)
+
+
+def test_every_job_of_a_workflow_has_steps_or_calls_one():
+    # GitHub refuses the whole file for one job without them, and says so nowhere a check sees.
+    for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+        for name, job in yaml.safe_load(path.read_text())["jobs"].items():
+            assert ("uses" in job) != ("steps" in job), f"{path.name}: {name}"
+            assert not {"run", "shell"} & set(job), f"{path.name}: {name}"
+            for step in job.get("steps", []):
+                assert ("uses" in step) != ("run" in step), f"{path.name}: {name}"
 
 
 def test_every_role_that_installs_step_cli_pins_the_same_one():

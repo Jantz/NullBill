@@ -388,6 +388,13 @@ def offered(names: list[str], weekly: bool, unread: dict[str, str]) -> dict[str,
             unread[name] = f"offers {new}, older than the pinned {now[name]}"
             continue
         out[name] = edits
+    # A new Minecraft moves only with a Paper and a Fabric for it: the three
+    # are one server's pins, and a test holds them to one Minecraft.
+    late = [n for n in FOLLOW_MINECRAFT if n in unread and n in names]
+    if "minecraft" in out and late:
+        unread["minecraft"] = f"waits for {' and '.join(late)}"
+        for name in ("minecraft", *FOLLOW_MINECRAFT):
+            out.pop(name, None)
     return out
 
 

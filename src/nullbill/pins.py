@@ -174,8 +174,9 @@ def in_use(plan: dict) -> set[str]:
 
 def asks(found: list[dict], plan: dict | None) -> list[dict]:
     """The held steps that touch something this server runs. Without a plan
-    nothing is built yet and nothing is asked."""
+    to say what it runs, every held step is one: a server whose last run
+    kept no plan is asked, not skipped."""
     if plan is None:
-        return []
+        return [step for step in found if step["held"]]
     used = in_use(plan)
     return [step for step in found if step["held"] and (not step["services"] or used & set(step["services"]))]

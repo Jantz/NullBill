@@ -11,6 +11,12 @@
 # half-installed guest. Settings files keep what is in them. A PostgreSQL
 # cluster of the old release's version is moved to the new one's with
 # Debian's pg_upgradecluster; the old cluster stays on disk, stopped.
+#
+# Only Debian's own packages move. What came from another repository
+# (Grafana, Tailscale, Jellyfin, step-ca...) is held at the version it has
+# for as long as this runs: those versions are NullBill's pins, each role
+# moves its own afterwards, and a vendor's newest must not come in here
+# past the pin, where a role could then only go back.
 set -Eeuo pipefail
 from=$1 to=$2
 state=/var/lib/nullbill
@@ -29,6 +35,30 @@ apt() {
 }
 # shellcheck disable=SC1091
 now() { (. /etc/os-release && echo "$VERSION_CODENAME"); }
+# Installed packages that a repository other than Debian's offers.
+others() {
+  # shellcheck disable=SC2016 # apt's own placeholders
+  apt-get indextargets --format '$(SITE) $(FILENAME)' 'Created-By: Packages' | while read -r site file; do
+    case $site in *debian.org*) continue ;; esac
+    [ -e "$file" ] || continue
+    /usr/lib/apt/apt-helper cat-file "$file" | sed -n 's/^Package: //p'
+  done | sort -u >"$state/release-upgrade.offered"
+  dpkg-query -W -f '${db:Status-Abbrev}${Package}\n' | sed -n 's/^ii //p' | sort -u | comm -12 - "$state/release-upgrade.offered"
+}
+# Hold them, and remember which this script held: only those are let go.
+hold_others() {
+  local name
+  for name in $(others); do
+    apt-mark showhold | grep -qx "$name" && continue
+    apt-mark hold "$name" >/dev/null
+    grep -qx "$name" "$state/release-upgrade.held" 2>/dev/null || echo "$name" >>"$state/release-upgrade.held"
+  done
+}
+let_go() {
+  [ -s "$state/release-upgrade.held" ] || return 0
+  xargs -r apt-mark unhold <"$state/release-upgrade.held" >/dev/null
+  rm -f "$state/release-upgrade.held"
+}
 
 case $(now) in
   "$from" | "$to") ;;
@@ -41,8 +71,11 @@ if [ "$(now)" = "$from" ]; then
   fi
   dpkg --configure -a
   apt update
+  hold_others
   apt -f install
   apt dist-upgrade
+  # Room for the next release's packages on a small disk.
+  apt-get clean
   say "downloading $to"
   for file in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
     [ -f "$file" ] || continue
@@ -50,6 +83,7 @@ if [ "$(now)" = "$from" ]; then
     sed -i "s/\\b$from\\b/$to/g" "$file"
   done
   apt update
+  hold_others
   apt full-upgrade --download-only
   say "installing $to"
   apt upgrade --without-new-pkgs
@@ -88,4 +122,5 @@ fi
 
 apt autoremove --purge
 apt-get clean
+let_go
 say "done $(now)"

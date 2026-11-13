@@ -124,7 +124,6 @@ class Context:
     held: bool = False  # this run had nb-power start a guest that runs on demand (ensure_on)
     shut_down: set[str] = field(default_factory=set)  # guests this run shut down itself, to start again
     ran: set[tuple[str | None, str]] = field(default_factory=set)  # (machine, playbook) this run did run, not left out
-    existed: set[str] | None = None  # the guests GUESTS named before this run's OpenTofu; None: not read
 
     @property
     def bare(self) -> dict:
@@ -709,14 +708,31 @@ def run_tofu(ctx: Context, stage: str, init: bool, replace: tuple[str, ...] = ()
         rc, shown = ctx.reach.local(["tofu", "show", "-json", PLAN_FILE], work, env, capture=True)
         if rc != 0:
             raise ApplyError(stage, f"tofu show failed (exit {rc})")
-        check_removals(ctx, stage, guest_removals(json.loads(shown or "{}"), replace))
+        changes = json.loads(shown or "{}")
+        check_removals(ctx, stage, guest_removals(changes, replace))
         ctx.say(f"{stage}: tofu apply")
         rc, _ = ctx.reach.local(["tofu", "apply", "-input=false", "-no-color", PLAN_FILE], work, env)
         if rc != 0:
             raise ApplyError(stage, f"tofu apply failed (exit {rc})")
+        # What this apply made is on today's release, from today's image. The
+        # plan says which those are; no file from an earlier run is believed.
+        for name in guests_made(changes):
+            if name in release.candidates(ctx.bare, ctx.model):
+                release.note(ctx.home, name, ctx.model["images"]["release"]["codename"])
         (ctx.home / GUESTS).write_text(json.dumps({"guests": sorted(ctx.bare["guests"])}, indent=2) + "\n")
     finally:
         planned.unlink(missing_ok=True)
+
+
+def guests_made(shown: dict) -> list[str]:
+    """Guests a saved plan (tofu show -json) creates, also in place of one it deletes."""
+    return sorted(
+        {
+            change["name"]
+            for change in shown.get("resource_changes") or []
+            if change.get("type") in GUEST_RESOURCES and "create" in change.get("change", {}).get("actions", [])
+        }
+    )
 
 
 def guest_removals(shown: dict, replace: tuple[str, ...] = ()) -> list[str]:
@@ -1406,7 +1422,6 @@ def stage_tofu(ctx: Context) -> None:
     windows_iso(ctx, "tofu", say=True)
     ctx.legacy_mounted = ctx.files_stopped = ctx.torrents_stopped = False
     ctx.kept_before = kept_disks(ctx)
-    ctx.existed = recorded_guests(ctx)
     copy_disks(ctx)
     legacy_disks(ctx)
     backup_disk(ctx)
@@ -1424,12 +1439,18 @@ def stage_tofu(ctx: Context) -> None:
     mgmt_leg(ctx)
 
 
-def recorded_guests(ctx: Context) -> set[str]:
-    """The guests the last full run's OpenTofu left on the server."""
+def built_guests(home: Path, plan: dict) -> list[str] | None:
+    """The guests that are on the server as far as this controller knows:
+    those the last OpenTofu apply recorded; every planned one when a run
+    wrote something down but that record is missing (a server built by a
+    version without it); None when nothing was ever built."""
     try:
-        return set(json.loads((ctx.home / GUESTS).read_text()).get("guests", []))
-    except (OSError, ValueError):
-        return set()
+        return [str(name) for name in json.loads((home / GUESTS).read_text())["guests"]]
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    if any((home / known).exists() for known in (applied.RECORD, release.RECORD, "tofu/main.tf.json")):
+        return sorted(plan["guests"])
+    return None
 
 
 def in_guest(ctx: Context, name: str, command: str, stdin: str | None = None, timeout: int = 60) -> tuple[int, str]:
@@ -1550,7 +1571,13 @@ def upgrade_release(ctx: Context, name: str) -> None:
             ctx.say(f"release: {name}: {said}")
         if state == "running" and time.monotonic() >= end:
             state, said = "failed", f"not finished after {release.LIMIT_S // 60} minutes (at: {last or 'its start'})"
-    found = release_restart(ctx, name) if state == "done" else ""
+    found = ""
+    if state == "done":
+        try:
+            found = release_restart(ctx, name)
+        except ApplyError as stuck:
+            # The likeliest way for an upgrade to fail: put back like any other.
+            state, said = "failed", str(stuck).split(": ", 2)[-1]
     if state == "done" and found == rel["codename"]:
         release.note(ctx.home, name, found, was=rel["from"], upgraded=time.time(), copy=copy)
         kept = "its snapshot from before is kept for a week"
@@ -1560,8 +1587,8 @@ def upgrade_release(ctx: Context, name: str) -> None:
         return
     if state == "done":
         said = f"it says it runs {found} after the upgrade"
-    _, log = in_guest(ctx, name, f"tail -n 25 {release.LOG}", timeout=30)
-    for line in log.splitlines():
+    rc, log = in_guest(ctx, name, f"tail -n 25 {release.LOG}", timeout=30)
+    for line in log.splitlines() if rc == 0 else []:
         ctx.say(f"release: {name}: {line}")
     raise ApplyError("release", f"{name}: the upgrade to Debian {rel['version']} failed: {said}. {release_back(ctx, name, copy)}")
 
@@ -1584,25 +1611,36 @@ def drop_copies(ctx: Context) -> None:
         release.write(ctx.home, record)
 
 
+# The release, then the last line of an upgrade's result file, if one ran here.
+LOOK = f"{CODENAME}; tail -n 1 {release.RESULT} 2>/dev/null || true"
+
+
 def stage_release(ctx: Context) -> None:
     """Every Linux guest NullBill sets up on the release the roles are
-    written for (release.py): a guest this run's OpenTofu made starts
-    there, one from before is asked once and upgraded in place when it
-    still runs the release before."""
+    written for (release.py). A guest OpenTofu made is written down as on
+    it when it is made (run_tofu); every other is asked once which Debian
+    it runs, and upgraded in place when that is the release before. A
+    guest where an upgrade began and was neither finished nor put back
+    stops the run: its copy from before is the way on, not a second try
+    on top of half a release."""
     rel = ctx.model["images"]["release"]
-    existed = recorded_guests(ctx) if ctx.existed is None else ctx.existed
     record = release.read(ctx.home)
     for name in release.candidates(ctx.bare, ctx.model):
         if record.get(name, {}).get("release") == rel["codename"]:
             continue
-        if name not in existed:
-            release.note(ctx.home, name, rel["codename"])
-            continue
         ensure_on(ctx, "release", [name])
-        rc, out = in_guest(ctx, name, CODENAME)
-        found = out.strip()
-        if rc != 0 or not found:
-            raise ApplyError("release", f"{name}: could not read which Debian it runs ({found[:200] or f'exit {rc}'})")
+        rc, out = in_guest(ctx, name, LOOK)
+        lines = [line.strip() for line in out.splitlines() if line.strip()] if rc == 0 else []
+        if not lines:
+            agent = " (a VM answers through its guest agent)" if ctx.bare["guests"][name]["kind"] == "vm" else ""
+            raise ApplyError("release", f"{name}: could not read which Debian it runs{agent}: {out.strip()[:200] or f'exit {rc}'}")
+        found, last = lines[0], lines[1] if len(lines) > 1 else ""
+        if last and not last.startswith("done "):
+            raise ApplyError(
+                "release",
+                f"{name}: an upgrade to Debian {rel['version']} began in it and was neither finished nor put back (it stopped at: "
+                f"{last[:160]}). Put {name} back from its copy from before, as docs/runbooks/debian-upgrade.md says, then run setup again",
+            )
         if found == rel["from"]:
             upgrade_release(ctx, name)
         elif found == rel["codename"]:
@@ -3198,6 +3236,29 @@ STAGES: list[Stage] = [
 CONTROLLER_UNIT = "nullbill-release"
 
 
+# The try to upgrade NullBill's own container: which snapshot, and when.
+CONTROLLER_TRIED = "controller-release.json"
+
+
+def drop_controller_copy(ctx: Context) -> None:
+    """Delete the snapshot from before the container's own upgrade once it
+    has had its week, as drop_copies does for the guests."""
+    path = ctx.home / CONTROLLER_TRIED
+    try:
+        tried = json.loads(path.read_text())
+        vmid, snap, at = int(tried["vmid"]), str(tried["snapshot"]), float(tried["at"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return
+    if time.time() - at < release.KEEP_COPY_S or not re.fullmatch(r"[A-Za-z0-9_-]+", snap):
+        return
+    rc, out, err = ctx.reach.host(f"! pct listsnapshot {vmid} | grep -qw {snap} || pct delsnapshot {vmid} {snap}", timeout=900)
+    if rc != 0:
+        ctx.say(f"release: could not delete the snapshot from before NullBill's own upgrade ({(err.strip() or out.strip())[:200]})")
+        return
+    path.unlink(missing_ok=True)
+    ctx.say("release: deleted the snapshot from before NullBill's own upgrade, a week on")
+
+
 def controller_release(ctx: Context) -> None:
     """After a full run that ended well: when the container NullBill itself
     runs in (install.sh's, named in install.json) is still on the release
@@ -3205,6 +3266,8 @@ def controller_release(ctx: Context) -> None:
     unit of its own. The page is away until the container has restarted."""
     rel = ctx.model["images"]["release"]
     rc, out = ctx.reach.local(["sh", "-c", CODENAME], ctx.home, {}, capture=True)
+    if rc == 0 and out.strip() == rel["codename"]:
+        drop_controller_copy(ctx)
     if rc != 0 or out.strip() != rel["from"]:
         return
     try:
@@ -3213,8 +3276,20 @@ def controller_release(ctx: Context) -> None:
         ctx.say(f"release: the machine NullBill runs on has Debian {rel['from']} and is no container of install.sh's; it is left as it is")
         return
     snap = release.snapshot(rel)
+    tried = ctx.home / CONTROLLER_TRIED
+    if tried.exists():
+        # Written before the snapshot, so a container put back from it holds
+        # it: the last try failed. Not again by itself, night after night.
+        ctx.say(
+            f"release: NullBill's own container stays on Debian {rel['from']}: its upgrade failed before and the host put it back. "
+            "The log of that try is /root/nullbill/controller-upgrade.log on the host; docs/runbooks/debian-upgrade.md says how to retry"
+        )
+        return
+    tried.write_text(json.dumps({"snapshot": snap, "vmid": vmid, "at": time.time()}) + "\n")
     ctx.reach.host(f"pct listsnapshot {vmid} | grep -qw {snap} && pct delsnapshot {vmid} {snap}", timeout=900)
     rc, out, err = ctx.reach.host(f"pct snapshot {vmid} {snap} --description 'NullBill, before the Debian upgrade'", timeout=900)
+    if rc != 0:
+        tried.unlink(missing_ok=True)
     if rc != 0:
         why = (err.strip() or out.strip() or f"exit {rc}").splitlines()[-1][:200]
         ctx.say(f"release: NullBill's own container stays on Debian {rel['from']}: no snapshot could be made before its upgrade ({why})")
@@ -3222,6 +3297,7 @@ def controller_release(ctx: Context) -> None:
     argv = ["systemd-run", "--quiet", "--collect", "--unit", CONTROLLER_UNIT, str(REPO_ROOT / "tools/upgrade-controller")]
     rc, out = ctx.reach.local([*argv, rel["from"], rel["codename"], ctx.target, str(vmid), snap], ctx.home, {}, capture=True)
     if rc != 0:
+        tried.unlink(missing_ok=True)
         ctx.say(f"release: NullBill's own container stays on Debian {rel['from']}: its upgrade did not start ({out.strip()[:200]})")
         return
     ctx.say(
@@ -3239,7 +3315,7 @@ def run_apply(ctx: Context, stages: list[Stage] = STAGES, only: str | None = Non
     if only is not None and only not in names:
         raise NullBillError(f"unknown stage {only!r}; stages are {', '.join(names)}")
     if only not in (None, *BEFORE_RELEASE):
-        waiting = release.unknown(ctx.home, ctx.bare, ctx.model, recorded_guests(ctx) if (ctx.home / GUESTS).exists() else None)
+        waiting = release.unknown(ctx.home, ctx.bare, ctx.model, built_guests(ctx.home, ctx.bare))
         if waiting:
             rel = ctx.model["images"]["release"]
             raise ApplyError(

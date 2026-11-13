@@ -18,7 +18,40 @@ echo "# nullbill wrote this" >>/etc/nginx/nginx.conf
 echo "# deb [signed-by=/usr/share/keyrings/example.gpg] https://packages.example.internal/debian bookworm main" \
   >/etc/apt/sources.list.d/vendor.list
 
+# Two programs from a vendor's repository, as Grafana or Tailscale are: the
+# guest has the version a role pinned, the vendor offers a newer one. One
+# of them the owner holds themselves.
+mkdir -p /opt/vendor
+vendor() {
+  local name=$1 version=$2 dir
+  dir=$(mktemp -d)
+  mkdir "$dir/DEBIAN"
+  printf 'Package: %s\nVersion: %s\nArchitecture: all\nMaintainer: Nobody <nobody@example.internal>\nDescription: a vendor program\n' \
+    "$name" "$version" >"$dir/DEBIAN/control"
+  dpkg-deb -b "$dir" "/opt/vendor/${name}_$version.deb" >/dev/null
+  {
+    cat "$dir/DEBIAN/control"
+    echo "Filename: ./${name}_$version.deb"
+    echo "Size: $(stat -c %s "/opt/vendor/${name}_$version.deb")"
+    echo "SHA256: $(sha256sum "/opt/vendor/${name}_$version.deb" | cut -d' ' -f1)"
+    echo
+  } >>/opt/vendor/Packages
+}
+vendor nb-pinned 1.0
+vendor nb-owner-held 1.0
+echo "deb [trusted=yes] copy:/opt/vendor ./" >/etc/apt/sources.list.d/pinned.list
+apt-get -qq update
+apt-get -qq -y install nb-pinned nb-owner-held >/dev/null 2>&1
+apt-mark hold nb-owner-held >/dev/null
+vendor nb-pinned 2.0
+vendor nb-owner-held 2.0
+
 bash "$upgrade" bookworm trixie || fail "the upgrade ran to its end"
+[ "$(dpkg-query -W -f '${Version}' nb-pinned)" = 1.0 ] || fail "a vendor's program stays at the version the role pinned"
+[ "$(apt-mark showhold)" = nb-owner-held ] || fail "only the owner's own hold is left: $(apt-mark showhold | tr '\n' ' ')"
+[ ! -e /var/lib/nullbill/release-upgrade.held ] || fail "the list of what was held is gone"
+apt-get -s -y install nb-pinned | grep -q '^Inst nb-pinned \[1.0\] (2.0' || fail "the role can move the vendor's program afterwards"
+pass "a vendor's newest does not come in with the release: held while it runs, let go after"
 [ "$(tail -n 1 /var/lib/nullbill/release-upgrade.result)" = "done trixie" ] || fail "the result's last line says done"
 grep -q '^VERSION_CODENAME=trixie$' /etc/os-release || fail "Debian 13 after the upgrade"
 grep -q 'debian trixie main' /etc/apt/sources.list.d/vendor.list || fail "a vendor's repository follows the release"

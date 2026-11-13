@@ -97,9 +97,10 @@ minecraft:
   title: Minecraft
   file: src/nullbill/data/catalog.yaml
   key: games.minecraft.version
-  # 26.3 to 26.4 is a new game: players must update, mods must follow, and
-  # a world opened by the newer server does not go back.
-  hold: 2
+  # Any new Minecraft: players need the same version to join, every plugin
+  # and mod must name it (plan refuses the server until they do), and a
+  # world opened by the newer server does not go back.
+  hold: all
   services: [minecraft]
 paper:
   title: Paper

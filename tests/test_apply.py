@@ -11,7 +11,24 @@ from conftest import HOME_PUBLIC, ROUTER_CLOCK, FakeTailnet, fixture_config, gue
 from fixturedata import games_config
 from pinned import FACTORIO, MINECRAFT, TERRARIA
 
-from nullbill import applied, apply, backups, browserca, ci, direct, flows, games, hostroot, lan, llm, names, owner, power, torrents
+from nullbill import (
+    applied,
+    apply,
+    backups,
+    browserca,
+    ci,
+    direct,
+    flows,
+    games,
+    hostroot,
+    lan,
+    llm,
+    names,
+    owner,
+    power,
+    release,
+    torrents,
+)
 from nullbill.apply import ApplyError, Context, connection, run_apply
 from nullbill.artifacts import render_all
 from nullbill.errors import NullBillError
@@ -151,6 +168,9 @@ class FakeReach:
                 vmid, inner = command.split()[2], shlex.split(command)[6]
                 return (*self.mark(int(vmid), inner), "")
             return (*self.mark("host", command), "")
+        if apply.LOOK in command:
+            # The release stage asks each guest once; these are on today's.
+            return 0, guest_exec("trixie\n") if "qm guest exec " in command else "trixie\n", ""
         self.calls.append(("host", command))
         if command.startswith(power.COMMAND + " "):
             return self.nb_power(shlex.split(command)[1:])
@@ -1122,6 +1142,15 @@ def test_a_plan_that_deletes_no_guest_clears_a_waiting_removal(ctx):
     (c.home / "removals.json").write_text('{"guests": ["windows-dev"]}\n')
     apply.stage_tofu(c)  # the owner ticked it again
     assert not (c.home / "removals.json").exists()
+
+
+def test_a_guest_opentofu_makes_is_written_down_as_on_todays_debian(ctx):
+    c = ctx("small")
+    made = [removal("forgejo", kind="container", actions=("create",)), removal("router", actions=("update",))]
+    c.reach.tofu_changes = [*made, removal("windows-dev", actions=("create",))]
+    apply.stage_tofu(c)
+    # Only what the release stage would otherwise ask; a changed guest and Windows are not it.
+    assert {name: entry["release"] for name, entry in release.read(c.home).items()} == {"forgejo": "trixie"}
 
 
 def test_a_golden_image_apply_replaces_on_purpose_is_no_removal():
