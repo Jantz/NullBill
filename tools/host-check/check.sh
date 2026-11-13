@@ -11,6 +11,12 @@ fail() {
   echo "FAIL $1"
   exit 1
 }
+# The container's /dev was filled when it started: a loop device the kernel
+# makes later (losetup -f past the ones in use on the machine) has no node
+# here, and losetup then says "device node /dev/loop8 is lost".
+for n in $(seq 0 63); do
+  [ -e "/dev/loop$n" ] || mknod "/dev/loop$n" b 7 "$n"
+done
 # shellcheck source=tools/host-check/legacy-disk.sh
 source /usr/local/lib/legacy-disk.sh
 
