@@ -55,17 +55,11 @@ def _startup(name: str) -> dict:
     return {"order": BOOT_ORDER.get(name, LATER)}
 
 
-# A VM boots the cloud image its service names; most use Debian 12, PBS 4
-# needs Debian 13.
-DEFAULT_IMAGE = "debian-cloud"
-
-
-def _vm_image(model: dict, name: str) -> str:
-    return model["services"][name].get("image", DEFAULT_IMAGE)
-
-
-def _image_ref(image: str) -> str:
-    return f"proxmox_download_file.{_tf_name(image)}"
+def _ignore(resource: dict, *attributes: str) -> dict:
+    """Leave these attributes of a guest that exists as they are."""
+    lifecycle = resource.setdefault("lifecycle", {})
+    lifecycle["ignore_changes"] = [*lifecycle.get("ignore_changes", []), *attributes]
+    return resource
 
 
 def _downloads(plan: dict, model: dict) -> dict:
@@ -82,19 +76,17 @@ def _downloads(plan: dict, model: dict) -> dict:
             "checksum_algorithm": "sha512",
         },
     }
-    linux_vms = [n for n, g in plan["guests"].items() if g["kind"] != "lxc" and g["zone"] != "windows"]
-    for image in sorted({DEFAULT_IMAGE, *(_vm_image(model, n) for n in linux_vms)}):
-        cloud = images[image]
-        downloads[_tf_name(image)] = {
-            "node_name": NODE,
-            "datastore_id": media,
-            # PVE lists disk images under iso content only with an .img name.
-            "content_type": "iso",
-            "file_name": cloud["url"].rsplit("/", 1)[1].removesuffix(".qcow2") + ".img",
-            "url": cloud["url"],
-            "checksum": cloud["sha512"],
-            "checksum_algorithm": "sha512",
-        }
+    cloud = images["debian-cloud"]
+    downloads["debian_cloud"] = {
+        "node_name": NODE,
+        "datastore_id": media,
+        # PVE lists disk images under iso content only with an .img name.
+        "content_type": "iso",
+        "file_name": cloud["url"].rsplit("/", 1)[1].removesuffix(".qcow2") + ".img",
+        "url": cloud["url"],
+        "checksum": cloud["sha512"],
+        "checksum_algorithm": "sha512",
+    }
     return downloads
 
 
@@ -116,9 +108,7 @@ def _on_demand(resource: dict, guest: dict, on_boot: str) -> dict:
     if guest.get("run") != power.ON_DEMAND:
         return resource
     resource |= {on_boot: False, "started": False}
-    lifecycle = resource.setdefault("lifecycle", {})
-    lifecycle["ignore_changes"] = [*lifecycle.get("ignore_changes", []), "started"]
-    return resource
+    return _ignore(resource, "started")
 
 
 def _container(name: str, guest: dict, plan: dict, model: dict, storage: str) -> dict:
@@ -133,7 +123,7 @@ def _container(name: str, guest: dict, plan: dict, model: dict, storage: str) ->
         "start_on_boot": True,
         "startup": _startup(name),
         "started": True,
-        # Debian 12's systemd needs nesting in an unprivileged container.
+        # Debian's systemd needs nesting in an unprivileged container.
         "features": {"nesting": True},
         "cpu": {"cores": guest["cores"]},
         "memory": {"dedicated": guest["memory_mib"], "swap": 0},
@@ -151,15 +141,19 @@ def _container(name: str, guest: dict, plan: dict, model: dict, storage: str) ->
         },
         "depends_on": [_bridge_ref(plan["zones"][zone]["bridge"])],
     }
+    # The template is what a container is made from. A newer pin must not
+    # make OpenTofu replace a container that exists, with all it holds; the
+    # release stage upgrades its Debian in place (release.py).
+    _ignore(container, "operating_system")
     if model["services"][name].get("gpu"):
         # apply gives it the GPU's device nodes as root over SSH (PVE allows
         # device passthrough to root@pam alone; ansible/roles/inference).
-        container["lifecycle"] = {"ignore_changes": ["device_passthrough"]}
+        _ignore(container, "device_passthrough")
     if name == "files" and (legacy.shares(plan) or legacy.copies(plan)):
         # apply sets the kept disks' bind mount points as root over SSH: PVE
         # refuses bind mounts to API tokens (docs/adr/0007-legacy-disks.md).
         # It attaches the copies of converted disks the same way.
-        container["lifecycle"] = {"ignore_changes": ["mount_point"]}
+        _ignore(container, "mount_point")
         if legacy.copies(plan):
             # A copy is a volume of this container: destroying it would
             # destroy the owner's only copy of those files.
@@ -167,10 +161,10 @@ def _container(name: str, guest: dict, plan: dict, model: dict, storage: str) ->
     if name == media.JELLYFIN:
         # apply sets the kept disks' bind mounts and the integrated GPU's
         # render node as root, as for the files guest and inference.
-        container["lifecycle"] = {"ignore_changes": ["mount_point", "device_passthrough"]}
+        _ignore(container, "mount_point", "device_passthrough")
     if name == torrents.QBITTORRENT:
         # apply sets its downloads folder, a bind mount, as root likewise.
-        container["lifecycle"] = {"ignore_changes": ["mount_point"]}
+        _ignore(container, "mount_point")
     return _in_agent_pool(_on_demand(container, guest, "start_on_boot"), guest)
 
 
@@ -257,7 +251,7 @@ def _vm(name: str, guest: dict, plan: dict, model: dict, storage: str) -> dict:
                     "datastore_id": storage,
                     "interface": "scsi0",
                     "size": guest["disk_gib"],
-                    "file_id": f"${{{_image_ref(_vm_image(model, name))}.id}}",
+                    "file_id": "${proxmox_download_file.debian_cloud.id}",
                     "discard": "on",
                     "iothread": True,
                 }
@@ -276,6 +270,10 @@ def _vm(name: str, guest: dict, plan: dict, model: dict, storage: str) -> dict:
                 "user_account": {"username": "nullbill", "keys": KEYS},
             },
         }
+    if guest["zone"] != "windows":
+        # As for a container's template: the image a VM that exists was
+        # made from stays; a pool's golden image is replaced on purpose.
+        _ignore(vm, "disk[0].file_id")
     vm["depends_on"] = [_bridge_ref(b) for b in bridges]
     gpus = _passed_gpus(plan, name)
     if gpus:
@@ -302,9 +300,9 @@ def _vm(name: str, guest: dict, plan: dict, model: dict, storage: str) -> dict:
         )
         # Destroying the VM would destroy the datastore disk with it, and
         # every backup on it; a change that needs a new VM stops tofu instead.
-        vm["lifecycle"] = {"prevent_destroy": True}
+        vm.setdefault("lifecycle", {})["prevent_destroy"] = True
     if pool:
-        vm["lifecycle"] = {"ignore_changes": ["template"]}
+        _ignore(vm, "template")
         # In no pool: the dispatcher may clone it, nobody may start or change it.
         return vm
     return _in_agent_pool(_on_demand(vm, guest, "on_boot"), guest)

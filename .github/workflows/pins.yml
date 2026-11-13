@@ -1,0 +1,127 @@
+name: pins
+# Latest stable, daily (docs/adr/0022-latest-stable.md): move every pin in
+# src/nullbill/data/pins.yaml to its vendor's newest stable release, run
+# every check on the result, and only then give it to main. Servers follow
+# main each night.
+on:
+  schedule:
+    - cron: "17 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pins
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    name: move the pins
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+      unread: ${{ steps.bump.outputs.unread }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install Python packages and uv
+        run: |
+          python3 -m venv /tmp/venv
+          /tmp/venv/bin/pip install -r requirements-dev.txt -e . uv==0.11.32
+          echo /tmp/venv/bin >> "$GITHUB_PATH"
+      - name: Ask the vendors
+        id: bump
+        run: |
+          rc=0
+          tools/pins bump > "$RUNNER_TEMP/moved.txt" 2> "$RUNNER_TEMP/unread.txt" || rc=$?
+          cat "$RUNNER_TEMP/moved.txt" "$RUNNER_TEMP/unread.txt"
+          # 3: some vendor could not be read; the other pins moved.
+          [ "$rc" = 0 ] || [ "$rc" = 3 ] || exit "$rc"
+          {
+            echo "unread<<END-OF-UNREAD"
+            cat "$RUNNER_TEMP/unread.txt"
+            echo "END-OF-UNREAD"
+          } >> "$GITHUB_OUTPUT"
+      # Rendered files and each role check's variables carry the versions.
+      - name: Regenerate what the tests keep equal to the pins
+        run: UPDATE_GOLDEN=1 python3 -m pytest -q
+      - name: Commit to the pins branch
+        id: commit
+        run: |
+          if git diff --quiet; then
+            echo "Nothing moved."
+            exit 0
+          fi
+          # As main's last commit: the owner's noreply identity.
+          git config user.name "$(git log -1 --format=%an)"
+          git config user.email "$(git log -1 --format=%ae)"
+          {
+            echo "Move pins to the vendors' newest stable releases"
+            echo
+            echo "The daily run of tools/pins (docs/adr/0022-latest-stable.md):"
+            echo
+            cat "$RUNNER_TEMP/moved.txt"
+          } > "$RUNNER_TEMP/message.txt"
+          git add -A
+          git commit -q -F "$RUNNER_TEMP/message.txt"
+          git push -f origin HEAD:refs/heads/pins
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  check:
+    needs: bump
+    if: needs.bump.outputs.sha != ''
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/check.yml
+    with:
+      ref: ${{ needs.bump.outputs.sha }}
+
+  land:
+    name: give it to main
+    needs: [bump, check]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.bump.outputs.sha }}
+          fetch-depth: 0
+      # Fast-forward only: when main moved meanwhile, tomorrow's run starts
+      # from the new main.
+      - run: git push origin HEAD:refs/heads/main
+
+  tell:
+    name: say what did not move
+    needs: [bump, check, land]
+    if: always() && (failure() || needs.bump.outputs.unread != '')
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      UNREAD: ${{ needs.bump.outputs.unread }}
+      RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      FAILED: ${{ contains(needs.*.result, 'failure') }}
+    run: |
+      title="The daily pins did not all move"
+      {
+        if [ "$FAILED" = true ]; then
+          echo "A step or a check failed with the new versions, so main keeps the old pins: $RUN"
+        fi
+        if [ -n "$UNREAD" ]; then
+          echo
+          echo "Not read from their vendors:"
+          echo
+          printf '%s\n' "$UNREAD" | sed 's/^/    /'
+        fi
+      } > "$RUNNER_TEMP/body.md"
+      number=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty')
+      if [ -n "$number" ]; then
+        gh issue comment "$number" -R "$GITHUB_REPOSITORY" -F "$RUNNER_TEMP/body.md"
+      else
+        gh issue create -R "$GITHUB_REPOSITORY" -t "$title" -F "$RUNNER_TEMP/body.md"
+      fi

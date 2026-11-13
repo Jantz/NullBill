@@ -19,7 +19,7 @@
 {% for mod in game_minecraft_mods %}
 # {{ mod.file }} sha512 {{ mod.sha512 }}
 {% endfor %}
-exec /opt/minecraft/java-{{ game_minecraft_java_version }}/bin/java \
+exec /usr/lib/jvm/java-{{ game_minecraft_java }}-openjdk-amd64/bin/java \
   -Xmx{{ game_minecraft_heap_mib }}M \
   -Djdk.net.hosts.file=/etc/minecraft/hosts \
 {% if game_minecraft_server == "fabric" %}

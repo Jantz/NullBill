@@ -23,6 +23,7 @@ STAGE_TEXT = {
     "tailnet": "Put the Tailscale access policy in place",
     "host": "Secure the Proxmox host",
     "tofu": "Create the networks, containers and VMs",
+    "release": "Bring guests from before to Debian 13",
     "router": "Set up the router",
     "proxy": "Set up the internet proxy",
     "updates": "Turn on automatic security updates",
@@ -233,6 +234,8 @@ ADVICE = [
 STAGE_ADVICE = {
     PREPARE: "Fix what the message names under Setup, then run setup again.",
     "tofu": "Proxmox refused a change. The message above names it. Fix it and run setup again; finished parts are kept.",
+    "release": "The guest it names was not upgraded to the new Debian and nothing after it was touched. "
+    "The lines above are the end of the upgrade's log. Run setup again to try once more; docs/runbooks/debian-upgrade.md has the rest.",
     "verify": "Setup itself finished. Look at the failing checks below, fix what they name, and run the checks again.",
 }
 DEFAULT_ADVICE = (

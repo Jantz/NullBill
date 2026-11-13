@@ -21,11 +21,11 @@ ip addr add 10.42.2.50/32 dev lo
 squid -f /etc/squid/squid.conf -N >/tmp/squid.log 2>&1 &
 for _ in $(seq 30); do (exec 3<>/dev/tcp/10.42.2.10/3128) 2>/dev/null && break; sleep 1; done
 through() { curl -s -o /dev/null -w '%{http_code}' -x http://10.42.2.10:3128 --interface "$1" "$2" || true; }
-code=$(through 10.42.1.50 https://deb.debian.org/debian/dists/bookworm/Release)
+code=$(through 10.42.1.50 https://deb.debian.org/debian/dists/trixie/Release)
 [ "$code" = 200 ] || { tail /tmp/squid.log; fail "a mgmt guest fetches from deb.debian.org (got $code)"; }
 code=$(through 10.42.1.50 https://example.com/)
 [ "$code" = 403 ] || [ "$code" = 000 ] || fail "a name off the allowlist is refused (got $code)"
-code=$(through 10.42.2.50 https://deb.debian.org/debian/dists/bookworm/Release)
+code=$(through 10.42.2.50 https://deb.debian.org/debian/dists/trixie/Release)
 [ "$code" = 403 ] || [ "$code" = 000 ] || fail "a guest outside the proxied zones is refused (got $code)"
 pass "allowlisted names for proxied zones only"
 

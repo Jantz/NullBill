@@ -46,7 +46,7 @@ grep -qx 'ssh_deletekeys: false' $keep || fail "drop-in written"
 pass "in a VM, cloud-init keeps the SSH host keys when PVE gives it a new instance"
 
 origins=$(unattended-upgrade --dry-run --debug 2>&1 | grep "Allowed origins are:")
-[[ $origins == "Allowed origins are: origin=Debian,codename=bookworm-security,label=Debian-Security, origin=Debian,codename=bookworm,label=Debian" ]] || fail "unattended origins: $origins"
+[[ $origins == "Allowed origins are: origin=Debian,codename=trixie-security,label=Debian-Security, origin=Debian,codename=trixie,label=Debian" ]] || fail "unattended origins: $origins"
 apt-config dump Unattended-Upgrade::Automatic-Reboot | grep -qx 'Unattended-Upgrade::Automatic-Reboot "true";' || fail "guests reboot after updates"
 apt-config dump Unattended-Upgrade::Automatic-Reboot-Time | grep -qx 'Unattended-Upgrade::Automatic-Reboot-Time "04:30";' || fail "reboot time"
 grep -qx "\$nrconf{restart} = 'a';" /etc/needrestart/conf.d/50-nullbill.conf || fail "needrestart restarts services"
@@ -103,7 +103,7 @@ bash -c 'exec -a "tmux: server" sleep 30' &
 sleep 0.5
 [ "$(nb-busy)" = "2 SSH sessions
 a tmux or screen session is open" ] || { nb-busy; fail "sessions reported"; }
-kill %1 %2 %3 %4
+kill $(jobs -p)
 wait 2>/dev/null || true
 [ -z "$(nb-busy)" ] || fail "idle again once the sessions end"
 # apt at work, from its timer or by hand; not the helper that waits for the
@@ -115,7 +115,7 @@ bash -c 'exec -a "/usr/bin/python3 /usr/bin/unattended-upgrade" sleep 30' &
 bash -c 'exec -a "/usr/bin/dpkg --status-fd 10 --configure --pending" sleep 30' &
 sleep 0.5
 [ "$(nb-busy)" = "updates are installing" ] || { nb-busy; fail "installing updates counts as use"; }
-kill %1 %2 %3
+kill $(jobs -p)
 wait 2>/dev/null || true
 pass "nb-busy: an idle guest says nothing; SSH sessions, a tmux session and installing updates count as use"
 

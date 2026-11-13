@@ -15,3 +15,7 @@ tls_cert_group: root
 # Run after each renewal, e.g. "systemctl reload nginx".
 tls_cert_reload: ""
 tls_cert_manage_services: true
+# The step-cli every guest with a certificate runs: the one the step_ca and
+# operator roles install, so a guest that has two of these roles is not asked
+# for two versions (tools/pins moves the three together).
+tls_cert_step_cli_version: 0.31.0-1

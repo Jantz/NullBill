@@ -55,7 +55,7 @@ def main() -> int:
     lan, public = sys.argv[1], sys.argv[2]
     mappings = Mappings()
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    # natpmpc takes answers from its gateway's address only.
+    # nb-portmap takes answers from its gateway's address only.
     sock.bind((lan, 5351))
     started = time.time()
     print(f"home router: NAT-PMP on {lan}", flush=True)

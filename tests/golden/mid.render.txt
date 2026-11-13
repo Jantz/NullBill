@@ -1288,26 +1288,17 @@ WantedBy=timers.target
         "node_name": "${var.node_name}",
         "datastore_id": "local",
         "content_type": "vztmpl",
-        "url": "http://download.proxmox.com/images/system/debian-12-standard_12.12-1_amd64.tar.zst",
-        "checksum": "50c85eaaece677a3ebe01cc909b83872e9da2a22c29ae652838afce71e83222fdf40f6accecd7d52b180e912fc1f85ecdf7b3fc4d3027da4d865e509a9e76597",
-        "checksum_algorithm": "sha512"
-      },
-      "debian_13_cloud": {
-        "node_name": "${var.node_name}",
-        "datastore_id": "local",
-        "content_type": "iso",
-        "file_name": "debian-13-genericcloud-amd64-20261026-2643.img",
-        "url": "https://cloud.debian.org/images/cloud/trixie/20261026-2643/debian-13-genericcloud-amd64-20261026-2643.qcow2",
-        "checksum": "3ace18e33bdd036edb49d1f79342bd01d2ab980e35194edb0b410435cd543538d286a0bd13bbb0835f7862306e3d385ce2f6a70d8ecf0bd961111166adbc1b8e",
+        "url": "http://download.proxmox.com/images/system/debian-13-standard_13.6-1_amd64.tar.zst",
+        "checksum": "4c0c27ca6ceab5ef0b84db57825a00f26157ef1854bafe97297813e1cbe8ecb8cc9c453cab6b3b0efe1ba193a50c47ece1e41d950e411b8730b835b71e9e754b",
         "checksum_algorithm": "sha512"
       },
       "debian_cloud": {
         "node_name": "${var.node_name}",
         "datastore_id": "local",
         "content_type": "iso",
-        "file_name": "debian-12-genericcloud-amd64-20261021-2638.img",
-        "url": "https://cloud.debian.org/images/cloud/bookworm/20261021-2638/debian-12-genericcloud-amd64-20261021-2638.qcow2",
-        "checksum": "9f181877006e8d9ca4f4554eba8729a829936f0f7d1db5e77f69b1ef0f6bc372b4d46f3dae39b10d84f9131496c2cc1d449264f26577fe934a79de5a5512a3dd",
+        "file_name": "debian-13-genericcloud-amd64-20261111-2659.img",
+        "url": "https://cloud.debian.org/images/cloud/trixie/20261111-2659/debian-13-genericcloud-amd64-20261111-2659.qcow2",
+        "checksum": "3247873136ba09b060fab45e9c115239f81c1d401fce00b8fa9b872013f7135d6a40b12462ab5ac03b9fa4ed5955dd0e8d1c900109a939ad7a0a4dafe7dea47b",
         "checksum_algorithm": "sha512"
       }
     },
@@ -1371,7 +1362,12 @@ WantedBy=timers.target
         },
         "depends_on": [
           "proxmox_network_linux_bridge.vmbr102"
-        ]
+        ],
+        "lifecycle": {
+          "ignore_changes": [
+            "operating_system"
+          ]
+        }
       },
       "vpn": {
         "node_name": "${var.node_name}",
@@ -1432,7 +1428,12 @@ WantedBy=timers.target
         },
         "depends_on": [
           "proxmox_network_linux_bridge.vmbr106"
-        ]
+        ],
+        "lifecycle": {
+          "ignore_changes": [
+            "operating_system"
+          ]
+        }
       },
       "step-ca": {
         "node_name": "${var.node_name}",
@@ -1493,7 +1494,12 @@ WantedBy=timers.target
         },
         "depends_on": [
           "proxmox_network_linux_bridge.vmbr101"
-        ]
+        ],
+        "lifecycle": {
+          "ignore_changes": [
+            "operating_system"
+          ]
+        }
       },
       "postgres": {
         "node_name": "${var.node_name}",
@@ -1554,7 +1560,12 @@ WantedBy=timers.target
         },
         "depends_on": [
           "proxmox_network_linux_bridge.vmbr102"
-        ]
+        ],
+        "lifecycle": {
+          "ignore_changes": [
+            "operating_system"
+          ]
+        }
       },
       "monitoring": {
         "node_name": "${var.node_name}",
@@ -1615,7 +1626,12 @@ WantedBy=timers.target
         },
         "depends_on": [
           "proxmox_network_linux_bridge.vmbr101"
-        ]
+        ],
+        "lifecycle": {
+          "ignore_changes": [
+            "operating_system"
+          ]
+        }
       },
       "operator": {
         "node_name": "${var.node_name}",
@@ -1676,7 +1692,12 @@ WantedBy=timers.target
         },
         "depends_on": [
           "proxmox_network_linux_bridge.vmbr101"
-        ]
+        ],
+        "lifecycle": {
+          "ignore_changes": [
+            "operating_system"
+          ]
+        }
       },
       "forgejo": {
         "node_name": "${var.node_name}",
@@ -1737,7 +1758,12 @@ WantedBy=timers.target
         },
         "depends_on": [
           "proxmox_network_linux_bridge.vmbr102"
-        ]
+        ],
+        "lifecycle": {
+          "ignore_changes": [
+            "operating_system"
+          ]
+        }
       },
       "runner-dispatcher": {
         "node_name": "${var.node_name}",
@@ -1798,7 +1824,12 @@ WantedBy=timers.target
         },
         "depends_on": [
           "proxmox_network_linux_bridge.vmbr102"
-        ]
+        ],
+        "lifecycle": {
+          "ignore_changes": [
+            "operating_system"
+          ]
+        }
       },
       "workspace": {
         "node_name": "${var.node_name}",
@@ -1861,6 +1892,11 @@ WantedBy=timers.target
           "proxmox_network_linux_bridge.vmbr103",
           "proxmox_virtual_environment_pool.agent_managed"
         ],
+        "lifecycle": {
+          "ignore_changes": [
+            "operating_system"
+          ]
+        },
         "pool_id": "agent-managed"
       },
       "inference": {
@@ -1926,6 +1962,7 @@ WantedBy=timers.target
         ],
         "lifecycle": {
           "ignore_changes": [
+            "operating_system",
             "device_passthrough"
           ]
         },
@@ -1990,7 +2027,12 @@ WantedBy=timers.target
         },
         "depends_on": [
           "proxmox_network_linux_bridge.vmbr104"
-        ]
+        ],
+        "lifecycle": {
+          "ignore_changes": [
+            "operating_system"
+          ]
+        }
       }
     },
     "proxmox_virtual_environment_vm": {
@@ -2180,6 +2222,11 @@ WantedBy=timers.target
             "keys": "${var.ssh_authorized_keys}"
           }
         },
+        "lifecycle": {
+          "ignore_changes": [
+            "disk[0].file_id"
+          ]
+        },
         "depends_on": [
           "proxmox_network_linux_bridge.vmbr101",
           "proxmox_network_linux_bridge.vmbr102",
@@ -2247,7 +2294,7 @@ WantedBy=timers.target
             "datastore_id": "local-lvm",
             "interface": "scsi0",
             "size": 8,
-            "file_id": "${proxmox_download_file.debian_13_cloud.id}",
+            "file_id": "${proxmox_download_file.debian_cloud.id}",
             "discard": "on",
             "iothread": true
           },
@@ -2284,12 +2331,15 @@ WantedBy=timers.target
             "keys": "${var.ssh_authorized_keys}"
           }
         },
+        "lifecycle": {
+          "ignore_changes": [
+            "disk[0].file_id"
+          ],
+          "prevent_destroy": true
+        },
         "depends_on": [
           "proxmox_network_linux_bridge.vmbr101"
-        ],
-        "lifecycle": {
-          "prevent_destroy": true
-        }
+        ]
       },
       "linux-runner": {
         "node_name": "${var.node_name}",
@@ -2372,14 +2422,15 @@ WantedBy=timers.target
             "keys": "${var.ssh_authorized_keys}"
           }
         },
-        "depends_on": [
-          "proxmox_network_linux_bridge.vmbr103"
-        ],
         "lifecycle": {
           "ignore_changes": [
+            "disk[0].file_id",
             "template"
           ]
-        }
+        },
+        "depends_on": [
+          "proxmox_network_linux_bridge.vmbr103"
+        ]
       },
       "windows-runner": {
         "node_name": "${var.node_name}",

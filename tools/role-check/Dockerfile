@@ -1,10 +1,9 @@
 # A Debian container standing in for a service guest, with Ansible to
 # apply a role to itself. Each role's tests/check.sh runs here, on the
-# release its guest runs (tools/check-roles passes BASE). Ansible is the
+# release the guests run. Ansible is the
 # one apply runs (requirements-apply.txt), not the release's own: a role
 # passed here under Debian 12's 2.14 and failed on the server under 2.19.
-ARG BASE=debian:12-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
-FROM ${BASE}
+FROM debian:13-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 # extra-ca.crt is empty unless the build runs behind a TLS-intercepting proxy.
 COPY extra-ca.crt /tmp/extra-ca.crt
 # No init in the container: package scripts must not try to start services.

@@ -38,10 +38,10 @@ if pct status "$vmid" >/dev/null 2>&1; then
 else
   storage=$(pvesm status --content rootdir 2>/dev/null | awk 'NR > 1 && $3 == "active" {print $1; exit}')
   [ -n "$storage" ] || die "no active storage holds containers (content rootdir)"
-  say "Downloading the Debian 12 container template"
+  say "Downloading the Debian 13 container template"
   pveam update >/dev/null
-  template=$(pveam available --section system | awk '$2 ~ /^debian-12-standard_.*_amd64\.tar\.zst$/ {print $2}' | sort -V | tail -1)
-  [ -n "$template" ] || die "no Debian 12 template in pveam's list"
+  template=$(pveam available --section system | awk '$2 ~ /^debian-13-standard_.*_amd64\.tar\.zst$/ {print $2}' | sort -V | tail -1)
+  [ -n "$template" ] || die "no Debian 13 template in pveam's list"
   pveam list local | grep -q "$template" || pveam download local "$template" >/dev/null
   say "Creating container $vmid (nullbill) on $storage"
   # Its LAN leg (net0) serves the setup page until VPN access works; apply

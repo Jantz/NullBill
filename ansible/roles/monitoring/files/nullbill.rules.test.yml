@@ -123,11 +123,11 @@ tests:
   # host waits on a reboot and on Proxmox updates.
   - interval: 1m
     input_series:
-      - series: 'apt_upgrades_pending{instance="forgejo:9100",origin="Debian:bookworm-security/oldstable-security",arch="amd64"}'
+      - series: 'apt_upgrades_pending{instance="forgejo:9100",origin="Debian:trixie-security/stable-security",arch="amd64"}'
         values: "2x3000"
       - series: 'apt_upgrades_pending{instance="pbs:9100",origin="",arch=""}'
         values: "0x3000"
-      - series: 'apt_upgrades_pending{instance="pve:9100",origin="Proxmox:bookworm/stable",arch="amd64"}'
+      - series: 'apt_upgrades_pending{instance="pve:9100",origin="Proxmox:trixie/stable",arch="amd64"}'
         values: "3x20300"
       - series: 'nb_unattended_upgrade_success_timestamp_seconds{instance="forgejo:9100"}'
         values: "0x4500"

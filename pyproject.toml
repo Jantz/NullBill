@@ -17,7 +17,7 @@ nullbill = "nullbill.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-nullbill = ["data/*.yaml", "web/static/*"]
+nullbill = ["data/*.yaml", "data/nb-release-upgrade", "web/static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -41,7 +41,7 @@ extend-include = [
   "ansible/roles/router/files/nb-portmap",
   "ansible/roles/runner_dispatcher/files/nb-dispatcher",
   "ansible/roles/step_ca/files/agent-provisioner",
-  "tools/game-pins",
+  "tools/pins",
   "ansible/roles/updates/files/nb-busy",
   "tools/guest-check/home-router",
 ]

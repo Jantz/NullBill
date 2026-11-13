@@ -1,10 +1,11 @@
 # LiteLLM's proxy with every dependency pinned by hash (files/requirements.txt,
-# for Debian 12's Python 3.11). Made with uv from files/requirements.in:
-#   uv pip compile requirements.in --generate-hashes --python-version 3.11 \
-#     --python-platform x86_64-manylinux_2_36 -o requirements.txt
+# for Debian 13's Python 3.13). tools/pins makes it with uv from
+# files/requirements.in:
+#   uv pip compile requirements.in --generate-hashes --python-version 3.13 \
+#     --python-platform x86_64-manylinux_2_40 -o requirements.txt
 # pip installs it with --require-hashes and wheels only, so a changed or
 # newly published file fails the install instead of running.
-model_gateway_version: 1.108.3
+model_gateway_version: 1.109.1
 
 # The name clients use. nginx serves HTTPS on model_gateway_port with the
 # certificate tls_cert keeps renewed for it (group www-data); LiteLLM itself

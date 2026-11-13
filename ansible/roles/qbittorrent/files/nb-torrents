@@ -148,7 +148,7 @@ def interface(cfg: dict) -> str:
 
 def first_config(cfg: dict) -> int:
     """Before qBittorrent first starts: its page's sign-in, since a new
-    qBittorrent of this version would take a well-known password; where
+    qBittorrent would make up one of its own that nobody is told; where
     files go; and the one interface it may send on. Never rewrites a file
     qBittorrent has made its own (settings does the rest through its API)."""
     if QBT_CONF.exists():
@@ -301,13 +301,13 @@ def guard(cfg: dict, free: int | None) -> None:
     if free < floor:
         active = [t["hash"] for t in torrents(cfg) if t["state"] in DOWNLOADING]
         if active:
-            api(cfg, "torrents/pause", {"hashes": "|".join(active)})
+            api(cfg, "torrents/stop", {"hashes": "|".join(active)})
             write_private(PAUSED, json.dumps({"hashes": sorted({*held, *active})}) + "\n")
     elif held and free >= floor + max(GIB, floor // 10):
-        still = {t["hash"] for t in torrents(cfg) if t["state"] == "pausedDL"}
+        still = {t["hash"] for t in torrents(cfg) if t["state"] == "stoppedDL"}
         resume = [h for h in held if h in still]
         if resume:
-            api(cfg, "torrents/resume", {"hashes": "|".join(resume)})
+            api(cfg, "torrents/start", {"hashes": "|".join(resume)})
         PAUSED.unlink(missing_ok=True)
 
 

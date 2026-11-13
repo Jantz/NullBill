@@ -96,8 +96,6 @@ $defs:
       # Made by install.sh, not OpenTofu: the nullbill container itself,
       # which runs apply (docs/adr/0006-nullbill-on-the-server.md).
       installed: {type: boolean}
-      # The cloud image a Linux VM boots; debian-cloud when omitted.
-      image: {enum: [debian-cloud, debian-13-cloud]}
       # Names egress-proxy forwards for this guest only, on top of
       # proxy.allow. Only for fixed-address guests in egress: proxy zones.
       proxy_allow: {type: array, uniqueItems: true, items: {$ref: "#/$defs/domain_pattern"}}
@@ -291,7 +289,14 @@ $defs:
       properties:
         debian-lxc: {$ref: "#/$defs/image"}
         debian-cloud: {$ref: "#/$defs/image"}
-        debian-13-cloud: {$ref: "#/$defs/image"}
+        release:
+          type: object
+          additionalProperties: false
+          required: [version, codename, from]
+          properties:
+            version: {type: string, pattern: "^[0-9]+$"}
+            codename: {type: string, pattern: "^[a-z]+$"}
+            from: {type: string, pattern: "^[a-z]+$"}
     proxy:
       type: object
       additionalProperties: false
@@ -420,13 +425,9 @@ $defs:
       version: {$ref: "#/$defs/game_pin/version"}
       url: {$ref: "#/$defs/game_pin/url"}
       sha256: {$ref: "#/$defs/game_pin/sha256"}
-      java:
-        type: object
-        additionalProperties: false
-        properties:
-          version: {$ref: "#/$defs/game_pin/version"}
-          url: {$ref: "#/$defs/game_pin/url"}
-          sha256: {$ref: "#/$defs/game_pin/sha256"}
+      # The Java release the server needs, which Debian's package of that
+      # number provides (openjdk-<java>-jre-headless).
+      java: {type: integer, minimum: 17}
       # true: the owner agrees to https://aka.ms/MinecraftEULA.
       eula: {type: boolean}
       # Players who are operators, by their Minecraft names.
@@ -623,8 +624,6 @@ $defs:
           - properties:
               minecraft:
                 required: [title, version, url, sha256, settings, java, eula, admins]
-                properties:
-                  java: {required: [version, url, sha256]}
               terraria: {required: [title, version, url, sha256, settings]}
               factorio: {required: [title, version, url, sha256, settings, space_age, admins]}
       torrents:

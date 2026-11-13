@@ -479,7 +479,8 @@ def test_the_agent_adds_a_service_only_after_the_owner_typed_the_word(agent):
 
     read = kinds(say(client, 'CALL read_service {"name": "paperless"}'), "tool_done")[-1]["output"]
     assert "Documents (paperless): a container of its own in zone apps" in read and "apt-get install -y nginx" in read
-    status = yaml.safe_load(kinds(say(client, "CALL status {}"), "tool_done")[-1]["output"])
+    done = kinds(say(client, "CALL status {}"), "tool_done")[-1]
+    status = yaml.safe_load(app.chat.output(done["full"]) if done.get("full") else done["output"])
     assert next(i for i in status["what_to_run"] if i["name"] == "paperless")["own"] is True
 
 

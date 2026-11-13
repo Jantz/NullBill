@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# tools/upgrade-controller FROM TO [TARGET VMID SNAPSHOT]: the NullBill
+# container itself from Debian FROM to TO (docs/adr/0022-latest-stable.md).
+# apply starts it as a unit of its own when a full setup run has ended well
+# and every guest runs TO: the page's Python is replaced under it, so
+# nothing of NullBill's may be at work. It upgrades Debian in place with
+# the script the guests got, makes the Python environment again, and
+# restarts the container. With TARGET (the PVE host, as apply reaches it),
+# a failure has the host put the container back from SNAPSHOT, which apply
+# made before it started this.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+from=$1 to=$2 target=${3:-} vmid=${4:-} snapshot=${5:-}
+
+back() {
+  echo "upgrade-controller: failed; the log is /var/log/nb-release-upgrade.log"
+  [ -n "$target" ] || exit 1
+  # On the host and of its own there: this container is stopped under us.
+  ssh -o BatchMode=yes -o ConnectTimeout=10 "$target" \
+    "systemd-run --quiet --collect --unit nb-controller-back sh -c 'pct stop $vmid; pct rollback $vmid $snapshot && pct start $vmid'"
+  exit 1
+}
+trap back ERR
+
+bash src/nullbill/data/nb-release-upgrade "$from" "$to"
+# The environment was made for the old release's Python.
+rm -rf venv
+tools/setup-controller
+unit=/etc/systemd/system/nullbill-web.service
+if [ -d /run/systemd/system ]; then
+  cmp -s tools/nullbill-web.service "$unit" || install -m 0644 tools/nullbill-web.service "$unit"
+  systemctl daemon-reload
+  # Everything runs what was installed only after a restart.
+  systemctl reboot
+fi

@@ -18,8 +18,9 @@ import pytest
 import yaml
 from fixturedata import fixture_config, write_raw
 from gitrepos import commit, git, make
+from pinned import MINECRAFT
 
-from nullbill import applied, apply, browserca, direct, preview
+from nullbill import applied, apply, browserca, direct, preview, release
 from nullbill.errors import NullBillError, Refused
 from nullbill.model import build_model
 from nullbill.probe import parse
@@ -346,7 +347,7 @@ def test_services_show_each_game_with_its_address_and_how_to_join(site):
     minecraft = items["minecraft"]
     assert minecraft["title"] == "Minecraft" and minecraft["watch"] == "minecraft"
     assert minecraft["addresses"] == ["In the game: 10.42.8.25:25565"]
-    assert "Players need Minecraft: Java Edition 26.3." in minecraft["what"]
+    assert f"Players need Minecraft: Java Edition {MINECRAFT}." in minecraft["what"]
     steps = minecraft["steps"]
     assert "Multiplayer, Add Server" in steps[0]["text"]
     assert (steps[1]["href"], steps[1]["link"]) == ("#access/people", "Access, People")
@@ -2244,6 +2245,8 @@ def test_the_review_says_why_a_run_is_due_and_what_it_changes(site, tmp_path):
     job = setup(client)[1]
     assert wait(client, job["id"])["state"] == "done"
     (app.home / "guests.json").write_text(json.dumps({"guests": [g["name"] for g in review["guests"]]}))
+    # The run's release stage found every guest it made on today's Debian.
+    release.write(app.home, {g["name"]: {"release": "trixie"} for g in review["guests"]})
     review = client.call("/api/state")[1]["review"]
     assert review["reasons"] == [] and {g["change"] for g in review["guests"]} == {"keep"} and review["known"] is True
     # Choices saved after it: what the next run creates and deletes, and every changed line of the plan.
@@ -2482,6 +2485,98 @@ def test_the_page_looks_for_updates_once_a_day_and_never_while_a_job_runs(instal
     assert not app.updates_due(now + web.UPDATE_CHECK_S + 60)
     release.write_text("")
     wait(client, job["id"])
+
+
+NIGHT_PINS = (
+    "forgejo: {title: Forgejo, file: ansible/roles/forgejo/defaults/main.yml, key: forgejo_version, hold: 1, services: [forgejo]}\n"
+)
+
+
+def night(n):
+    """A quarter past three in the morning, n days from now."""
+    today = time.localtime()
+    return time.mktime((today.tm_year, today.tm_mon, today.tm_mday + n, web.NIGHTLY_HOURS[0], 15, 0, 0, 0, -1))
+
+
+def a_night(app, client, when):
+    """The page's every-minute look, until tonight's update has ended."""
+    for _ in range(8):
+        job = app.scheduled(when)
+        if job is not None:
+            assert wait(client, job.id)["state"] == "done"
+            if job.action == "upgrade":
+                restarted(app)
+        if app.nightly().get("day") and app.nightly().get("step") == "done":
+            break
+    return app.nightly()["ended"]
+
+
+def test_each_night_the_page_installs_what_is_new_and_a_big_step_waits_for_the_owner(installed, monkeypatch):
+    app, client, work = installed
+    sign_in(app, client)
+    told = []
+    monkeypatch.setattr(app, "tell", lambda text, tag, title="": told.append(text))
+    # Nothing is built: the night does nothing.
+    assert app.scheduled(night(1)) is None and "day" not in app.nightly()
+    wait(client, client.call("/api/jobs", {"action": "probe"})[1]["id"])
+    client.call("/api/choices", {"workloads": ["agents"], "backups": False, "owner_login": "owner-a@example.internal"})
+    wait(client, setup(client)[1]["id"])
+    # By day nothing happens; at night with nothing new, nothing is set up.
+    assert app.scheduled(night(1) + 9 * 3600) is None and "day" not in app.nightly()
+    assert a_night(app, client, night(1))["how"] == "same"
+    # main gets its pins, then a small step: installed and set up by the night.
+    commit(work, NIGHT_PINS, "Pins", "src/nullbill/data/pins.yaml")
+    commit(work, "forgejo_version: 15.0.11\n", "Forgejo 15.0.11", "ansible/roles/forgejo/defaults/main.yml")
+    assert a_night(app, client, night(2))["how"] == "done"
+    small = commit(work, "forgejo_version: 15.0.12\n", "Forgejo 15.0.12", "ansible/roles/forgejo/defaults/main.yml")
+    assert a_night(app, client, night(3))["how"] == "done"
+    about = app.version_view()
+    assert about["current"]["id"] == small[:12] and about["server"]["follows"] is True and about["available"] == []
+    assert [(j.action, j.by) for j in app.setup_runs()][-1] == ("apply", "nightly") and told == []
+    # A big step: nothing is installed, the owner is told once, and the page says what waits.
+    commit(work, "forgejo_version: 17.0.1\n", "Forgejo 17.0.1", "ansible/roles/forgejo/defaults/main.yml")
+    ended = a_night(app, client, night(4))
+    assert ended["how"] == "waits" and "Forgejo 15.0.12 to 17.0.1" in ended["text"] and told == [ended["text"]]
+    assert git(app.repo, "rev-parse", "HEAD") == small
+    assert a_night(app, client, night(5))["how"] == "waits" and len(told) == 1
+    about = client.call("/api/state")[1]["version"]
+    assert about["steps"] == [{"name": "forgejo", "title": "Forgejo", "from": "15.0.12", "to": "17.0.1", "asks": True}]
+    assert about["nightly"]["enabled"] is True and about["nightly"]["ended"]["how"] == "waits"
+    # Switched off, the night does nothing.
+    assert client.call("/api/updates/nightly", {"enabled": False})[1]["version"]["nightly"]["enabled"] is False
+    assert app.scheduled(night(6)) is None and app.nightly()["day"] != time.strftime("%Y-%m-%d", time.localtime(night(6)))
+    # The owner's own Update is the yes; choices they saved and did not review keep setup theirs.
+    client.call("/api/updates/nightly", {"enabled": True})
+    wait(client, client.call("/api/jobs", {"action": "upgrade"})[1]["id"])
+    restarted(app)
+    config = app.home / "config.yaml"
+    os.utime(config, (time.time() + 5, time.time() + 5))
+    ended = a_night(app, client, night(7))
+    assert ended["how"] == "waits" and "saved choices" in ended["text"]
+    assert app.version_view()["server"]["follows"] is False
+
+
+def test_a_night_whose_setup_run_fails_tells_the_owner(installed, monkeypatch):
+    app, client, work = installed
+    sign_in(app, client)
+    told = []
+    monkeypatch.setattr(app, "tell", lambda text, tag, title="": told.append(text))
+    wait(client, client.call("/api/jobs", {"action": "probe"})[1]["id"])
+    client.call("/api/choices", {"workloads": ["agents"], "backups": False, "owner_login": "owner-a@example.internal"})
+    wait(client, setup(client)[1]["id"])
+    commit(work, "- name: install\n", "Forgejo: a newer release", "ansible/roles/forgejo/tasks/main.yml")
+    job = app.scheduled(night(1))
+    assert job.action == "upgrade" and wait(client, job.id)["state"] == "done"
+    restarted(app)
+    app.scheduled(night(1))
+    app.command = [sys.executable, "-c", "raise SystemExit(3)"]
+    job = app.scheduled(night(1))
+    assert job.action == "apply" and wait(client, job.id)["state"] == "failed"
+    app.scheduled(night(1))
+    ended = app.nightly()["ended"]
+    assert ended["how"] == "failed" and told == [ended["text"]] and "setup run failed" in ended["text"]
+    # The same night does not try again.
+    assert app.scheduled(night(1)) is None
 
 
 def test_a_setup_run_from_before_the_page_noted_its_version_is_found_in_gits_record(installed):

@@ -41,7 +41,7 @@ operator_loki_url: "https://monitoring.{{ operator_domain }}:3100"
 operator_domain: nullbill.internal
 
 # From ansible/roles/step_ca, for step-cli.
-step_cli_version: 0.30.1-1
+step_cli_version: 0.31.0-1
 
 # The PVE host as the agent reaches it with `ssh pve`: its mgmt address and
 # its ed25519 host key ("ssh-ed25519 AAAA..."). Empty: no `ssh pve`.

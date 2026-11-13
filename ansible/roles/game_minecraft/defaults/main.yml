@@ -3,7 +3,7 @@
 # src/nullbill/games.py works out the heap and the settings.
 #
 # game_minecraft_version, game_minecraft_url, game_minecraft_sha256: the server.
-# game_minecraft_java_version, game_minecraft_java_url, game_minecraft_java_sha256: its JRE.
+# game_minecraft_java: the Java release it needs, installed from Debian.
 # game_minecraft_heap_mib: Java's heap.
 # game_minecraft_port: where players connect.
 # game_minecraft_settings: server.properties keys to set; the server keeps

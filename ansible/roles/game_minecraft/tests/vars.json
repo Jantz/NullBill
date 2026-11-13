@@ -19,9 +19,7 @@
     "hardcore": "false",
     "generate-structures": "true"
   },
-  "game_minecraft_java_version": "25.0.5+8",
-  "game_minecraft_java_url": "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.5%2B8/OpenJDK25U-jre_x64_linux_hotspot_25.0.5_8.tar.gz",
-  "game_minecraft_java_sha256": "6fac98f0c8202efc3135a9e9e42aa61963ec42d1c5cbb40caf231e7b14a24ef6",
+  "game_minecraft_java": 25,
   "game_minecraft_heap_mib": 2048,
   "game_minecraft_eula": true,
   "game_minecraft_proxy": "10.42.2.10:3128",

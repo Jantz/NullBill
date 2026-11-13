@@ -257,7 +257,7 @@ def test_a_further_server_has_its_own_kind_and_list_and_the_games_pins(facts):
     assert model["games"]["creative"]["servers"] == model["games"]["minecraft"]["servers"]
     assert {"cdn.modrinth.com"} <= set(model["services"]["creative"]["proxy_allow"])
     plan = strip_notes(build_plan(model, facts("large")))
-    assert plan["games"]["creative"]["server"] == "paper build 248" and "server" not in plan["games"]["minecraft"]
+    assert plan["games"]["creative"]["server"] == "paper build 249" and "server" not in plan["games"]["minecraft"]
     assert games.variables(plan, model, "creative")["game_minecraft_server"] == "paper"
     assert games.variables(plan, model, "minecraft")["game_minecraft_server"] == "vanilla"
 

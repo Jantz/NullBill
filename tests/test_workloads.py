@@ -3,6 +3,7 @@ memory adds up the way plan counts it."""
 
 import pytest
 from fixturedata import CLASSES, fixture_config, games_config
+from pinned import MINECRAFT, TERRARIA
 
 from nullbill.errors import NullBillError
 from nullbill.model import build_model
@@ -77,12 +78,12 @@ def test_a_game_asks_for_its_agreement_and_its_admins_beside_its_tick(facts):
     # A container counts at half its limit: 3072 MiB for Minecraft.
     assert minecraft["memory_mib"] == 1536 and minecraft["guests"][0]["name"] == "minecraft"
     assert minecraft["note"] == (
-        "Players need Minecraft: Java Edition 26.3, the same version as the server. "
+        f"Players need Minecraft: Java Edition {MINECRAFT}, the same version as the server. "
         "Java gets 2.0 GiB of the container's memory for the world."
     )
     terraria = by_name["terraria"]["game"]
     assert "eula" not in terraria and "admins" not in terraria
-    assert by_name["terraria"]["note"].startswith("Players need Terraria (PC) 1.4.5.8")
+    assert by_name["terraria"]["note"].startswith(f"Players need Terraria (PC) {TERRARIA}")
     assert {o["key"]: o["value"] for o in terraria["options"]}["worldname"] == "Fixture"
     assert by_name["factorio"]["game"]["admins"] == ["owner_a"] and "eula" not in by_name["factorio"]["game"]
     assert by_name["factorio"]["note"].endswith("The base game: nobody needs the Space Age expansion.")

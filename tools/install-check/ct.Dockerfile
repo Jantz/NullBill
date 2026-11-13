@@ -1,6 +1,6 @@
-# What Proxmox's Debian 12 container template gives the nullbill container,
+# What Proxmox's Debian 13 container template gives the nullbill container,
 # plus a fake systemctl (no init here) that starts the page as the unit does.
-FROM debian:12-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
+FROM debian:13-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 COPY extra-ca.crt /tmp/extra-ca.crt
 RUN apt-get update -qq \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ca-certificates iproute2 procps >/dev/null \

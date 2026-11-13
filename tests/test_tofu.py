@@ -49,7 +49,7 @@ def test_guests_match_plan(facts):
     # apply bakes the golden image and converts it; OpenTofu leaves that alone.
     runner = res["proxmox_virtual_environment_vm"]["linux-runner"]
     assert runner["template"] is False and runner["started"] is False
-    assert runner["lifecycle"] == {"ignore_changes": ["template"]}
+    assert "template" in runner["lifecycle"]["ignore_changes"]
 
 
 def test_router_macs_match_its_link_files(facts):
@@ -78,15 +78,18 @@ def test_images_are_checksummed_and_nothing_identifying_is_rendered(facts):
     assert "api_token" not in json.dumps(config)
 
 
-def test_pbs_boots_debian_13_and_other_vms_debian_12(facts):
-    # PBS 4 is built for Debian 13; PBS 3 on Debian 12 is past its end of life.
-    config, _, _ = rendered(facts, "small")
-    vms = config["resource"]["proxmox_virtual_environment_vm"]
-    images = {name: vm["disk"][0]["file_id"] for name, vm in vms.items()}
-    assert images.pop("pbs") == "${proxmox_download_file.debian_13_cloud.id}"
-    assert set(images.values()) == {"${proxmox_download_file.debian_cloud.id}"}
+def test_every_linux_guest_is_made_from_debian_13_and_keeps_what_it_was_made_from(facts):
+    config, _, _ = rendered(facts, "large")
     downloads = config["resource"]["proxmox_download_file"]
-    assert "/trixie/" in downloads["debian_13_cloud"]["url"] and "/bookworm/" in downloads["debian_cloud"]["url"]
+    assert "/trixie/" in downloads["debian_cloud"]["url"] and "debian-13-standard" in downloads["debian_lxc"]["url"]
+    for name, vm in config["resource"]["proxmox_virtual_environment_vm"].items():
+        if "file_id" not in vm["disk"][0]:
+            continue  # Windows installs from the owner's ISO
+        assert vm["disk"][0]["file_id"] == "${proxmox_download_file.debian_cloud.id}", name
+        # A newer pin replaces no VM that exists: pbs holds the backups.
+        assert "disk[0].file_id" in vm["lifecycle"]["ignore_changes"], name
+    for name, container in config["resource"]["proxmox_virtual_environment_container"].items():
+        assert "operating_system" in container["lifecycle"]["ignore_changes"], name
 
 
 def test_windows_iso_variable_only_with_windows(facts):

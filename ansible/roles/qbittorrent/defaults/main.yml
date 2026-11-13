@@ -1,5 +1,13 @@
-# qBittorrent as Debian packages it (qbittorrent-nox), so Debian's security
-# updates reach it through unattended-upgrades like the rest of the guest.
+# qBittorrent without a desktop, built here from its source at a pinned
+# release: qBittorrent publishes no such build for Linux, and Debian's is
+# a year or more behind. git checks out the tag and the role refuses it
+# unless it is still this commit. It builds against Debian's Qt, libtorrent,
+# Boost and OpenSSL, whose security updates arrive with the guest's own.
+qbittorrent_repo: https://github.com/qbittorrent/qBittorrent.git
+qbittorrent_version: 5.3.0
+qbittorrent_commit: 9213075dd5f7b352208361c6a84c1c115efc898e
+# One compiler at a time: two need more memory than apply lends the guest.
+qbittorrent_build_jobs: 1
 # uid and gid 1000, which own the kept disks' files in an unprivileged
 # container (nb-legacy-disk mounts them so).
 qbittorrent_uid: 1000

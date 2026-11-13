@@ -550,7 +550,7 @@
       <div class="settings" id="updates-body">
         <div class="setting">
           <div class="setting-text"><h2>NullBill</h2>
-            <p>Updating restarts this page only; it reloads by itself in about a minute. Your services keep running.</p></div>
+            <p>NullBill follows each program's newest stable release. Every night it installs what is new and runs setup. A big version jump waits for your yes.</p></div>
           <div class="setting-control">
             <dl class="props compact"><div><dt>Version</dt><dd id="version-current"></dd></div><div><dt>Newest</dt><dd id="version-newest"></dd></div></dl>
             <div class="row">
@@ -558,8 +558,16 @@
               <button type="button" class="btn" id="update-check"><span>Check for updates</span></button>
               <p class="feedback" id="update-result" role="status"></p>
             </div>
+            <label class="switch-row"><input type="checkbox" id="nightly" role="switch" aria-describedby="nightly-result"><span class="switch" aria-hidden="true"></span><span>Install updates every night</span></label>
+            <p class="help" id="nightly-last" hidden></p>
+            <p class="feedback" id="nightly-result" role="status"></p>
           </div>
           <div class="setting-wide" id="update-available" hidden>
+            <div id="update-steps" hidden>
+              <h3 class="mini-head" id="update-steps-title">Versions it moves</h3>
+              <p class="note" id="update-asks" hidden><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg><span id="update-asks-text"></span></p>
+              <ul class="changes" id="update-steps-list" aria-labelledby="update-steps-title"></ul>
+            </div>
             <h3 class="mini-head" id="update-available-title"></h3>
             <ul class="changes" id="update-available-list"></ul>
             <div id="update-effect" hidden>
@@ -576,7 +584,7 @@
         </div>
         <div class="setting">
           <div class="setting-text"><h2>The server</h2>
-            <p>An update reaches your services only when you run setup. What it would change is listed here.</p></div>
+            <p>An update reaches your services with a setup run: the nightly one, or yours. What it would change is listed here.</p></div>
           <div class="setting-control">
             <dl class="props compact"><div><dt>Built with</dt><dd id="server-built"></dd></div><div><dt>Status</dt><dd id="server-follows"></dd></div></dl>
             <div class="row" id="server-run" hidden><a class="btn primary" href="#setup/build"><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg>Review and run setup</a></div>

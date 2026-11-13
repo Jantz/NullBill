@@ -72,7 +72,9 @@ owner's is the first.
 - `nb-portmap` on the router VM asks the home router for that port every
   quarter of an hour with a lease of an hour: NAT-PMP first, then UPnP,
   with Debian's `natpmpc` and `miniupnpc` (two new packages on the router;
-  this record is their approval). It takes the port only as asked: a router
+  this record is their approval; since ADR 0022 `nb-portmap` speaks
+  NAT-PMP itself, because Debian 13's `natpmpc` refuses a home router
+  whose address is not a public one before it asks). It takes the port only as asked: a router
   that offers another one is told to drop it, since Tailscale would not
   tell devices that one. It runs as a throwaway user that cannot reach a
   NullBill zone, since it reads what a device outside NullBill sends.

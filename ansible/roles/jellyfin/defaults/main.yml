@@ -1,11 +1,11 @@
 # Jellyfin from its own apt repository, at pinned versions, so it changes
 # only when this pin moves (unattended-upgrades takes Debian security
 # updates only). Versions from
-# https://repo.jellyfin.org/debian/dists/bookworm/main/binary-amd64/Packages
+# https://repo.jellyfin.org/debian/dists/trixie/main/binary-amd64/Packages
 jellyfin_repo: https://repo.jellyfin.org/debian
-jellyfin_version: "12.4+deb12"
+jellyfin_version: "12.4+deb13"
 jellyfin_ffmpeg_package: jellyfin-ffmpeg8
-jellyfin_ffmpeg_version: "8.1.3-2-bookworm"
+jellyfin_ffmpeg_version: "8.1.3-2-trixie"
 # SHA-256 of https://repo.jellyfin.org/jellyfin_team.gpg.key, key
 # 4918AABC486CA052358D778D49023CD01DE21A7B (Jellyfin Team).
 jellyfin_repo_signer_sha256: a0cde241ae297fa6f0265c0bf15ce9eb9ee97c008904a59ab367a67d59532839

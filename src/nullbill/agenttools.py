@@ -20,6 +20,7 @@ STAGES = [
     "tailnet",
     "host",
     "tofu",
+    "release",
     "router",
     "proxy",
     "updates",
@@ -338,7 +339,7 @@ TOOLS = [
     {
         "name": "add_service",
         "description": "Add a program NullBill has no built-in support for as a service of the owner's own, or change "
-        "one (give only what changes). NullBill makes a Debian 12 guest of its own for it with an address and a name, "
+        "one (give only what changes). NullBill makes a Debian 13 guest of its own for it with an address and a name, "
         "the firewall for exactly the ports listed, updates, monitoring, backups and on-demand power; the setup script "
         "puts the program in, run as root inside the guest by the next setup run, and again whenever the script "
         "changes. The owner reads the definition and the whole script before it is saved. Read "

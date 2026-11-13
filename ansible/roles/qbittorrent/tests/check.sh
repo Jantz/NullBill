@@ -30,7 +30,7 @@ chown 1000:1000 /downloads
 loopback_only qbt
 
 start() {
-  (runuser -u qbt -- env -i HOME=/var/lib/qbittorrent PATH=/usr/bin:/bin /usr/bin/qbittorrent-nox --profile=/var/lib/qbittorrent \
+  (runuser -u qbt -- env -i HOME=/var/lib/qbittorrent PATH=/usr/bin:/bin /opt/qbittorrent/*/bin/qbittorrent-nox --profile=/var/lib/qbittorrent \
     >>/tmp/qbittorrent.log 2>&1 &)
   nb-torrents wait 60 || { tail -30 /tmp/qbittorrent.log; fail "qBittorrent answers"; }
 }
@@ -38,7 +38,14 @@ start
 
 ip=$(hostname -i | cut -d' ' -f1)
 code() { curl -sS -o /dev/null -w '%{http_code}' "$@"; }
-login() { curl -sS -H "Referer: http://$ip:8080" "http://$ip:8080/api/v2/auth/login" --data-urlencode "username=$1" --data-urlencode "password=$2"; }
+# qBittorrent 5.2 and later answer a sign-in with a status alone.
+login() {
+  case $(code -H "Referer: http://$ip:8080" "http://$ip:8080/api/v2/auth/login" --data-urlencode "username=$1" --data-urlencode "password=$2") in
+    200 | 204) echo "Ok." ;;
+    401) echo "Fails." ;;
+    *) echo "?" ;;
+  esac
+}
 [ "$(code "http://$ip:8080/api/v2/app/version")" = 403 ] || fail "the page asks for a sign-in from another address"
 [ "$(login nullbill-admin first-password)" = "Ok." ] || fail "sign-in with the password apply made"
 [ "$(login nullbill-admin adminadmin)" = "Fails." ] || fail "the password qBittorrent ships with is refused"
@@ -120,8 +127,8 @@ add $a one
 add $b two
 { becomes $a metaDL && becomes $b metaDL; } || fail "a new download starts (it is $(state $a))"
 grep -qx "2 downloads in progress" <<<"$(nb-torrents busy)" || { nb-torrents busy; fail "downloads count as use"; }
-curl -sS -o /dev/null http://127.0.0.1:8080/api/v2/torrents/pause -d "hashes=$b"
-becomes $b pausedDL || fail "a download pauses when asked"
+curl -sS -o /dev/null http://127.0.0.1:8080/api/v2/torrents/stop -d "hashes=$b"
+becomes $b stoppedDL || fail "a download pauses when asked"
 grep -qx "1 download in progress" <<<"$(nb-torrents busy)" || { nb-torrents busy; fail "a paused download is no use"; }
 pass "nb-torrents busy: nothing while unused, then each download in progress"
 
@@ -142,14 +149,14 @@ nb-torrents tick
 [ "$(metric nb_torrents_store_mounted)" = 1 ] || fail "the disk is seen"
 keep 100
 nb-torrents tick
-becomes $a pausedDL || fail "a download pauses when the disk has less free than is kept (it is $(state $a))"
+becomes $a stoppedDL || fail "a download pauses when the disk has less free than is kept (it is $(state $a))"
 grep -q "^1 download is paused: .* GiB free on the disk, and 100 GiB are kept free" <<<"$(nb-torrents space)" || { nb-torrents space; fail "space says why"; }
 [ "$(metric nb_torrents_paused_for_space)" = 1 ] || fail "the metric says paused"
 nb-torrents tick
 keep 1
 nb-torrents tick
 becomes $a metaDL || fail "the download goes on once there is room (it is $(state $a))"
-[ "$(state $b)" = pausedDL ] || fail "a download the owner paused stays paused"
+[ "$(state $b)" = stoppedDL ] || fail "a download the owner paused stays paused"
 [ "$(nb-torrents space)" = room ] || fail "room again"
 nb-torrents tick
 [ "$(metric nb_torrents_paused_for_space)" = 0 ] || fail "the metric says not paused"

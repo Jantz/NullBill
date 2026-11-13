@@ -1,5 +1,5 @@
-# Debian 12 ships PostgreSQL 15; security updates come with Debian's.
-postgres_version: 15
+# Debian 13 ships PostgreSQL 17; its updates come with Debian's.
+postgres_version: 17
 # Addresses the server listens on besides localhost: the guest's own.
 postgres_listen: []
 # One entry per client service: its database, role, password and the only

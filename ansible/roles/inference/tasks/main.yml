@@ -10,7 +10,6 @@
 - name: Paths
   ansible.builtin.set_fact:
     inference_llama_dir: "/opt/llama.cpp/{{ inference_llama_tag }}"
-    inference_headers_dir: "/opt/vulkan-headers/{{ inference_vulkan_headers_tag }}"
     inference_server: "/opt/llama.cpp/{{ inference_llama_tag }}/build/bin/llama-server"
     inference_model_path: "/var/lib/llama/models/{{ inference_model_url | basename }}"
     # git and the downloads reach the internet through egress-proxy in the
@@ -61,35 +60,6 @@
         creates: "/usr/lib/x86_64-linux-gnu/libnvidia-glcore.so.{{ inference_nvidia_version }}"
       notify: Restart llama-server
 
-- name: Khronos' Vulkan headers at the pinned tag
-  ansible.builtin.git:
-    repo: "{{ inference_vulkan_headers_repo }}"
-    dest: "{{ inference_headers_dir }}/src"
-    version: "{{ inference_vulkan_headers_tag }}"
-    depth: 1
-    # A second run over the shallow clone of a tag makes the module's fetch
-    # fail ("'NoneType' object has no attribute 'startswith'", ansible-core
-    # 2.19). dest is per tag, so a new pin clones afresh; the assert below
-    # still checks the commit.
-    update: false
-  environment: "{{ inference_git_env }}"
-  register: inference_headers_git
-
-- name: The headers' tag is still the pinned commit
-  ansible.builtin.assert:
-    that: inference_headers_git.after == inference_vulkan_headers_commit
-    fail_msg: "{{ inference_vulkan_headers_tag }} is {{ inference_headers_git.after }} upstream, not {{ inference_vulkan_headers_commit }}"
-
-- name: Install the headers
-  ansible.builtin.shell: |
-    set -e
-    cmake -S src -B build -DCMAKE_INSTALL_PREFIX={{ inference_headers_dir }}
-    cmake --install build
-  args:
-    chdir: "{{ inference_headers_dir }}"
-    executable: /bin/bash
-    creates: "{{ inference_headers_dir }}/include/vulkan/vulkan.hpp"
-
 - name: llama.cpp at the pinned tag
   ansible.builtin.git:
     repo: "{{ inference_llama_repo }}"
@@ -118,7 +88,6 @@
   ansible.builtin.shell: |
     set -e
     cmake -S src -B build -DCMAKE_BUILD_TYPE=Release -DGGML_VULKAN=ON \
-      -DVulkan_INCLUDE_DIR={{ inference_headers_dir }}/include \
       -DLLAMA_CURL=OFF -DLLAMA_OPENSSL=OFF -DLLAMA_USE_PREBUILT_UI=OFF \
       -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF
     cmake --build build --target llama-server -j {{ inference_build_jobs }}

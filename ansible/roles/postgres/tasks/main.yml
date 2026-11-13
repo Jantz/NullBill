@@ -1,3 +1,20 @@
+# A guest from before Debian 13 holds PostgreSQL 15's cluster. apply's
+# release stage moves it over (pg_upgradecluster) before this role runs;
+# an empty new cluster beside the old data would look like lost data.
+- name: Clusters of another PostgreSQL version
+  ansible.builtin.shell: |
+    [ -e /var/lib/postgresql/{{ postgres_version }}/main/PG_VERSION ] || ls /var/lib/postgresql/*/main/PG_VERSION 2>/dev/null || true
+  register: postgres_older
+  changed_when: false
+
+- name: No data of an older PostgreSQL is left behind
+  ansible.builtin.assert:
+    that: postgres_older.stdout == ""
+    fail_msg: >-
+      {{ postgres_older.stdout_lines | first | default('') | dirname | dirname }} holds a database cluster of another
+      PostgreSQL version and there is none for {{ postgres_version }}. Run setup in full: its release stage moves the
+      data over before this step.
+
 - name: Install PostgreSQL
   ansible.builtin.apt:
     name: "postgresql-{{ postgres_version }}"

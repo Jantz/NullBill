@@ -38,12 +38,11 @@ getent passwd game | grep -q ':/usr/sbin/nologin$' || fail "the game user has no
 pass "the server's files are root's, the world the game user's, who has no login"
 
 # Behind a TLS-intercepting proxy, Java needs its CA as the system does.
+# Debian's Java reads the store ca-certificates-java keeps from the system's.
+# One certificate per file: that store takes the first of each.
 if [ -s /usr/local/share/ca-certificates/extra-ca.crt ]; then
-  java=$(dirname "$(readlink -f /opt/minecraft/java-*/bin/java)")
-  awk -v dir=/tmp/extra-ca '/BEGIN CERT/{n++} {print > (dir "-" n ".crt")}' /usr/local/share/ca-certificates/extra-ca.crt
-  for cert in /tmp/extra-ca-*.crt; do
-    "$java/keytool" -importcert -noprompt -cacerts -storepass changeit -alias "$(basename "$cert")" -file "$cert" >/dev/null 2>&1
-  done
+  awk -v dir=/usr/local/share/ca-certificates/extra-ca '/BEGIN CERT/{n++} {print > (dir "-" n ".crt")}' /usr/local/share/ca-certificates/extra-ca.crt
+  update-ca-certificates >/dev/null 2>&1 || fail "the proxy's CA goes into Java's store"
 fi
 
 # As in the games zone: the game user has no way out but the proxy.

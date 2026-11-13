@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from conftest import HOME_PUBLIC, ROUTER_CLOCK, FakeTailnet, fixture_config, guest_exec, portmap_state, tailscale_status
 from fixturedata import games_config
+from pinned import FACTORIO, MINECRAFT, TERRARIA
 
 from nullbill import applied, apply, backups, browserca, ci, direct, flows, games, hostroot, lan, llm, names, owner, power, torrents
 from nullbill.apply import ApplyError, Context, connection, run_apply
@@ -110,7 +111,7 @@ class FakeReach:
         # render nodes by PCI address. nb-jellyfin's runs.
         self.media_ct = {"exists": False, "status": "running", "mps": {}, "devs": {}, "restarts": 0}
         self.torrents_asked = []
-        self.torrents_ct = {"exists": False, "status": "running", "mps": {}, "restarts": 0}
+        self.torrents_ct = {"exists": False, "status": "running", "mps": {}, "restarts": 0, "memory": []}
         self.render_nodes = {"0000:00:02.0": "/dev/dri/renderD128"}
         self.jellyfin = []
         # nb-forgejo-owner's runs, and the keys given to the workspace, with what each read on stdin.
@@ -430,6 +431,10 @@ class FakeReach:
             return 0, "", ""
         args = argv[3:]
         for flag, value in zip(args[::2], args[1::2], strict=True):
+            if flag == "--memory":
+                # Lent while the role builds qBittorrent, then given back.
+                ct["memory"].append(int(value))
+                continue
             assert ct["status"] == "stopped", "mount points change only while the download client's guest is stopped"
             if flag == "--delete":
                 for key in value.split(","):
@@ -2583,9 +2588,9 @@ def test_games_stage_runs_each_role_waits_and_makes_the_admins(ctx):
     assert index_of(calls, f"pct exec 2025 -- {games.NB_GAME} wait {games.START_WAIT_S}") < index_of(
         calls, f"pct exec 2025 -- {games.NB_GAME} console"
     )
-    assert "games: Minecraft 26.3 answers at 10.42.8.25:25565" in c.log
-    assert "games: Terraria 1.4.5.8 answers at 10.42.8.26:7777" in c.log
-    assert "games: Factorio 2.1.24 answers at 10.42.8.27:34197" in c.log
+    assert f"games: Minecraft {MINECRAFT} answers at 10.42.8.25:25565" in c.log
+    assert f"games: Terraria {TERRARIA} answers at 10.42.8.26:7777" in c.log
+    assert f"games: Factorio {FACTORIO} answers at 10.42.8.27:34197" in c.log
     # Again: the admins are there, and nothing is typed.
     apply.stage_games(c)
     assert servers["2025"]["typed"] == ["op owner_a"] and servers["2027"]["typed"] == ["/promote owner_a"]
@@ -2599,7 +2604,7 @@ def test_games_stage_says_which_admin_the_game_does_not_know(ctx, monkeypatch):
     apply.stage_games(c)
     assert "games: Minecraft did not make owner_a an admin; is the name spelled as in the game?" in c.log
     # The server runs all the same.
-    assert "games: Minecraft 26.3 answers at 10.42.8.25:25565" in c.log
+    assert f"games: Minecraft {MINECRAFT} answers at 10.42.8.25:25565" in c.log
 
 
 def test_games_stage_stops_when_a_server_does_not_answer(ctx):

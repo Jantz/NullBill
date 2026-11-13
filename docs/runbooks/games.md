@@ -333,33 +333,31 @@ of setup.
 ## When a game updates
 
 A player's game and the server must be the same version. NullBill pins
-each server's file by its checksum, and **Update NullBill** (on the
-**Updates** page) followed by **Run setup** moves to the version NullBill
-pins now. Worlds are kept.
+each server's file by its checksum and moves the pin to the game's newest
+version within a day of its release
+([how updates work](debian-upgrade.md)). Worlds are kept.
 
-When a game updates before NullBill does, either the players keep the
-older version (Minecraft's launcher: **Installations**, **New
-installation**, pick the version; Factorio on Steam: **Properties**,
-**Betas**), or you pin the new server yourself:
+- A small step (a Factorio patch, a new Paper build) installs in the
+  night and restarts the server.
+- A step your players must follow waits for you: a new Minecraft version,
+  any new Terraria version, a new Factorio minor version. **Updates**
+  lists it as "Waits for your yes". Tell your players, then press
+  **Update NullBill** and run setup.
 
-1. On any computer with Python 3, fetch
-   [`tools/game-pins`](../../tools/game-pins) from the repository and run
-   `python3 game-pins`. It asks each game's maker what is current and
-   prints version, address and SHA-256 for each.
-2. Put those of the game in `config.yaml` (as in [Settings](#3-settings)):
+To stay on the older version after NullBill moved on, pin it yourself.
+Before you update, copy the game's `version`, `url` and `sha256` from
+`src/nullbill/data/catalog.yaml` into `config.yaml` (as in
+[Settings](#3-settings)):
 
-   ```yaml
-   games:
-     factorio:
-       version: 2.1.25
-       url: https://factorio.com/get-download/2.1.25/headless/linux64
-       sha256: <the SHA-256 it printed>
-   ```
+```yaml
+games:
+  factorio:
+    version: 2.1.25
+    url: https://factorio.com/get-download/2.1.25/headless/linux64
+    sha256: <the SHA-256 from the catalog>
+```
 
-   For Minecraft, if the tool prints another Java than the catalog's, pin
-   `java` (`version`, `url`, `sha256`) the same way.
-3. Press **Run setup**. The server is replaced, the world stays. Remove
-   the lines again once NullBill pins that version or a newer one.
+Remove the lines again when your players have caught up.
 
 A world opened by a newer server cannot go back to an older one. Copy it
 out first if you are not sure.
@@ -369,10 +367,8 @@ to a newer Minecraft, **Review and run** may refuse with "is not for
 Minecraft ...". Press **Check for updates** in the Minecraft row and take
 the newer ones, or remove what has none yet. To keep playing the older
 Minecraft until a mod catches up, pin the old `version`, `url` and
-`sha256` under `games.minecraft` as in step 2. If you pin a newer
-Minecraft yourself while the server is Paper or Fabric, pin that server
-too: `tools/game-pins` prints `servers` for Paper and Fabric beside
-Mojang's file.
+`sha256` under `games.minecraft` as above, and with Paper or Fabric that
+server's lines under `servers` too.
 
 ## If something is wrong
 

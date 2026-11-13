@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# nb-release-upgrade FROM TO: move this Debian guest from release FROM to TO
+# in place (docs/adr/0022-latest-stable.md, docs/runbooks/debian-upgrade.md).
+# apply's release stage puts it into a guest that still runs FROM and starts
+# it as a unit of its own, so it outlives the connection that started it.
+# Run again after a failure it goes on where it stopped. It never restarts
+# the guest: apply does, once the last line of the result file says `done`.
+#
+# Everything is downloaded before anything is installed, so a network that
+# comes and goes (the router is upgraded this way too) costs a retry and no
+# half-installed guest. Settings files keep what is in them. A PostgreSQL
+# cluster of the old release's version is moved to the new one's with
+# Debian's pg_upgradecluster; the old cluster stays on disk, stopped.
+set -Eeuo pipefail
+from=$1 to=$2
+state=/var/lib/nullbill
+result=$state/release-upgrade.result
+mkdir -p "$state"
+exec >>/var/log/nb-release-upgrade.log 2>&1
+echo "--- $(date -u +%FT%TZ) $from to $to"
+say() { echo "$*" | tee -a "$result" >/dev/null; }
+: >"$result"
+trap 'say "failed: $(tail -n 1 /var/log/nb-release-upgrade.log | cut -c1-300)"' ERR
+
+export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 APT_LISTCHANGES_FRONTEND=none
+apt() {
+  apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
+    -o DPkg::Lock::Timeout=900 -o Acquire::Retries=5 "$@"
+}
+# shellcheck disable=SC1091
+now() { (. /etc/os-release && echo "$VERSION_CODENAME"); }
+
+case $(now) in
+  "$from" | "$to") ;;
+  *) echo "this guest runs $(now), neither $from nor $to"; false ;;
+esac
+if [ "$(now)" = "$from" ]; then
+  say "updating $from"
+  if [ -d /run/systemd/system ]; then
+    systemctl stop apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service 2>/dev/null || true
+  fi
+  dpkg --configure -a
+  apt update
+  apt -f install
+  apt dist-upgrade
+  say "downloading $to"
+  for file in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+    [ -f "$file" ] || continue
+    cp -n "$file" "$state/$(basename "$file").$from"
+    sed -i "s/\\b$from\\b/$to/g" "$file"
+  done
+  apt update
+  apt full-upgrade --download-only
+  say "installing $to"
+  apt upgrade --without-new-pkgs
+fi
+[ "$(now)" = "$to" ] || apt full-upgrade
+# Left half done by a run that was cut off.
+dpkg --configure -a
+apt -f install
+apt full-upgrade
+[ "$(now)" = "$to" ] || { echo "still $(now) after the upgrade"; false; }
+
+# PostgreSQL: Debian keeps the old version's cluster running under the new
+# release and installs nothing newer by itself.
+if command -v pg_lsclusters >/dev/null; then
+  newest=$(apt-cache show postgresql | sed -n 's/^Depends:.*postgresql-\([0-9]\+\).*/\1/p' | sort -n | tail -n 1)
+  mapfile -t clusters < <(pg_lsclusters -h)
+  for cluster in "${clusters[@]}"; do
+    read -r version name _ status _ <<<"$cluster"
+    [ "$version" -lt "$newest" ] || continue
+    if pg_lsclusters -h | grep -q "^$newest  *$name "; then
+      # Moved by an earlier run; the old one only waits to be deleted.
+      continue
+    fi
+    say "moving PostgreSQL $version/$name to $newest"
+    apt install "postgresql-$newest"
+    # The package makes an empty cluster "main" that would be in the way.
+    if [ "$name" = main ] && pg_lsclusters -h | grep -q "^$newest  *main "; then
+      [ "$(du -sm "/var/lib/postgresql/$newest/main" | cut -f1)" -lt 200 ] || { echo "PostgreSQL $newest/main already holds data"; false; }
+      pg_dropcluster --stop "$newest" main
+    fi
+    case $status in online*) ;; *) pg_ctlcluster "$version" "$name" start ;; esac
+    pg_upgradecluster "$version" "$name"
+    echo "$version $name" >>"$state/postgresql-old-clusters"
+  done
+fi
+
+apt autoremove --purge
+apt-get clean
+say "done $(now)"

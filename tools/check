@@ -3,7 +3,7 @@
 # packages in requirements-dev.txt.
 #
 # Arguments name the parts to run: static (lint, tests, gitleaks) and the
-# container checks apply install firewall guests host roles tofu. None runs
+# container checks apply install firewall guests host release roles tofu. None runs
 # them all. CI runs them in parallel jobs; ROLES limits roles to those roles.
 #
 # CI_SKIP names container checks to leave out, space or comma separated,
@@ -12,7 +12,7 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
-docker_checks=(apply install firewall guests host roles tofu)
+docker_checks=(apply install firewall guests host release roles tofu)
 parts=("$@")
 ((${#parts[@]})) || parts=(static "${docker_checks[@]}")
 for part in "${parts[@]}"; do
@@ -42,7 +42,7 @@ if wanted static; then
     ansible/roles/host_baseline/files/nb-power ansible/roles/updates/files/nb-busy ansible/roles/qbittorrent/files/nb-torrents)
   ruff check . "${scripts[@]}"
   ruff format --check . "${scripts[@]}"
-  shellcheck -x hooks/* install.sh tools/check-install tools/install-check/check.sh tools/install-check/fakes/* tools/check tools/check-apply tools/install-apply-deps tools/setup-controller tools/finish-upgrade tools/check-firewall tools/check-guests tools/check-host tools/check-roles tools/check-tofu tools/guest-check/check.sh tools/guest-check/portmap.sh tools/guest-check/tunnel.sh tools/host-check/check.sh tools/host-check/legacy-disk.sh tools/tofu-check/check.sh tools/role-check/role-check.sh ansible/roles/*/tests/check.sh ansible/roles/updates/files/nb-update-metrics ansible/roles/host_baseline/files/nb-pve-api-cert ansible/roles/host_baseline/files/nb-backup-disk ansible/roles/host_baseline/files/nb-legacy-disk ansible/roles/host_baseline/files/nb-legacy-copy ansible/roles/host_baseline/files/nb-storage-disk ansible/roles/egress_proxy/files/nb-squid-check ansible/roles/agent_ssh/files/nb-agent-command ansible/roles/custom_service/files/nb-custom-setup tools/denylist-scan tools/install-hooks tools/ci-passed-on-pr
+  shellcheck -x hooks/* install.sh tools/check-install tools/install-check/check.sh tools/install-check/fakes/* tools/check tools/check-apply tools/install-apply-deps tools/setup-controller tools/finish-upgrade tools/check-firewall tools/check-guests tools/check-host tools/check-roles tools/check-tofu tools/guest-check/check.sh tools/guest-check/portmap.sh tools/guest-check/tunnel.sh tools/host-check/check.sh tools/host-check/legacy-disk.sh tools/tofu-check/check.sh tools/role-check/role-check.sh ansible/roles/*/tests/check.sh ansible/roles/updates/files/nb-update-metrics ansible/roles/host_baseline/files/nb-pve-api-cert ansible/roles/host_baseline/files/nb-backup-disk ansible/roles/host_baseline/files/nb-legacy-disk ansible/roles/host_baseline/files/nb-legacy-copy ansible/roles/host_baseline/files/nb-storage-disk ansible/roles/egress_proxy/files/nb-squid-check ansible/roles/agent_ssh/files/nb-agent-command ansible/roles/custom_service/files/nb-custom-setup tools/denylist-scan tools/install-hooks tools/ci-passed-on-pr tools/check-release tools/release-check/check.sh tools/release-check/controller.sh tools/upgrade-controller src/nullbill/data/nb-release-upgrade
   python3 -m pytest -q
   gitleaks dir --no-banner --redact -c .gitleaks.toml .
   gitleaks git --no-banner --redact -c .gitleaks.toml .

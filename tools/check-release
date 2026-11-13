@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Move a Debian 12 container to Debian 13 with the script apply's release
+# stage runs in each guest of a server built before guests ran Debian 13
+# (src/nullbill/data/nb-release-upgrade), PostgreSQL 15 to 17 with it, and
+# the NullBill container with tools/upgrade-controller.
+# Needs docker and network access to Debian's mirrors.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+ctx=$(mktemp -d)
+trap 'rm -rf "$ctx"' EXIT
+cp tools/release-check/Dockerfile tools/release-check/check.sh tools/release-check/controller.sh "$ctx/"
+cat "${EXTRA_CA_FILE:-/dev/null}" > "$ctx/extra-ca.crt"
+docker build -q -t nullbill-release-check "$ctx" >/dev/null
+docker run --rm -v "$PWD/src/nullbill/data:/src:ro" nullbill-release-check bash /usr/local/lib/check.sh
+# The NullBill container: this checkout's committed HEAD, set up on Debian
+# 12, then upgraded with tools/upgrade-controller.
+git archive --format=tar --prefix=nullbill/ HEAD > "$ctx/nullbill.tar"
+docker run --rm -v "$ctx/nullbill.tar:/nullbill.tar:ro" nullbill-release-check bash /usr/local/lib/controller.sh

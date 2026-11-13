@@ -14,28 +14,16 @@
   loop:
     - {path: /opt/minecraft, owner: root, mode: "0755"}
     - {path: /etc/minecraft, owner: root, mode: "0755"}
-    - {path: "/opt/minecraft/java-{{ game_minecraft_java_version }}", owner: root, mode: "0755"}
     # The world, the server's own files and its logs.
     - {path: /var/lib/minecraft, owner: game, mode: "0750"}
 
+# Debian's Java of the release the server needs; unattended-upgrades keeps
+# it patched, and needrestart restarts the server for it.
 - name: Java
-  ansible.builtin.include_role:
-    name: downloads
-    tasks_from: fetch
-  vars:
-    downloads_url: "{{ game_minecraft_java_url }}"
-    downloads_dest: "/opt/minecraft/java-{{ game_minecraft_java_version }}.tar.gz"
-    downloads_checksum: "sha256:{{ game_minecraft_java_sha256 }}"
-
-- name: Java unpacked
-  ansible.builtin.unarchive:
-    src: "/opt/minecraft/java-{{ game_minecraft_java_version }}.tar.gz"
-    dest: "/opt/minecraft/java-{{ game_minecraft_java_version }}"
-    remote_src: true
-    owner: root
-    group: root
-    extra_opts: [--strip-components=1]
-    creates: "/opt/minecraft/java-{{ game_minecraft_java_version }}/bin/java"
+  ansible.builtin.apt:
+    name: "openjdk-{{ game_minecraft_java }}-jre-headless"
+    install_recommends: false
+    update_cache: true
   notify: Restart minecraft
 
 - name: Server
@@ -146,9 +134,8 @@
     paths: /opt/minecraft
     file_type: any
     patterns: ["java-*", "server-*.jar"]
+    # java-*: a Java this role unpacked there before Debian had the release.
     excludes:
-      - "java-{{ game_minecraft_java_version }}"
-      - "java-{{ game_minecraft_java_version }}.tar.gz"
       - "server-{{ game_minecraft_version }}.jar"
   register: game_minecraft_stale
 

@@ -15,12 +15,90 @@
 
 # curl and python3: apply, nb-torrents and nullbill verify talk to
 # qBittorrent from inside this guest. wireguard-tools is `wg`; the tunnel's
-# interface is the host kernel's, whose module apply loads there.
-- name: qBittorrent
+# interface is the host kernel's, whose module apply loads there. The rest
+# is what qBittorrent's INSTALL names for a build without a desktop.
+- name: What qBittorrent is built with and runs on
   ansible.builtin.apt:
-    name: "{{ ['qbittorrent-nox', 'python3', 'curl', 'iproute2'] + (['wireguard-tools'] if qbittorrent_route == 'vpn' else []) }}"
+    name: "{{ qbittorrent_packages + (['wireguard-tools'] if qbittorrent_route == 'vpn' else []) }}"
     install_recommends: false
     update_cache: true
+  vars:
+    qbittorrent_packages:
+      - python3
+      - curl
+      - iproute2
+      - git
+      - ca-certificates
+      - cmake
+      - ninja-build
+      - g++
+      - libboost-dev
+      - libssl-dev
+      - zlib1g-dev
+      - libtorrent-rasterbar-dev
+      - qt6-base-dev
+      - qt6-base-private-dev
+      - qt6-tools-dev
+      - libqt6sql6-sqlite
+
+- name: Where this release is built
+  ansible.builtin.set_fact:
+    qbittorrent_dir: "/opt/qbittorrent/{{ qbittorrent_version }}"
+
+- name: qBittorrent at the pinned release
+  ansible.builtin.git:
+    repo: "{{ qbittorrent_repo }}"
+    dest: "{{ qbittorrent_dir }}/src"
+    version: "release-{{ qbittorrent_version }}"
+    depth: 1
+    # As for llama.cpp (inference role): a second run over the shallow clone
+    # of a tag fails in the module's fetch. dest is per release, so a new
+    # pin clones afresh; the assert below still checks the commit.
+    update: false
+  environment: "{{ {'https_proxy': downloads_proxy} if downloads_proxy | default('') else {} }}"
+  register: qbittorrent_git
+
+- name: The release is still the pinned commit
+  ansible.builtin.assert:
+    that: qbittorrent_git.after == qbittorrent_commit
+    fail_msg: "release-{{ qbittorrent_version }} is {{ qbittorrent_git.after }} upstream, not {{ qbittorrent_commit }}"
+
+# apply lends the guest memory while this runs (apply.stage_torrents). A
+# build that stops part way goes on at the next run; the marker is written
+# last, and the build tree goes once the program is installed.
+- name: Build qBittorrent without a desktop (takes a while the first time)
+  ansible.builtin.shell: |
+    set -e
+    cmake -G Ninja -S src -B build -DCMAKE_BUILD_TYPE=Release -DGUI=OFF -DCMAKE_INSTALL_PREFIX={{ qbittorrent_dir }}
+    cmake --build build -j {{ qbittorrent_build_jobs }}
+    cmake --install build
+    rm -rf build
+    touch .nullbill-built
+  args:
+    chdir: "{{ qbittorrent_dir }}"
+    executable: /bin/bash
+    creates: "{{ qbittorrent_dir }}/.nullbill-built"
+
+- name: Releases built before this one
+  ansible.builtin.find:
+    paths: /opt/qbittorrent
+    file_type: directory
+    excludes: "{{ qbittorrent_version }}"
+  register: qbittorrent_old
+
+- name: Releases built before this one go
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ qbittorrent_old.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+# A guest set up before NullBill built qBittorrent itself has Debian's.
+- name: Debian's own qBittorrent goes
+  ansible.builtin.apt:
+    name: qbittorrent-nox
+    state: absent
 
 - name: Directories
   ansible.builtin.file:
@@ -155,7 +233,7 @@
         - /etc/systemd/system/nb-tunnel.service
       notify: Restart qbittorrent
 
-# A new qBittorrent of this version takes a well-known password until one
+# A new qBittorrent makes up a password of its own for each start until one
 # is set: its settings exist, with the page's password, before it starts.
 - name: qBittorrent's settings before its first start
   ansible.builtin.command: /usr/local/sbin/nb-torrents first-config

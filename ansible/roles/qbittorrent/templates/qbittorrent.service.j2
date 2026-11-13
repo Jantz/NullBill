@@ -15,7 +15,8 @@ ConditionPathIsMountPoint={{ qbittorrent_store }}
 [Service]
 User=qbt
 Group=qbt
-ExecStart=/usr/bin/qbittorrent-nox --profile=/var/lib/qbittorrent
+# The release the role built; a new one restarts the client.
+ExecStart={{ qbittorrent_dir }}/bin/qbittorrent-nox --profile=/var/lib/qbittorrent
 Restart=on-failure
 RestartSec=5
 # It writes what it holds in memory before it ends.

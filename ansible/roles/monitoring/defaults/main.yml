@@ -8,8 +8,8 @@ monitoring_probe_ca: ""
 
 # Grafana's signed apt repository, key pinned by checksum. Loki ships there too.
 monitoring_grafana_repo_signer_sha256: 3d4029689bc7e4444ec00abafa07f21e9c812b41f1123ab5bbe6f8c3e3f7ff8c
-monitoring_grafana_version: 13.2.4
-monitoring_loki_version: 3.7.8
+monitoring_grafana_version: 13.3.1
+monitoring_loki_version: 3.7.9
 
 # All addresses: the guest firewall limits 9090 to the operator and the
 # NullBill page.

@@ -108,7 +108,7 @@ and the script at `/var/lib/nullbill/custom/navidrome/setup.sh`. Then
 
 ## 4. What a setup script must do
 
-It runs as root in a fresh Debian 12 guest with no terminal, at most an
+It runs as root in a fresh Debian 13 guest with no terminal, at most an
 hour, and again whenever its text changes (and after a failure).
 
 - Start with `#!/bin/bash` and `set -eu`.

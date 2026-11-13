@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Render the router and egress-proxy files for every fixture class and check
-# them with nft, dnsmasq, squid and ifupdown in a Debian 12 container, the
+# them with nft, dnsmasq, squid and ifupdown in a Debian 13 container, the
 # release those guests run. Then walk the path a phone on mobile data takes
 # to the vpn guest (tools/guest-check/portmap.sh), and the path the download
 # client's traffic takes behind the owner's VPN (tools/guest-check/tunnel.sh).

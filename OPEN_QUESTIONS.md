@@ -24,16 +24,16 @@ answered items move to the decisions list at the bottom.
    long jobs there). Recommendation: keep these manual, with an "Update and
    reboot the host" button on the setup page and an alert after 14 days of
    waiting Proxmox updates or 3 days of a waiting reboot.
-5. **Debian 13.** Guests run Debian 12, which is now oldstable; its
-   security updates continue through Debian LTS until mid-2028. Proxmox VE
-   9 is on Debian 13. Recommendation: move every guest to Debian 13 before
-   the first real install is a few months old; it touches every role check.
-6. **Pinned versions.** Grafana, Loki, step-ca, Forgejo, OpenTofu, sops and
-   the agent CLI install at versions this repository pins, so their fixes
-   arrive only when the pin moves. apt-installed pins show as waiting
-   updates in monitoring; binary pins do not yet. Recommendation: a weekly
-   CI job in this repository that compares each pin with its upstream
-   release and opens an issue.
+5. **Debian 13.** Decided 2026-11-13 (ADR 0022): every guest NullBill
+   sets up runs Debian 13, and a server built before is upgraded in place
+   by the first setup run after the update. Open: services of your own
+   stay on the Debian they were made with. Recommendation: leave them;
+   upgrade one yourself when its program is ready for it.
+6. **Pinned versions.** Decided 2026-11-13 (ADR 0022): a daily job moves
+   every pin in `pins.yaml` to its vendor's newest stable release and
+   servers follow nightly. Open: OpenTofu, its provider, sops, Ansible,
+   gitleaks and the NVIDIA driver are not followed. Recommendation: add
+   OpenTofu, sops and Ansible to the table next; leave the driver by hand.
 7. **Windows Update.** Not managed yet; the plan lists Windows guests under
    `updates.not_managed`. Recommendation: Group Policy for automatic
    install and an exporter for update age, when Windows work starts.
@@ -128,10 +128,11 @@ answered items move to the decisions list at the bottom.
   follows a service port, and the policy carries tests that Tailscale runs
   on every push, so a policy that lets a default user reach the host is
   rejected.
-- Guest images: Debian 12 for every container (Proxmox's standard
+- Guest images: Debian 13 for every container (Proxmox's standard
   template) and Linux VM (Debian's dated generic cloud image), each pinned
-  by SHA-512 in `catalog.yaml`. PBS installs from its apt repository onto
-  the Debian VM. Windows installs from the ISO you supply.
+  by SHA-512 in `catalog.yaml` and moved to the newest by the daily pins
+  job. A guest keeps the image it was made from. PBS installs from its apt
+  repository onto the Debian VM. Windows installs from the ISO you supply.
 - OpenTofu 1.13.2 with bpg/proxmox 0.118.1; the API token comes from the
   environment, never a file. State and saved plans are encrypted with
   OpenTofu's own AES-GCM and a passphrase from the environment

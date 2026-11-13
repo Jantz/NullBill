@@ -345,7 +345,7 @@ def variables(plan: dict, model: dict, name: str) -> dict:
     # What a new world takes, each with the game's own start, as the server reads it.
     out["new_world"] = {o["key"]: str(o["default"]).lower() if isinstance(o["default"], bool) else str(o["default"]) for o in NEW_WORLD[of]}
     if of == "minecraft":
-        out |= {f"java_{k}": game["java"][k] for k in ("version", "url", "sha256")}
+        out["java"] = game["java"]
         out |= {"heap_mib": plan["games"][name]["heap_mib"], "eula": game["eula"], "proxy": proxy, "services": list(MOJANG)}
         # Which server runs Mojang's file, what that kind is made of, and
         # its plugins or mods (nullbill/mods.py).

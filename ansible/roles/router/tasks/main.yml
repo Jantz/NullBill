@@ -5,11 +5,11 @@
       - "'/etc/nftables.conf' in router_files"
     fail_msg: router_files is empty; run this through nullbill apply
 
-# miniupnpc and natpmpc: the UPnP and NAT-PMP clients nb-portmap asks the
-# home router with.
+# miniupnpc: the UPnP client nb-portmap asks the home router with. NAT-PMP
+# it speaks itself.
 - name: Router packages
   ansible.builtin.apt:
-    name: [nftables, dnsmasq-base, ifupdown, miniupnpc, natpmpc]
+    name: [nftables, dnsmasq-base, ifupdown, miniupnpc]
     update_cache: true
 
 # Asks the home router to send Tailscale's port here, so devices behind a
@@ -35,7 +35,7 @@
     state: absent
   register: router_cloud_init_file
 
-# Debian 12's cloud image configures the network through netplan and
+# Debian's cloud image configures the network through netplan and
 # systemd-networkd. netplan's 10-netplan-ethN.link files sort before the
 # rendered .link files and would name the legs eth1.. again, so the nb-*
 # interfaces dnsmasq binds to would never exist. ifupdown owns them now.

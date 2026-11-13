@@ -6,8 +6,8 @@ step_ca_port: 443
 # Smallstep's signed apt repository. The key file is pinned by checksum.
 step_ca_repo_key_url: https://packages.smallstep.com/keys/apt/repo-signing-key.gpg
 step_ca_repo_signer_sha256: 3ecc63922b7795eb23fdc449ff9396f9114cb3cf186d6f5b53ad4cc3ebfbb11f
-step_ca_version: 0.30.1-1
-step_cli_version: 0.30.1-1
+step_ca_version: 0.30.2-1
+step_cli_version: 0.31.0-1
 
 step_ca_home: /etc/step-ca
 step_ca_manage_services: true

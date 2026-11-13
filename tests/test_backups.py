@@ -56,7 +56,7 @@ def test_without_a_pbs_disk_the_datastore_is_a_volume_beside_the_guests(facts):
     (root, datastore) = config["resource"]["proxmox_virtual_environment_vm"]["pbs"]["disk"]
     assert (datastore["datastore_id"], datastore["size"], datastore["serial"]) == ("local-lvm", 64, backups.DISK_SERIAL)
     assert datastore["backup"] is False and root["datastore_id"] == "local-lvm"
-    assert config["resource"]["proxmox_virtual_environment_vm"]["pbs"]["lifecycle"] == {"prevent_destroy": True}
+    assert config["resource"]["proxmox_virtual_environment_vm"]["pbs"]["lifecycle"]["prevent_destroy"] is True
     assert "proxmox_backup_job" in config["resource"]
     assert backups.enabled(plan) and backups.disk(plan) is None and backups.store(plan) == ("local-lvm", 64)
     # The checks run as on a disk of PBS's own; verify adds what one disk cannot do.

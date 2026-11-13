@@ -57,8 +57,10 @@ from nullbill import (
     names,
     owner,
     people,
+    pins,
     power,
     preview,
+    release,
     tailscale,
     torrents,
     version,
@@ -98,6 +100,13 @@ SCHEDULED = {"rebake-ci": ["apply", "--stage", "ci"]}
 # Deleting the guests the last apply stopped before deleting (apply.REMOVALS).
 REMOVE_ACTIONS = {"remove-guests": ["apply", "--remove-guests"]}
 REBAKE_WEEKDAY, REBAKE_HOUR = 6, 3
+# The page's own nightly job (docs/adr/0022-latest-stable.md): fetch main,
+# install what it brings and run setup when that changes what setup builds.
+# A step the owner is asked about (nullbill/pins.py) stops it before it
+# installs anything. Between these hours, local time, once a night, after
+# the backups and whenever no other job runs; its state is in NIGHTLY.
+NIGHTLY = "web/nightly.json"
+NIGHTLY_HOURS = range(3, 6)
 # Setup runs of everything, as the page starts them. The owner starts one
 # only with the id of the review the page showed them (App.review).
 SETUP_ACTIONS = {"apply", *REMOVE_ACTIONS}
@@ -125,6 +134,8 @@ AGENT_CREDENTIALS = {"sk-ant-api": ("anthropic_api_key", "API key"), "sk-ant-oat
 # anything else, read other jobs' logs, or use the owner's API.
 AGENT_TOKEN = "web/agent-token.sha256"
 AGENT_ACTIONS = {"verify"}
+# Who a job the nightly update starts is `by`.
+NIGHTLY_BY = "nightly"
 # The owner's switch on the page (docs/adr/0003-agent-access.md): while it
 # is on, the runtime agent has root on the PVE host (nullbill/hostroot.py)
 # and may also run setup (all of it or one stage) and update NullBill
@@ -217,6 +228,7 @@ STAMPED = (
     "names.json",
     "guests.json",
     "removals.json",
+    "releases.json",
     "disks.json",
     "secrets.sops.yaml",
     "applied.json",
@@ -225,6 +237,7 @@ STAMPED = (
     "web/owner.json",
     "web/update-check.json",
     "web/last-update.json",
+    NIGHTLY,
     "web/agent-powers.json",
     "web/alerts-heard.json",
     "web/remote-agents.json",
@@ -1199,6 +1212,21 @@ class App:
         if self.built() and not self.config_changed():
             return self.planned_guests()
         return None
+
+    def release_waiting(self) -> list[str]:
+        """Guests the next full setup run upgrades to the Debian release
+        guests run now: those of the last finished OpenTofu apply that no
+        run has found on it yet (release.unknown). Read from what the page
+        has; the server is not asked."""
+        config, plan, record = self.config(), self.home / "plan.yaml", self.home / GUESTS
+        if config is None or not plan.is_file() or not record.is_file():
+            return []
+        try:
+            model = build_model(config)
+            existing = [str(n) for n in json.loads(record.read_text())["guests"]]
+            return release.unknown(self.home, yaml.safe_load(plan.read_text()) or {"guests": {}}, model, existing)
+        except (NullBillError, ValueError, KeyError, TypeError):
+            return []
 
     def planned_removals(self) -> list[str]:
         """Guests on the server that the saved choices no longer plan: the
@@ -2222,20 +2250,21 @@ class App:
             return False
         return read or action in POWER_ACTIONS
 
-    def tell(self, message: str, tag: str) -> None:
+    def tell(self, message: str, tag: str, title: str = "NullBill agent") -> None:
         """One message to the owner's ntfy topic, or NullBillError."""
         topic = Secrets(self.codec(self.home)).data.get("ntfy_topic")
         if not topic:
             raise NullBillError("the owner has no ntfy topic yet, so they could not be told; set a password on the page first")
         try:
-            self.send(NTFY + topic, message, {"Title": "NullBill agent", "Tags": tag})
+            self.send(NTFY + topic, message, {"Title": title, "Tags": tag})
         except OSError as exc:
             raise NullBillError(f"could not tell the owner through ntfy ({exc}); nothing started") from exc
 
     def tell_agent_jobs(self) -> None:
         """How each job an agent started ended, once."""
         for job in list(self.jobs.values()):
-            if job.by == "owner" or job.state() == "running":
+            # The nightly update tells of its own runs (nightly_step).
+            if job.by in ("owner", NIGHTLY_BY) or job.state() == "running":
                 continue
             meta = json.loads(job.meta_file.read_text())
             if meta.get("told"):
@@ -2283,7 +2312,7 @@ class App:
             job = Job(job_id, action, args, jobs / f"{job_id}.log", time.time(), by=by)
             # The page's own agent announces setup runs and updates; the
             # owner approved or allowed the rest on the page.
-            if by != "owner" and not (by == "agent" and action in AGENT_ACTIONS | {"probe"}):
+            if by not in ("owner", NIGHTLY_BY) and not (by == "agent" and action in AGENT_ACTIONS | {"probe"}):
                 # Before the job exists: an action the owner is not told of does not run.
                 self.tell(f"The agent started: {progress.JOB_TEXT.get(action, action)}{f' (stage {stage})' if stage else ''}", "robot")
             env = os.environ | {"NULLBILL_HOME": str(self.home), "PYTHONUNBUFFERED": "1", "ANSIBLE_FORCE_COLOR": "0"}
@@ -2373,13 +2402,113 @@ class App:
             except NullBillError:
                 pass
         if not self.rebake_due(now):
-            return None
+            return self.nightly_step(now)
         try:
             job = self.start("rebake-ci")
         except NullBillError:
             return None
         _write_private(self.home / "web" / "last-rebake", f"{now}\n")
         return job
+
+    # The nightly update (docs/adr/0022-latest-stable.md).
+    def nightly(self) -> dict:
+        try:
+            found = json.loads((self.home / NIGHTLY).read_text())
+        except (OSError, ValueError):
+            found = {}
+        return {"enabled": True} | (found if isinstance(found, dict) else {})
+
+    def set_nightly(self, enabled: bool) -> dict:
+        record = self.nightly() | {"enabled": bool(enabled)}
+        _write_private(self.home / NIGHTLY, json.dumps(record) + "\n")
+        return record
+
+    def update_steps(self, head: str, newest: str) -> list[dict]:
+        """The pinned versions an update moves (nullbill/pins.py), each with
+        `asks`: a step this server's owner is asked about."""
+        found = pins.steps(version.reader(self.repo, head), version.reader(self.repo, newest))
+        text = self.built_plan()
+        asked = {s["name"] for s in pins.asks(found, yaml.safe_load(text) if text else None)}
+        return [{k: s[k] for k in ("name", "title", "from", "to")} | {"asks": s["name"] in asked} for s in found]
+
+    def nightly_step(self, now: float) -> Job | None:
+        """One step of tonight's update, at most one job at a time: look
+        for an update; install it unless it asks the owner something; run
+        setup when the server no longer follows the version. Each minute
+        takes the next step, also after the page restarted with the update."""
+        record = self.nightly()
+        today = time.strftime("%Y-%m-%d", time.localtime(now))
+        if not record["enabled"] or not self.built() or version.head(self.repo) is None:
+            return None
+        if any(j.state() == "running" for j in self.jobs.values()):
+            return None
+        if record.get("day") != today:
+            if time.localtime(now).tm_hour not in NIGHTLY_HOURS:
+                return None
+            record |= {"day": today, "step": "look", "job": None, "ended": None}
+
+        def keep(**fields: object) -> None:
+            record.update(fields)
+            _write_private(self.home / NIGHTLY, json.dumps(record) + "\n")
+
+        def end(how: str, text: str, tell: bool = False) -> None:
+            said = record.get("said")
+            keep(step="done", ended={"how": how, "text": text, "at": now})
+            # Once per thing to say, not every night it stays true.
+            if tell and said != text:
+                try:
+                    self.tell(text, "arrows_counterclockwise" if how == "waits" else "warning", "NullBill updates")
+                    keep(said=text)
+                except NullBillError as exc:
+                    print(f"nullbill-web: {exc}", file=sys.stderr, flush=True)
+
+        def failed(what: str) -> bool:
+            job = self.jobs.get(record.get("job") or "")
+            if job is None or job.state() == "done":
+                return False
+            end("failed", f"Tonight's {what} failed. Open Activity on the page to see why.", tell=True)
+            return True
+
+        step = record.get("step")
+        if step == "look":
+            try:
+                newest = self.check_updates().get("commit")
+            except NullBillError:
+                return None
+            head = version.head(self.repo)
+            if not newest or not version.behind(self.repo, head, newest):
+                keep(step="updated")
+                return None
+            asks = [s for s in self.update_steps(head, newest) if s["asks"]]
+            if asks:
+                names = ", ".join(f"{s['title']} {s['from']} to {s['to']}" for s in asks)
+                end("waits", f"An update waits for your yes: {names}. Open Updates on the page.", tell=True)
+                return None
+            job = self.start("upgrade", by=NIGHTLY_BY)
+            keep(step="updating", job=job.id)
+            return job
+        if step == "updating":
+            if not failed("update of NullBill"):
+                keep(step="updated")
+            return None
+        if step == "updated":
+            follows = (self.version_view() or {}).get("server", {}).get("follows")
+            if follows is not False:
+                end("same", "Nothing to set up.")
+            elif self.config_changed() or self.removals() or self.planned_removals():
+                # Choices the owner saved and has not reviewed are theirs to start.
+                end("waits", "Setup did not run by itself: your saved choices wait for you under Setup, Review and run.")
+            elif self.release_waiting():
+                # Every guest is away in turn, and the page at the end.
+                end("waits", "Setup did not run by itself: it upgrades Debian in every guest, which waits for you under Setup, Review.")
+            else:
+                job = self.start("apply", by=NIGHTLY_BY)
+                keep(step="setup", job=job.id)
+                return job
+            return None
+        if step == "setup" and not failed("setup run"):
+            end("done", "Setup ran with the update.")
+        return None
 
     def job_view(self, job: Job, offset: int = 0) -> dict:
         data = job.log.read_bytes()
@@ -2585,11 +2714,15 @@ class App:
             view = {
                 "current": version.describe(self.repo, head),
                 "available": version.changes(self.repo, head, newest) if ahead else [],
+                # The versions the waiting update moves; `asks` waits for the owner.
+                "steps": self.update_steps(head, newest) if ahead else [],
                 "server": server,
                 "last": last,
             }
             self.version_seen = (key, view)
         view = self.version_seen[1] | {"checked": check.get("checked"), "check_error": check.get("error")}
+        night = self.nightly()
+        view["nightly"] = {"enabled": night["enabled"], "hour": NIGHTLY_HOURS[0], "day": night.get("day"), "ended": night.get("ended")}
         # What installing the waiting update, and the setup run after it, does to each machine.
         view["effect"] = self.update_effect(head, check["commit"]) if view["available"] and self.built() else None
         return view
@@ -2633,10 +2766,19 @@ class App:
             why("update", f"NullBill was updated since the last setup run: {what}.")
         if self.tailscale_key():
             why("key", "A Tailscale auth key waits to be used.")
+        upgrading = self.release_waiting()
+        if upgrading and built is not None:
+            n, debian = len(upgrading), build_model(self.config() or {})["images"]["release"]["version"]
+            why(
+                "release",
+                f"{n} guest{' was' if n == 1 else 's were'} built on the Debian before. This run moves "
+                f"{'it' if n == 1 else 'each'} to Debian {debian} first, with a snapshot taken before: "
+                f"{'it is' if n == 1 else 'each is'} away for some minutes, and at the end this page for about ten.",
+            )
 
         text = plan.get("text")
         config = self.home / "config.yaml"
-        seen = [text or "", config.read_text() if config.exists() else "", version.head(self.repo) or "", *sorted(removals)]
+        seen = [text or "", config.read_text() if config.exists() else "", version.head(self.repo) or "", *sorted(removals), *upgrading]
         out: dict = {
             "id": hashlib.sha256("\0".join(seen).encode()).hexdigest()[:16],
             "ready": bool(text),
@@ -3243,6 +3385,9 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                     return self.json(200, {"ok": True, "alerts": app.alerts()})
                 if match := re.fullmatch(r"/api/jobs/([0-9T]+-[a-z-]+)/stop", self.path):
                     return self.json(200, app.job_view(app.stop(match[1])))
+                if self.path == "/api/updates/nightly":
+                    app.set_nightly(body.get("enabled") is True)
+                    return self.json(200, {"ok": True, "version": app.version_view()})
                 if self.path == "/api/updates/check":
                     app.check_updates()
                     return self.json(200, {"ok": True, "version": app.version_view()})

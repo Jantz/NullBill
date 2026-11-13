@@ -1569,6 +1569,18 @@ class Tools:
         }
         if version.get("effect"):
             out["the_update_and_its_setup_run_would"] = foreseen(version["effect"])
+        # Versions an update moves; a big step waits for the owner's own press of Update NullBill.
+        steps = version.get("steps") or []
+        if steps:
+            out["versions_the_update_moves"] = [
+                f"{step['title']}: {step['from']} to {step['to']}"
+                + (" (a big step: waits for the owner's yes)" if step.get("asks") else "")
+                for step in steps
+            ]
+        nightly = version.get("nightly") or {}
+        out["updates_install_by_themselves_each_night"] = bool(nightly.get("enabled"))
+        if (nightly.get("ended") or {}).get("text"):
+            out["last_night"] = nightly["ended"]["text"]
         return yaml.safe_dump(out, sort_keys=False, width=200)
 
     def t_test_alert(self) -> str:

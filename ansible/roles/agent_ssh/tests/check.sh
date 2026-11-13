@@ -16,7 +16,9 @@ converge agent-ssh.yml -e agent_ssh_manage_services=false -e "agent_ssh_user_ca_
 
 mkdir -p /run/sshd
 start_journald
-/usr/sbin/sshd -E /tmp/sshd.log
+# The refused logins below all come from one address; without this sshd
+# (9.8 and later) would then refuse that address the good ones too.
+/usr/sbin/sshd -E /tmp/sshd.log -o PerSourcePenalties=no
 
 # sign CA PRINCIPAL VALIDITY: a fresh certificate for key.pub.
 sign() {

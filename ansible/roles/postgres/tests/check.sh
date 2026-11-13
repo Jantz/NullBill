@@ -20,6 +20,18 @@ postgres_manage_services: false
 postgres_databases:
   - {name: forgejo, client: 127.0.0.1, password: "it's a test"}
 YAML
+# A cluster of the PostgreSQL before, not moved over: the role stops
+# rather than start an empty one beside it.
+install -d /var/lib/postgresql/15/main
+echo 15 >/var/lib/postgresql/15/main/PG_VERSION
+if ansible-playbook -i localhost, -c local -e @/tmp/vars.yml /ansible/postgres.yml >/tmp/older.log 2>&1; then
+  fail "the role ran beside an older version's data"
+fi
+grep -q "/var/lib/postgresql/15 holds a database cluster of another" /tmp/older.log || { cat /tmp/older.log; fail "the role names the older cluster"; }
+[ ! -e /var/lib/postgresql/17 ] || fail "nothing was installed beside the older data"
+rm -r /var/lib/postgresql/15
+pass "beside an older PostgreSQL's data that was not moved over, the role stops and says so"
+
 converge postgres.yml -e @/tmp/vars.yml
 
 export PGPASSWORD="it's a test"

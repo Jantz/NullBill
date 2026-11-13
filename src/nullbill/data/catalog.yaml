@@ -202,7 +202,6 @@ services:
     zone: mgmt
     workload: core
     description: Proxmox Backup Server. The host sends encrypted backups.
-    image: debian-13-cloud
     floor: {cores: 1, memory_mib: 2048, disk_gib: 8}
     ports:
       - {port: 8007, proto: tcp, from: ["host", "role:owner"]}
@@ -599,7 +598,7 @@ models:
 # updates, this pin moves, or pin the new file in config.yaml under
 # games.<name> (version, url, sha256). settings are the server's own
 # options by its own names, on top of what NullBill sets; admins are player
-# names. tools/game-pins prints what the vendors offer now.
+# names. tools/pins moves these pins daily (pins.yaml).
 games:
   minecraft:
     title: Minecraft
@@ -610,13 +609,9 @@ games:
     version: "26.3"
     url: https://piston-data.mojang.com/v1/objects/33680f5f2ac32864d6d7cf5e56a705fdb3e05f4c/server.jar
     sha256: d052f14d7a173734fba553711e5b570162e2f2a313267ee31a21b975a679be64
-    # 26.3 needs Java 25 (javaVersion in 26.3.json); Debian 12 has 17.
-    # Eclipse Temurin's JRE, with its checksum, from
-    # https://api.adoptium.net/v3/assets/latest/25/hotspot?architecture=x64&image_type=jre&os=linux&vendor=eclipse
-    java:
-      version: 25.0.5+8
-      url: https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.5%2B8/OpenJDK25U-jre_x64_linux_hotspot_25.0.5_8.tar.gz
-      sha256: 6fac98f0c8202efc3135a9e9e42aa61963ec42d1c5cbb40caf231e7b14a24ef6
+    # 26.3 needs Java 25 (javaVersion in 26.3.json), which Debian 13 has
+    # as openjdk-25-jre-headless; its updates come with Debian's.
+    java: 25
     # The server starts only once its owner agrees to Minecraft's EULA
     # (https://aka.ms/MinecraftEULA): eula: true in config.yaml says so.
     eula: false
@@ -634,9 +629,9 @@ games:
       # the role hands it, so it downloads nothing when it starts.
       paper:
         version: "26.3"
-        build: 248
-        url: https://fill-data.papermc.io/v1/objects/352dbbf965946456a81305f4c4a8d39cb7a8e55a0b0126b417a24efd944b92c2/paper-26.3-248.jar
-        sha256: 352dbbf965946456a81305f4c4a8d39cb7a8e55a0b0126b417a24efd944b92c2
+        build: 249
+        url: https://fill-data.papermc.io/v1/objects/4c734aeb4da98845934af1e5481f0df7c80ad3ca50d272319ffe2b0e8a187c8a/paper-26.3-249.jar
+        sha256: 4c734aeb4da98845934af1e5481f0df7c80ad3ca50d272319ffe2b0e8a187c8a
       # Fabric's loader and the libraries it names for this Minecraft
       # (https://meta.fabricmc.net/v2/versions/loader/26.3/0.20.1/server/json),
       # each with the SHA-256 Fabric's Maven publishes beside it. The loader
@@ -743,20 +738,22 @@ proxy:
 # Images apply downloads onto the media storage. Pinned by checksum, so a
 # changed file fails the download instead of booting.
 images:
+  # Every Linux guest runs Debian 13, the release under Proxmox VE 9 and the
+  # one PBS 4 is built for.
+  # A guest made from an earlier image runs `from`; apply's release stage
+  # moves it to `codename` in place (nullbill/release.py).
+  release:
+    version: "13"
+    codename: trixie
+    from: bookworm
   # From http://download.proxmox.com/images/aplinfo-pve-9.dat
   debian-lxc:
-    url: http://download.proxmox.com/images/system/debian-12-standard_12.12-1_amd64.tar.zst
-    sha512: 50c85eaaece677a3ebe01cc909b83872e9da2a22c29ae652838afce71e83222fdf40f6accecd7d52b180e912fc1f85ecdf7b3fc4d3027da4d865e509a9e76597
-  # From https://cloud.debian.org/images/cloud/bookworm/20261021-2638/SHA512SUMS
-  debian-cloud:
-    url: https://cloud.debian.org/images/cloud/bookworm/20261021-2638/debian-12-genericcloud-amd64-20261021-2638.qcow2
-    sha512: 9f181877006e8d9ca4f4554eba8729a829936f0f7d1db5e77f69b1ef0f6bc372b4d46f3dae39b10d84f9131496c2cc1d449264f26577fe934a79de5a5512a3dd
-  # PBS 4 is built for Debian 13; PBS 3 on Debian 12 reached its end of life
-  # in 2026-08 (https://pbs.proxmox.com/docs/faq.html).
+    url: http://download.proxmox.com/images/system/debian-13-standard_13.6-1_amd64.tar.zst
+    sha512: 4c0c27ca6ceab5ef0b84db57825a00f26157ef1854bafe97297813e1cbe8ecb8cc9c453cab6b3b0efe1ba193a50c47ece1e41d950e411b8730b835b71e9e754b
   # From https://cloud.debian.org/images/cloud/trixie/20261026-2643/SHA512SUMS
-  debian-13-cloud:
-    url: https://cloud.debian.org/images/cloud/trixie/20261026-2643/debian-13-genericcloud-amd64-20261026-2643.qcow2
-    sha512: 3ace18e33bdd036edb49d1f79342bd01d2ab980e35194edb0b410435cd543538d286a0bd13bbb0835f7862306e3d385ce2f6a70d8ecf0bd961111166adbc1b8e
+  debian-cloud:
+    url: https://cloud.debian.org/images/cloud/trixie/20261111-2659/debian-13-genericcloud-amd64-20261111-2659.qcow2
+    sha512: 3247873136ba09b060fab45e9c115239f81c1d401fce00b8fa9b872013f7135d6a40b12462ab5ac03b9fa4ed5955dd0e8d1c900109a939ad7a0a4dafe7dea47b
 
 # verify checks direct egress against this name's address, and the proxy
 # with both the name and the bare address. It must be on proxy.allow.

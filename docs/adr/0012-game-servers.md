@@ -87,7 +87,8 @@ itself.
   images, no server managers, no third-party builds. A player's game must
   be the same version as the server, so the pin moves with NullBill's
   updates, and the owner can pin another file in `config.yaml` at once.
-  `tools/game-pins` prints what the vendors offer now.
+  `tools/pins latest` (first `tools/game-pins`) prints what the vendors
+  offer now.
 - **Players prove who they are to the vendor**, always: Minecraft's
   `online-mode` and Factorio's `require_user_verification` cannot be
   turned off from `config.yaml`, nor can anything that would list the

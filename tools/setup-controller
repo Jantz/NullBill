@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Turn a Debian 12 container into the NullBill controller (ADR 0006). Run as
+# Turn a Debian 13 container into the NullBill controller (ADR 0006). Run as
 # root inside the `nullbill` container, from the checkout at /opt/nullbill;
 # install.sh does this. Safe to run again: each step checks first.
 #
@@ -37,7 +37,9 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends python3-venv git openssh-client age curl ca-certificates >/dev/null
 
-if [ ! -x "$root/venv/bin/python3" ]; then
+# Made again when its Python is gone, as after a Debian upgrade.
+if ! "$root/venv/bin/python3" -c 'import pip' 2>/dev/null; then
+  rm -rf "$root/venv"
   python3 -m venv "$root/venv"
 fi
 # shellcheck disable=SC1091

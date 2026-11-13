@@ -3,13 +3,8 @@
 # to install (docs/adr/0008-local-models.md). git checks out the tag and
 # the role refuses it unless it is still this commit.
 inference_llama_repo: https://github.com/ggml-org/llama.cpp.git
-inference_llama_tag: b12205
-inference_llama_commit: a691b2345844ce1b430201fc5fd404ce062e05f2
-# Debian 12's Vulkan headers (1.3.239) are too old for this llama.cpp, so
-# it builds against Khronos' headers at the version Debian 13 ships.
-inference_vulkan_headers_repo: https://github.com/KhronosGroup/Vulkan-Headers.git
-inference_vulkan_headers_tag: v1.4.309
-inference_vulkan_headers_commit: 952f776f6573aafbb62ea717d871cd1d6816c387
+inference_llama_tag: b12367
+inference_llama_commit: fe14cad51bbfb3f1cc8d9cfd9d70e98a123743d3
 # Compilers at once. Some files of the Vulkan backend take close to 2 GiB
 # each to compile; apply gives the container room for one at a time.
 inference_build_jobs: 1

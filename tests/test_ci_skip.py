@@ -37,7 +37,8 @@ def test_a_skipped_part_says_so_and_runs_nothing_else():
 def test_ci_jobs_run_every_part_and_every_role_once():
     matrix = yaml.safe_load(WORKFLOW.read_text())["jobs"]["check"]["strategy"]["matrix"]["include"]
     parts = [part for job in matrix for part in job["parts"].split()]
-    assert sorted(parts) == sorted(["static", "apply", "install", "firewall", "guests", "host", "tofu"] + ["roles"] * parts.count("roles"))
+    once = ["static", "apply", "install", "firewall", "guests", "host", "release", "tofu"]
+    assert sorted(parts) == sorted(once + ["roles"] * parts.count("roles"))
     sharded = [role for job in matrix if job["parts"] == "roles" for role in job["roles"].split()]
     roles = sorted(p.parent.parent.name for p in (REPO_ROOT / "ansible" / "roles").glob("*/tests/check.sh"))
     assert sorted(sharded) == roles

@@ -1,6 +1,6 @@
 # OpenTofu, to validate the rendered configuration against the provider's
 # schema without a PVE API.
-FROM debian:12-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
+FROM debian:13-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 # extra-ca.crt is empty unless the build runs behind a TLS-intercepting proxy.
 COPY extra-ca.crt /tmp/extra-ca.crt
 RUN apt-get update \

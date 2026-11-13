@@ -521,6 +521,8 @@ def test_a_setup_run_gives_the_client_its_folder_while_stopped_and_sets_it_up_af
     ct = reach.torrents_ct
     assert ct["mps"] == {"mp0": "/mnt/nb-legacy/data/Downloads,mp=/downloads,backup=0,ro=0"} and ct["status"] == "running"
     assert reach.torrents_asked == [["wait"], ["settings"], ["paths"]]
+    # qBittorrent is built in the guest: memory lent for the role, then given back.
+    assert ct["memory"] == [torrents.BUILD_MEMORY_MIB, plan["guests"]["qbittorrent"]["memory_mib"]]
     restarts = ct["restarts"]
     apply.run_apply(c)
     assert ct["restarts"] == restarts, "a second run leaves the guest running"

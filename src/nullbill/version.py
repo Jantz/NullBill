@@ -49,6 +49,16 @@ def holds(root: Path, commit: str) -> bool:
     return _git(root, "cat-file", "-e", f"{commit}^{{commit}}") is not None
 
 
+def reader(root: Path, commit: str):
+    """Reads a file's text as that commit holds it, None when it has none
+    (nullbill/pins.py reads the pins of two commits this way)."""
+
+    def read(path: str) -> str | None:
+        return _git(root, "show", f"{commit}:{path}")
+
+    return read
+
+
 def describe(root: Path, commit: str) -> dict | None:
     """A commit as the page shows it."""
     out = _git(root, "show", "-s", "--format=%H%x00%ct%x00%s", commit)

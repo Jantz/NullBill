@@ -35,9 +35,11 @@ import http.server, json, ssl
 class Page(http.server.BaseHTTPRequestHandler):
     def reply(self, data):
         if self.headers.get("Authorization") != "Bearer page-token" or self.headers.get("X-NullBill") != "1":
-            self.send_response(401); self.end_headers(); return
+            self.send_response(401); self.send_header("Content-Length", "0"); self.end_headers(); return
         body = json.dumps(data).encode()
-        self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(body)
+        self.send_response(200); self.send_header("Content-Type", "application/json")
+        # As the page does: without a length curl waits for the end, which OpenSSL 3.5 calls an error.
+        self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
         if self.path == "/api/agent/apply":

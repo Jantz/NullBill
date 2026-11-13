@@ -12,7 +12,7 @@ import re
 
 from nullbill.errors import NullBillError
 
-# OpenSSH's public key types that Forgejo and Debian 12's sshd both accept.
+# OpenSSH's public key types that Forgejo and Debian's sshd both accept.
 KEY_TYPES = (
     "ssh-ed25519",
     "ssh-rsa",

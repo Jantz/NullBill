@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 import yaml
 from fixturedata import games_config
+from pinned import FACTORIO, MINECRAFT, TERRARIA
 
 from nullbill import games, people, power
 from nullbill.cli import plan_text
@@ -205,11 +206,11 @@ def test_a_friend_is_told_the_address_and_the_version(facts):
     plan = build_plan(model, facts("large"))
     text = people.instructions(model, plan, "friend-c", names=True)
     assert "minecraft.nullbill.internal:25565" in text and "If the name does not open: 10.42.8.25:25565" in text
-    assert "You need Minecraft: Java Edition 26.3." in text
-    assert "terraria.nullbill.internal, port 7777" in text and "You need Terraria 1.4.5.8 on a computer." in text
+    assert f"You need Minecraft: Java Edition {MINECRAFT}." in text
+    assert "terraria.nullbill.internal, port 7777" in text and f"You need Terraria {TERRARIA} on a computer." in text
     assert "Factorio" not in text
     opens = people.opens(model, plan, "factorio", ["udp/34197"], names=False)
-    assert opens["where"] == "10.42.8.27:34197" and "You need Factorio 2.1.24," in opens["note"]
+    assert opens["where"] == "10.42.8.27:34197" and f"You need Factorio {FACTORIO}," in opens["note"]
 
 
 def test_admins_are_made_on_the_console_only_when_missing(facts):
@@ -264,12 +265,12 @@ def test_verify_asks_each_planned_game(facts):
     plan, model = planned(facts)
     labels = [label for label, _, _ in games.commands(plan, model)]
     assert labels == [
-        "minecraft runs version 26.3 and answers",
+        f"minecraft runs version {MINECRAFT} and answers",
         *[f"minecraft reaches {host} through the proxy" for host in games.MOJANG],
         "minecraft runs Mojang's own server",
         "minecraft's admins are those in config.yaml",
-        "terraria runs version 1.4.5.8 and answers",
-        "factorio runs version 2.1.24 and answers",
+        f"terraria runs version {TERRARIA} and answers",
+        f"factorio runs version {FACTORIO} and answers",
         "factorio's admins are those in config.yaml",
     ]
     vmids = {plan["guests"][name]["vmid"] for name in GAMES}
@@ -287,14 +288,14 @@ def test_verify_passes_fails_and_skips(facts):
     def run(target, command):
         label = by_command[command]
         if label.startswith("terraria"):
-            return 0, "1.4.5.8 False\n", ""
+            return 0, f"{TERRARIA} False\n", ""
         return 0, answers[label] + "\n", ""
 
     results = games.check(copy.deepcopy(plan_with_notes), model, "root@host", run)
     assert [r.status for r in results].count("PASS") == len(results) - 1
     (failed,) = [r for r in results if r.status == "FAIL"]
-    assert failed.name == "terraria runs version 1.4.5.8 and answers"
-    assert failed.detail == "1.4.5.8 False"
+    assert failed.name == f"terraria runs version {TERRARIA} and answers"
+    assert failed.detail == f"{TERRARIA} False"
     skipped = games.skipped(plan_with_notes, model, "the host is not reachable")
     assert [r.name for r in skipped] == list(answers)
     assert {r.status for r in skipped} == {"SKIP"}

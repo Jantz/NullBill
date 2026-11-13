@@ -2,8 +2,8 @@
 # taken from a download whose detached signature verified against Forgejo's
 # release key EB114F5E6C0DC2BCDD183550A4B61A2DC5923710. v15 is the LTS
 # line (supported to 2027-07-15).
-forgejo_version: 15.0.11
-forgejo_sha256: 17b59b5f8a8f968126b7a6fcc1d45d9531228dbf293f172cf5565d2e72e999a3
+forgejo_version: 17.0.1
+forgejo_sha256: 51a8cdf4a1252e79f4b3855d7a7891af6c6635105420768c460e2f0690385d6f
 forgejo_url: "https://codeberg.org/forgejo/forgejo/releases/download/v{{ forgejo_version }}/forgejo-{{ forgejo_version }}-linux-amd64"
 
 # The name people and runners use. nginx serves HTTPS on 443; Forgejo's own

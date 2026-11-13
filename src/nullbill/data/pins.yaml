@@ -1,0 +1,139 @@
+# Every version this repository pins, and where the pin is written
+# (docs/adr/0022-latest-stable.md). tools/pins moves each to its vendor's
+# newest stable release once a day; a server follows main each night.
+#
+# file, key: where the version stands. In a YAML file key is a dotted path,
+#   elsewhere the name of a shell variable.
+# hold: how many leading numbers of the version a server keeps until its
+#   owner says yes (Updates page): a change there can change stored data
+#   one way, or what clients must run. `all`: every change waits.
+# services: only a server that runs one of these is asked. None: every one.
+# weekly: moved on Mondays only.
+# by_hand: tools/pins leaves it; a person moves it with the work it needs.
+# was: what a commit from before the key existed is taken to have pinned.
+debian:
+  title: Debian in every guest
+  file: src/nullbill/data/catalog.yaml
+  key: images.release.version
+  # Every guest is upgraded in place, PostgreSQL with it (the release
+  # stage); it takes each guest away for some minutes.
+  hold: all
+  by_hand: true
+  was: "12"
+forgejo:
+  title: Forgejo
+  file: ansible/roles/forgejo/defaults/main.yml
+  key: forgejo_version
+  hold: 1
+  services: [forgejo]
+forgejo-runner:
+  title: Forgejo Runner
+  file: ansible/roles/ci_runner/defaults/main.yml
+  key: ci_runner_version
+  hold: 1
+  services: [runner-dispatcher]
+grafana:
+  title: Grafana
+  file: ansible/roles/monitoring/defaults/main.yml
+  key: monitoring_grafana_version
+  hold: 1
+  services: [monitoring]
+loki:
+  title: Loki
+  file: ansible/roles/monitoring/defaults/main.yml
+  key: monitoring_loki_version
+  hold: 1
+  services: [monitoring]
+step-ca:
+  title: step-ca
+  file: ansible/roles/step_ca/defaults/main.yml
+  key: step_ca_version
+  # 0.x: the second number is the one that breaks things.
+  hold: 2
+tailscale:
+  title: Tailscale
+  file: ansible/roles/vpn/defaults/main.yml
+  key: vpn_tailscale_version
+  hold: 1
+jellyfin:
+  title: Jellyfin
+  file: ansible/roles/jellyfin/defaults/main.yml
+  key: jellyfin_version
+  hold: 1
+  services: [jellyfin]
+jellyfin-ffmpeg:
+  title: Jellyfin's ffmpeg
+  file: ansible/roles/jellyfin/defaults/main.yml
+  key: jellyfin_ffmpeg_version
+  hold: 0
+  services: [jellyfin]
+qbittorrent:
+  title: qBittorrent
+  file: ansible/roles/qbittorrent/defaults/main.yml
+  key: qbittorrent_version
+  hold: 1
+  services: [qbittorrent]
+litellm:
+  title: LiteLLM
+  file: ansible/roles/model_gateway/defaults/main.yml
+  key: model_gateway_version
+  hold: 1
+  services: [model-gateway]
+llama.cpp:
+  title: llama.cpp
+  file: ansible/roles/inference/defaults/main.yml
+  key: inference_llama_tag
+  # Several releases a day, each a rebuild on the server and a reload of
+  # the model.
+  hold: 0
+  weekly: true
+  services: [inference]
+agent-cli:
+  title: The agents' Claude Code
+  file: ansible/roles/operator/defaults/main.yml
+  key: operator_claude_code_version
+  hold: 1
+minecraft:
+  title: Minecraft
+  file: src/nullbill/data/catalog.yaml
+  key: games.minecraft.version
+  # 26.3 to 26.4 is a new game: players must update, mods must follow, and
+  # a world opened by the newer server does not go back.
+  hold: 2
+  services: [minecraft]
+paper:
+  title: Paper
+  file: src/nullbill/data/catalog.yaml
+  key: games.minecraft.servers.paper.build
+  hold: 0
+  services: [minecraft]
+fabric:
+  title: Fabric's loader
+  file: src/nullbill/data/catalog.yaml
+  key: games.minecraft.servers.fabric.loader
+  hold: 0
+  services: [minecraft]
+terraria:
+  title: Terraria
+  file: src/nullbill/data/catalog.yaml
+  key: games.terraria.version
+  # Players need the server's exact version.
+  hold: all
+  services: [terraria]
+factorio:
+  title: Factorio
+  file: src/nullbill/data/catalog.yaml
+  key: games.factorio.version
+  hold: 2
+  services: [factorio]
+debian-template:
+  title: Debian's container template
+  file: src/nullbill/data/catalog.yaml
+  key: images.debian-lxc.url
+  # What new guests are made from; one that exists keeps its own.
+  hold: 0
+debian-cloud:
+  title: Debian's cloud image
+  file: src/nullbill/data/catalog.yaml
+  key: images.debian-cloud.url
+  hold: 0

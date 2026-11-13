@@ -23,7 +23,7 @@ pass "rendered files placed; cloud-init no longer configures the network"
 
 # The port mapping: the script, the clients it runs and the units that run it.
 test -x /usr/local/sbin/nb-portmap || fail "nb-portmap installed"
-command -v upnpc natpmpc >/dev/null || fail "Debian's UPnP and NAT-PMP clients installed"
+command -v upnpc >/dev/null || fail "Debian's UPnP client installed"
 units=(/etc/systemd/system/nullbill-portmap.service /etc/systemd/system/nullbill-portmap.timer)
 verify=$(systemd-analyze verify "${units[@]}" 2>&1) || fail "systemd refuses the port mapping units: $verify"
 grep -q "nullbill-portmap" <<<"$verify" && fail "systemd warns about the port mapping units: $verify"

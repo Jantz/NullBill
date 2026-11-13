@@ -13,6 +13,7 @@ import test_chat
 import test_web
 import yaml
 from fixturedata import fixture_config, games_config
+from pinned import FACTORIO, MINECRAFT
 
 from nullbill import apply, custom, games
 from nullbill.errors import NullBillError
@@ -79,7 +80,7 @@ def test_a_further_server_is_a_game_server_like_the_catalogs(facts):
     assert games.planned(plan, model) == ["minecraft", "terraria", "factorio", "minecraft-creative", "factorio-2"]
     assert plan["games"]["minecraft-creative"] == {
         "title": "Creative world",
-        "version": "26.3",
+        "version": MINECRAFT,
         "port": "tcp/25565",
         "game": "minecraft",
         "heap_mib": 6144 - games.JVM_OVERHEAD_MIB,
@@ -118,7 +119,7 @@ def test_each_server_gets_its_games_role_with_its_own_settings(facts):
     assert games.admin_command(model, "minecraft-creative", "owner_b") == "op owner_b"
     assert games.address(plan, "minecraft-creative", model, by_name=True) == "minecraft-creative.nullbill.internal:25565"
     labels = [label for label, _, _ in games.commands(plan, model)]
-    assert "minecraft-creative runs version 26.3 and answers" in labels
+    assert f"minecraft-creative runs version {MINECRAFT} and answers" in labels
     assert "minecraft-creative reaches sessionserver.mojang.com through the proxy" in labels
     assert "minecraft-creative's admins are those in config.yaml" in labels
     assert not any(label.startswith("terraria-master") for label in labels)
@@ -345,8 +346,8 @@ def test_the_games_stage_sets_up_each_server_with_its_games_playbook(ctx):
     ]
     servers = c.reach.game_servers
     assert servers["2064"]["typed"] == ["op owner_b"] and servers["2025"]["typed"] == ["op owner_a"]
-    assert "games: Creative world 26.3 answers at 10.42.8.64:25565" in c.log
-    assert "games: Second factory 2.1.24 answers at 10.42.8.65:34197" in c.log
+    assert f"games: Creative world {MINECRAFT} answers at 10.42.8.64:25565" in c.log
+    assert f"games: Second factory {FACTORIO} answers at 10.42.8.65:34197" in c.log
 
 
 # The page.
@@ -380,7 +381,7 @@ def test_the_services_page_says_how_to_join_each_server(facts):
     entry = items["minecraft-creative"]
     assert entry["title"] == "Creative world" and entry["what"].startswith("A Minecraft server for you and the people you let in.")
     assert entry["addresses"] == ["In the game: 10.42.8.64:25565"]
-    assert any("Multiplayer, Add Server" in s["text"] and "Minecraft: Java Edition 26.3" in s["text"] for s in entry["steps"])
+    assert any("Multiplayer, Add Server" in s["text"] and f"Minecraft: Java Edition {MINECRAFT}" in s["text"] for s in entry["steps"])
     assert any("beside Creative world" in s["text"] and s["done"] for s in entry["steps"])
     # Its worlds and console are asked by its own name, as a Minecraft server.
     assert entry["game"] == "minecraft" and not any("code" in s for s in entry["steps"])
@@ -534,7 +535,7 @@ def test_the_agent_adds_game_servers_as_a_change_and_never_agrees_for_the_owner(
     assert (proposal["tier"], proposal["word"], proposal["act"]) == ("change", "", "game")
     assert proposal["title"] == "Add the game server Creative world"
     assert proposal["lines"] == [
-        "A Minecraft 26.3 server of its own, called Creative world, with its own world.",
+        f"A Minecraft {MINECRAFT} server of its own, called Creative world, with its own world.",
         "A container in the games zone: 2 cores, 4.0 GiB memory, 16 GiB disk.",
         "Opens tcp/25565 to you and the people you tick it for, as every Minecraft server does. No program comes with it "
         "but the game's own server, pinned by NullBill.",

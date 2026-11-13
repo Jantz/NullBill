@@ -2663,6 +2663,19 @@ function renderUpdates() {
   show("update-available", n > 0);
   $("update-available-title").textContent = n ? `What the update brings (${needSetup(v.available)})` : "";
   $("update-available-list").replaceChildren(...v.available.map((c) => changeItem(c, true)));
+  // The versions it moves; a big jump waits for the owner's Update.
+  const steps = n > 0 ? v.steps : [];
+  const asks = steps.filter((s) => s.asks);
+  show("update-steps", steps.length > 0);
+  show("update-asks", asks.length > 0);
+  $("update-asks-text").textContent = asks.length ? `${asks.length === 1 ? "One is a big jump, which" : `${asks.length} are big jumps, which`} can change stored data for good. Nothing installs by itself until you press Update NullBill. Look at Backups first.` : "";
+  $("update-steps-list").replaceChildren(...steps.map((s) => make("li", {}, make("span", {className: "change-subject", textContent: s.title}),
+    make("span", {className: "meta", textContent: `${shortVersion(s.from)} to ${shortVersion(s.to)}`}),
+    s.asks ? make("span", {className: "tag", textContent: "Waits for your yes"}) : null)));
+  $("nightly").checked = v.nightly.enabled;
+  const ended = v.nightly.ended;
+  show("nightly-last", Boolean(ended));
+  if (ended) $("nightly-last").textContent = `Last night's run, ${ago(ended.at)}: ${ended.text}`;
   renderUpdateEffect(n > 0 ? v.effect : null);
   // The server.
   const b = v.server.built;
@@ -2688,6 +2701,10 @@ function renderUpdates() {
 }
 // What the waiting update does to each machine: read from the files it
 // changes (nullbill/preview.py), before anything of it is installed.
+// A version as a line shows it: an image's address by its file name.
+function shortVersion(text) {
+  return text.includes("/") ? text.slice(text.lastIndexOf("/") + 1) : text;
+}
 function renderUpdateEffect(e) {
   show("update-effect", Boolean(e));
   if (!e) return;
@@ -6037,6 +6054,17 @@ document.addEventListener("DOMContentLoaded", () => {
   $("backups-key-get").addEventListener("click", () => setTimeout(() => loadBackups().catch(() => {}), 1500));
   $("start-setup").addEventListener("click", () => startJob("apply", $("start-setup"), $("build-result")));
   $("update-now").addEventListener("click", () => startJob("upgrade", $("update-now"), $("update-result")));
+  $("nightly").addEventListener("change", async () => {
+    const on = $("nightly").checked;
+    say("nightly-result", "busy", "Saving…");
+    try {
+      state.version = (await api("/api/updates/nightly", {enabled: on})).version;
+      say("nightly-result", "ok", on ? "On. It runs after 03:00." : "Off. Updates wait for you here.");
+    } catch (error) {
+      say("nightly-result", "error", error.message);
+    }
+    renderUpdates();
+  });
   $("update-check").addEventListener("click", () => press($("update-check"), "update-result", "Asking the repository…", async () => {
     state.version = (await api("/api/updates/check", {})).version;
     paintStates();

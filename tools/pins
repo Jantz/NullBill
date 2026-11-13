@@ -1,0 +1,432 @@
+#!/usr/bin/env python3
+"""Move the pins in src/nullbill/data/pins.yaml to what each vendor offers
+as its newest stable release (docs/adr/0022-latest-stable.md).
+
+    tools/pins list             what is pinned now
+    tools/pins latest [NAME..]  what the vendors offer, changing nothing
+    tools/pins bump [NAME..]    write the newer pins into their files
+
+Every new pin comes with the vendor's own checksum, checked here against
+the download where the vendor publishes one (Mojang's SHA-1, Wube's,
+PaperMC's and Fabric's SHA-256, npm's integrity), or against the
+vendor's signature (Forgejo and its runner); source builds are pinned by
+tag and commit, apt packages by version, signed by the repository key the
+role pins. bump prints one line per moved pin, `name: old -> new`, which
+.github/workflows/pins.yml puts in the commit message.
+
+Needs network access, git, gpg, and uv for LiteLLM's lock.
+"""
+
+import base64
+import datetime
+import gzip
+import hashlib
+import json
+import re
+import subprocess
+import sys
+import tempfile
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "src"))
+
+from nullbill import pins  # noqa: E402
+
+FORGEJO_SIGNED_BY = "EB114F5E6C0DC2BCDD183550A4B61A2DC5923710"
+KEYSERVER = "https://keys.openpgp.org/vks/v1/by-fingerprint/{}"
+FORGEJO = "https://codeberg.org/api/v1/repos/forgejo/forgejo/releases?limit=50&draft=false&pre-release=false"
+RUNNER = "https://code.forgejo.org/api/v1/repos/forgejo/runner/releases?limit=50&draft=false&pre-release=false"
+GRAFANA = "https://apt.grafana.com/dists/stable/main/binary-amd64/Packages"
+SMALLSTEP = "https://packages.smallstep.com/stable/debian/dists/debs/main/binary-amd64/Packages"
+TAILSCALE = "https://pkgs.tailscale.com/stable/debian/dists/trixie/main/binary-amd64/Packages"
+JELLYFIN = "https://repo.jellyfin.org/debian/dists/trixie/main/binary-amd64/Packages"
+QBITTORRENT = "https://github.com/qbittorrent/qBittorrent.git"
+LLAMA = "https://github.com/ggml-org/llama.cpp.git"
+PYPI = "https://pypi.org/pypi/litellm/json"
+NPM = "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64"
+MOJANG = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
+TERRARIA = "https://terraria.org/api/get/dedicated-servers-names"
+TERRARIA_FILE = "https://terraria.org/api/download/pc-dedicated-server/{}"
+PAPER = "https://fill.papermc.io/v3/projects/paper/versions/{}/builds"
+FABRIC_LOADERS = "https://meta.fabricmc.net/v2/versions/loader/{}"
+FABRIC_SERVER = "https://meta.fabricmc.net/v2/versions/loader/{}/{}/server/json"
+FACTORIO = "https://factorio.com/api/latest-releases"
+FACTORIO_SUMS = "https://factorio.com/download/sha256sums/"
+FACTORIO_FILE = "https://factorio.com/get-download/{}/headless/linux64"
+PROXMOX = "http://download.proxmox.com/images/"
+DEBIAN = "https://cloud.debian.org/images/cloud/trixie/"
+
+CATALOG = "src/nullbill/data/catalog.yaml"
+# One edit: the file, the key in it, the new value.
+Edit = tuple[str, str, object]
+
+
+def get(url: str) -> bytes:
+    request = urllib.request.Request(url, headers={"User-Agent": "nullbill-pins"})
+    with urllib.request.urlopen(request, timeout=300) as response:
+        return response.read()
+
+
+def sha256(url: str) -> str:
+    return hashlib.sha256(get(url)).hexdigest()
+
+
+def newest(versions: list[str]) -> str:
+    return max(versions, key=pins.numbers)
+
+
+def defaults(role: str) -> str:
+    return f"ansible/roles/{role}/defaults/main.yml"
+
+
+def signed(url: str, fingerprint: str) -> str:
+    """The SHA-256 of a download whose detached signature (url + .asc) is
+    by this key."""
+    data, signature = get(url), get(url + ".asc")
+    with tempfile.TemporaryDirectory() as home:
+        gpg = ["gpg", "--homedir", home, "--batch", "--quiet"]
+        subprocess.run([*gpg, "--import"], input=get(KEYSERVER.format(fingerprint)), check=True, capture_output=True)
+        (Path(home) / "file").write_bytes(data)
+        (Path(home) / "file.asc").write_bytes(signature)
+        done = subprocess.run(
+            [*gpg, "--status-fd", "1", "--verify", f"{home}/file.asc", f"{home}/file"], capture_output=True, text=True, check=False
+        )
+    # VALIDSIG ends with the primary key's fingerprint; a subkey signs.
+    if done.returncode != 0 or not re.search(rf"^\[GNUPG:\] VALIDSIG .* {fingerprint}$", done.stdout, re.M):
+        raise SystemExit(f"{url}: no valid signature by {fingerprint}")
+    return hashlib.sha256(data).hexdigest()
+
+
+def forgejo_release(listing: str, key: str, name: str, role: str, file: str) -> list[Edit]:
+    tags = [r["tag_name"] for r in json.loads(get(listing)) if re.fullmatch(r"v\d+\.\d+\.\d+", r["tag_name"]) and not r["prerelease"]]
+    version = newest(tags).removeprefix("v")
+    url = f"{listing.split('/api/v1/repos/')[0]}/{name}/releases/download/v{version}/{file}-{version}-linux-amd64"
+    return [(defaults(role), f"{key}_version", version), (defaults(role), f"{key}_sha256", signed(url, FORGEJO_SIGNED_BY))]
+
+
+def forgejo() -> list[Edit]:
+    return forgejo_release(FORGEJO, "forgejo", "forgejo/forgejo", "forgejo", "forgejo")
+
+
+def forgejo_runner() -> list[Edit]:
+    return forgejo_release(RUNNER, "ci_runner", "forgejo/runner", "ci_runner", "forgejo-runner")
+
+
+def packages(index: str) -> list[dict[str, str]]:
+    """An apt repository's Packages index, one dict per package."""
+    try:
+        text = get(index).decode()
+    except urllib.error.HTTPError:
+        text = gzip.decompress(get(index + ".gz")).decode()
+    return [
+        dict(line.split(": ", 1) for line in stanza.splitlines() if ": " in line and not line.startswith(" "))
+        for stanza in text.split("\n\n")
+    ]
+
+
+def apt_newest(index: list[dict[str, str]], package: str, like: str = r".*") -> str:
+    found = [p["Version"] for p in index if p.get("Package") == package and re.fullmatch(like, p["Version"])]
+    if not found:
+        raise SystemExit(f"no {package} in the repository's index")
+    return newest(found)
+
+
+def grafana() -> list[Edit]:
+    return [(defaults("monitoring"), "monitoring_grafana_version", apt_newest(packages(GRAFANA), "grafana", r"[\d.]+"))]
+
+
+def loki() -> list[Edit]:
+    return [(defaults("monitoring"), "monitoring_loki_version", apt_newest(packages(GRAFANA), "loki", r"[\d.]+"))]
+
+
+def step_ca() -> list[Edit]:
+    index = packages(SMALLSTEP)
+    ca, cli = apt_newest(index, "step-ca"), apt_newest(index, "step-cli")
+    # The operator and every guest with a certificate install the same step-cli.
+    return [
+        (defaults("step_ca"), "step_ca_version", ca),
+        (defaults("step_ca"), "step_cli_version", cli),
+        (defaults("operator"), "step_cli_version", cli),
+        (defaults("tls_cert"), "tls_cert_step_cli_version", cli),
+    ]
+
+
+def tailscale() -> list[Edit]:
+    return [(defaults("vpn"), "vpn_tailscale_version", apt_newest(packages(TAILSCALE), "tailscale"))]
+
+
+def jellyfin() -> list[Edit]:
+    return [(defaults("jellyfin"), "jellyfin_version", apt_newest(packages(JELLYFIN), "jellyfin-server", r"[\d.]+\+deb13"))]
+
+
+def jellyfin_ffmpeg() -> list[Edit]:
+    index = packages(JELLYFIN)
+    version = apt_newest(index, "jellyfin", r"[\d.]+\+deb13")
+    # Jellyfin's own package names the ffmpeg it runs with (jellyfin-ffmpeg8).
+    package = next(
+        re.search(r"\bjellyfin-ffmpeg\d+\b", p["Depends"])[0]
+        for p in index
+        if (p.get("Package"), p.get("Version")) == ("jellyfin", version)
+    )
+    return [
+        (defaults("jellyfin"), "jellyfin_ffmpeg_package", package),
+        (defaults("jellyfin"), "jellyfin_ffmpeg_version", apt_newest(index, package, r".*-trixie")),
+    ]
+
+
+def tags(repository: str, pattern: str) -> dict[str, str]:
+    """A git repository's tags that match, each with the commit it names."""
+    out = subprocess.run(["git", "ls-remote", "--tags", repository], capture_output=True, text=True, check=True, timeout=300).stdout
+    found: dict[str, str] = {}
+    for line in out.splitlines():
+        commit, ref = line.split("\t")
+        tag = ref.removeprefix("refs/tags/")
+        # An annotated tag's own line comes first, its commit's (^{}) after.
+        if re.fullmatch(pattern, tag.removesuffix("^{}")):
+            found[tag.removesuffix("^{}")] = commit
+    return found
+
+
+def qbittorrent() -> list[Edit]:
+    found = tags(QBITTORRENT, r"release-\d+\.\d+\.\d+")
+    tag = newest(list(found))
+    return [
+        (defaults("qbittorrent"), "qbittorrent_version", tag.removeprefix("release-")),
+        (defaults("qbittorrent"), "qbittorrent_commit", found[tag]),
+    ]
+
+
+def llama() -> list[Edit]:
+    found = tags(LLAMA, r"b\d+")
+    tag = newest(list(found))
+    return [(defaults("inference"), "inference_llama_tag", tag), (defaults("inference"), "inference_llama_commit", found[tag])]
+
+
+def litellm() -> list[Edit]:
+    version = json.loads(get(PYPI))["info"]["version"]
+    if not re.fullmatch(r"[\d.]+", version):
+        raise SystemExit(f"litellm: PyPI's newest is {version}, not a stable release")
+    return [(defaults("model_gateway"), "model_gateway_version", version)]
+
+
+def litellm_lock(version: str) -> None:
+    """The gateway's hash-pinned lock for this LiteLLM, as its defaults say."""
+    files = ROOT / "ansible/roles/model_gateway/files"
+    (files / "requirements.in").write_text(f"litellm[proxy]=={version}\n")
+    subprocess.run(
+        ["uv", "pip", "compile", "requirements.in", "--generate-hashes", "--python-version", "3.13"]
+        + ["--python-platform", "x86_64-manylinux_2_40", "--no-header", "--quiet", "-o", "requirements.txt"],
+        cwd=files,
+        check=True,
+    )
+
+
+def agent_cli() -> list[Edit]:
+    package = json.loads(get(NPM))
+    version = package["dist-tags"]["stable"]
+    algorithm, digest = package["versions"][version]["dist"]["integrity"].split("-", 1)
+    if algorithm != "sha512":
+        raise SystemExit(f"agent-cli: npm gives {algorithm}, not sha512")
+    url = f"{NPM}/-/claude-code-linux-x64-{version}.tgz"
+    ours = hashlib.sha512(get(url)).hexdigest()
+    if ours != base64.b64decode(digest).hex():
+        raise SystemExit(f"agent-cli: {url} is not what npm's integrity names")
+    return [(defaults("operator"), "operator_claude_code_version", version), (defaults("operator"), "operator_claude_code_sha512", ours)]
+
+
+def minecraft() -> list[Edit]:
+    listing = json.loads(get(MOJANG))
+    release = listing["latest"]["release"]
+    version = json.loads(get(next(v["url"] for v in listing["versions"] if v["id"] == release)))
+    server = version["downloads"]["server"]
+    data = get(server["url"])
+    if hashlib.sha1(data).hexdigest() != server["sha1"]:
+        raise SystemExit(f"minecraft: {server['url']} is not the file Mojang's SHA-1 names")
+    return [
+        (CATALOG, "games.minecraft.version", release),
+        (CATALOG, "games.minecraft.url", server["url"]),
+        (CATALOG, "games.minecraft.sha256", hashlib.sha256(data).hexdigest()),
+        (CATALOG, "games.minecraft.java", version["javaVersion"]["majorVersion"]),
+    ]
+
+
+def minecraft_version(edits: list[Edit]) -> str:
+    """The Minecraft version Paper and Fabric must be for: the one this run
+    moves to, else the pinned one."""
+    moved = next((value for _, key, value in edits if key == "games.minecraft.version"), None)
+    return str(moved or pins.current(pins.checkout(ROOT))["minecraft"])
+
+
+def paper(version: str) -> list[Edit]:
+    stable = [b for b in json.loads(get(PAPER.format(version))) if b.get("channel") == "STABLE"]
+    if not stable:
+        raise SystemExit(f"paper: no stable build for Minecraft {version} yet")
+    build = max(stable, key=lambda b: b["id"])
+    file = build["downloads"]["server:default"]
+    if sha256(file["url"]) != file["checksums"]["sha256"]:
+        raise SystemExit(f"paper: {file['url']} is not the file PaperMC's SHA-256 names")
+    at = "games.minecraft.servers.paper"
+    return [(CATALOG, f"{at}.version", version), (CATALOG, f"{at}.build", build["id"]), (CATALOG, f"{at}.url", file["url"])] + [
+        (CATALOG, f"{at}.sha256", file["checksums"]["sha256"])
+    ]
+
+
+def fabric(version: str) -> list[Edit]:
+    stable = [entry["loader"]["version"] for entry in json.loads(get(FABRIC_LOADERS.format(version))) if entry["loader"].get("stable")]
+    if not stable:
+        raise SystemExit(f"fabric: no stable loader for Minecraft {version} yet")
+    libraries = []
+    for library in json.loads(get(FABRIC_SERVER.format(version, stable[0])))["libraries"]:
+        group, name, release = library["name"].split(":")
+        file = f"{name}-{release}.jar"
+        url = f"{library['url'].rstrip('/')}/{group.replace('.', '/')}/{name}/{release}/{file}"
+        listed = get(url + ".sha256").decode().split()[0]
+        if sha256(url) != listed:
+            raise SystemExit(f"fabric: {url} is not the file Fabric's Maven names")
+        libraries.append({"file": file, "url": url, "sha256": listed})
+    at = "games.minecraft.servers.fabric"
+    return [(CATALOG, f"{at}.version", version), (CATALOG, f"{at}.loader", stable[0]), (CATALOG, f"{at}.libraries", libraries)]
+
+
+def terraria() -> list[Edit]:
+    name = json.loads(get(TERRARIA))[0]
+    digits = re.fullmatch(r"terraria-server-(\d+)\.zip", name)
+    if not digits:
+        raise SystemExit(f"terraria: unexpected file name {name}")
+    url = TERRARIA_FILE.format(name)
+    # Re-Logic publishes no checksum: the pin is the download's own.
+    return [
+        (CATALOG, "games.terraria.version", ".".join(digits[1])),
+        (CATALOG, "games.terraria.url", url),
+        (CATALOG, "games.terraria.sha256", sha256(url)),
+    ]
+
+
+def factorio() -> list[Edit]:
+    version = json.loads(get(FACTORIO))["stable"]["headless"]
+    url = FACTORIO_FILE.format(version)
+    listed = re.search(rf"^([0-9a-f]{{64}})\s+factorio-headless_linux_{re.escape(version)}\.tar\.xz$", get(FACTORIO_SUMS).decode(), re.M)
+    if not listed or listed[1] != sha256(url):
+        raise SystemExit(f"factorio: {url} is not the file factorio.com's SHA-256 names")
+    return [
+        (CATALOG, "games.factorio.version", version),
+        (CATALOG, "games.factorio.url", url),
+        (CATALOG, "games.factorio.sha256", listed[1]),
+    ]
+
+
+def debian_template() -> list[Edit]:
+    listing = get(PROXMOX + "aplinfo-pve-9.dat").decode()
+    found = {}
+    for stanza in listing.split("\n\n"):
+        fields = dict(line.split(": ", 1) for line in stanza.splitlines() if ": " in line and not line.startswith(" "))
+        if fields.get("Package") == "debian-13-standard" and fields.get("Architecture") == "amd64":
+            found[fields["Version"]] = fields
+    fields = found[newest(list(found))]
+    return [(CATALOG, "images.debian-lxc.url", PROXMOX + fields["Location"]), (CATALOG, "images.debian-lxc.sha512", fields["sha512sum"])]
+
+
+def debian_cloud() -> list[Edit]:
+    builds = re.findall(r'href="(\d{8}-\d+)/"', get(DEBIAN).decode())
+    build = newest(builds)
+    file = f"debian-13-genericcloud-amd64-{build}.qcow2"
+    listed = re.search(rf"^([0-9a-f]{{128}})\s+{re.escape(file)}$", get(f"{DEBIAN}{build}/SHA512SUMS").decode(), re.M)
+    if not listed:
+        raise SystemExit(f"debian-cloud: {build} lists no {file}")
+    return [(CATALOG, "images.debian-cloud.url", f"{DEBIAN}{build}/{file}"), (CATALOG, "images.debian-cloud.sha512", listed[1])]
+
+
+SOURCES = {
+    "forgejo": forgejo,
+    "forgejo-runner": forgejo_runner,
+    "grafana": grafana,
+    "loki": loki,
+    "step-ca": step_ca,
+    "tailscale": tailscale,
+    "jellyfin": jellyfin,
+    "jellyfin-ffmpeg": jellyfin_ffmpeg,
+    "qbittorrent": qbittorrent,
+    "litellm": litellm,
+    "llama.cpp": llama,
+    "agent-cli": agent_cli,
+    "minecraft": minecraft,
+    "terraria": terraria,
+    "factorio": factorio,
+    "debian-template": debian_template,
+    "debian-cloud": debian_cloud,
+}
+# After minecraft, for the version it moved to.
+FOLLOW_MINECRAFT = {"paper": paper, "fabric": fabric}
+
+
+def offered(names: list[str], weekly: bool, unread: dict[str, str]) -> dict[str, list[Edit]]:
+    """Per pin whose vendor offers another version than is pinned, the
+    edits that move it there. A weekly pin is looked at only when asked;
+    a pin that could not be read goes into `unread` with why."""
+    table, now = pins.table(), pins.current(pins.checkout(ROOT))
+    out: dict[str, list[Edit]] = {}
+    for name in names:
+        pin = table[name]
+        if pin.get("by_hand") or (pin.get("weekly") and not weekly):
+            continue
+        try:
+            if name in FOLLOW_MINECRAFT:
+                edits = FOLLOW_MINECRAFT[name](minecraft_version(out.get("minecraft", [])))
+            else:
+                edits = SOURCES[name]()
+        except (Exception, SystemExit) as error:  # noqa: BLE001 - one vendor's bad day leaves the other pins moving
+            unread[name] = f"{type(error).__name__}: {error}"
+            continue
+        new = next(str(value) for file, key, value in edits if (file, key) == (pin["file"], pin["key"]))
+        if new == now[name]:
+            continue
+        # A vendor that withdrew a release offers an older one: nothing goes back.
+        if name not in FOLLOW_MINECRAFT and pins.numbers(new) < pins.numbers(now[name]):
+            unread[name] = f"offers {new}, older than the pinned {now[name]}"
+            continue
+        out[name] = edits
+    return out
+
+
+def write(edits: list[Edit]) -> None:
+    for file, key, new in edits:
+        path = ROOT / file
+        path.write_text(pins.put(path.read_text(), file, key, new))
+
+
+def main(argv: list[str]) -> int:
+    table = pins.table()
+    command, names = (argv[0] if argv else ""), argv[1:] or list(table)
+    unknown = [n for n in names if n not in table]
+    if command not in ("list", "latest", "bump") or unknown:
+        print(__doc__ if not unknown else f"tools/pins: no pin named {', '.join(unknown)}", file=sys.stderr)
+        return 2
+    now = pins.current(pins.checkout(ROOT))
+    if command == "list":
+        for name in names:
+            print(f"{name}: {now[name]}")
+        return 0
+    # minecraft before what follows it.
+    names.sort(key=lambda n: n in FOLLOW_MINECRAFT)
+    # A weekly pin moves on Mondays, or when it is named.
+    unread: dict[str, str] = {}
+    weekly = command == "latest" or bool(argv[1:]) or datetime.date.today().weekday() == 0
+    found = offered(names, weekly, unread)
+    for name, edits in found.items():
+        pin = table[name]
+        new = next(str(value) for file, key, value in edits if (file, key) == (pin["file"], pin["key"]))
+        if command == "bump":
+            write(edits)
+            if name == "litellm":
+                litellm_lock(new)
+        print(f"{name}: {now[name]} -> {new}")
+    for name, why in unread.items():
+        print(f"tools/pins: {name} stays at {now[name]}: {why}", file=sys.stderr)
+    return 3 if unread else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

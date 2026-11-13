@@ -4,8 +4,8 @@
 A device behind a mobile carrier's NAT reaches the vpn guest directly only
 on a port the home router forwards (nullbill/direct.py); this router passes
 that port on to the vpn guest (its nftables.conf). Home routers open a port
-on request: NAT-PMP first, one question to the gateway, then UPnP, both with
-Debian's own clients (natpmpc, upnpc).
+on request: NAT-PMP first, one question to the gateway, which this program
+asks itself, then UPnP with Debian's upnpc.
 
     nb-portmap /etc/nullbill/portmap.json
 
@@ -30,35 +30,44 @@ import ipaddress
 import json
 import os
 import re
+import socket
+import struct
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 LEASE_S = 3600
-# natpmpc doubles its wait from 250 ms: four tries fit, and a gateway that
-# will answer has by then.
-NATPMP_WAIT_S = 6
+# NAT-PMP (RFC 6886) is spoken here, not by Debian's natpmpc: from Debian 13
+# on natpmpc refuses a home router whose address is not a public one before
+# it asks for anything, and with it every answer worth reporting. A request
+# is sent again after 250 ms, then after twice that: four tries, under 4 s,
+# and a gateway that will answer has by then.
+PMP_PORT = 5351
+PMP_TRIES = 4
+PMP_FIRST_WAIT_S = 0.25
+PMP_KINDS = {"udp": 1, "tcp": 2}
 UPNP_WAIT_S = 30
 NATPMP, UPNP = "NAT-PMP", "UPnP"
 
-PMP_ADDRESS = re.compile(r"^Public IP address : (\S+)$", re.M)
-# natpmpc spells it "liftime".
-PMP_MAPPED = re.compile(r"^Mapped public port (\d+) protocol (?:UDP|TCP) to local port (\d+) lif\w*time (\d+)$", re.M)
-PMP_FAILED = re.compile(r"^readnatpmpresponseorretry\(\) failed : (.+)$", re.M)
 # upnpc prints this line from what the router reads back, not from its own request.
 UPNP_MAPPED = re.compile(r"^external (\S*):(\d+) (?:UDP|TCP) is redirected to internal (\S+):(\d+)", re.M)
 UPNP_FAILED = re.compile(r"AddPortMapping\(.*\) failed with code (-?\d+) \((.*)\)")
+# upnpc from 2.2.6 on, of a router whose outside address is private or shared.
+UPNP_RESERVED = "Found an IGD with a reserved IP address"
 # Its answer, not a finding: a port forwarded by hand past it may be open all the same.
 NO_PUBLIC_ADDRESS = "it says it has no public address of its own"
 # Nothing to set against what Tailscale offers: such a mapping is given back.
 UNNAMED = "it mapped the port without saying its public address"
 REFUSED = "it does not let this device open ports"
-# natpmpc's words (libnatpmp's strnatpmperr).
-PMP_REASONS = {
-    "the gateway does not support nat-pmp": "not offered",
-    "network failure": NO_PUBLIC_ADDRESS,
-    "not authorized": REFUSED,
+# The result codes of RFC 6886, 3.5. 3 is "network failure": a gateway
+# that has no outside address itself, as miniupnpd says on a shared one.
+PMP_RESULTS = {
+    1: "not offered",
+    2: REFUSED,
+    3: NO_PUBLIC_ADDRESS,
+    4: "it has no room for another mapping",
+    5: "not offered",
 }
 TAKEN = "it already sends that port to another device"
 UPNP_CODES = {"606": REFUSED, "718": TAKEN}
@@ -93,22 +102,72 @@ def ipv4(text: str) -> str | None:
         return None
 
 
+def exchange(gateway: str, packet: bytes) -> bytes | None:
+    """The gateway's answer to one NAT-PMP request: None when none came,
+    b"" when nothing listens there."""
+    wait = PMP_FIRST_WAIT_S
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            # Connected: answers from the gateway's address only.
+            sock.connect((gateway, PMP_PORT))
+            for _ in range(PMP_TRIES):
+                sock.send(packet)
+                end = time.monotonic() + wait
+                while (left := end - time.monotonic()) > 0:
+                    sock.settimeout(left)
+                    try:
+                        data = sock.recv(64)
+                    except TimeoutError:
+                        break
+                    if len(data) >= 8 and data[0] == 0 and data[1] == 128 + packet[1]:
+                        return data
+                wait *= 2
+    except ConnectionRefusedError:
+        return b""
+    except OSError:
+        return None
+    return None
+
+
+def pmp(gateway: str, packet: bytes, size: int) -> tuple[bytes | None, str]:
+    """(what the answer holds after its head, "") or (None, why not)."""
+    data = exchange(gateway, packet)
+    if data is None:
+        return None, "no answer"
+    if not data:
+        return None, "not offered"
+    code = struct.unpack("!H", data[2:4])[0]
+    if code:
+        return None, PMP_RESULTS.get(code, f"it answered error {code}")
+    if len(data) < 8 + size:
+        return None, "it answered with something that is no NAT-PMP"
+    return data[8 : 8 + size], ""
+
+
+def pmp_map(gateway: str, inner: int, outer: int, proto: str, lease: int) -> tuple[tuple[int, int, int] | None, str]:
+    """((local port, public port, lifetime), "") as the gateway granted it."""
+    body, why = pmp(gateway, struct.pack("!BBHHHI", 0, PMP_KINDS[proto], 0, inner, outer, lease), 8)
+    return (struct.unpack("!HHI", body), "") if body else (None, why)
+
+
 def natpmp(gateway: str, port: int, lease: int, proto: str = "udp") -> tuple[str | None, str]:
     """(external address:port, "") once the gateway maps the port, else (None, why not)."""
-    ask = ["natpmpc", "-g", gateway, "-a"]
-    out = run([*ask, str(port), str(port), proto, str(lease)], NATPMP_WAIT_S)
-    address, mapped = PMP_ADDRESS.search(out), PMP_MAPPED.search(out)
-    if mapped and int(mapped[2]) == port and int(mapped[3]) > 0:
-        if int(mapped[1]) != port:
-            # The port is another device's; Tailscale would not know this one.
-            run([*ask, "0", str(port), proto, "0"], NATPMP_WAIT_S)
-            return None, f"it offered port {mapped[1]}: {port} goes to another device"
-        if address and ipv4(address[1]):
-            return f"{ipv4(address[1])}:{port}", ""
-        run([*ask, str(port), str(port), proto, "0"], NATPMP_WAIT_S)
-        return None, UNNAMED
-    failed = PMP_FAILED.search(out)
-    return None, PMP_REASONS.get(failed[1], f"it answered: {failed[1][:60]}") if failed else "no answer"
+    body, why = pmp(gateway, bytes([0, 0]), 4)
+    if not body:
+        # Nobody there, or a gateway with no address to map a port on.
+        return None, why
+    address = str(ipaddress.IPv4Address(body))
+    mapped, why = pmp_map(gateway, port, port, proto, lease)
+    if not mapped or mapped[0] != port or mapped[2] <= 0:
+        return None, why or "no answer"
+    if mapped[1] != port:
+        # The port is another device's; Tailscale would not know this one.
+        pmp_map(gateway, port, 0, proto, 0)
+        return None, f"it offered port {mapped[1]}: {port} goes to another device"
+    if address != "0.0.0.0":
+        return f"{address}:{port}", ""
+    pmp_map(gateway, port, port, proto, 0)
+    return None, UNNAMED
 
 
 def upnp(settings: dict, address: str, lease: int, port: int | None = None, proto: str = "udp") -> tuple[str | None, str]:
@@ -127,6 +186,10 @@ def upnp(settings: dict, address: str, lease: int, port: int | None = None, prot
             return f"{ipv4(mapped[1])}:{port}", ""
         run([*base, "-d", port, kind], UPNP_WAIT_S)
         return None, UNNAMED
+    if failed and UPNP_RESERVED in out:
+        # Debian 13's upnpc asks such a router all the same, and miniupnpd
+        # then answers 501 for want of an address to open the port on.
+        return None, NO_PUBLIC_ADDRESS
     if failed:
         return None, UPNP_CODES.get(failed[1], f"it answered error {failed[1]} ({failed[2][:60]})")
     if mapped:
@@ -143,8 +206,8 @@ def release(settings: dict, gateway: str, method: str, port: int | None = None, 
     never did. Without an answer the mapping may still be there."""
     port = str(port or settings["port"])
     if method == NATPMP:
-        out = run(["natpmpc", "-g", gateway, "-a", port, port, proto, "0"], NATPMP_WAIT_S)
-        return bool(PMP_MAPPED.search(out) or PMP_FAILED.search(out))
+        # Any answer will do: a refusal holds no mapping either.
+        return exchange(gateway, struct.pack("!BBHHHI", 0, PMP_KINDS[proto], 0, int(port), int(port), 0)) is not None
     out = run(["upnpc", "-m", settings["uplink"], "-z", str(settings["ssdp_port"]), "-d", port, proto.upper()], UPNP_WAIT_S)
     return "UPNP_DeletePortMapping()" in out
 

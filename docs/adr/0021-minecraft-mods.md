@@ -160,7 +160,8 @@ gate: the reach is the game server's, which the owner already runs.
 - A `.jar` put into `/var/lib/minecraft/plugins` by hand still loads on
   Paper: NullBill neither lists nor updates it, and verify does not see
   it. Fabric reads only the role's directory.
-- `tools/game-pins` prints Paper's and Fabric's pins beside Mojang's;
+- `tools/pins` (first `tools/game-pins`) moves Paper's and Fabric's pins
+  with Mojang's;
   `tools/record-modrinth` records Modrinth's answers for the tests.
 
 ## Not built

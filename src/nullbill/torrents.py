@@ -33,6 +33,9 @@ WORKLOAD = "torrents"
 ZONE = "torrents"
 PORT = 8080
 PLAYBOOK = "qbittorrent.yml"
+# The guest's memory limit while the role builds qBittorrent: release 5.3.0
+# built with one compiler under a 2 GiB limit (docker --memory 2g).
+BUILD_MEMORY_MIB = 2048
 # Where the client sees its folder of the kept disk, and where unfinished
 # downloads wait inside it (with a .ignore file, so Jellyfin skips them).
 STORE = "/downloads"

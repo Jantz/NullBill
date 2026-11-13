@@ -1,6 +1,6 @@
-- name: Debian 12
+- name: Debian 13
   ansible.builtin.assert:
-    that: ansible_distribution_release == "bookworm"
+    that: ansible_distribution_release == "trixie"
 
 - name: Secrets from apply are set
   ansible.builtin.assert:

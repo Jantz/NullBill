@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The path a phone on mobile data takes to the vpn guest (nullbill/direct.py),
 # walked with the small class's rendered router files and the role's own
-# nb-portmap, Debian 12's natpmpc and upnpc, in network namespaces:
+# nb-portmap and Debian's upnpc, in network namespaces:
 #
 #   out (a device on the internet) - home (a home router) - router - vpn
 #
@@ -258,7 +258,8 @@ ok "miniupnpd on a provider's shared address answers over NAT-PMP and UPnP, and 
 # ruleset lets in SSDP_REPLY_PORT and nothing else, so a search from any
 # other port hears nothing.
 # (upnpc exits 1 here either way: this router is not one it would use.)
-heard() { grep -q "IGD : http" <<<"$(ns router upnpc -m nb-uplink "$@" -l 2>&1 || true)"; }
+# "Found an IGD with a reserved IP address (..) : http.." is what it says of it.
+heard() { grep -Eq "IGD .*: http" <<<"$(ns router upnpc -m nb-uplink "$@" -l 2>&1 || true)"; }
 heard -z "$ssdp" || fail "a UPnP search from port $ssdp was not answered"
 if heard; then
   fail "a UPnP search from another port was answered through the router's input chain"
