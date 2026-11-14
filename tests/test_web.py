@@ -467,6 +467,15 @@ def test_jobs_report_failure_and_offsets(site):
     assert client.call("/api/state")[1]["last_jobs"]["apply"]["state"] == "failed"
     later = client.call(f"/api/jobs/{job['id']}?offset={done['offset']}")[1]
     assert later["text"] == ""
+    # A run the page lost (NullBill restarted under it) ended when its log
+    # last grew, and the page says it went unrecorded.
+    lost = app.jobs[job["id"]]
+    lost.rc_file.unlink()
+    lost.rc, lost.process = None, None
+    os.utime(lost.log, (lost.started + 5, lost.started + 5))
+    view = client.call(f"/api/jobs/{job['id']}")[1]
+    assert view["rc"] == -1 and view["seconds"] == 5
+    assert view["progress"]["error"]["message"].startswith("NullBill restarted before this run wrote down how it ended")
 
 
 def test_choices_saved_after_the_last_good_setup_run_are_waiting(site):

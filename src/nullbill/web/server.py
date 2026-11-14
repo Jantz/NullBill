@@ -2536,9 +2536,14 @@ class App:
         state = job.state()
         ended = job.rc_file.stat().st_mtime if state != "running" and job.rc_file.exists() else None
         now = time.time()
+        # A run that ended unrecorded ended when its log last grew, not now.
+        unrecorded = state == "failed" and job.rc == -1 and not job.rc_file.exists()
+        if unrecorded:
+            ended = job.log.stat().st_mtime
         times = {"started": job.started, "now": now, "ended": ended or (None if state == "running" else now)}
         times["output"] = job.log.stat().st_mtime
         times["stopped"] = job.meta().get("stopped")
+        times["unrecorded"] = unrecorded
         only = progress.only(job.action, job.args)
         return {
             "id": job.id,

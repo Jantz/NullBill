@@ -241,6 +241,10 @@ STAGE_ADVICE = {
 DEFAULT_ADVICE = (
     "Run setup again; it is safe to repeat and picks up where it stopped. If it stops at the same place, copy the details and report them."
 )
+UNRECORDED_ADVICE = (
+    "Run the checks to see where the server stands (Run setup's menu, Run checks). If they pass, nothing is "
+    "wrong; otherwise run setup again: it picks up where it stopped."
+)
 BUG_ADVICE = (
     "This is a fault in NullBill, not something you did. Press Update NullBill on the Updates page in case a fix is out, "
     "then run it again. If it stops here again, copy the details and report them."
@@ -305,9 +309,9 @@ def _said(data: dict) -> tuple[str, str]:
     printed = errors or output
     lines = message.splitlines()
     if message.lower() in NO_MESSAGE:
-        text = printed[-1].strip() if printed else "it failed without a message"
+        text = telling(printed) if printed else "it failed without a message"
         if data.get("rc") not in (None, 0):
-            text += f" (exit {data['rc']})"
+            text = text.removesuffix(".") + f" (exit {data['rc']})"
         lines = []
     else:
         text = lines[0].strip()
@@ -316,6 +320,31 @@ def _said(data: dict) -> tuple[str, str]:
     if len(text) > 300:
         detail = "\n".join(filter(None, [message, detail]))
     return cut(text, 300), detail[-1500:]
+
+
+# A line that names an error: "CMake Error in ...", "gcc: error: ...", apt's "E: ...".
+ERROR_LINE = re.compile(r"(?i)(^|[\s:])(error|fatal)\b|^E: ")
+
+
+def telling(printed: list[str]) -> str:
+    """The line that says what went wrong in a program's output: the first
+    that names an error, with the indented lines that go on with it up to
+    the end of its sentence, else the last line (a traceback's exception).
+    The last line alone was "provide." when CMake's message wrapped."""
+    if any(line.strip() == TRACEBACK for line in printed):
+        return printed[-1].strip()
+    for i, line in enumerate(printed):
+        if not ERROR_LINE.search(line):
+            continue
+        parts = [line.strip()]
+        for more in printed[i + 1 :]:
+            if parts[-1].endswith(".") or not more.startswith((" ", "\t")) or ERROR_LINE.search(more):
+                break
+            parts.append(more.strip())
+        text = " ".join(parts)
+        end = re.search(r"\.(\s|$)", text[text.find(":") + 1 :])
+        return text[: text.find(":") + 2 + end.start()].strip() if end else text
+    return printed[-1].strip()
 
 
 def _ansible_failures(lines: list[str]) -> list[dict]:
@@ -476,6 +505,16 @@ def summarize(action: str, text: str, state: str, times: dict, stage: str | None
         default = None
         if stopped:
             message = "you stopped this run from the page"
+        elif not message and times.get("unrecorded"):
+            # NullBill itself restarted under the run (an update, its own
+            # Debian upgrade, the container's restart): say how far the log
+            # got, not that something failed.
+            ended_in = STAGE_TEXT.get(current, current)
+            message = f'NullBill restarted before this run wrote down how it ended; its log ends in "{ended_in}"'
+            if results and current == "verify":
+                c = results["counts"]
+                message += f", with {c['PASS']} checks passed and {c['FAIL']} failed so far"
+            default = UNRECORDED_ADVICE
         elif not message and failures:
             message = f"{failures} check{'s' if failures > 1 else ''} failed"
         elif not message and (crash := _crash(stage_lines)):
