@@ -2804,6 +2804,7 @@ class App:
                 "steps": self.update_steps(head, newest) if ahead else [],
                 "server": server,
                 "last": last,
+                "docs": version.docs(self.repo, head),
             }
             self.version_seen = (key, view)
         view = self.version_seen[1] | {"checked": check.get("checked"), "check_error": check.get("error")}

@@ -2530,8 +2530,29 @@ function renderGuide(items) {
 }
 
 // Each count, the guide, the overview and the banner, from state and the run.
+// A runbook the page names in code, such as docs/runbooks/media.md, opens
+// as that file of the NullBill that runs here (version.docs), wherever it
+// is drawn; without a GitHub origin it stays the path it was.
+const DOC_PATH = /^docs\/[\w./-]+\.md$/;
+function linkDocs(root) {
+  const base = state && state.version && state.version.docs;
+  if (!base || !root.querySelectorAll) return;
+  const found = root.matches && root.matches("code") ? [root] : root.querySelectorAll("code:not([data-doc])");
+  for (const code of found) {
+    if (code.dataset.doc || !DOC_PATH.test(code.textContent.trim()) || code.closest("a")) continue;
+    code.dataset.doc = "1";
+    const a = make("a", {href: base + code.textContent.trim(), target: "_blank", rel: "noopener"});
+    code.replaceWith(a);
+    a.append(code);
+  }
+}
+new MutationObserver((changes) => {
+  for (const c of changes) for (const n of c.addedNodes) if (n.nodeType === 1) linkDocs(n);
+}).observe(document.body, {childList: true, subtree: true});
+
 function paintStates() {
   if (!state) return;
+  linkDocs(document.body);
   const st = state;
   const running = runningAction();
   const items = guideItems(st);
