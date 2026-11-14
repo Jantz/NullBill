@@ -49,20 +49,32 @@ apt() {
 }
 # shellcheck disable=SC1091
 now() { (. /etc/os-release && echo "$VERSION_CODENAME"); }
-# Installed packages that a repository other than Debian's offers.
+# Installed packages that a repository other than Debian's offers. Debian's
+# are known by what their signed Release file calls itself, not only by the
+# address: a VM from Debian's cloud image reads its packages through a
+# mirror list (mirror+file:/etc/apt/mirrors/debian.list), and on the first
+# real run every package of the router counted as a vendor's and was held.
 others() {
   # shellcheck disable=SC2016 # apt's own placeholders
-  apt-get indextargets --format '$(SITE) $(FILENAME)' 'Created-By: Packages' | while read -r site file; do
+  apt-get indextargets --format '$(FILENAME)|$(SITE)|$(ORIGIN)' 'Created-By: Packages' | while IFS='|' read -r file site origin; do
+    case $origin in Debian | "Debian Backports") continue ;; esac
     case $site in *debian.org*) continue ;; esac
     [ -e "$file" ] || continue
     /usr/lib/apt/apt-helper cat-file "$file" | sed -n 's/^Package: //p'
   done | sort -u >"$state/release-upgrade.offered"
+  # Holding Debian itself would leave the release where it is.
+  if grep -qxE 'base-files|dpkg|apt|libc6' "$state/release-upgrade.offered"; then
+    echo "a repository that is not Debian's offers Debian's own base packages; which is Debian's cannot be told, so nothing was held or changed" >&2
+    return 1
+  fi
   dpkg-query -W -f '${db:Status-Abbrev}${Package}\n' | sed -n 's/^ii //p' | sort -u | comm -12 - "$state/release-upgrade.offered"
 }
 # Hold them, and remember which this script held: only those are let go.
 hold_others() {
-  local name
-  for name in $(others); do
+  local name names
+  # On a line of its own: a failure inside a for's list would go unseen.
+  names=$(others)
+  for name in $names; do
     apt-mark showhold | grep -qx "$name" && continue
     apt-mark hold "$name" >/dev/null
     grep -qx "$name" "$state/release-upgrade.held" 2>/dev/null || echo "$name" >>"$state/release-upgrade.held"

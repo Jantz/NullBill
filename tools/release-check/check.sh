@@ -8,6 +8,24 @@ upgrade=/src/nb-release-upgrade
 as_postgres() { runuser -u postgres -- "$@"; }
 
 grep -q '^VERSION_CODENAME=bookworm$' /etc/os-release || fail "the container starts on Debian 12"
+# Debian's packages through a mirror list, as Debian's cloud image (the
+# router, every Linux VM) has them: no address in the source says Debian.
+mkdir -p /etc/apt/mirrors
+echo http://deb.debian.org/debian >/etc/apt/mirrors/debian.list
+echo http://deb.debian.org/debian-security >/etc/apt/mirrors/debian-security.list
+cat >/etc/apt/sources.list.d/debian.sources <<'SOURCES'
+Types: deb
+URIs: mirror+file:///etc/apt/mirrors/debian.list
+Suites: bookworm bookworm-updates bookworm-backports
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+Types: deb
+URIs: mirror+file:///etc/apt/mirrors/debian-security.list
+Suites: bookworm-security
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+SOURCES
 pg_ctlcluster 15 main start
 as_postgres psql -qc "CREATE ROLE forgejo LOGIN PASSWORD 'not-a-secret'" -c "CREATE DATABASE forgejo OWNER forgejo"
 as_postgres psql -qd forgejo -c "CREATE TABLE kept (word text)" -c "INSERT INTO kept VALUES ('from fifteen')"
@@ -61,12 +79,27 @@ grep -q "^refused: the upgrade needs about $need MiB free on this guest's disk, 
 [ -z "$(ls -d /var/tmp/nb-release-room.* 2>/dev/null)" ] || fail "the measuring folder is gone"
 pass "the room is measured before anything changes ($need MiB needed, $get MiB to download); one MiB too little is refused"
 
+# A repository that is not Debian's and offers Debian's base: holding that
+# would keep the release where it is, so the run ends before it holds.
+mkdir -p /opt/base
+printf 'Package: base-files\nVersion: 99\nArchitecture: all\nFilename: ./none.deb\nSize: 1\nSHA256: 0\n' >/opt/base/Packages
+echo "deb [trusted=yes] copy:/opt/base ./" >/etc/apt/sources.list.d/base.list
+if bash "$upgrade" bookworm trixie; then fail "a stranger's base-files stops the run"; fi
+grep -q "^failed: a repository that is not Debian's offers Debian's own base packages" /var/lib/nullbill/release-upgrade.result \
+  || fail "the result says why: $(tail -n 1 /var/lib/nullbill/release-upgrade.result)"
+[ -z "$(apt-mark showhold | grep -vx nb-owner-held)" ] || fail "nothing was held"
+rm -r /opt/base /etc/apt/sources.list.d/base.list
+pass "a repository offering Debian's base under another name stops the run with nothing held"
+
 bash "$upgrade" bookworm trixie || fail "the upgrade ran to its end"
+grep -q "^Unpacking base-files (13" /var/log/nb-release-upgrade.log || fail "Debian's own packages moved"
 [ "$(dpkg-query -W -f '${Version}' nb-pinned)" = 1.0 ] || fail "a vendor's program stays at the version the role pinned"
 [ "$(apt-mark showhold)" = nb-owner-held ] || fail "only the owner's own hold is left: $(apt-mark showhold | tr '\n' ' ')"
 [ ! -e /var/lib/nullbill/release-upgrade.held ] || fail "the list of what was held is gone"
 apt-get -s -y install nb-pinned | grep -q '^Inst nb-pinned \[1.0\] (2.0' || fail "the role can move the vendor's program afterwards"
 pass "a vendor's newest does not come in with the release: held while it runs, let go after"
+grep -q 'mirror+file:///etc/apt/mirrors/debian.list' /etc/apt/sources.list.d/debian.sources || fail "the mirror list is still the source"
+pass "Debian's packages behind a mirror list are Debian's: none of them was held"
 [ "$(tail -n 1 /var/lib/nullbill/release-upgrade.result)" = "done trixie" ] || fail "the result's last line says done"
 grep -q '^VERSION_CODENAME=trixie$' /etc/os-release || fail "Debian 13 after the upgrade"
 grep -q 'debian trixie main' /etc/apt/sources.list.d/vendor.list || fail "a vendor's repository follows the release"
