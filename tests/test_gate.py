@@ -179,6 +179,11 @@ def test_risky(command, word):
     "command",
     [
         "cat /var/lib/nullbill/secrets.sops.yaml",
+        "cat /var/lib/nullbill/setup-code",
+        "cat /var/lib/nullbill/release-upgrade.result/../setup-code",
+        "grep -r x /var/lib/nullbill",
+        "rm -rf /tmp/../etc",
+        "rm -rf /var/tmp/x /etc",
         "pct exec 2002 -- cat /tmp/x",
         "pct stop 2002",
         "pct destroy 2002",
@@ -304,3 +309,27 @@ def test_choices_summary():
 def test_ip_brief_is_not_batch():
     assert tier("ip -br a") == gate.READ
     assert tier("ip -b /tmp/cmds") == gate.RISKY
+
+
+def test_a_guests_state_files_are_no_secret():
+    # The page agent could not read why an upgrade stopped (2026-11-14).
+    for command in ["cat /var/lib/nullbill/release-upgrade.result", "cat /var/lib/nullbill/power.json"]:
+        assert gate.classify(command, PROTECTED).tier == gate.READ, command
+
+
+def test_a_scratch_folder_in_tmp_is_no_system_directory():
+    # rm -rf /tmp/nbtest was refused in every mode as "a whole system directory".
+    for command in ["rm -rf /tmp/nbtest", "rm -r /var/tmp/nb-cmake-test"]:
+        assert gate.classify(command, PROTECTED).tier == gate.CHANGE, command
+    for command in ["rm -rf /tmp", "rm -rf /tmp/*", "rm -rf /opt/x"]:
+        assert gate.classify(command, PROTECTED).tier == gate.BLOCKED, command
+    # Expansions, `..` and a link's contents are no scratch folder.
+    for command in [
+        "rm -rf /tmp/{x,../etc}",
+        "x=../etc; rm -rf /tmp/$x",
+        "rm -rf /tmp/$(echo ../etc)",
+        "ln -s /etc /tmp/e && rm -rf /tmp/e/",
+        "rm -rf /tmp/e/ssh",
+        "rm -rf /tmp/..",
+    ]:
+        assert gate.classify(command, PROTECTED).tier in (gate.RISKY, gate.BLOCKED), command

@@ -76,9 +76,17 @@ def unseen(why: str) -> Verdict:
 # PVE's private directory, each guest's /etc/nullbill, service configs that
 # hold passwords, a process's environment and memory. Matched anywhere in a
 # normalised token and in the raw text, so a quoted or joined path is caught.
+# /var/lib/nullbill is the NullBill container's home (secrets, sessions, the
+# CA); on the host and in guests the same folder keeps state files with no
+# secret in them, named in STATE_FILES, which a diagnosis needs to read.
+STATE_FILES = (
+    r"release-upgrade\.(?:result|held)|kept-copies|discarded-journals|worlds\.json|torrents-log\.json"
+    r"|power\.json|restore-test\.json|backups-seen\.json|updates-since|game-last-active|jellyfin-scan-owed"
+    r"|jellyfin-libraries"
+)
 SECRET_PATHS = re.compile(
     r"/etc/pve/priv|(^|/)priv(/|$)|\.ssh/id_|ssh_host_[a-z0-9]+_key(?!\.pub)|(^|/)g?shadow-?$|/etc/g?shadow"
-    r"|/var/lib/nullbill(?!-agent)|/etc/nullbill|\.sops\.|keys\.txt|/\.config/sops|age-key|private[-_]key"
+    rf"|/var/lib/nullbill(?!-agent)(?!/(?:{STATE_FILES})(?![\w./-]))|/etc/nullbill|\.sops\.|keys\.txt|/\.config/sops|age-key|private[-_]key"
     r"|\.key\b|-key\.pem|/etc/ssl/private|/etc/step-ca|/var/lib/step|credentials\.json|\.netrc|authkey|token\.cfg"
     r"|/proc/[^/\s]+/(environ|mem)|/proc/kcore|/var/lib/tailscale|app\.ini|/etc/litellm"
     r"|/etc/proxmox-backup/(shadow\.json|token\.shadow|.*\.key)|/root/\.ssh/(?!known_hosts|config\b)"
@@ -1486,13 +1494,21 @@ def r_openssl(args, _p):
 def r_rm(args, _p):
     paths = [a for a in args if not a.startswith("-")]
     recursive = has(args, "-r", "-R", "--recursive")
+    # A folder right in /tmp or /var/tmp is scratch, not a system directory:
+    # one plain name, so no expansion, `..` or link inside it reaches out.
+    scratch = [p for p in paths if re.fullmatch(r"/(var/)?tmp/[A-Za-z0-9_-][A-Za-z0-9._-]*", p) and p.rsplit("/", 1)[1] not in {".", ".."}]
     shallow = [
-        p for p in paths if (normalise(p).rstrip("/").count("/") <= 2 and normalise(p).startswith("/")) or p in {"/", "/*", "*", ".", ".."}
+        p
+        for p in paths
+        if p not in scratch
+        and ((normalise(p).rstrip("/").count("/") <= 2 and normalise(p).startswith("/")) or p in {"/", "/*", "*", ".", ".."})
     ]
     if recursive and shallow:
         return blocked(f"rm -r {' '.join(shallow)} would take out a whole system directory")
     if any("pbs" in p or "vzdump" in p or "/dump/" in p for p in paths):
         return blocked("deletes backups")
+    if recursive and paths and len(scratch) == len(paths):
+        return change("rm -r deletes a scratch folder")
     if recursive:
         return risky("rm -r deletes whole directories", "delete")
     return change("rm deletes files")
