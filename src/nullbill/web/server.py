@@ -3036,7 +3036,8 @@ class App:
             "stamp": self.stamp(),
             "at": time.time(),
             "chat": self.chat.summary(),
-            "job": self.job_view(latest) | {"text": ""} if latest else None,
+            # Without its log, which the page asks for from the start.
+            "job": self.job_view(latest) | {"text": "", "offset": 0} if latest else None,
         }
 
 

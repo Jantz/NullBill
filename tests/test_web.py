@@ -469,6 +469,10 @@ def test_jobs_report_failure_and_offsets(site):
     # Overview tells of the latest failed run from the state, whichever run the page has open.
     error = done["progress"]["error"]
     assert st["last_jobs"]["apply"]["error"] == {"stage_text": error["stage_text"], "message": error["message"]}
+    # The state brings the latest run without its log, and from its start:
+    # the page asks for the log from that offset and gets all of it.
+    assert (st["job"]["id"], st["job"]["text"], st["job"]["offset"]) == (job["id"], "", 0)
+    assert client.call(f"/api/jobs/{job['id']}?offset={st['job']['offset']}")[1]["text"] == done["text"]
     later = client.call(f"/api/jobs/{job['id']}?offset={done['offset']}")[1]
     assert later["text"] == ""
     # A run the page lost (NullBill restarted under it) ended when its log
