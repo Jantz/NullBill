@@ -5,6 +5,7 @@ for the page's other features."""
 import base64
 import http.client
 import json
+import re
 import struct
 import time
 import zlib
@@ -419,6 +420,53 @@ def test_the_way_downloads_go_waits_for_the_owner_and_a_vpn_file_is_never_the_ag
     assert "the owner pastes it on the page" in said and saved(app)["torrents"]["route"] == "home"
 
 
+def test_the_agent_sets_each_guests_size_as_a_change_and_hears_what_does_not_fit(agent):
+    app, client, _ = chosen(agent, "manual")
+    # status lists each guest's size with its least, the core servers too.
+    done = kinds(call(client, "status"), "tool_done")[-1]
+    text = app.chat.output(done["full"]) if done.get("full") else done["output"]
+    sizes = {s["guest"]: s for s in yaml.safe_load(text)["sizes"]}
+    assert sizes["workspace"] == {
+        "guest": "workspace",
+        "of": "agents",
+        "cores": 1,
+        "memory_mib": 1024,
+        "least": {"cores": 1, "memory_mib": 1024},
+        "set_by_owner": {},
+    }
+    assert sizes["router"]["of"] == "core servers" and sizes["linux-runner"]["per_job_vm"] is True and "nullbill" not in sizes
+    view = call(client, "set_choices", sizes={"workspace": {"cores": 2, "memory_mib": 4096}, "forgejo": {"memory_mib": 2048}})
+    proposal = kinds(view, "proposal")[-1]
+    assert (proposal["tier"], proposal["title"]) == ("change", "Change what to run")
+    assert proposal["lines"] == [
+        "forgejo: memory 2 GiB, was 1 GiB (the least)",
+        "workspace: 2 cores, was 1 core (the least)",
+        "workspace: memory 4 GiB, was 1 GiB (the least)",
+    ]
+    assert "overrides" not in saved(app)
+    approved(client, proposal["id"])
+    assert saved(app)["overrides"] == {"workspace": {"cores": 2, "memory_mib": 4096}, "forgejo": {"memory_mib": 2048}}
+    # Back to the least: automatic again, said as such.
+    view = call(client, "set_choices", sizes={"forgejo": {"memory_mib": None}})
+    assert kinds(view, "proposal")[-1]["lines"] == ["forgejo: memory 1 GiB (the least), was 2 GiB"]
+    # What cannot be used, or does not fit, is said before any card.
+    said = result(call(client, "set_choices", sizes={"workspace": {"cores": 999}, "router": {"memory_mib": 1000}}))
+    assert "workspace: its cores are a whole number from 1 to" in said and "router: its memory is from 0.5 GiB" in said
+    # A VM, which counts in full, given all the memory the server has: more than fits beside the rest.
+    top = int(re.search(r"to (\d+) MiB\)", result(call(client, "set_choices", sizes={"linux-runner": {"memory_mib": 1 << 30}}))).group(1))
+    said = result(call(client, "set_choices", sizes={"linux-runner": {"memory_mib": top}}))
+    assert f"linux-runner: {top / 1024:g} GiB of memory does not fit; the server would be " in said and "At most " in said
+    # What is not a size is said too, never taken for no change.
+    for bad, words in (
+        (["workspace"], "sizes: give each guest's name with its cores and memory_mib"),
+        ({"workspace": 4096}, "workspace: its size is cores and memory_mib"),
+        ({"workspace": {"ram": 4096}}, "workspace: ram is not a size"),
+    ):
+        said = result(call(client, "set_choices", sizes=bad))
+        assert words in said, said
+    assert saved(app)["overrides"] == {"workspace": {"cores": 2, "memory_mib": 4096}, "forgejo": {"memory_mib": 2048}}
+
+
 def test_game_settings_and_when_things_run_are_choices_and_an_agreement_is_the_owners(agent):
     app, client, _ = chosen(agent, "auto")
     workloads = [*OWNER["workloads"], "minecraft"]
@@ -443,9 +491,9 @@ def test_game_settings_and_when_things_run_are_choices_and_an_agreement_is_the_o
     config = saved(app)
     assert config["games"]["minecraft"]["admins"] == ["alex"] and config["power"]["agents"]["run"] == "on-demand"
     assert config["intent"]["workloads"] == workloads
-    # A server's own options and its memory, each as a line of the card.
+    # A server's own options and its memory, each as a line of the card. Its memory is its size.
     view = call(client, "set_choices", games={"minecraft": {"settings": {"difficulty": "hard"}, "memory_mib": 6144}})
-    assert {"Minecraft: settings difficulty: hard (was the default)", "Minecraft: memory in MiB: 6144 (was the default)"} <= set(
+    assert {"Minecraft: settings difficulty: hard (was the default)", "Minecraft: memory 6 GiB, was 3 GiB (the least)"} <= set(
         kinds(view, "ran")[-1]["lines"]
     )
     config = saved(app)

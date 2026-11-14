@@ -86,11 +86,14 @@ def guests(now: dict, was: dict | None, existing: set[str] | None, losses: dict[
             change = "change"
         else:
             change = "keep"
+        old = built.get(name) or {}
         rows.append(
             {
                 "name": name,
                 "change": change,
                 "detail": detail,
+                # New cores or memory: OpenTofu sets them in place (preview.py says what that does).
+                "resized": change == "change" and any(old.get(k) not in (None, guest.get(k)) for k in ("cores", "memory_mib")),
                 **{k: guest.get(k) for k in ("kind", "zone", "cores", "memory_mib", "count")},
             }
         )
@@ -102,6 +105,7 @@ def guests(now: dict, was: dict | None, existing: set[str] | None, losses: dict[
                 "name": name,
                 "change": "delete",
                 "detail": [note],
+                "resized": False,
                 **{k: old.get(k) for k in ("kind", "zone", "cores", "memory_mib", "count")},
             }
         )

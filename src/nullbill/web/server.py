@@ -65,6 +65,8 @@ from nullbill import (
     torrents,
     version,
 )
+from nullbill import plan as planning
+from nullbill import sizes as sizing
 from nullbill.apply import DISKS_FILE, FULL_NEXT, GUESTS, NTFY, REMOVALS, SPKI, STAGES, Context, built_guests, split_target
 from nullbill.artifacts import render_all
 from nullbill.cli import plan_text, reach_target
@@ -392,15 +394,32 @@ class Job:
         return "done" if self.rc == 0 else "failed"
 
 
-def problems(view: dict, other: str | None) -> dict:
+def problems(view: dict, other: str | None, model: dict | None = None) -> dict:
     """A view's `errors` with what to do: `problems` pairs each with the
     advice for its cause where the page knows the cause, and `advice` lists
     every line once, in the problems' order, `other` standing in for a
-    cause it does not know."""
+    cause it does not know. A memory problem that names guests set above
+    their least keeps them apart, a line each (`items`), with the model."""
     known = [progress.specific(m) for m in view["errors"]]
-    view["problems"] = [{"text": m, "advice": a} for m, a in zip(view["errors"], known, strict=True)]
+    view["problems"] = [{"text": m, "advice": a} | raised_apart(m, model) for m, a in zip(view["errors"], known, strict=True)]
     view["advice"] = list(dict.fromkeys(a or other for a in known if a or other))
     return view
+
+
+def raised_apart(message: str, model: dict | None) -> dict:
+    """plan's memory problem without its last sentence, and that sentence's
+    guests as items: each by the name the page gives it, with its memory
+    and its least."""
+    if model is None or planning.RAISED not in message:
+        return {}
+    text, names = message.rsplit(f". {planning.RAISED}", 1)
+    items = []
+    for name in names.split(", "):
+        if not sizing.sizable(model, name):
+            return {}
+        set_to = (model.get("overrides", {}).get(name) or {}).get("memory_mib", sizing.least(model, name)["memory_mib"])
+        items.append(f"{sizing.label(model, name)}: {sizing.gib(set_to)}, its least {sizing.gib(sizing.least(model, name)['memory_mib'])}")
+    return {"text": text, "items": items}
 
 
 @dataclass
@@ -1247,7 +1266,7 @@ class App:
         except NullBillError as exc:
             return problems({"items": [], "power": [], "memory": None, "errors": exc.messages, "adds": None, "removes": None}, None)
         out = workloads.options(model, self.facts(), self.existing_guests(), self.home)
-        return problems(out, "Turn off a choice, or change one, until this no longer applies.")
+        return problems(out, "Turn off a choice, or change one, until this no longer applies.", model)
 
     def preview(self, body: dict) -> dict | None:
         """The page's form, not saved: what it would come to."""
@@ -1511,7 +1530,7 @@ class App:
             ticked = new.setdefault("intent", {}).setdefault("workloads", list(DEFAULT_WORKLOADS))
             ticked.append(name)
         if form:
-            self._games_config(new, {name: form})
+            self._games_config(new, {name: form}, facts=self.facts())
         model = build_model(new)
         out = {"name": name, "title": model["games"][name]["title"], "lines": games.describe(model, name, on)}
         if not save:
@@ -1759,23 +1778,29 @@ class App:
         return {"ok": True, "id": found.get("id"), "view": self.game_view(name, fresh=True)}, left == 0
 
     @staticmethod
-    def _games_config(config: dict, form: object) -> None:
+    def _games_config(config: dict, form: object, sizes: object = None, facts: dict | None = None, strict: bool = True) -> None:
         """What the page asks beside each game server's tick, put into
         config.yaml: the owner's agreement to the game's EULA (once for all
         its servers), the admins' names, the server's settings (`settings`
-        by name, `other` as lines of name = value), its memory, and a
-        further server's title. A key the form leaves out stays as it is;
-        nothing changes without the form's `games`. Every problem is raised
-        together, a message each."""
-        if not isinstance(form, dict):
+        by name, `other` as lines of name = value) and a further server's
+        title. With them each guest's size (`sizes`, nullbill/sizes.py);
+        a game server's `memory_mib` here, as older pages and the agent's
+        add_game_server send it, is read as its size. A key the form leaves
+        out stays as it is, and a `memory_mib` of null leaves the size as it
+        is; nothing changes without either form. Every problem is raised
+        together, a message each; strict False (the preview) leaves out a
+        size it cannot read."""
+        if not isinstance(form, dict) and sizes is None:
             return
         chosen = copy.deepcopy(config.get("games") or {})
-        sizes = copy.deepcopy(config.get("overrides") or {})
+        overrides = copy.deepcopy(config.get("overrides") or {})
         # Only games and sizes matter here; the rest of the form may not be whole yet.
-        model = build_model({"games": chosen, "overrides": sizes})
+        model = build_model({"games": chosen, "services": config.get("services") or {}})
         catalog = build_model({})["games"]
         problems: list[str] = []
-        for name, asked in form.items():
+        # What is not a size is left to sizing.read, which says so.
+        asked_sizes = {str(k): v for k, v in sizes.items()} if isinstance(sizes, dict) else sizes
+        for name, asked in (form if isinstance(form, dict) else {}).items():
             if name not in model["games"] or not isinstance(asked, dict):
                 continue
             of = games.kind(model, name)
@@ -1791,6 +1816,12 @@ class App:
                     chosen[of] = {k: v for k, v in agreed.items() if k != "eula"}
                     if not chosen[of]:
                         del chosen[of]
+            if asked.get("memory_mib") is not None and asked_sizes is None:
+                asked_sizes = {}
+            if asked.get("memory_mib") is not None and isinstance(asked_sizes, dict):
+                size = asked_sizes.get(name, {})
+                if isinstance(size, dict) and "memory_mib" not in size:
+                    asked_sizes[name] = {**size, "memory_mib": asked["memory_mib"]}
             # Each part is read on its own, so one refusal does not hide the next.
             found = len(problems)
             if "admins" in catalog[of] and "admins" in asked:
@@ -1799,22 +1830,16 @@ class App:
                 if any(not isinstance(a, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,60}", a) for a in admins):
                     problems.append(f"{model['games'][name]['title']}: admins are player names, as shown in the game, separated by commas")
                 game["admins"] = admins
-            memory = None
-            for part in ("title", "settings", "memory_mib"):
+            for part in ("title", "settings"):
                 try:
                     if part == "title" and of != name and "title" in asked:
                         game["title"] = games.read_title(model, name, asked["title"])
                     if part == "settings" and ("settings" in asked or "other" in asked):
                         game["settings"] = games.read_settings(model, name, asked.get("settings"), asked.get("other"))
-                    if part == "memory_mib" and "memory_mib" in asked:
-                        memory = games.read_memory(model, name, asked["memory_mib"])
                 except NullBillError as exc:
                     problems.extend(exc.messages)
             if len(problems) > found:
                 continue
-            if "memory_mib" in asked:
-                size = {k: v for k, v in sizes.get(name, {}).items() if k != "memory_mib"} | ({"memory_mib": memory} if memory else {})
-                sizes = {k: v for k, v in sizes.items() if k != name} | ({name: size} if size else {})
             # What equals the catalog is not written down; a further server
             # always keeps which game it is and its address.
             start = catalog.get(name) or {"settings": {}, "admins": []}
@@ -1823,13 +1848,18 @@ class App:
                 chosen[name] = game
             else:
                 chosen.pop(name, None)
-        if problems:
-            raise (
-                Refused("Some game server settings cannot be used, so nothing was saved", problems)
-                if len(problems) > 1
-                else NullBillError(*problems)
-            )
-        for section, value in (("games", chosen), ("overrides", sizes)):
+        overrides, wrong = sizing.read(model, overrides, asked_sizes, facts, strict)
+        titles = tuple(f"{g['title']}:" for g in model["games"].values())
+        about_games = all(message.startswith(titles) for message in wrong)
+        sizing.raise_problems(
+            problems + wrong,
+            "Some game server settings cannot be used, so nothing was saved"
+            if about_games
+            else "Some sizes cannot be used, so nothing was saved"
+            if not problems
+            else "Some settings cannot be used, so nothing was saved",
+        )
+        for section, value in (("games", chosen), ("overrides", overrides)):
             if value:
                 config[section] = value
             else:
@@ -1853,7 +1883,8 @@ class App:
         people = {n: p for n, p in config.get("people", {}).items() if p.get("role") != "owner"}
         keys = owner.keys(config)
         config["people"] = {"owner": {"role": "owner", "login": login} | ({"ssh_keys": keys} if keys else {}), **people}
-        self._games_config(config, body.get("games"))
+        facts = self.facts()
+        self._games_config(config, body.get("games"), body.get("sizes"), facts, strict=saving)
         self._torrents_config(config, body.get("torrents"))
         if not saving:
             # A pasted WireGuard file counts in the preview once it reads;
@@ -1890,6 +1921,16 @@ class App:
                 config["disks"] = pins
             else:
                 config.pop("disks", None)
+        if saving and config.get("overrides") != (self.config() or {}).get("overrides"):
+            # A size that takes the plan past the server's memory is refused
+            # here, with what fits; a tick that does is saved and planned.
+            try:
+                before, after = build_model(self.config() or {}), build_model(config)
+            except NullBillError:
+                return config
+            sizing.raise_problems(
+                sizing.too_much(before, after, facts), "These sizes do not fit in the server's memory, so nothing was saved"
+            )
         return config
 
     def _power_pins(self, config: dict, chosen: dict, strict: bool = True) -> None:
@@ -1959,12 +2000,13 @@ class App:
         config = self.config()
         if config is None or not facts.is_file():
             return {"text": None, "errors": [], "advice": [], "summary": None, "tailnet_policy": None}
+        model = None
         try:
             model = build_model(config)
             text = plan_text(model, facts.read_bytes())
         except NullBillError as exc:
             other = "Change your choices under Setup, What to run, so this no longer applies, and press Save and plan."
-            return problems({"text": None, "errors": exc.messages, "summary": None, "tailnet_policy": None}, other)
+            return problems({"text": None, "errors": exc.messages, "summary": None, "tailnet_policy": None}, other, model)
         _write_private(self.home / "plan.yaml", text)
         loaded = yaml.safe_load(text)
         policy = render_tailnet(loaded, model)["policy.json"]
@@ -2536,9 +2578,14 @@ class App:
         state = job.state()
         ended = job.rc_file.stat().st_mtime if state != "running" and job.rc_file.exists() else None
         now = time.time()
+        # A run that ended unrecorded ended when its log last grew, not now.
+        unrecorded = state == "failed" and job.rc == -1 and not job.rc_file.exists()
+        if unrecorded:
+            ended = job.log.stat().st_mtime
         times = {"started": job.started, "now": now, "ended": ended or (None if state == "running" else now)}
         times["output"] = job.log.stat().st_mtime
         times["stopped"] = job.meta().get("stopped")
+        times["unrecorded"] = unrecorded
         only = progress.only(job.action, job.args)
         return {
             "id": job.id,

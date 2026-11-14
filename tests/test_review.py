@@ -49,6 +49,9 @@ def test_later_runs_say_what_is_created_deleted_changed_and_kept(facts):
     assert set(found["change"]) == {"router", "forgejo", "windows-runner"}
     detail = {row["name"]: row["detail"] for row in rows}
     assert detail["forgejo"] == ["memory 1.0 GiB to 8.0 GiB", "cores 1 to 4"]
+    # A new size is told apart: OpenTofu sets it in place, and preview.py says what that does.
+    resized = {row["name"] for row in rows if row["resized"]}
+    assert "forgejo" in resized and "router" not in resized and "windows-dev" not in resized
     # The router gets a leg in the media zone.
     assert detail["router"] == ["its network legs change"]
     assert detail["windows-dev"] == ["Deletes the VM and its disk."]
@@ -71,8 +74,11 @@ def test_what_apply_recorded_on_the_server_says_which_guests_exist(facts):
 def test_a_guest_put_on_demand_and_a_pool_given_more_runners_read_as_such():
     was = {"guests": {"jellyfin": {"kind": "lxc", "memory_mib": 2048}, "linux-runner": {"kind": "vm-pool", "count": 1}}}
     now = {"guests": {"jellyfin": {"kind": "lxc", "memory_mib": 2048, "run": "on-demand"}, "linux-runner": {"kind": "vm-pool", "count": 3}}}
-    detail = {row["name"]: row["detail"] for row in review.guests(now, was, None, {})}
+    rows = review.guests(now, was, None, {})
+    detail = {row["name"]: row["detail"] for row in rows}
     assert detail == {"jellyfin": ["runs on demand from now on"], "linux-runner": ["3 at a time, 1 before"]}
+    # More runners at a time is no new size of each.
+    assert not any(row["resized"] for row in rows)
     back = {row["name"]: row["detail"] for row in review.guests(was, now, None, {})}
     assert back["jellyfin"] == ["always runs from now on"]
 

@@ -2,8 +2,10 @@
 
 import time
 
+import pytest
+
 from nullbill.apply import STAGE_MARK, STAGE_TIME, STAGES
-from nullbill.web.progress import PREPARE, advice, only, sentence, summarize
+from nullbill.web.progress import PREPARE, advice, only, sentence, summarize, telling
 
 T0 = time.mktime(time.strptime("2026-11-07 18:00:00", STAGE_TIME))
 
@@ -144,12 +146,64 @@ def test_a_failed_command_leads_with_what_the_program_said_and_keeps_its_output_
     assert error["message"] == 'The step "Install the packages Forgejo needs" failed on forgejo.'
     (item,) = error["items"]
     assert item["title"] is None
-    assert item["text"] == "E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing? (exit 100)."
+    assert item["text"] == (
+        "E: Failed to fetch http://deb.debian.org/debian/pool/main/n/nginx/nginx_1.22.1-9_amd64.deb  403  Forbidden"
+        " [IP: 10.20.0.3 3128] (exit 100)."
+    )
     assert item["detail"].splitlines() == [
         "E: Failed to fetch http://deb.debian.org/debian/pool/main/n/nginx/nginx_1.22.1-9_amd64.deb  403  Forbidden [IP: 10.20.0.3 3128]",
         "E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?",
     ]
     assert error["advice"].startswith("NullBill's internet proxy refused a site")
+
+
+def test_a_wrapped_error_leads_with_its_sentence_not_its_last_line():
+    # The qBittorrent build on Debian 13 (2026-11-14): the item read
+    # "provide. (exit 1)." because CMake wraps its message.
+    cmake = [
+        "CMake Error in src/base/CMakeLists.txt:",
+        '  Imported target "OpenSSL::Crypto" includes non-existent path',
+        "",
+        '    "/include"',
+        "",
+        "  in its INTERFACE_INCLUDE_DIRECTORIES.  Possible reasons include:",
+        "",
+        "  * The installation package was faulty and references files it does not",
+        "  provide.",
+        "",
+        "CMake Generate step failed.  Build files cannot be regenerated correctly.",
+    ]
+    stderr = "\n".join(f"        {line}" if line else "" for line in cmake)
+    failure = YAML_FAILURE.replace("apt-get -y install nginx", "cmake -S src -B build").replace("rc: 100", "rc: 1")
+    start, end = failure.index("    stderr: |-\n") + len("    stderr: |-\n"), failure.index("    stderr_lines")
+    stopped = "nullbill: apply stopped at forgejo: forgejo.yml failed on forgejo (exit 2)"
+    log = "\n".join([mark("forgejo", 0), failure[:start] + stderr + "\n" + failure[end:], stopped])
+    (item,) = summarize("apply", log, "failed", times(9, 9))["error"]["items"]
+    assert item["text"] == (
+        'CMake Error in src/base/CMakeLists.txt: Imported target "OpenSSL::Crypto" includes non-existent path'
+        ' "/include" in its INTERFACE_INCLUDE_DIRECTORIES (exit 1).'
+    )
+
+
+@pytest.mark.parametrize(
+    ("printed", "line"),
+    [
+        (["Traceback (most recent call last):", '  File "x", line 1', "ValueError: bad"], "ValueError: bad"),
+        (
+            [
+                "Traceback (most recent call last):",
+                '  File "/usr/lib/python3.13/urllib/request.py", line 533, in error',
+                "    return self._call_chain(*args)",
+                "urllib.error.HTTPError: HTTP Error 403: Forbidden",
+            ],
+            "urllib.error.HTTPError: HTTP Error 403: Forbidden",
+        ),
+        (["x.c:1:2: error: expected ';'", "make: *** [all] Error 1"], "x.c:1:2: error: expected ';'"),
+        (["nothing named", "the last line"], "the last line"),
+    ],
+)
+def test_the_telling_line_of_a_programs_output(printed, line):
+    assert telling(printed) == line
 
 
 def test_each_item_of_a_loop_that_failed_is_an_item_of_its_own():
@@ -312,3 +366,19 @@ def test_a_refused_read_write_disk_points_at_its_card():
         "nb-legacy-disk: the journal on it now (j1f63daad72c7) is not the one you said may be discarded (jb95e30db0b42)",
     ):
         assert "look at the disk under What to run" in advice(message, "tofu")
+
+
+def test_a_run_nullbill_restarted_under_says_how_far_its_log_got():
+    # 2026-11-14: every stage ran and 385 checks passed, then NullBill's own
+    # Debian upgrade restarted it; the page said "It ended without saying why"
+    # and "Look at the failing checks below" with none failing.
+    lines = [mark(name, i) for i, (name, _) in enumerate(STAGES)]
+    lines += ["PASS     router answers", "DEGRADED backups: switched off", "PASS     forgejo answers"]
+    view = summarize("apply", "\n".join(lines), "failed", times(99, 99) | {"unrecorded": True})
+    error = view["error"]
+    assert error["message"] == (
+        'NullBill restarted before this run wrote down how it ended; its log ends in "Run the checks", '
+        "with 2 checks passed and 0 failed so far."
+    )
+    assert error["items"] == []
+    assert error["advice"].startswith("Run the checks to see where the server stands")

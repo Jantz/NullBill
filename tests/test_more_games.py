@@ -15,7 +15,7 @@ import yaml
 from fixturedata import fixture_config, games_config
 from pinned import FACTORIO, MINECRAFT
 
-from nullbill import apply, custom, games
+from nullbill import apply, custom, games, sizes
 from nullbill.errors import NullBillError
 from nullbill.firewall import render_firewall
 from nullbill.model import build_model
@@ -301,11 +301,34 @@ def test_settings_from_a_form_keep_only_what_the_owner_changed():
         "Creative world: 'bad key' is not the name of a setting",
         "Creative world: motd is one line of at most 200 characters",
     ]
-    assert games.read_memory(model, name, 3072) is None and games.read_memory(model, name, "") is None
-    assert games.read_memory(model, name, "8192") == 8192
-    for bad in (1024, "much", True, 70000):
-        with pytest.raises(NullBillError, match="Creative world: its memory is from 3 to 64 GiB"):
-            games.read_memory(model, name, bad)
+    # Its memory is its size (nullbill/sizes.py): the least is not written down.
+    assert sizes.read(model, {}, {name: {"memory_mib": 3072}}) == ({}, [])
+    assert sizes.read(model, {name: {"memory_mib": 6144}}, {name: {"memory_mib": ""}}) == ({}, [])
+    assert sizes.read(model, {}, {name: {"memory_mib": "8192"}}) == ({name: {"memory_mib": 8192}}, [])
+    for bad in (1024, "much", True, 300000, 3100):
+        assert sizes.read(model, {}, {name: {"memory_mib": bad}})[1] == [
+            "Creative world: its memory is from 3 GiB to 64 GiB in steps of 0.25 GiB (3072 to 65536 MiB)"
+        ]
+    # A digit that is no decimal one is refused like any other word, not a crash.
+    assert (
+        sizes.read(model, {}, {name: {"memory_mib": "\u00b2"}})[1]
+        and sizes.read(model, {}, {name: {"memory_mib": "\u00b2"}}, strict=False)[1] == []
+    )
+    # A value sent as it is saved passes unchecked: a size saved before a rule changed blocks nothing.
+    saved = {name: {"memory_mib": 3379}, "forgejo": {"memory_mib": 3000}}
+    assert sizes.read(model, saved, {name: {"memory_mib": 3379}, "forgejo": {"memory_mib": "3000"}}) == (saved, [])
+    # Changed, it is checked.
+    assert sizes.read(model, saved, {"forgejo": {"memory_mib": 3001}})[1] == [
+        "forgejo: its memory is from 1 GiB to 64 GiB in steps of 0.25 GiB (1024 to 65536 MiB)"
+    ]
+    # What is not a size is said, not passed over as no change.
+    assert sizes.read(model, {}, ["forgejo"])[1] == [sizes.SHAPE]
+    assert sizes.read(model, {}, {"forgejo": 2048})[1] == [f"forgejo: {sizes.GUEST_SHAPE}"]
+    assert sizes.read(model, {}, {"forgejo": {"ram": 2048, "memory_mib": 2048}}) == (
+        {"forgejo": {"memory_mib": 2048}},
+        [f"forgejo: ram {sizes.NOT_A_SIZE}"],
+    )
+    assert sizes.read(model, {}, ["forgejo"], strict=False) == ({}, [])
 
 
 def test_every_named_option_is_one_the_schema_takes_and_nullbill_does_not_set():
@@ -362,7 +385,8 @@ def test_what_to_run_has_a_row_for_each_server_with_what_the_owner_can_set(facts
     assert row["memory_mib"] == 3072 and "Java gets 5.0 GiB" in row["note"]
     game = row["game"]
     assert (game["kind"], game["kind_title"], game["more"], game["removable"]) == ("minecraft", "Minecraft", True, False)
-    assert (game["memory_mib"], game["floor_mib"], game["file"]) == (6144, 3072, "server.properties")
+    assert game["file"] == "server.properties" and "memory_mib" not in game
+    assert [(g["memory_mib"], g["set"], g["label"]) for g in row["guests"]] == [(6144, {"memory_mib": 6144}, "Creative world")]
     assert game["eula"]["agreed"] and game["eula"]["text"] == "I agree to the Minecraft EULA" and game["admins"] == ["owner_b"]
     assert rows["minecraft"]["game"]["more"] is False and "removable" not in rows["minecraft"]["game"]
     # Off and with no guest on the server: it can be removed. Terraria keeps no admins.
@@ -439,17 +463,30 @@ def test_the_page_adds_a_server_saves_its_settings_and_removes_it_once_gone(site
     assert plan["games"][name]["heap_mib"] == 3072 and plan["guests"][name]["memory_mib"] == 4096
     # Saved again as shown, nothing changes; a key the form leaves out stays.
     row = next(i for i in client.call("/api/state")[1]["options"]["items"] if i["name"] == name)
-    assert row["title"] == "Creative" and row["game"]["other"] == "spawn-protection = 0\n" and row["game"]["memory_mib"] == 4096
+    assert row["title"] == "Creative" and row["game"]["other"] == "spawn-protection = 0\n"
+    assert row["guests"][0]["set"] == {"memory_mib": 4096}
     same = {
         "admins": ", ".join(row["game"]["admins"]),
         "title": row["title"],
-        "memory_mib": row["game"]["memory_mib"],
+        "memory_mib": row["guests"][0]["memory_mib"],
         "settings": {o["key"]: o["value"] for o in row["game"]["options"]},
         "other": row["game"]["other"],
     }
     assert client.call("/api/choices", body(app, **{name: same}))[0] == 200 and saved(app) == config
-    assert client.call("/api/choices", body(app, **{name: {"memory_mib": None}}))[0] == 200
+    # A null memory from an older page leaves the size as it is; the size form's empty value is the least.
+    assert client.call("/api/choices", body(app, **{name: {"memory_mib": None}}))[0] == 200 and saved(app) == config
+    assert client.call("/api/choices", body(app) | {"sizes": {name: {"memory_mib": None}}})[0] == 200
     assert "overrides" not in saved(app) and saved(app)["games"][name]["settings"] == config["games"][name]["settings"]
+    # A server that is off keeps a size saved before sizes came in steps, through any save.
+    ticked = saved(app)["intent"]["workloads"]
+    (app.home / "config.yaml").write_text(yaml.safe_dump(saved(app) | {"overrides": {"minecraft": {"memory_mib": 2355}}}))
+    shown = {"minecraft": {"cores": None, "memory_mib": 2355}, name: {"cores": None, "memory_mib": None}}
+    unticked = [w for w in ticked if w != "minecraft"]
+    assert client.call("/api/choices", body(app) | {"workloads": unticked, "sizes": shown})[0] == 200
+    assert saved(app)["overrides"] == {"minecraft": {"memory_mib": 2355}} and "minecraft" not in saved(app)["intent"]["workloads"]
+    shown["minecraft"]["memory_mib"] = None
+    assert client.call("/api/choices", body(app) | {"workloads": ticked, "sizes": shown})[0] == 200
+    assert "overrides" not in saved(app)
 
     # The agreement is the game's: unticked on the second server's row, it is gone for both.
     assert client.call("/api/choices", body(app, **{name: {"eula": False}}))[0] == 200
@@ -469,8 +506,9 @@ def test_the_page_adds_a_server_saves_its_settings_and_removes_it_once_gone(site
         "Creative: admins are player names, as shown in the game, separated by commas",
         "Creative: Players at once (max-players) is a whole number from 1 to 200",
         "Creative: NullBill sets server-port itself, so that only the people you let in reach the server",
-        "Creative: its memory is from 3 to 64 GiB (3072 to 65536 MiB)",
         "Minecraft: Difficulty (difficulty) is one of peaceful, easy, normal, hard",
+        # Its memory is its size, read with every guest's and said after the settings.
+        "Creative: its memory is from 3 GiB to 251.5 GiB in steps of 0.25 GiB (3072 to 257536 MiB)",
     ]
     # One problem is one line, with no list.
     status, answer = client.call("/api/choices", body(app, **{name: {"settings": {"server-port": 1}}}))
@@ -608,3 +646,14 @@ def test_the_large_custom_fixture_carries_a_second_minecraft_for_the_container_c
     plan = strip_notes(build_plan(model, facts("large")))
     assert games.more(model) == ["minecraft-creative"] and plan["games"]["minecraft-creative"]["game"] == "minecraft"
     assert fixture_config("large")["intent"]["workloads"] != config["intent"]["workloads"]
+
+
+def test_a_save_without_games_or_sizes_reads_no_saved_game_server():
+    """A form without games and sizes leaves both alone, so a saved game
+    server the schema no longer takes does not fail another save."""
+    from nullbill.web.server import App
+
+    config = {"games": {"creative": {"game": "chess", "id": 70, "title": "Creative"}}, "overrides": {"forgejo": {"memory_mib": 3000}}}
+    before = copy.deepcopy(config)
+    App._games_config(config, None)
+    assert config == before

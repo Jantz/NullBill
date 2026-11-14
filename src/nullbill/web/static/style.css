@@ -659,6 +659,26 @@ ul.notes[hidden] { display: none; }
 .own-tools { display: grid; gap: 8px; margin-top: 8px; max-width: 88ch; }
 .own-path { color: var(--text-3); font-size: 12px; margin: 4px 0 0; }
 pre.own-script { margin: 0; padding: 10px 12px; max-height: 420px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-sub); font-size: 12px; line-height: 1.5; white-space: pre; }
+/* Size and Details under a row: one line while both are closed (app.js sizeBlock). */
+.opt-foot { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 20px; margin: 6px 0 0 28px; font-size: 12px; min-width: 0; }
+.opt-foot > details { min-width: 0; }
+.opt-foot > details[open] { flex-basis: 100%; }
+.opt-foot > .opt-details { margin: 0; }
+.opt-size[hidden] { display: none; }
+.opt-size .opt-settings-body { max-width: 72ch; }
+.size-rows { display: grid; gap: 12px; }
+.size-row { display: grid; grid-template-columns: minmax(0, 1fr) 88px 112px; gap: 4px 12px; align-items: end; }
+.size-name { display: grid; gap: 2px; min-width: 0; align-self: center; }
+.size-name .name { font-weight: 500; color: var(--text); overflow-wrap: anywhere; }
+.size-field { display: grid; gap: 4px; min-width: 0; }
+.size-field input { width: 100%; box-sizing: border-box; }
+.size-hint { margin: 0; }
+.core-sizes { padding: 11px 14px; border: 1px solid var(--line); border-radius: var(--radius-lg); font-size: 12px; display: grid; gap: 6px; }
+.core-sizes .help { margin: 0; }
+@container main (max-width: 560px) {
+  .size-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .size-name { grid-column: 1 / -1; }
+}
 .opt-details > summary { cursor: pointer; width: fit-content; color: var(--text-2); font-weight: 500; }
 .opt-details > summary:hover { color: var(--text); }
 .opt-facts { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 8px 16px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); max-width: 88ch; }
@@ -757,6 +777,7 @@ select:disabled { color: var(--text-3); background: var(--bg-sub); cursor: not-a
 .fail:last-child { padding-bottom: 2px; }
 .fail-title { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
 .fail-text { max-width: 86ch; overflow-wrap: anywhere; }
+.fail-list { margin: 2px 0 0; padding-left: 20px; max-width: 86ch; }
 .fail-fix { max-width: 86ch; color: var(--text-2); font-size: 13px; }
 .fail-fix b { color: var(--text); font-weight: 500; }
 .fail-more { margin-top: 4px; min-width: 0; }
