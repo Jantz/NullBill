@@ -25,6 +25,9 @@ class _Errors(list):
 
 # Planned by itself when a disk is kept and shared, never by intent.
 FILES_WORKLOAD = "files"
+# Ends a memory problem when the owner set guests above their least; the
+# page lists those guests apart (web/server.py's problems).
+RAISED = "More memory than the least is set for "
 
 # Smallstep's apt repository, which every guest with a certificate installs
 # from, and the name it redirects to (catalog.yaml's proxy.allow).
@@ -230,8 +233,9 @@ def _size(
     (power.groups). They share what the guests that always run leave, so
     each has to fit there by itself, not all of them at once."""
     overrides = model.get("overrides", {})
-    for name in sorted(set(overrides) - set(planned)):
-        errors.append(f"overrides.{name}: not a planned service")
+    # A size kept for a service that is turned off waits for it to be on again.
+    for name in sorted(set(overrides) - set(model["services"])):
+        errors.append(f"overrides.{name}: no service has this name")
 
     sizes: dict[str, dict] = {}
     pinned_counts: dict[str, int] = {}
@@ -269,9 +273,23 @@ def _size(
     floor_total = sum(counted(n, s) for n, s in sizes.items())
     always_floor = sum(counted(n, s) for n, s in sizes.items() if n not in parked)
     has = f"the host has {facts['memory_mib']} MiB minus a {reserve_mib} MiB host reserve"
+
+    def raised(names: list[str]) -> str:
+        """The guests among names given more memory than their floor, said
+        where it matters: they are what the owner can give back."""
+        more = [n for n in names if sizes[n]["memory_mib"] > planned[n]["floor"]["memory_mib"]]
+        return f". {RAISED}{', '.join(more)}" if more else ""
+
     if always_floor > available:
         which = "guests that always run" if parked else "planned guests"
-        errors.append(f"memory: {which} need {always_floor} MiB at their floors (containers at {container_pct}% of their limit); {has}")
+        always = [n for n in sizes if n not in parked]
+        if raised(always):
+            errors.append(
+                f"memory: {which} need {always_floor} MiB (containers at {container_pct}% of their limit), "
+                f"{always_floor - available} MiB more than there is; {has}{raised(always)}"
+            )
+        else:
+            errors.append(f"memory: {which} need {always_floor} MiB at their floors (containers at {container_pct}% of their limit); {has}")
     else:
         for workload, members in on_demand.items():
             needs = sum(counted(n, sizes[n]) for n in members)
@@ -279,6 +297,7 @@ def _size(
                 errors.append(
                     f"memory: {model['power'][workload]['title']} needs {needs} MiB while it runs, and with everything else "
                     f"on demand off {available - always_floor} MiB is left beside the guests that always run ({has})"
+                    f"{raised(members + [n for n in sizes if n not in parked])}"
                 )
 
     # Memory left after floors grows the pools whose count is not pinned, by
@@ -352,6 +371,26 @@ def _size(
     }
     pool_counts = {n: Note(counts[n], f"Clones, {limits[n]}.") for n in pools}
     return sizes, pool_counts, {"memory": memory, "disk": disk_section, "on_demand_mib": group_mib}
+
+
+def memory_over(model: dict, facts: dict) -> int:
+    """How many MiB the guests' memory comes to beyond what the host has
+    for them, counted as _size counts it: what always runs, and beside it
+    the largest workload that runs on demand. Zero or less fits."""
+    planned = planned_services(model, facts)
+    on_demand = power.groups(model, planned, _Errors())
+    overrides = model.get("overrides", {})
+    share = model["host"].get("container_share_pct", 100)
+
+    def counted(name: str) -> int:
+        svc, pin = planned[name], overrides.get(name, {})
+        count = pin.get("count", 1) if svc["kind"] == "vm-pool" else 1
+        return counted_mib(svc["kind"], pin.get("memory_mib", svc["floor"]["memory_mib"]), share, count)
+
+    parked = {n for members in on_demand.values() for n in members}
+    always = sum(counted(n) for n in planned if n not in parked)
+    largest = max((sum(counted(n) for n in members) for members in on_demand.values()), default=0)
+    return always + largest - (facts["memory_mib"] - reserve(model, facts)[0])
 
 
 def reserve(model: dict, facts: dict) -> tuple[int, str]:

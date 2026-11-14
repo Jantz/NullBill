@@ -11,7 +11,7 @@ from fixturedata import legacy_config
 from nullbill.cli import plan_text
 from nullbill.errors import NullBillError
 from nullbill.model import build_model
-from nullbill.plan import build_plan
+from nullbill.plan import build_plan, memory_over
 from nullbill.render import strip_notes
 
 GOLDEN = Path(__file__).parent / "golden"
@@ -105,13 +105,55 @@ def test_overrides_are_checked(facts):
         "windows-dev": {"cores": 4},
         "postgres": {"count": 2},
         "workspace": {"cores": 8},
+        "no-such-guest": {"cores": 2},
     }
+    # A size kept for a service that is off (windows-dev) waits for it.
     assert sorted(errors_of(facts("small"), config)) == [
         "overrides.forgejo.memory_mib: 512 is below the floor of 1024",
+        "overrides.no-such-guest: no service has this name",
         "overrides.postgres.count: only vm-pool services have a count",
-        "overrides.windows-dev: not a planned service",
         "workspace: needs 8 cores, the host has 4 threads",
     ]
+
+
+def test_memory_set_too_high_names_the_guests(facts):
+    """More memory than the least, set by the owner, that no longer fits:
+    the plan says how much is missing and for which guests it was set."""
+    small = facts("small")
+    config = copy.deepcopy(fixture_config("small"))
+    assert memory_over(build_model(config), small) < 0
+    config["overrides"] = {"workspace": {"memory_mib": 8192}, "jellyfin": {"memory_mib": 4096}, "forgejo": {"memory_mib": 2048}}
+    over = memory_over(build_model(config), small)
+    message = errors_of(small, config)[0]
+    assert over > 0 and message.startswith("memory: planned guests need ")
+    assert f", {over} MiB more than there is; the host has" in message
+    assert message.endswith(". More memory than the least is set for forgejo, jellyfin, workspace")
+    # On demand, the workload that runs then is named with the rest.
+    config["power"] = {"agents": {"run": "on-demand"}}
+    config["overrides"] = {"workspace": {"memory_mib": 12288}}
+    assert memory_over(build_model(config), small) > 0
+    assert errors_of(small, config)[0].endswith("). More memory than the least is set for workspace")
+
+
+def test_a_raise_is_refused_at_save_only_when_it_alone_makes_the_choices_not_fit(facts):
+    from nullbill import sizes
+
+    small = facts("small")
+    config = copy.deepcopy(fixture_config("small"))
+    before = build_model(config)
+    slack = -memory_over(before, small)
+    assert slack > 0
+    # Workspace, a container, counts at half: this raise is 512 MiB past what is free.
+    raised = copy.deepcopy(config) | {"overrides": {"workspace": {"memory_mib": 1024 + 2 * slack + 1024}}}
+    after = build_model(raised)
+    said = sizes.too_much(before, after, small)
+    assert len(said) == 1 and f"the server would be {sizes.amount(memory_over(after, small))} short" in said[0]
+    assert memory_over(after, small) == 512
+    # Choices that do not fit anyway (a tick), and a raise beside them: the plan says so, the save is not refused.
+    over = copy.deepcopy(config)
+    over["intent"]["workloads"] = [*over["intent"]["workloads"], "windows-dev"]
+    assert memory_over(build_model(over), small) > 0
+    assert sizes.too_much(build_model(over), build_model(over | {"overrides": raised["overrides"]}), small) == []
 
 
 def test_pinned_pool_count(facts):

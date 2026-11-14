@@ -178,7 +178,6 @@ SETTING = re.compile(r"[A-Za-z][A-Za-z0-9._-]{0,60}")
 MAX_SETTINGS = 60
 MAX_VALUE = 200
 MAX_TITLE = 40
-MAX_MEMORY_MIB = 65536
 # How an admin is made on the server's console; Terraria has no admins.
 ADMIN_COMMAND = {"minecraft": "op {}", "factorio": "/promote {}"}
 # Minecraft asks Mojang for the player behind a name before it answers.
@@ -607,26 +606,6 @@ def read_settings(model: dict, name: str, chosen: object, other: object = "") ->
         raise NullBillError(*problems)
     start = defaults(model, name) | {key: o["default"] for key, o in named.items()}
     return {key: value for key, value in out.items() if key not in start or start[key] != value or type(start[key]) is not type(value)}
-
-
-def floor_mib(model: dict, name: str) -> int:
-    return model["services"][name]["floor"]["memory_mib"]
-
-
-def read_memory(model: dict, name: str, value: object) -> int | None:
-    """A server's memory from a form, in MiB; None for the game's own."""
-    title, least = model["games"][name]["title"], floor_mib(model, name)
-    if value in (None, ""):
-        return None
-    try:
-        asked = int(value)  # type: ignore[call-overload]
-    except (TypeError, ValueError):
-        asked = None
-    if asked is None or isinstance(value, bool) or not least <= asked <= MAX_MEMORY_MIB:
-        raise NullBillError(
-            f"{title}: its memory is from {least / 1024:g} to {MAX_MEMORY_MIB / 1024:g} GiB ({least} to {MAX_MEMORY_MIB} MiB)"
-        )
-    return None if asked == least else asked
 
 
 def read_title(model: dict, name: str | None, value: object) -> str:
