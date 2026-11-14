@@ -1647,7 +1647,7 @@ function renderDisks(disks) {
     box.append(make("legend", {}, make("div", {className: "disk-head"},
       make("span", {className: "disk-id", textContent: disk.id}),
       make("span", {className: "meta", textContent: `${disk.size_gib} GiB ${disk.rotational ? "hard disk" : "SSD"}${hours}`}),
-      make("span", {className: "push"}, status(healthKind, `Health ${disk.health}`)))));
+      make("span", {className: "push"}, status(healthKind, disk.health === "PASSED" ? "Healthy" : disk.health === "FAILED" ? "Failing" : "Health not read")))));
     if (disk.health === "FAILED") {
       box.append(make("div", {className: "problem"}, make("p", {textContent: "This disk reports that it is failing. Copy what you need off it soon."})));
     }
@@ -2379,7 +2379,15 @@ function renderDirect(found) {
   const notes = settled ? [] : String(found.detail || "").split("; ").filter(Boolean).map(sentence);
   if (verdict === "unmeasured" && found.kind !== "waiting") notes.unshift("The server asks every device on your tailnet while this tab is open, and a phone that is asleep may not answer. Open this page on the phone, on mobile data, and its path shows here within seconds.");
   show("direct-help", notes.length > 0);
-  $("direct-help").replaceChildren(...notes.map((t) => li(t)));
+  // What the server could not read says so in words; what a program
+  // printed stays under Details.
+  const said = (t) => {
+    const [head, ...rest] = t.split(": ");
+    if (verdict !== "unread" || !rest.length) return li(t);
+    return make("li", {}, sentence(head), " ", make("details", {className: "printed"}, make("summary", {textContent: "Details"}),
+      make("code", {textContent: rest.join(": ").replace(/\.$/, "")})));
+  };
+  $("direct-help").replaceChildren(...notes.map(said));
 }
 
 // The port and where a forward made by hand goes, wherever the page names them.
@@ -2937,7 +2945,7 @@ function attentionItems() {
   if ((state.removals || []).length && state.removals_stopped) add("bad", `Setup stopped before deleting ${andList(state.removals)}`, "Keep them or confirm the deletion.", [link("Decide", "#setup/build")]);
   const s = lastStatus;
   if (s && s.monitoring === "ok") {
-    for (const a of s.alerts) add(a.severity === "page" ? "bad" : "warn", alertText(a).what, alertText(a).todo || a.name, [link("Alerts", "#alerts")]);
+    for (const a of s.alerts) add(a.severity === "page" ? "bad" : "warn", alertText(a).what, alertText(a).todo || "", [link("Alerts", "#alerts")]);
     // What an alert already tells of gets no second row.
     const firing = new Set(s.alerts.map((a) => a.name));
     if (s.down.length && !firing.has("TargetDown")) add("bad", `${s.down.length} system${s.down.length > 1 ? "s do" : " does"} not answer`, s.down.join(", "),

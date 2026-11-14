@@ -329,7 +329,7 @@ def find(plan_with_notes: dict, model: dict, target: str, run: Runner) -> Findin
 
     said, why = status()
     if said is None:
-        return Finding(UNREAD, f"tailscale status on the vpn guest: {why}")
+        return Finding(UNREAD, f"cannot read Tailscale on the vpn guest: {why}")
     if said.get("BackendState") != "Running":
         return Finding(WAITING, "the vpn guest is not on the tailnet yet")
     asked = idle(said)
