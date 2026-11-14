@@ -2904,7 +2904,7 @@ function renderSystemUpdates() {
     show("system-restart-row", false);
     return;
   }
-  $("system-updates").replaceChildren(s.security_waiting.length ? status("warn", `Waiting on ${s.security_waiting.length}`, s.security_waiting.join(", ")) : status("good", "Up to date", "installed nightly"));
+  $("system-updates").replaceChildren(s.security_waiting.length ? status("warn", s.security_waiting.length === 1 ? "Waiting on 1 system" : `Waiting on ${s.security_waiting.length} systems`, s.security_waiting.join(", ")) : status("good", "Up to date", "installed nightly"));
   show("system-restart-row", s.reboot_waiting.length > 0);
   $("system-restart").replaceChildren(status("warn", "Needed", s.reboot_waiting.join(", ")));
 }
