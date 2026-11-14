@@ -65,6 +65,13 @@ def script() -> str:
     return resources.files("nullbill").joinpath("data/nb-release-upgrade").read_text()
 
 
+# Puts what it is sent into the guest as the script. It reads the stream it
+# was given and never opens /dev/stdin: in an unprivileged container that
+# is a pipe of the host's root, which the container's root may read from
+# but not open again ("Permission denied", on the first real run).
+PLACE = f"cat > {SCRIPT}.new && chmod 0755 {SCRIPT}.new && mv {SCRIPT}.new {SCRIPT}"
+
+
 def snapshot(release: dict) -> str:
     return f"nb-before-debian-{release['version']}"
 

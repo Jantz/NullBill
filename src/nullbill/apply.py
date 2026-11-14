@@ -1552,7 +1552,7 @@ def upgrade_release(ctx: Context, name: str) -> None:
     rel = ctx.model["images"]["release"]
     ctx.say(f"release: {name} runs Debian {rel['from']}; copying it, then upgrading it to {rel['codename']} (Debian {rel['version']})")
     copy = release_copy(ctx, name)
-    rc, out = in_guest(ctx, name, f"install -m 0755 /dev/stdin {release.SCRIPT}", stdin=release.script())
+    rc, out = in_guest(ctx, name, release.PLACE, stdin=release.script())
     if rc == 0:
         start = f"systemctl reset-failed {release.UNIT} 2>/dev/null; rm -f {release.RESULT}; "
         start += f"systemd-run --quiet --unit {release.UNIT} {release.SCRIPT} {rel['from']} {rel['codename']}"
@@ -1674,7 +1674,7 @@ def release_room(ctx: Context, names: list[str]) -> None:
     ctx.say(f"release: measuring the room for Debian {rel['version']} in {len(names)} guests before any is changed")
     short, downloads = [], 0
     for name in names:
-        rc, out = in_guest(ctx, name, f"install -m 0755 /dev/stdin {release.SCRIPT}", stdin=release.script())
+        rc, out = in_guest(ctx, name, release.PLACE, stdin=release.script())
         if rc == 0:
             rc, out = in_guest(ctx, name, f"{release.SCRIPT} {rel['from']} {rel['codename']} room", timeout=ROOM_S)
         found = release.room(out) if rc == 0 else None

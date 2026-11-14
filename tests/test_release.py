@@ -3,7 +3,10 @@ apply's release stage (release.py), against a stand-in host whose guests
 answer as pct and the guest agent do."""
 
 import json
+import os
 import shlex
+import socket
+import subprocess
 import time
 
 import pytest
@@ -54,7 +57,7 @@ class Server:
             return 0, self.runs[vmid] + "\n" + self.left.get(vmid, "")
         if command == apply.CODENAME:
             return (1, "") if vmid in self.silent else (0, self.runs[vmid] + "\n")
-        if command.startswith("install -m 0755 /dev/stdin"):
+        if command == release.PLACE:
             assert stdin == release.script()
             return 0, ""
         if command == f"{release.SCRIPT} bookworm trixie room":
@@ -424,6 +427,22 @@ def test_a_guest_that_finds_too_little_room_itself_is_left_as_it_was(server):
     host.measured.clear()
     apply.stage_release(ctx)
     assert release.read(ctx.home)["router"]["release"] == "trixie"
+
+
+def test_the_script_is_placed_from_a_stream_that_cannot_be_opened_again(tmp_path):
+    # In an unprivileged container the piped script is the host root's pipe:
+    # readable, but /dev/stdin cannot be opened. A socket is the same to a shell.
+    ours, theirs = socket.socketpair()
+    ours.sendall(release.script().encode())
+    ours.shutdown(socket.SHUT_WR)
+    where = tmp_path / "nb-release-upgrade"
+    done = subprocess.run(["sh", "-c", release.PLACE.replace(release.SCRIPT, str(where))], stdin=theirs, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    assert where.read_text() == release.script() and os.access(where, os.X_OK) and not where.with_name(where.name + ".new").exists()
+    refused = subprocess.run(["sh", "-c", "cat /dev/stdin"], stdin=socket.socketpair()[1], capture_output=True, text=True)
+    assert refused.returncode != 0
+    # Nothing sent into a guest names /dev/stdin.
+    assert "/dev/stdin" not in (apply.REPO_ROOT / "src/nullbill/apply.py").read_text()
 
 
 def test_the_script_names_what_apply_reads_and_the_catalog_names_the_release():
