@@ -464,7 +464,15 @@ def test_jobs_report_failure_and_offsets(site):
     # It said nothing of why, and the page says so, at the first stage.
     assert done["progress"]["steps"][0]["status"] == "failed"
     assert done["progress"]["error"]["message"].startswith("It ended without saying why")
-    assert client.call("/api/state")[1]["last_jobs"]["apply"]["state"] == "failed"
+    st = client.call("/api/state")[1]
+    assert st["last_jobs"]["apply"]["state"] == "failed"
+    # Overview tells of the latest failed run from the state, whichever run the page has open.
+    error = done["progress"]["error"]
+    assert st["last_jobs"]["apply"]["error"] == {"stage_text": error["stage_text"], "message": error["message"]}
+    # The state brings the latest run without its log, and from its start:
+    # the page asks for the log from that offset and gets all of it.
+    assert (st["job"]["id"], st["job"]["text"], st["job"]["offset"]) == (job["id"], "", 0)
+    assert client.call(f"/api/jobs/{job['id']}?offset={st['job']['offset']}")[1]["text"] == done["text"]
     later = client.call(f"/api/jobs/{job['id']}?offset={done['offset']}")[1]
     assert later["text"] == ""
     # A run the page lost (NullBill restarted under it) ended when its log
@@ -711,6 +719,8 @@ def test_activity_lists_runs_newest_first_and_built_waits_for_a_good_setup_run(s
     assert all(r["seconds"] >= 0 for r in st["runs"])
     # The list says where a failed run stopped; a finished one has nothing to say.
     assert st["runs"][0]["where"] is None and st["runs"][1]["where"] == 'At "Read your choices and make the plan"'
+    # A good run after it: nothing failed is left to tell of.
+    assert st["last_jobs"]["apply"]["id"] == good["id"] and "error" not in st["last_jobs"]["apply"]
 
 
 def test_each_plan_problem_carries_what_to_do_about_it():
@@ -1080,7 +1090,7 @@ def test_status_reads_prometheus_on_the_monitoring_guest(site):
                 {"state": "firing", "labels": {"alertname": "Watchdog", "severity": "none"}},
                 {
                     "state": "firing",
-                    "labels": {"alertname": "RebootRequired", "severity": "warn"},
+                    "labels": {"alertname": "RebootRequired", "severity": "warn", "instance": "pve"},
                     "annotations": {"summary": "pve needs a reboot"},
                 },
                 {"state": "pending", "labels": {"alertname": "DiskAlmostFull", "severity": "page"}},
@@ -1105,8 +1115,9 @@ def test_status_reads_prometheus_on_the_monitoring_guest(site):
     assert status == 200 and data == {
         "monitoring": "ok",
         "alerts": [
-            {"name": "TargetDown", "severity": "page", "summary": "forgejo is down"},
-            {"name": "RebootRequired", "severity": "warn", "summary": "pve needs a reboot"},
+            {"name": "TargetDown", "severity": "page", "summary": "forgejo is down", "instance": ""},
+            # The machine it names, so the page keeps the name's spelling.
+            {"name": "RebootRequired", "severity": "warn", "summary": "pve needs a reboot", "instance": "pve"},
         ],
         "targets": 2,
         "down": ["forgejo:9100"],
@@ -1626,6 +1637,17 @@ def test_an_erased_disk_becomes_backups_or_storage(site):
     status, data = client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "copy", "for": "storage", "confirm": "D_0002"}}})
     assert status == 200 and data["plan"]["errors"] == []
     assert pins(app) == {OLD: {"use": "storage", "wipe": True, "evacuate": "local-lvm"}}
+
+
+def test_the_blank_disk_the_plan_takes_for_backups_says_so(site):
+    # Disks said "Leave it alone" of the disk the Backups page put them on.
+    app, client = site
+    sign_in(app, client)
+    probed(app)
+    assert client.call("/api/choices", OWNER)[0] == 200
+    disks = {d["id"]: d for d in client.call("/api/state")[1]["disks"]}
+    assert disks["ata-SYNTHETIC_HDD_0003"]["backups"] and disks["ata-SYNTHETIC_HDD_0003"]["choice"] == "alone"
+    assert not disks[OLD]["backups"]
 
 
 def test_a_disk_not_kept_cannot_be_copied(site):

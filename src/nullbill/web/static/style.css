@@ -270,7 +270,9 @@ input[type=checkbox], input[type=radio] { width: 16px; height: 16px; margin: 2px
   grid-template-areas: "side top dock" "side banner dock" "side main dock";
 }
 .shell.dock-closed { grid-template-columns: var(--side) minmax(0, 1fr) 0; }
-.shell.dock-closed .dock { visibility: hidden; }
+/* Closed, nothing in it may reach past the empty column, hidden labels
+   placed absolutely included: the page scrolled sideways. */
+.shell.dock-closed .dock { visibility: hidden; contain: paint; border-left: 0; }
 
 .sidebar {
   grid-area: side; display: flex; flex-direction: column; gap: 4px; min-height: 0; overflow-y: auto;
@@ -1332,6 +1334,10 @@ dialog::backdrop { background: var(--scrim); }
   .services .demand-acts { flex-wrap: wrap; justify-content: flex-end; }
 }
 @container main (max-width: 560px) {
+  /* Needs attention: the text takes the width, its buttons a line under it. */
+  .rows > li { flex-wrap: wrap; row-gap: 8px; }
+  .rows > li > .row { flex-basis: calc(100% - 20px); margin-left: 20px; }
+  .rows > li > .row:empty { display: none; }
   .table .hide-phone { display: none; }
   .table.review .effect-narrow { display: block; }
   .table.review tr.detail > td { padding: 8px 12px 10px 40px; }

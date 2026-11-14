@@ -85,6 +85,14 @@ def test_disks_are_offered_by_what_they_hold(facts):
         backupview.save(config, view, {"place": "nope"}, no_erase)
 
 
+def test_the_blank_disk_the_plan_took_is_not_saved_again(facts):
+    # Saving it pinned it, and the page then asked for a setup run that changed nothing.
+    config = fixture_config("large")
+    view, _ = shown(facts, "large", config)
+    assert view["where"]["disk"] == BLANK
+    assert backupview.save(config, view, {"place": BLANK}, no_erase) == config
+
+
 def test_a_kept_disk_is_never_a_place_for_backups(facts):
     config = fixture_config("large") | OFF | {"disks": {KEPT: {"use": "legacy"}}}
     view, _ = shown(facts, "large", config, drop=(BLANK,))

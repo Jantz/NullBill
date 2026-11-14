@@ -1612,6 +1612,8 @@ function diskChoice(disk, value, keepable) {
     return [CHOICES.copy, size];
   }
   if (value === "erase" && disk.kept) return ["Erase everything on it without a copy", "I have its files elsewhere."];
+  // A blank disk the plan took for the backups by itself: left to them.
+  if (value === "alone" && disk.backups) return ["Leave it to the nightly backups", "Setup took it for them because it was blank. The Backups page shows how full it is."];
   return [CHOICES[value], ""];
 }
 
@@ -1927,7 +1929,9 @@ function renderAlerts(alerts) {
 // a line each.
 function alertText(a) {
   const [what, ...todo] = String(a.summary || a.name).split("; ");
-  return {what: sentence(what).replace(/\.$/, ""), todo: todo.map(sentence).join(" ")};
+  // A machine's name keeps its spelling: "pve needs a reboot", not "Pve".
+  const named = a.instance && what.startsWith(a.instance);
+  return {what: (named ? what : sentence(what)).replace(/\.$/, ""), todo: todo.map(sentence).join(" ")};
 }
 
 // What is firing, from monitoring.
@@ -2575,7 +2579,8 @@ function paintStates() {
   renderReview();
   renderReady();
   // What a finished run says changes with the time that has passed since.
-  if (job && job.view && job.view.state !== "running") { drawOutcome(job.node, job.view); paintPill(job.view); }
+  if (job && job.view && job.view.state !== "running") drawOutcome(job.node, job.view);
+  paintPill(latestView());
   renderOverview(items);
   renderRuns();
   renderFiring();
@@ -2733,6 +2738,7 @@ function renderReview() {
   if (restart.length) parts.push(`${restart.length} may restart`);
   if (again.length > restart.length) parts.push(`${again.length - restart.length} set up again, nothing restarts`);
   if (alone.length) parts.push(`${alone.length} left alone`);
+  if (unknown.length && built()) parts.push(`${unknown.length} not known`);
   $("review-summary").replaceChildren(...parts.map((text) => make("li", {textContent: text})));
   show("review-unknown", r.known === false);
   // Before the first run that wrote down what each machine was set up with.
@@ -2924,8 +2930,7 @@ function attentionItems() {
   }
   const apply = state.last_jobs.apply;
   if (apply && apply.state === "failed" && !apply.stopped && !runningAction()) {
-    const view = job && job.id === apply.id ? job.view : null;
-    const e = view && view.progress.error;
+    const e = apply.error;
     add("bad", e && e.stage_text ? `Setup failed at "${e.stage_text}"` : "The last setup run failed", e ? e.message : "",
       [link("Open the run", `#activity/${apply.id}`), signed ? ask("Ask the agent", `The last setup run failed${e && e.stage_text ? ` at "${e.stage_text}"` : ""}. Find out why and propose the fix.`) : null].filter(Boolean));
   }
@@ -2933,9 +2938,11 @@ function attentionItems() {
   const s = lastStatus;
   if (s && s.monitoring === "ok") {
     for (const a of s.alerts) add(a.severity === "page" ? "bad" : "warn", alertText(a).what, alertText(a).todo || a.name, [link("Alerts", "#alerts")]);
-    if (s.down.length) add("bad", `${s.down.length} system${s.down.length > 1 ? "s do" : " does"} not answer`, s.down.join(", "),
+    // What an alert already tells of gets no second row.
+    const firing = new Set(s.alerts.map((a) => a.name));
+    if (s.down.length && !firing.has("TargetDown")) add("bad", `${s.down.length} system${s.down.length > 1 ? "s do" : " does"} not answer`, s.down.join(", "),
       signed ? [ask("Ask the agent", "Look at the systems that do not answer, find the cause and propose the fix.")] : []);
-    if (s.reboot_waiting.length) add("warn", "A restart would finish installed updates", s.reboot_waiting.join(", "), []);
+    if (s.reboot_waiting.length && !firing.has("RebootRequired")) add("warn", "A restart would finish installed updates", s.reboot_waiting.join(", "), []);
   } else if (s && built() && s.monitoring !== "not planned" && !SETUP_RUNS.has(runningAction())) {
     add("warn", "Monitoring does not answer", "If setup just finished, wait a minute.", signed ? [ask("Ask the agent", "Monitoring does not answer. Find out why.")] : []);
   }
@@ -4030,8 +4037,10 @@ function renderBackups() {
     $("backups-meta").textContent = live && live.read ? `Measured on the server ${readAt(live.read)}` : "";
   }
 
-  // Where they go.
-  const holder = b.places.find((p) => p.kind === "made" || p.kind === "chosen");
+  // Where they go. A blank disk the saved plan already took holds them too:
+  // offering it again only saved it as a choice and asked for a setup run.
+  const holder = b.places.find((p) => p.kind === "made" || p.kind === "chosen")
+    || (want && want.kind === "disk" && b.places.find((p) => p.id === want.disk));
   const system = b.system;
   show("backups-weak", b.on && Boolean(want || has) && (want || has).kind === "system");
   show("backups-own", Boolean(holder));
@@ -4252,7 +4261,7 @@ async function refresh() {
   }
   // Follow the latest run unless the owner opened another one.
   if (st.job && (!job || (job.id !== st.job.id && !(currentView === "activity" && currentSub === job.id)))) follow(st.job, st.job.state === "running");
-  if (!st.job) paintPill(null);
+  paintPill(latestView());
   gateJobButtons();
 }
 
@@ -4430,6 +4439,14 @@ async function tick(current) {
   }
 }
 
+// The top bar tells of the latest run, whichever one the owner has open:
+// live when the page follows it, else as the state brought it.
+function latestView() {
+  const latest = state && state.job;
+  if (job && job.view && (!latest || job.view.started >= latest.started)) return job.view;
+  return latest || null;
+}
+
 function paintPill(view) {
   const pill = $("run");
   const fill = $("run-fill");
@@ -4493,7 +4510,7 @@ function drawJob(current, view) {
   // A run that went well folds its stages and log away; a live or failed one shows them.
   if (node.dataset.state !== view.state) node.querySelector(".job-more").open = view.state !== "done";
   node.dataset.state = view.state;
-  paintPill(view);
+  paintPill(latestView());
   node.querySelector(".job-title").textContent = p.title;
   const steps = p.steps || [];
   const done = steps.filter((s) => s.status === "done").length;

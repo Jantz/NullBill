@@ -82,7 +82,7 @@ tests:
         alertname: TargetDown
         exp_alerts:
           - exp_labels: {severity: page, job: node, instance: "forgejo:9100"}
-            exp_annotations: {summary: "node target forgejo:9100 is not answering"}
+            exp_annotations: {summary: "forgejo:9100 does not answer monitoring (node); if it stays so, look at it in Proxmox, or ask the agent"}
       - eval_time: 16m
         alertname: DiskAlmostFull
         exp_alerts:
@@ -395,7 +395,7 @@ tests:
         alertname: TargetDown
         exp_alerts:
           - exp_labels: {severity: page, job: node, instance: jellyfin}
-            exp_annotations: {summary: "node target jellyfin is not answering"}
+            exp_annotations: {summary: "jellyfin does not answer monitoring (node); if it stays so, look at it in Proxmox, or ask the agent"}
       - eval_time: 20m
         alertname: CertificateProbeFailing
         exp_alerts:

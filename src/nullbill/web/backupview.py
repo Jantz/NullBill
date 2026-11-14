@@ -177,6 +177,8 @@ def save(config: dict, shown: dict, body: dict, erase: Callable[[dict, dict], di
         raise NullBillError(f"{place}: {KEPT_WHY}")
     if disk["kind"] == "storage":
         raise NullBillError(f"{place}: it is extra storage in Proxmox; Setup, What to run, Disks changes that")
+    if disk["kind"] == "blank" and (shown.get("where") or {}).get("disk") == place:
+        return config  # the plan takes this blank disk already; a pin would only ask for a setup run
     if disk["kind"] == "blank":
         config["disks"] = {**(config.get("disks") or {}), place: {"use": "pbs"}}
     elif disk["kind"] == "erase":
