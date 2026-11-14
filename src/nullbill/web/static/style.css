@@ -1334,6 +1334,10 @@ dialog::backdrop { background: var(--scrim); }
   .services .demand-acts { flex-wrap: wrap; justify-content: flex-end; }
 }
 @container main (max-width: 560px) {
+  /* Needs attention: the text takes the width, its buttons a line under it. */
+  .rows > li { flex-wrap: wrap; row-gap: 8px; }
+  .rows > li > .row { flex-basis: calc(100% - 20px); margin-left: 20px; }
+  .rows > li > .row:empty { display: none; }
   .table .hide-phone { display: none; }
   .table.review .effect-narrow { display: block; }
   .table.review tr.detail > td { padding: 8px 12px 10px 40px; }
