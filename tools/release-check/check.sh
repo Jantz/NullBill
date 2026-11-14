@@ -87,7 +87,7 @@ echo "deb [trusted=yes] copy:/opt/base ./" >/etc/apt/sources.list.d/base.list
 if bash "$upgrade" bookworm trixie; then fail "a stranger's base-files stops the run"; fi
 grep -q "^failed: a repository that is not Debian's offers Debian's own base packages" /var/lib/nullbill/release-upgrade.result \
   || fail "the result says why: $(tail -n 1 /var/lib/nullbill/release-upgrade.result)"
-[ -z "$(apt-mark showhold | grep -vx nb-owner-held)" ] || fail "nothing was held"
+if apt-mark showhold | grep -qvx nb-owner-held; then fail "nothing was held"; fi
 rm -r /opt/base /etc/apt/sources.list.d/base.list
 pass "a repository offering Debian's base under another name stops the run with nothing held"
 
