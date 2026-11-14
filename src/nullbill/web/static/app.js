@@ -2376,16 +2376,18 @@ function renderDirect(found) {
   // What the server read about the port and what to do, a line each; with
   // a direct path seen in use there is nothing to do.
   const settled = verdict === "measured" || verdict === "open";
-  const notes = settled ? [] : String(found.detail || "").split("; ").filter(Boolean).map(sentence);
+  // What could not be read is one note: a program's output may hold "; " too.
+  const notes = settled ? [] : verdict === "unread" ? [String(found.detail || "")].filter(Boolean)
+    : String(found.detail || "").split("; ").filter(Boolean).map(sentence);
   if (verdict === "unmeasured" && found.kind !== "waiting") notes.unshift("The server asks every device on your tailnet while this tab is open, and a phone that is asleep may not answer. Open this page on the phone, on mobile data, and its path shows here within seconds.");
   show("direct-help", notes.length > 0);
   // What the server could not read says so in words; what a program
   // printed stays under Details.
   const said = (t) => {
     const [head, ...rest] = t.split(": ");
-    if (verdict !== "unread" || !rest.length) return li(t);
-    return make("li", {}, sentence(head), " ", make("details", {className: "printed"}, make("summary", {textContent: "Details"}),
-      make("code", {textContent: rest.join(": ").replace(/\.$/, "")})));
+    if (verdict !== "unread" || !rest.length) return li(sentence(t));
+    return make("li", {}, sentence(head), make("details", {className: "fail-more"}, make("summary", {textContent: "Details"}),
+      outputBox(make("pre", {textContent: rest.join(": ")}))));
   };
   $("direct-help").replaceChildren(...notes.map(said));
 }
@@ -2533,7 +2535,7 @@ function renderGuide(items) {
 // A runbook the page names in code, such as docs/runbooks/media.md, opens
 // as that file of the NullBill that runs here (version.docs), wherever it
 // is drawn; without a GitHub origin it stays the path it was.
-const DOC_PATH = /^docs\/[\w./-]+\.md$/;
+const DOC_PATH = /^docs\/(?:[\w-]+\/)*[\w.-]+\.md$/;
 function linkDocs(root) {
   const base = state && state.version && state.version.docs;
   if (!base || !root.querySelectorAll) return;

@@ -40,7 +40,7 @@ groups:
         for: 15m
         labels: {severity: page}
         annotations:
-          summary: "{{ $labels.instance }} {{ $labels.mountpoint }} has under 10% free; delete what it no longer needs, or ask the agent what fills it"
+          summary: "{{ $labels.instance }} {{ $labels.mountpoint }} has under 10% free; ask the agent what fills it before deleting anything"
       # A writable share with under 1 GiB left, as the files guest sees it
       # (the host reports the same disk; one alert is enough).
       - alert: KeptDiskFull
@@ -162,7 +162,7 @@ groups:
         for: 1h
         labels: {severity: page}
         annotations:
-          summary: "{{ $labels.guest }} ({{ $labels.vmid }}) has no encrypted backup from the last 26 hours; the page's Backups page shows each guest's newest backup"
+          summary: "{{ $labels.guest }} ({{ $labels.vmid }}) has no encrypted backup from the last 26 hours; the page's Backups page lists the guests without one, and the agent can read why the nightly backup left it out"
       - alert: BackupStatusUnknown
         expr: nb_backup_status_ok == 0
         for: 2h

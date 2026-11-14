@@ -239,7 +239,8 @@ def router_state(rc: int, out: str, err: str) -> tuple[dict | None, int | None, 
     if not answer.get("exited"):
         return None, None, "the router did not answer in time"
     if answer.get("exitcode") != 0 or not text.strip():
-        return None, None, f"nothing to read on the router: {(answer.get('err-data') or 'nb-portmap has not run yet').strip()[:120]}"
+        printed = str(answer.get("err-data") or "").strip()[:120]
+        return None, None, f"nothing to read on the router: {printed}" if printed else "nb-portmap has not run on the router yet"
     body, _, clock = text.strip().rpartition("\n")
     try:
         state = json.loads(body)

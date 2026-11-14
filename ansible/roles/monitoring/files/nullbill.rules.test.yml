@@ -87,7 +87,7 @@ tests:
         alertname: DiskAlmostFull
         exp_alerts:
           - exp_labels: {severity: page, instance: "pbs:9100", mountpoint: /, fstype: ext4}
-            exp_annotations: {summary: "pbs:9100 / has under 10% free; delete what it no longer needs, or ask the agent what fills it"}
+            exp_annotations: {summary: "pbs:9100 / has under 10% free; ask the agent what fills it before deleting anything"}
       - eval_time: 14m
         alertname: KeptDiskFull
         exp_alerts: []
@@ -220,7 +220,7 @@ tests:
         alertname: BackupTooOld
         exp_alerts:
           - exp_labels: {severity: page, instance: "pve:9100", vmid: "2017", guest: forgejo}
-            exp_annotations: {summary: "forgejo (2017) has no encrypted backup from the last 26 hours; the page's Backups page shows each guest's newest backup"}
+            exp_annotations: {summary: "forgejo (2017) has no encrypted backup from the last 26 hours; the page's Backups page lists the guests without one, and the agent can read why the nightly backup left it out"}
       - eval_time: 1h50m
         alertname: BackupStatusUnknown
         exp_alerts: []
