@@ -36,6 +36,25 @@ POLL_S = 20
 # A snapshot is kept this long after its guest's upgrade, then deleted by
 # the next full setup run: it grows with every block the guest changes.
 KEEP_COPY_S = 7 * 86400
+# The result line of a run that changed nothing (too little room).
+REFUSED = "refused: "
+# A snapshot keeps every block the upgrade replaces: what is downloaded,
+# and the new packages unpacked, which come to three to four times their
+# archives. So much room, times what a guest downloads, its snapshot may
+# take on the guests' storage.
+SNAPSHOT_TIMES = 5
+
+
+def room(text: str) -> tuple[int, int, int] | None:
+    """`nb-release-upgrade FROM TO room`'s answer: MiB needed in the guest,
+    MiB free there, MiB it downloads. None when it gave none."""
+    for line in reversed(text.splitlines()):
+        words = line.split()
+        if len(words) == 4 and words[0] == "room" and all(word.isdigit() for word in words[1:]):
+            return int(words[1]), int(words[2]), int(words[3])
+    return None
+
+
 # Guests the others need to download anything: first, so a problem there
 # stops the run before the rest is touched.
 FIRST = ("router", "egress-proxy")
@@ -109,7 +128,8 @@ def expired(home: Path, now: float) -> dict[str, dict]:
 
 def result(text: str) -> tuple[str, str]:
     """What the result file's last line says: (`done`, codename),
-    (`failed`, why) or (`running`, the step it is at)."""
+    (`failed`, why), (`refused`, why: the script changed nothing) or
+    (`running`, the step it is at)."""
     lines = [line for line in text.splitlines() if line.strip()]
     if not lines:
         return "running", ""
@@ -118,4 +138,6 @@ def result(text: str) -> tuple[str, str]:
         return "done", last.removeprefix("done ").strip()
     if last.startswith("failed: "):
         return "failed", last.removeprefix("failed: ").strip()
+    if last.startswith(REFUSED):
+        return "refused", last.removeprefix(REFUSED).strip()
     return "running", last

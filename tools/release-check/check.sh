@@ -46,6 +46,21 @@ apt-mark hold nb-owner-held >/dev/null
 vendor nb-pinned 2.0
 vendor nb-owner-held 2.0
 
+# Room is measured first, with nothing changed; too little refuses.
+before=$(md5sum /etc/apt/sources.list.d/* /var/lib/dpkg/status)
+measured=$(bash "$upgrade" bookworm trixie room) || fail "the room can be measured"
+read -r word need free get <<<"$measured"
+if ! { [ "$word" = room ] && [ "$need" -gt "$get" ] && [ "$get" -gt 20 ] && [ "$free" -gt 0 ]; }; then
+  fail "measuring answers room NEED FREE DOWNLOAD: $measured"
+fi
+[ ! -e /var/lib/nullbill/release-upgrade.result ] || fail "measuring leaves no result file"
+if NB_RELEASE_FREE_MIB=$((need - 1)) bash "$upgrade" bookworm trixie; then fail "too little room is refused"; fi
+grep -q "^refused: the upgrade needs about $need MiB free on this guest's disk, and $((need - 1)) MiB are free" \
+  /var/lib/nullbill/release-upgrade.result || fail "the refusal says how much is needed and free"
+[ "$before" = "$(md5sum /etc/apt/sources.list.d/* /var/lib/dpkg/status)" ] || fail "measuring and a refusal change nothing"
+[ -z "$(ls -d /var/tmp/nb-release-room.* 2>/dev/null)" ] || fail "the measuring folder is gone"
+pass "the room is measured before anything changes ($need MiB needed, $get MiB to download); one MiB too little is refused"
+
 bash "$upgrade" bookworm trixie || fail "the upgrade ran to its end"
 [ "$(dpkg-query -W -f '${Version}' nb-pinned)" = 1.0 ] || fail "a vendor's program stays at the version the role pinned"
 [ "$(apt-mark showhold)" = nb-owner-held ] || fail "only the owner's own hold is left: $(apt-mark showhold | tr '\n' ' ')"

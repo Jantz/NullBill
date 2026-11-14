@@ -45,13 +45,18 @@ the update moves each to Debian 13 in place:
    NullBill**.
 2. Open **Setup**, **Review and run**. It says how many guests are
    upgraded. Press **Start setup**.
-3. The run upgrades one guest after another, the router first. For each it
+3. The run first measures the room, and changes nothing while it does:
+   each guest works out what its upgrade needs on its own disk, and the
+   server's disk must have room for what the snapshots keep for a week. If
+   anything is short, the run stops there and says which guest or disk,
+   how much it needs and how much is free.
+4. The run upgrades one guest after another, the router first. For each it
    takes a snapshot in Proxmox, upgrades, restarts the guest and checks it.
    Each guest is away for some minutes; while the router restarts, nothing
    on the server is reachable for about a minute, this page included.
-4. PostgreSQL moves from 15 to 17 in the same step. Its old data stays on
+5. PostgreSQL moves from 15 to 17 in the same step. Its old data stays on
    the guest's disk, stopped.
-5. When the run has finished, the NullBill container upgrades itself. This
+6. When the run has finished, the NullBill container upgrades itself. This
    page is away for about ten minutes and comes back by itself.
 
 Only Debian's own packages move in this step. Programs from their vendors'
@@ -97,6 +102,12 @@ host, `/root/nullbill/controller-upgrade.log`. NullBill does not try
 again by itself. To try again, delete
 `/var/lib/nullbill/controller-release.json` in the NullBill container and
 run setup.
+
+"Too little room to upgrade the guests": nothing was changed. For a guest,
+make its disk larger in Proxmox (the guest, **Resources**, the disk,
+**Volume Action**, **Resize**) or delete what it does not need, then run
+setup again. For the server's storage, free room on it first: old backups
+on `local`, a guest you no longer use.
 
 ## 4. Putting a guest back by hand
 

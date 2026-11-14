@@ -17,16 +17,30 @@
 # for as long as this runs: those versions are NullBill's pins, each role
 # moves its own afterwards, and a vendor's newest must not come in here
 # past the pin, where a role could then only go back.
+#
+# Room is measured before anything is changed: apt works out the upgrade
+# against the new release's package lists in a folder of its own and says
+# what it would download and how much more the disk would then hold; a
+# PostgreSQL cluster is copied once more. Too little free room ends the
+# run with `refused:` in the result file and the guest as it was.
+# `nb-release-upgrade FROM TO room` only measures and prints one line,
+# `room NEED FREE DOWNLOAD` in MiB, for apply to add up before it touches
+# any guest.
 set -Eeuo pipefail
-from=$1 to=$2
+from=$1 to=$2 only=${3:-}
 state=/var/lib/nullbill
 result=$state/release-upgrade.result
 mkdir -p "$state"
-exec >>/var/log/nb-release-upgrade.log 2>&1
-echo "--- $(date -u +%FT%TZ) $from to $to"
+exec 3>&1 >>/var/log/nb-release-upgrade.log 2>&1
+echo "--- $(date -u +%FT%TZ) $from to $to $only"
 say() { echo "$*" | tee -a "$result" >/dev/null; }
-: >"$result"
-trap 'say "failed: $(tail -n 1 /var/log/nb-release-upgrade.log | cut -c1-300)"' ERR
+if [ "$only" = room ]; then
+  say() { :; }
+  trap 'echo "failed: $(tail -n 1 /var/log/nb-release-upgrade.log | cut -c1-300)" >&3' ERR
+else
+  : >"$result"
+  trap 'say "failed: $(tail -n 1 /var/log/nb-release-upgrade.log | cut -c1-300)"' ERR
+fi
 
 export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 APT_LISTCHANGES_FRONTEND=none
 apt() {
@@ -59,12 +73,68 @@ let_go() {
   xargs -r apt-mark unhold <"$state/release-upgrade.held" >/dev/null
   rm -f "$state/release-upgrade.held"
 }
+# apt's "12.3 MB" or "512 kB" as whole MiB, rounded up.
+mib() {
+  awk -v n="${1//,/}" -v u="$2" 'BEGIN {
+    f = u ~ /^G/ ? 1000 ^ 3 : u ~ /^M/ ? 1000 ^ 2 : u ~ /^k/ ? 1000 : 1
+    printf "%d\n", n * f / 1048576 + 0.999
+  }'
+}
+# What the move to $to needs on this disk, measured with nothing changed:
+# sets need, free and get (MiB).
+room() {
+  local tmp file plan after data
+  tmp=$(mktemp -d /var/tmp/nb-release-room.XXXXXX)
+  mkdir -p "$tmp/parts" "$tmp/lists/partial"
+  : >"$tmp/sources.list"
+  for file in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+    [ -f "$file" ] || continue
+    if [ "$file" = /etc/apt/sources.list ]; then
+      sed "s/\\b$from\\b/$to/g" "$file" >"$tmp/sources.list"
+    else
+      sed "s/\\b$from\\b/$to/g" "$file" >"$tmp/parts/$(basename "$file")"
+    fi
+  done
+  local -a there=(-o "Dir::Etc::sourcelist=$tmp/sources.list" -o "Dir::Etc::sourceparts=$tmp/parts" -o "Dir::State::lists=$tmp/lists"
+    -o Dir::Cache::pkgcache= -o Dir::Cache::srcpkgcache= -o DPkg::Lock::Timeout=900 -o Acquire::Retries=5)
+  apt-get "${there[@]}" update
+  # Answers no to its own question, after saying what it would do.
+  plan=$(LC_ALL=C apt-get "${there[@]}" --assume-no full-upgrade 2>&1 || true)
+  rm -rf "$tmp"
+  echo "$plan" | tail -n 6
+  echo "$plan" | grep -q '^E: ' && { echo "apt could not work out the upgrade to $to: $(echo "$plan" | grep -m1 '^E: ')"; false; }
+  # shellcheck disable=SC2046 # two words: the number and its unit
+  get=$(mib $(echo "$plan" | sed -n 's|^Need to get \([0-9.,]*\) \([kMG]\?B\).*|\1 \2|p' | grep . || echo "0 B"))
+  # shellcheck disable=SC2046
+  after=$(mib $(echo "$plan" | sed -n 's|^After this operation, \([0-9.,]*\) \([kMG]\?B\) of additional disk space.*|\1 \2|p' | grep . || echo "0 B"))
+  data=0
+  if command -v pg_lsclusters >/dev/null; then
+    # pg_upgradecluster copies the cluster; the new server's packages come too.
+    data=$(($(pg_lsclusters -h | awk '{print $6}' | xargs -r du -smc | tail -n 1 | cut -f1) + 300))
+  fi
+  need=$((get + after + data))
+  # A fifth more: apt's figure leaves out what package scripts write.
+  need=$((need + need / 5 + 200))
+  free=${NB_RELEASE_FREE_MIB:-$(df -BM --output=avail / | tail -n 1 | tr -dc 0-9)}
+}
 
 case $(now) in
   "$from" | "$to") ;;
   *) echo "this guest runs $(now), neither $from nor $to"; false ;;
 esac
+if [ "$only" = room ]; then
+  need=0 free=0 get=0
+  [ "$(now)" = "$to" ] || room
+  echo "room $need $free $get" >&3
+  exit 0
+fi
 if [ "$(now)" = "$from" ]; then
+  say "measuring the room for $to"
+  room
+  if [ "$free" -lt "$need" ]; then
+    say "refused: the upgrade needs about $need MiB free on this guest's disk, and $free MiB are free"
+    exit 1
+  fi
   say "updating $from"
   if [ -d /run/systemd/system ]; then
     systemctl stop apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service 2>/dev/null || true

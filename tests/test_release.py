@@ -18,6 +18,7 @@ from nullbill.plan import build_plan
 from nullbill.render import strip_notes
 
 SNAP = "nb-before-debian-13"
+ROOM = (900, 3000, 100)  # what a guest's measuring answers unless a test says otherwise
 
 
 class Server:
@@ -31,9 +32,14 @@ class Server:
         self.no_snapshot = set()  # guests PVE cannot snapshot
         self.no_backup = set()  # storages vzdump fails on
         self.breaks = set()  # guests whose upgrade fails
+        self.refuses = set()  # guests whose own measuring finds too little room
         self.silent = set()  # guests that do not answer after their restart
         self.left = {}  # guest: the last line of an upgrade's result file found in it
         self.asked = []  # guests asked which Debian they run
+        self.measured = []  # guests whose room was measured
+        self.room = {}  # guest: (MiB needed, MiB free, MiB downloaded), else ROOM
+        self.pool = 200 * 1024 * 1024  # KiB free on the guests' storage
+        self.own_room = ""  # what the container's own measuring prints
         self.results = {}
         self.done = []  # (what, guest name, more)
         self.local_calls = []
@@ -51,10 +57,17 @@ class Server:
         if command.startswith("install -m 0755 /dev/stdin"):
             assert stdin == release.script()
             return 0, ""
+        if command == f"{release.SCRIPT} bookworm trixie room":
+            assert not self.done, "measured before anything is changed"
+            self.measured.append(self.names[vmid])
+            found = self.room.get(vmid, ROOM)
+            return (0, "room {} {} {}\n".format(*found)) if isinstance(found, tuple) else (0, found)
         if "systemd-run" in command:
             assert command.endswith(f"{release.SCRIPT} bookworm trixie")
             self.did("upgrade", vmid)
-            if vmid in self.breaks:
+            if vmid in self.refuses:
+                self.results[vmid] = ["measuring the room for trixie\nrefused: the upgrade needs about 900 MiB free\nfailed\n"]
+            elif vmid in self.breaks:
                 self.results[vmid] = [
                     "installing trixie\nactive\n",
                     "failed: E: Sub-process /usr/bin/dpkg returned an error code (1)\nfailed\n",
@@ -79,6 +92,16 @@ class Server:
             assert self.kinds[int(argv[3])] == "qm" and ("--pass-stdin" in argv) == (stdin is not None)
             rc, out = self.inside(int(argv[3]), argv[-1], stdin)
             return 0, json.dumps({"exitcode": rc, "exited": 1, "out-data": out}), ""
+        if argv[:2] == ["pvesm", "status"]:
+            assert argv[2:] == ["--storage", "local-lvm"]
+            if self.pool is None:
+                return 1, "", "storage 'local-lvm' does not exist\n"
+            head = "Name             Type     Status           Total            Used       Available        %\n"
+            return (
+                0,
+                head + f"local-lvm     lvmthin     active       487325696       {487325696 - self.pool}       {self.pool}   50.00%\n",
+                "",
+            )
         tool, verb, vmid = argv[0], argv[1], int(argv[2]) if len(argv) > 2 and argv[2].isdigit() else None
         if argv[0] in ("!", "{"):
             tool, verb, vmid = argv[1], argv[2], int(argv[3])
@@ -113,6 +136,8 @@ class Server:
 
     def local(self, argv, cwd, env, capture=False):
         self.local_calls.append(argv)
+        if argv[-1] == "room":
+            return 0, self.own_room
         return (0, self.controller + "\n") if argv[:2] == ["sh", "-c"] else (0, "")
 
     def playbook(self, playbook, hosts, variables):
@@ -145,6 +170,11 @@ def test_guests_from_before_are_copied_upgraded_and_restarted_one_at_a_time(serv
     assert set(upgraded) == set(ctx.bare["guests"]) - {"nullbill", "pbs", "linux-runner", "windows-runner", "windows-dev"}
     for name in upgraded:
         assert [what for what, n, *_ in host.done if n == name] == ["snapshot", "upgrade", "reboot"]
+    # Every guest was measured before the first was changed (the stand-in refuses otherwise).
+    assert host.measured == upgraded
+    assert "release: router: needs about 900 MiB free on its disk, has 3000 MiB" in ctx.log
+    took = 100 * release.SNAPSHOT_TIMES * len(upgraded)
+    assert f"release: the snapshots from before may take about {took} MiB on local-lvm for a week; 204800 MiB are free there" in ctx.log
     record = release.read(ctx.home)
     assert record["postgres"]["release"] == "trixie" and record["postgres"]["was"] == "bookworm"
     assert record["postgres"]["copy"] == {"kind": "snapshot", "name": SNAP}
@@ -341,7 +371,59 @@ def test_nullbills_own_container_is_upgraded_last_by_a_unit_of_its_own(server):
     before = len(host.local_calls)
     apply.controller_release(ctx)
     assert "stays on Debian bookworm: no snapshot could be made" in ctx.log[-1] and not tried.exists()
-    assert [c for c in host.local_calls[before:] if c[0] == "systemd-run"] == []
+    assert [c for c in host.local_calls[before:] if c[0] == "systemd-run" and c[-1] != "room"] == []
+
+    # Too little room in the container: nothing is tried, and nothing written down to stop a later try.
+    host.no_snapshot = set()
+    host.own_room = "room 2400 800 300\n"
+    host.done.clear()
+    apply.controller_release(ctx)
+    assert host.done == [] and not tried.exists()
+    assert "its upgrade needs about 2400 MiB free on its disk and 800 MiB are free" in ctx.log[-1]
+
+
+def test_too_little_room_anywhere_stops_the_run_before_any_guest_is_changed(server):
+    ctx, host = server()
+    router, vpn = ctx.bare["guests"]["router"]["vmid"], ctx.bare["guests"]["vpn"]["vmid"]
+    host.room = {
+        router: (1800, 700, 200),
+        vpn: "E: The repository 'https://packages.example.internal trixie Release' does not have a Release file.\n",
+    }
+    host.pool = 2 * 1024 * 1024
+    with pytest.raises(ApplyError) as stopped:
+        apply.stage_release(ctx)
+    said = str(stopped.value)
+    assert "too little room to upgrade the guests to Debian 13; nothing was changed: " in said
+    assert "router: needs about 1800 MiB free on its disk and has 700 MiB" in said
+    assert "vpn: its room could not be measured (E: The repository" in said
+    assert "the server's storage local-lvm: the snapshots may take about" in said and "2048 MiB are free" in said
+    assert host.done == [] and release.read(ctx.home) == {}
+    # With room, the same run goes through; a storage that cannot be read is said and not a stop.
+    host.room, host.pool = {}, None
+    apply.stage_release(ctx)
+    assert "release: the free room on local-lvm could not be read, so the room for the snapshots was not checked" in ctx.log
+    assert release.read(ctx.home)["router"]["release"] == "trixie"
+
+
+def test_a_guest_that_finds_too_little_room_itself_is_left_as_it_was(server):
+    assert release.result("measuring the room for trixie\nrefused: the upgrade needs about 900 MiB\n") == (
+        "refused",
+        "the upgrade needs about 900 MiB",
+    )
+    assert release.room("noise\nroom 885 23813 96\n") == (885, 23813, 96) and release.room("room x 1 2\n") is None
+    ctx, host = server()
+    router = ctx.bare["guests"]["router"]["vmid"]
+    host.refuses = {router}
+    with pytest.raises(ApplyError) as stopped:
+        apply.stage_release(ctx)
+    assert "router was not upgraded and not changed: the upgrade needs about 900 MiB free" in str(stopped.value)
+    assert [what for what, name, *_ in host.done if name == "router"] == ["snapshot", "upgrade"]
+    # Such a result file is no half upgrade: the next run tries again.
+    host.left[router], host.refuses = "refused: the upgrade needs about 900 MiB free\n", set()
+    host.done.clear()
+    host.measured.clear()
+    apply.stage_release(ctx)
+    assert release.read(ctx.home)["router"]["release"] == "trixie"
 
 
 def test_the_script_names_what_apply_reads_and_the_catalog_names_the_release():

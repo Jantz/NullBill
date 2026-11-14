@@ -1585,6 +1585,8 @@ def upgrade_release(ctx: Context, name: str) -> None:
             kept = f"its backup from before is on {copy['storage']}"
         ctx.say(f"release: {name} runs Debian {rel['version']} now; {kept}")
         return
+    if state == "refused":
+        raise ApplyError("release", f"{name} was not upgraded and not changed: {said}")
     if state == "done":
         said = f"it says it runs {found} after the upgrade"
     rc, log = in_guest(ctx, name, f"tail -n 25 {release.LOG}", timeout=30)
@@ -1619,12 +1621,14 @@ def stage_release(ctx: Context) -> None:
     """Every Linux guest NullBill sets up on the release the roles are
     written for (release.py). A guest OpenTofu made is written down as on
     it when it is made (run_tofu); every other is asked once which Debian
-    it runs, and upgraded in place when that is the release before. A
+    it runs. Those on the release before are upgraded in place, after
+    all of them were measured for room (release_room). A
     guest where an upgrade began and was neither finished nor put back
     stops the run: its copy from before is the way on, not a second try
     on top of half a release."""
     rel = ctx.model["images"]["release"]
     record = release.read(ctx.home)
+    waiting: list[str] = []
     for name in release.candidates(ctx.bare, ctx.model):
         if record.get(name, {}).get("release") == rel["codename"]:
             continue
@@ -1635,21 +1639,71 @@ def stage_release(ctx: Context) -> None:
             agent = " (a VM answers through its guest agent)" if ctx.bare["guests"][name]["kind"] == "vm" else ""
             raise ApplyError("release", f"{name}: could not read which Debian it runs{agent}: {out.strip()[:200] or f'exit {rc}'}")
         found, last = lines[0], lines[1] if len(lines) > 1 else ""
-        if last and not last.startswith("done "):
+        if last and not last.startswith(("done ", release.REFUSED)):
             raise ApplyError(
                 "release",
                 f"{name}: an upgrade to Debian {rel['version']} began in it and was neither finished nor put back (it stopped at: "
                 f"{last[:160]}). Put {name} back from its copy from before, as docs/runbooks/debian-upgrade.md says, then run setup again",
             )
         if found == rel["from"]:
-            upgrade_release(ctx, name)
+            waiting.append(name)
         elif found == rel["codename"]:
             release.note(ctx.home, name, found)
         else:
             raise ApplyError(
                 "release", f"{name} runs Debian {found}, neither {rel['from']} nor {rel['codename']}; NullBill does not upgrade it"
             )
+    if waiting:
+        release_room(ctx, waiting)
+    for name in waiting:
+        upgrade_release(ctx, name)
     drop_copies(ctx)
+
+
+# One guest's measuring: apt reads the new release's lists and works the upgrade out.
+ROOM_S = 900
+
+
+def release_room(ctx: Context, names: list[str]) -> None:
+    """Before any guest is touched: is there room for all of it? Each
+    guest measures what its upgrade needs on its own disk
+    (nb-release-upgrade's `room`), and the guests' storage must hold what
+    their snapshots will keep for a week (release.SNAPSHOT_TIMES). Every
+    shortfall is said together, and nothing was changed."""
+    rel = ctx.model["images"]["release"]
+    ctx.say(f"release: measuring the room for Debian {rel['version']} in {len(names)} guests before any is changed")
+    short, downloads = [], 0
+    for name in names:
+        rc, out = in_guest(ctx, name, f"install -m 0755 /dev/stdin {release.SCRIPT}", stdin=release.script())
+        if rc == 0:
+            rc, out = in_guest(ctx, name, f"{release.SCRIPT} {rel['from']} {rel['codename']} room", timeout=ROOM_S)
+        found = release.room(out) if rc == 0 else None
+        if found is None:
+            why = next((line for line in reversed(out.splitlines()) if line.strip()), f"exit {rc}")
+            short.append(f"{name}: its room could not be measured ({why.strip()[:200]})")
+            continue
+        need, free, get = found
+        downloads += get
+        ctx.say(f"release: {name}: needs about {need} MiB free on its disk, has {free} MiB")
+        if free < need:
+            short.append(f"{name}: needs about {need} MiB free on its disk and has {free} MiB")
+    storage = ctx.bare["disk"]["storage"]
+    need = downloads * release.SNAPSHOT_TIMES
+    rc, out, _ = ctx.reach.host(f"pvesm status --storage {shlex.quote(storage)}", timeout=60)
+    # Name Type Status Total Used Available %, in KiB.
+    row = next((line.split() for line in out.splitlines() if line.split()[:1] == [storage]), []) if rc == 0 else []
+    if len(row) >= 6 and row[5].isdigit():
+        free = int(row[5]) // 1024
+        ctx.say(f"release: the snapshots from before may take about {need} MiB on {storage} for a week; {free} MiB are free there")
+        if free < need:
+            short.append(f"the server's storage {storage}: the snapshots may take about {need} MiB for a week and {free} MiB are free")
+    else:
+        ctx.say(f"release: the free room on {storage} could not be read, so the room for the snapshots was not checked")
+    if short:
+        raise ApplyError(
+            "release",
+            f"too little room to upgrade the guests to Debian {rel['version']}; nothing was changed: " + "; ".join(short),
+        )
 
 
 def routes_unit(ctx: Context) -> str:
@@ -3283,6 +3337,18 @@ def controller_release(ctx: Context) -> None:
         ctx.say(
             f"release: NullBill's own container stays on Debian {rel['from']}: its upgrade failed before and the host put it back. "
             "The log of that try is /root/nullbill/controller-upgrade.log on the host; docs/runbooks/debian-upgrade.md says how to retry"
+        )
+        return
+    # Room first, as for the guests: measured by a unit of its own, since
+    # the page's own may not write where apt does. No answer is no refusal:
+    # the upgrade measures again before it changes anything.
+    measure = ["systemd-run", "--quiet", "--wait", "--pipe", "--collect", str(REPO_ROOT / "src/nullbill/data/nb-release-upgrade")]
+    rc, out = ctx.reach.local([*measure, rel["from"], rel["codename"], "room"], ctx.home, {}, capture=True)
+    found = release.room(out) if rc == 0 else None
+    if found is not None and found[1] < found[0]:
+        ctx.say(
+            f"release: NullBill's own container stays on Debian {rel['from']}: its upgrade needs about {found[0]} MiB free "
+            f"on its disk and {found[1]} MiB are free. The next full setup run looks again"
         )
         return
     tried.write_text(json.dumps({"snapshot": snap, "vmid": vmid, "at": time.time()}) + "\n")

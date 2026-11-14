@@ -180,14 +180,18 @@ a version.
 
 Found by a review of the first version (2026-11-13) and left as they are:
 
-- A guest's free room is not measured before its upgrade. A full disk
-  fails the upgrade, which is put back; the package cache is emptied
-  between the two releases to make that less likely.
-- Every guest's snapshot is kept for a week, on a thin pool that shows
-  less room than the snapshots can come to need. `DiskAlmostFull` is the
-  only guard.
+- Room is measured before any guest is changed (the owner asked for it
+  after the review): each guest has apt work the upgrade out against the
+  new release's lists in a folder of its own and compares what it needs
+  with what is free; the guests' storage must have five times what the
+  guests download, for the blocks their snapshots keep. That factor is an
+  estimate (archives, plus the unpacked packages at three to four times
+  their archives), not a measurement on a thin pool, and what the guests
+  write during the week after is not in it. The room for a backup in
+  place of a snapshot is not measured; a backup that fails leaves the
+  guest untouched.
 - A vendor's repository in a guest that has no suite for the new release
-  fails `apt update`, and with it that guest's upgrade.
+  fails the measuring, so the run stops before any guest is changed.
 - The file shares' backup before the upgrade includes the copies of kept
   disks that are that guest's own volumes, so it can be large and slow.
 - The review's rows per machine (ADR 0018) do not know the release
