@@ -1612,6 +1612,8 @@ function diskChoice(disk, value, keepable) {
     return [CHOICES.copy, size];
   }
   if (value === "erase" && disk.kept) return ["Erase everything on it without a copy", "I have its files elsewhere."];
+  // A blank disk the plan took for the backups by itself: left to them.
+  if (value === "alone" && disk.backups) return ["Leave it to the nightly backups", "Setup took it for them because it was blank. The Backups page shows how full it is."];
   return [CHOICES[value], ""];
 }
 
@@ -1927,7 +1929,9 @@ function renderAlerts(alerts) {
 // a line each.
 function alertText(a) {
   const [what, ...todo] = String(a.summary || a.name).split("; ");
-  return {what: sentence(what).replace(/\.$/, ""), todo: todo.map(sentence).join(" ")};
+  // A machine's name keeps its spelling: "pve needs a reboot", not "Pve".
+  const named = a.instance && what.startsWith(a.instance);
+  return {what: (named ? what : sentence(what)).replace(/\.$/, ""), todo: todo.map(sentence).join(" ")};
 }
 
 // What is firing, from monitoring.
@@ -4030,8 +4034,10 @@ function renderBackups() {
     $("backups-meta").textContent = live && live.read ? `Measured on the server ${readAt(live.read)}` : "";
   }
 
-  // Where they go.
-  const holder = b.places.find((p) => p.kind === "made" || p.kind === "chosen");
+  // Where they go. A blank disk the saved plan already took holds them too:
+  // offering it again only saved it as a choice and asked for a setup run.
+  const holder = b.places.find((p) => p.kind === "made" || p.kind === "chosen")
+    || (want && want.kind === "disk" && b.places.find((p) => p.id === want.disk));
   const system = b.system;
   show("backups-weak", b.on && Boolean(want || has) && (want || has).kind === "system");
   show("backups-own", Boolean(holder));

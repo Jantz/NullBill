@@ -1080,7 +1080,7 @@ def test_status_reads_prometheus_on_the_monitoring_guest(site):
                 {"state": "firing", "labels": {"alertname": "Watchdog", "severity": "none"}},
                 {
                     "state": "firing",
-                    "labels": {"alertname": "RebootRequired", "severity": "warn"},
+                    "labels": {"alertname": "RebootRequired", "severity": "warn", "instance": "pve"},
                     "annotations": {"summary": "pve needs a reboot"},
                 },
                 {"state": "pending", "labels": {"alertname": "DiskAlmostFull", "severity": "page"}},
@@ -1105,8 +1105,9 @@ def test_status_reads_prometheus_on_the_monitoring_guest(site):
     assert status == 200 and data == {
         "monitoring": "ok",
         "alerts": [
-            {"name": "TargetDown", "severity": "page", "summary": "forgejo is down"},
-            {"name": "RebootRequired", "severity": "warn", "summary": "pve needs a reboot"},
+            {"name": "TargetDown", "severity": "page", "summary": "forgejo is down", "instance": ""},
+            # The machine it names, so the page keeps the name's spelling.
+            {"name": "RebootRequired", "severity": "warn", "summary": "pve needs a reboot", "instance": "pve"},
         ],
         "targets": 2,
         "down": ["forgejo:9100"],
@@ -1626,6 +1627,17 @@ def test_an_erased_disk_becomes_backups_or_storage(site):
     status, data = client.call("/api/choices", {**OWNER, "disks": {OLD: {"choice": "copy", "for": "storage", "confirm": "D_0002"}}})
     assert status == 200 and data["plan"]["errors"] == []
     assert pins(app) == {OLD: {"use": "storage", "wipe": True, "evacuate": "local-lvm"}}
+
+
+def test_the_blank_disk_the_plan_takes_for_backups_says_so(site):
+    # Disks said "Leave it alone" of the disk the Backups page put them on.
+    app, client = site
+    sign_in(app, client)
+    probed(app)
+    assert client.call("/api/choices", OWNER)[0] == 200
+    disks = {d["id"]: d for d in client.call("/api/state")[1]["disks"]}
+    assert disks["ata-SYNTHETIC_HDD_0003"]["backups"] and disks["ata-SYNTHETIC_HDD_0003"]["choice"] == "alone"
+    assert not disks[OLD]["backups"]
 
 
 def test_a_disk_not_kept_cannot_be_copied(site):

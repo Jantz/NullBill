@@ -45,6 +45,7 @@ import yaml
 
 from nullbill import (
     applied,
+    backups,
     browserca,
     custom,
     direct,
@@ -569,6 +570,7 @@ class App:
                     "name": a["labels"]["alertname"],
                     "severity": a["labels"].get("severity", ""),
                     "summary": a.get("annotations", {}).get("summary", ""),
+                    "instance": a["labels"].get("instance", ""),
                 }
                 for a in self.fetch(api + "alerts")["data"]["alerts"]
                 if a.get("state") == "firing" and a["labels"].get("alertname") != "Watchdog"
@@ -839,6 +841,11 @@ class App:
         # the probe may be older than that run.
         record = self.home / DISKS_FILE
         mounted = json.loads(record.read_text()).get("mounts", []) if record.exists() else []
+        # A blank disk the plan took for the backups without a pin.
+        try:
+            backup_disk = backups.disk(self.saved_plan())
+        except (KeyError, TypeError, AttributeError):
+            backup_disk = None
         out = []
         for disk in facts.get("disks", []):
             if disk.get("system"):
@@ -869,6 +876,7 @@ class App:
                     "partitions": parts,
                     "choice": choice,
                     "for": "storage" if pin.get("use") == "storage" else "backups",
+                    "backups": not pin and disk["id"] == backup_disk,
                     "rw": pin.get("mode") == "rw",
                     # Whether Windows left it fit for that (legacy.write_state).
                     "write": legacy.write_state(

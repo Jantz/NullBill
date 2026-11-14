@@ -26,7 +26,7 @@ groups:
         for: 5m
         labels: {severity: page}
         annotations:
-          summary: "{{ $labels.job }} target {{ $labels.instance }} is not answering"
+          summary: "{{ $labels.instance }} does not answer monitoring ({{ $labels.job }}); if it stays so, look at it in Proxmox, or ask the agent"
       # The server's own filesystems. Read-only ones cannot fill up. A disk
       # kept from a previous OS (on the host under /mnt/nb-legacy, in the
       # files guest under /srv/share, where a copy of one sits too) holds
