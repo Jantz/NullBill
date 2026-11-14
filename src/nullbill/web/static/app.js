@@ -2579,7 +2579,8 @@ function paintStates() {
   renderReview();
   renderReady();
   // What a finished run says changes with the time that has passed since.
-  if (job && job.view && job.view.state !== "running") { drawOutcome(job.node, job.view); paintPill(job.view); }
+  if (job && job.view && job.view.state !== "running") drawOutcome(job.node, job.view);
+  paintPill(latestView());
   renderOverview(items);
   renderRuns();
   renderFiring();
@@ -2928,8 +2929,7 @@ function attentionItems() {
   }
   const apply = state.last_jobs.apply;
   if (apply && apply.state === "failed" && !apply.stopped && !runningAction()) {
-    const view = job && job.id === apply.id ? job.view : null;
-    const e = view && view.progress.error;
+    const e = apply.error;
     add("bad", e && e.stage_text ? `Setup failed at "${e.stage_text}"` : "The last setup run failed", e ? e.message : "",
       [link("Open the run", `#activity/${apply.id}`), signed ? ask("Ask the agent", `The last setup run failed${e && e.stage_text ? ` at "${e.stage_text}"` : ""}. Find out why and propose the fix.`) : null].filter(Boolean));
   }
@@ -4258,7 +4258,7 @@ async function refresh() {
   }
   // Follow the latest run unless the owner opened another one.
   if (st.job && (!job || (job.id !== st.job.id && !(currentView === "activity" && currentSub === job.id)))) follow(st.job, st.job.state === "running");
-  if (!st.job) paintPill(null);
+  paintPill(latestView());
   gateJobButtons();
 }
 
@@ -4436,6 +4436,14 @@ async function tick(current) {
   }
 }
 
+// The top bar tells of the latest run, whichever one the owner has open:
+// live when the page follows it, else as the state brought it.
+function latestView() {
+  const latest = state && state.job;
+  if (job && job.view && (!latest || job.view.started >= latest.started)) return job.view;
+  return latest || null;
+}
+
 function paintPill(view) {
   const pill = $("run");
   const fill = $("run-fill");
@@ -4499,7 +4507,7 @@ function drawJob(current, view) {
   // A run that went well folds its stages and log away; a live or failed one shows them.
   if (node.dataset.state !== view.state) node.querySelector(".job-more").open = view.state !== "done";
   node.dataset.state = view.state;
-  paintPill(view);
+  paintPill(latestView());
   node.querySelector(".job-title").textContent = p.title;
   const steps = p.steps || [];
   const done = steps.filter((s) => s.status === "done").length;

@@ -456,7 +456,7 @@ class App:
     # Tailscale's API with the owner's OAuth client, for the People tab.
     tailnet_client: Callable[[str, str], Tailnet] = Tailnet
     tailnet_seen: tuple[float, dict] | None = None
-    # Where each failed run stopped, for Activity's list.
+    # How each failed run ended, for Activity's list and Overview.
     failed_stages: dict = field(default_factory=dict, repr=False)
     people_busy: bool = False
     agent_command: list[str] = field(default_factory=lambda: list(AGENT_COMMAND))
@@ -2613,16 +2613,20 @@ class App:
         }
 
     def last_jobs(self) -> dict:
-        """Each action's latest job: how it ended, and when."""
-        out: dict[str, dict] = {}
+        """Each action's latest job: how it ended, and when. A failed one
+        carries where it stopped and what it said (`error`), so Overview
+        tells of it whichever run the page has open."""
+        latest: dict[str, Job] = {}
         for job in sorted(self.jobs.values(), key=lambda j: j.started):
+            latest[job.action] = job
+        out: dict[str, dict] = {}
+        for action, job in latest.items():
             state = job.state()
-            out[job.action] = {
-                "id": job.id,
-                "state": state,
-                "started": job.started,
-                "stopped": state == "failed" and bool(job.meta().get("stopped")),
-            }
+            stopped = state == "failed" and bool(job.meta().get("stopped"))
+            out[action] = {"id": job.id, "state": state, "started": job.started, "stopped": stopped}
+            if state == "failed" and not stopped:
+                found = self.failure(job)
+                out[action]["error"] = {"stage_text": found["stage_text"], "message": found["message"]}
         return out
 
     def runs(self, limit: int = 30) -> list[dict]:
@@ -2650,14 +2654,20 @@ class App:
 
     def failed_at(self, job: Job) -> str | None:
         """Where a failed run stopped, for Activity's list: its stage in the
-        page's words, or how many checks failed. Read from its log once: a
-        run that ended does not change."""
+        page's words, or how many checks failed."""
+        return self.failure(job)["where"]
+
+    def failure(self, job: Job) -> dict:
+        """How a failed run ended: `where` for Activity's list, its stage and
+        message for Overview. Read from its log once: a run that ended does
+        not change."""
         if job.id not in self.failed_stages:
             view = self.job_view(job)["progress"]
-            stage = (view.get("error") or {}).get("stage_text")
+            error = view.get("error") or {}
+            stage = error.get("stage_text")
             failed = (view.get("verify") or {}).get("counts", {}).get("FAIL", 0)
             where = f'At "{stage}"' if stage else f"{failed} check{'s' if failed > 1 else ''}" if failed else None
-            self.failed_stages[job.id] = where
+            self.failed_stages[job.id] = {"where": where, "stage_text": stage, "message": error.get("message") or ""}
         return self.failed_stages[job.id]
 
     def checks(self) -> dict | None:

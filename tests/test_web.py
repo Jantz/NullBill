@@ -464,7 +464,11 @@ def test_jobs_report_failure_and_offsets(site):
     # It said nothing of why, and the page says so, at the first stage.
     assert done["progress"]["steps"][0]["status"] == "failed"
     assert done["progress"]["error"]["message"].startswith("It ended without saying why")
-    assert client.call("/api/state")[1]["last_jobs"]["apply"]["state"] == "failed"
+    st = client.call("/api/state")[1]
+    assert st["last_jobs"]["apply"]["state"] == "failed"
+    # Overview tells of the latest failed run from the state, whichever run the page has open.
+    error = done["progress"]["error"]
+    assert st["last_jobs"]["apply"]["error"] == {"stage_text": error["stage_text"], "message": error["message"]}
     later = client.call(f"/api/jobs/{job['id']}?offset={done['offset']}")[1]
     assert later["text"] == ""
     # A run the page lost (NullBill restarted under it) ended when its log
@@ -711,6 +715,8 @@ def test_activity_lists_runs_newest_first_and_built_waits_for_a_good_setup_run(s
     assert all(r["seconds"] >= 0 for r in st["runs"])
     # The list says where a failed run stopped; a finished one has nothing to say.
     assert st["runs"][0]["where"] is None and st["runs"][1]["where"] == 'At "Read your choices and make the plan"'
+    # A good run after it: nothing failed is left to tell of.
+    assert st["last_jobs"]["apply"]["id"] == good["id"] and "error" not in st["last_jobs"]["apply"]
 
 
 def test_each_plan_problem_carries_what_to_do_about_it():
