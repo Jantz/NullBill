@@ -2738,6 +2738,7 @@ function renderReview() {
   if (restart.length) parts.push(`${restart.length} may restart`);
   if (again.length > restart.length) parts.push(`${again.length - restart.length} set up again, nothing restarts`);
   if (alone.length) parts.push(`${alone.length} left alone`);
+  if (unknown.length && built()) parts.push(`${unknown.length} not known`);
   $("review-summary").replaceChildren(...parts.map((text) => make("li", {textContent: text})));
   show("review-unknown", r.known === false);
   // Before the first run that wrote down what each machine was set up with.
