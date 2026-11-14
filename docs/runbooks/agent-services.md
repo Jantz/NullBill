@@ -17,6 +17,11 @@ Three things hold in every guest:
   proxy, which lets only listed names pass. A guest that is off on demand
   must be started first (`on_demand`).
 
+A guest that needs more processor cores or memory gets them from the
+choices, never from `pct set` or `qm set`: `set_choices` with `sizes`
+(`status` lists each guest's size and its least). Setup applies a new size
+and may restart the guest for it.
+
 Passwords are on the **Services** page, for the owner. The agent never
 reads them and does not need them: each service has a root-side command
 below.

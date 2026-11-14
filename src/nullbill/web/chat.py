@@ -43,7 +43,7 @@ from typing import TYPE_CHECKING
 
 import yaml
 
-from nullbill import custom, direct, people, torrents
+from nullbill import custom, direct, people, sizes, torrents
 from nullbill.errors import NullBillError
 from nullbill.model import build_model
 from nullbill.secretfile import Secrets
@@ -97,7 +97,7 @@ BACKGROUND_DIR = "/var/log/nb-agent"
 JOB_TIERS = {"probe": gate.READ, "verify": gate.READ, "apply": gate.CHANGE, "upgrade": gate.CHANGE}
 # The home router is the owner's, and a port it opens faces the internet.
 OPENS_A_PORT = "has the server ask your home router to open a port to the internet"
-CHOICE_KEYS = {"workloads", "backups", "console", "owner_login", "gpus", "games", "power", "torrents"}
+CHOICE_KEYS = {"workloads", "backups", "console", "owner_login", "gpus", "games", "power", "torrents", "sizes"}
 # What add_game_server takes for the new server, as the page's form does.
 GAME_KEYS = {"settings", "admins", "memory_mib"}
 # Credentials the CLI reads from its environment.
@@ -1129,6 +1129,26 @@ def changed_lines(title: str, was: dict, now_: dict) -> list[str]:
     return out
 
 
+def size_lines(model: dict, was: dict, now_: dict) -> list[str]:
+    """What differs between two configs' sizes, a line per guest and key,
+    with the least named where a size goes back to it."""
+    out = []
+    for name in sorted({*was, *now_}):
+        if name not in model["services"]:
+            continue
+        least, title = sizes.least(model, name), sizes.label(model, name)
+        for key in sizes.KEYS:
+            old, new = (was.get(name) or {}).get(key), (now_.get(name) or {}).get(key)
+            if old == new:
+                continue
+            if key == "cores":
+                said = [f"{v or least[key]} core{'' if (v or least[key]) == 1 else 's'}{'' if v else ' (the least)'}" for v in (new, old)]
+            else:
+                said = [f"{sizes.gib(v or least[key])}{'' if v else ' (the least)'}" for v in (new, old)]
+            out.append(f"{title}: {'' if key == 'cores' else 'memory '}{said[0]}, was {said[1]}")
+    return out
+
+
 def _ids(user: str) -> tuple[int, int]:
     import pwd
 
@@ -1307,6 +1327,20 @@ class Tools:
                 | ({"own": True} if i.get("own") else {})
                 | ({"game_server_of": i["game"]["kind"]} if i.get("game") else {})
                 for i in options["items"]
+            ],
+            # Each guest's cores and memory (MiB) as planned, the least it
+            # takes, and what the owner set (set_choices sizes); a pool's are
+            # each job VM's. Only what is ticked, and the core servers, which
+            # no tick controls.
+            "sizes": [
+                {"guest": g["name"], "of": i["name"] if i else "core servers", "cores": g["cores"], "memory_mib": g["memory_mib"]}
+                | {"least": g["least"], "set_by_owner": g["set"]}
+                | ({"per_job_vm": True} if g["kind"] == "vm-pool" else {})
+                for i, g in [
+                    *((i, g) for i in options["items"] if i["chosen"] for g in i["guests"]),
+                    *((None, g) for g in options.get("core", [])),
+                ]
+                if g.get("sizable", True)
             ],
             "memory_free_mib": (options["memory"] or {}).get("free_mib"),
             "plan_fits": bool(plan.get("text")) and not plan.get("errors"),
@@ -1808,7 +1842,7 @@ class Tools:
             raise NullBillError(
                 "the VPN's WireGuard file holds a key: the owner pastes it on the page (Setup, What to run, Downloads), never here"
             )
-        if {"games", "power", "torrents"} & set(changes):
+        if {"games", "power", "torrents", "sizes"} & set(changes):
             # What the form comes to in config.yaml, with nothing saved.
             old = self.app.config() or {}
             new = self.app._choices_config(after | {"disks": {}})  # noqa: SLF001 - the page's own form reader
@@ -1818,10 +1852,10 @@ class Tools:
                 was, now_ = old.get("games", {}).get(name) or {}, new.get("games", {}).get(name) or {}
                 title = now_.get("title") or titles.get(name, name)
                 lines += changed_lines(title, was, now_)
-                # A server's memory is saved beside its settings, under overrides.
-                lines += changed_lines(title, (old.get("overrides") or {}).get(name) or {}, (new.get("overrides") or {}).get(name) or {})
                 if now_.get("eula") is True and was.get("eula") is not True:
                     verdict = gate.risky("agrees to a game's licence (EULA) in your name", "agree")
+            # Each guest's size, a game server's memory too (nullbill/sizes.py).
+            lines += size_lines(build_model(new), old.get("overrides") or {}, new.get("overrides") or {})
             for name in sorted({*old.get("power", {}), *new.get("power", {})}):
                 lines += changed_lines(f"When {name} runs", old.get("power", {}).get(name) or {}, new.get("power", {}).get(name) or {})
             was, now_ = old.get("torrents") or {}, new.get("torrents") or {}

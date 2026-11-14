@@ -549,7 +549,7 @@ TOOLS = [
                     "type": "object",
                     "description": "Per game server by its name (minecraft, terraria, factorio, or a further server that "
                     "add_game_server made): settings (the server's own options, such as {difficulty: hard}; "
-                    "docs/runbooks/games.md lists what NullBill sets itself), admins (player names), memory_mib, title "
+                    "docs/runbooks/games.md lists what NullBill sets itself), admins (player names), title "
                     "(a further server's) and, for the game itself, eula (true only when the owner said they agree; it "
                     "always waits for them).",
                 },
@@ -557,6 +557,13 @@ TOOLS = [
                     "type": "object",
                     "description": "When a workload runs, by its name: run (always or on-demand), stop (auto, ask or "
                     "manual) and idle_minutes (5 to 10080).",
+                },
+                "sizes": {
+                    "type": "object",
+                    "description": "Each guest's size, by the guest's name as status lists it under sizes (a game server's "
+                    "memory too): cores (whole) and memory_mib (in steps of 256), each at least the guest's least and at most "
+                    "the server's threads and memory. null or the least makes it automatic again. A CI pool's size is each job "
+                    "VM's. Refused when more memory no longer fits; then say what fits.",
                 },
                 "torrents": {
                     "type": "object",
