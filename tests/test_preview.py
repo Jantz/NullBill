@@ -155,6 +155,24 @@ def test_a_new_size_says_the_guest_may_restart_and_a_pools_next_jobs_get_it(ctx,
     assert by_name["factorio"]["what"] == "alone"
 
 
+def test_a_new_size_keeps_what_could_not_be_worked_out_and_an_on_demand_guest_restarts_only_if_running():
+    resized = {"change": "change", "resized": True, "detail": ["cores 1 to 2"]}
+    row = preview._row("forgejo", resized, [], "the step-ca token", False)
+    assert row["what"] == "change" and row["effect"] == preview.RESIZED_SHORT
+    assert row["why"] == [
+        "cores 1 to 2",
+        "What its setup runs with could not be worked out without the server (the step-ca token).",
+        preview.RESIZED,
+    ]
+    # OpenTofu restarts a guest that runs; one that is off has the size when it starts.
+    row = preview._row("factorio", resized, [], None, True)
+    assert (row["what"], row["effect"], row["why"]) == (
+        "change",
+        preview.ON_DEMAND_RESIZED_SHORT,
+        ["cores 1 to 2", preview.ON_DEMAND_RESIZED],
+    )
+
+
 def test_a_new_and_a_dropped_workload_are_created_and_deleted_and_their_neighbours_set_up_again(ctx, monkeypatch, tailnet, facts):
     c = built(ctx, monkeypatch, "games")
     config = games_config()

@@ -676,6 +676,11 @@ IN_PLACE = "OpenTofu changes it in place; Proxmox may restart it for that."
 # never runs, and its clones are made from it per job.
 RESIZED = "OpenTofu gives it the new size in place; if it is running, it may restart for that."
 RESIZED_SHORT = "May restart for its new size"
+# OpenTofu restarts only what runs; a guest that is off takes the size when started.
+ON_DEMAND_RESIZED = (
+    "OpenTofu gives it the new size in place: if it is running, it may restart for that; if it is off, it has the new size when it starts."
+)
+ON_DEMAND_RESIZED_SHORT = "May restart for its new size if running"
 POOL_RESIZED = "Each job's VM gets the new size from the next job on; jobs that run keep theirs."
 POOL_RESIZED_SHORT = "New size from the next job on"
 CREATED = "New: OpenTofu creates it, and every part of its setup runs for the first time."
@@ -738,11 +743,12 @@ def _row(name: str | None, guest: dict | None, lines: list[dict], stuck: str | N
     elif change == "create":
         what, lines, again = "create", [], []
         why.append(CREATED)
-    elif resized:
-        what = "change"
-    elif stuck:
-        what, again = UNKNOWN, []
-        why.append(f"What its setup runs with could not be worked out without the server ({stuck}).")
+    elif resized or stuck:
+        # A new size is a change either way; what runs in it may still be unknown.
+        what = "change" if resized else UNKNOWN
+        if stuck:
+            again = []
+            why.append(f"What its setup runs with could not be worked out without the server ({stuck}).")
     elif again:
         what = "again"
     elif change == "change":
@@ -752,14 +758,16 @@ def _row(name: str | None, guest: dict | None, lines: list[dict], stuck: str | N
     else:
         what = "alone"
     if change == "change":
-        why.append((POOL_RESIZED if pool else RESIZED) if resized else IN_PLACE)
+        why.append((POOL_RESIZED if pool else ON_DEMAND_RESIZED if on_demand else RESIZED) if resized else IN_PLACE)
     for line in again:
         why += [reason for reason in line["why"] if reason not in why]
     effect = Effects(_unique(r for line in again for r in line["effect"].restarts), all(line["effect"].followed for line in again))
     notes = [line["note"] for line in again if line.get("note")]
     effect_text, interrupts = in_short(what, why, effect, [line["short"] for line in again if line.get("short")])
     if resized:
-        effect_text, interrupts = (POOL_RESIZED_SHORT, False) if pool else (RESIZED_SHORT, True)
+        effect_text, interrupts = (
+            (POOL_RESIZED_SHORT, False) if pool else (ON_DEMAND_RESIZED_SHORT, True) if on_demand else (RESIZED_SHORT, True)
+        )
     timed = [line["last"] for line in again if line["last"] and line["last"].get("took_s") is not None]
     last = None
     if timed:

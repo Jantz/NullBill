@@ -165,9 +165,12 @@ more memory than fits beside the rest, saying how much fits. They are
 `overrides.<name>.cores` and `.memory_mib` in `config.yaml`.
 
 Under **Review and run**, a guest with a new size reads **May restart for
-its new size**: OpenTofu sets it in place, and Proxmox needs a restart of a
-running guest for new cores or memory. A CI pool's next jobs get the new
-size and nothing is interrupted.
+its new size**: Proxmox could take most new sizes while the guest runs, but
+OpenTofu, which sets them, restarts a running container for any new cores
+or memory and a running VM for any change Proxmox cannot add while it runs.
+A guest that runs on demand reads **May restart for its new size if
+running**: if it is off, it has the new size when it next starts. A CI
+pool's next jobs get the new size and nothing is interrupted.
 
 ## Run a program NullBill has no support for
 
