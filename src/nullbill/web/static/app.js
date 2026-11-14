@@ -776,9 +776,11 @@ function optionRow(item) {
     make("p", {className: "opt-note", id: `${id}-note`, hidden: true}),
     item.game ? gameAsks(item) : item.torrents ? torrentAsks(item) : null,
     make("p", {className: "opt-change", role: "status", hidden: true}),
-    make("details", {className: "opt-details"}, make("summary", {textContent: "Details"}), make("dl", {className: "opt-facts"}),
-      item.own ? ownTools(item) : null,
-      item.game && item.game.more ? gameTools(item) : null));
+    make("div", {className: "opt-foot"},
+      item.guests.some((g) => g.sizable) ? sizeBlock("Size", item.guests.filter((g) => g.sizable)) : null,
+      make("details", {className: "opt-details"}, make("summary", {textContent: "Details"}), make("dl", {className: "opt-facts"}),
+        item.own ? ownTools(item) : null,
+        item.game && item.game.more ? gameTools(item) : null)));
   row.dataset.name = item.name;
   row.dataset.find = `${item.title} ${item.name} ${item.what}`.toLowerCase();
   return row;
@@ -1007,8 +1009,9 @@ function gameAsks(item) {
   return asks;
 }
 
-// A game server's own settings: the ones most people change by name, any
-// other of the server's in a box, and its memory. Saved with the choices.
+// A game server's own settings: the ones most people change by name and any
+// other of the server's in a box. Saved with the choices; its memory is its
+// Size, as for every guest (sizeBlock).
 function gameSettings(item) {
   const g = item.game;
   const field = (label, control, hint, cls) => {
@@ -1025,9 +1028,6 @@ function gameSettings(item) {
     title.dataset.role = "title";
     fields.append(field("Name", title, "What you and your friends see it called."));
   }
-  const memory = make("input", {type: "number", min: String(g.floor_mib / 1024), max: String(g.max_mib / 1024), step: "0.5", inputMode: "decimal"});
-  memory.dataset.role = "memory";
-  fields.append(field("Memory, in GiB", memory, `At least ${gib(g.floor_mib)}. Give it more for a larger world or more players.`));
   for (const o of g.options) {
     let control;
     if (o.type === "choice") {
@@ -1065,7 +1065,6 @@ function paintGame(item) {
   if (g.admins) $(`opt-${item.name}-admins`).value = g.admins.join(", ");
   const title = row.querySelector("[data-role=title]");
   if (title) title.value = item.title;
-  row.querySelector("[data-role=memory]").value = String(g.memory_mib / 1024);
   row.querySelector("[data-role=other]").value = g.other;
   const options = new Map(g.options.map((o) => [o.key, o]));
   for (const control of row.querySelectorAll("[data-role=setting]")) {
@@ -1097,6 +1096,113 @@ function gameTools(item) {
   return make("div", {className: "own-tools"}, make("div", {className: "row"}, remove, said));
 }
 
+// Size: each guest's cores and memory (web/workloads.py's guests,
+// nullbill/sizes.py). Empty is the least the guest takes, which is what
+// NullBill gives it; only what differs from that is saved. Closed under a
+// line that says what is chosen, like a row's other settings.
+let sizeLimits = null;
+function sizeBlock(title, guests) {
+  const rows = guests.map((g) => {
+    const id = `size-${g.name}`;
+    const cores = make("input", {type: "number", id: `${id}-cores`, min: String(g.least.cores), step: "1", inputMode: "numeric", placeholder: "Auto"});
+    cores.dataset.role = "size-cores";
+    const memory = make("input", {type: "number", id: `${id}-memory`, min: String(g.least.memory_mib / 1024), step: "0.25", inputMode: "decimal",
+      placeholder: "Auto"});
+    memory.dataset.role = "size-memory";
+    const kind = g.kind === "vm-pool" ? "Each CI job's VM" : g.kind === "vm" ? "VM" : "Container";
+    const of = make("span", {className: "sr-only", textContent: ` of ${g.name}`});
+    const row = make("div", {className: "size-row"},
+      make("div", {className: "size-name"}, make("span", {className: "name", textContent: g.name}),
+        make("span", {className: "hint", id: `${id}-least`, textContent: `${kind}, at least ${count(g.least.cores, "core")} and ${gib(g.least.memory_mib)}`})),
+      make("label", {className: "size-field"}, make("span", {className: "label"}, "Cores", of), cores),
+      make("label", {className: "size-field"}, make("span", {className: "label"}, "Memory, GiB", of.cloneNode(true)), memory));
+    for (const input of [cores, memory]) input.setAttribute("aria-describedby", `${id}-least`);
+    row.dataset.guest = g.name;
+    row.dataset.label = g.label.toLowerCase();
+    row.dataset.kind = g.kind;
+    row.dataset.cores = String(g.least.cores);
+    row.dataset.memory = String(g.least.memory_mib);
+    return row;
+  });
+  return make("details", {className: "opt-settings opt-size"}, make("summary", {}, title, make("span", {className: "set-now"})),
+    make("div", {className: "opt-settings-body"}, make("div", {className: "size-rows"}, ...rows), make("p", {className: "hint size-hint"})));
+}
+
+// The saved sizes, into the controls.
+function paintSizes(guests) {
+  for (const g of guests) {
+    const row = $("pick").querySelector(`.size-row[data-guest="${g.name}"]`);
+    if (!row) continue;
+    row.querySelector("[data-role=size-cores]").value = g.set.cores ? String(g.set.cores) : "";
+    row.querySelector("[data-role=size-memory]").value = g.set.memory_mib ? String(g.set.memory_mib / 1024) : "";
+  }
+}
+
+// A size block's closed line and its hint, from the controls as they stand.
+function paintSizeNow(box) {
+  const limits = sizeLimits || {};
+  const rows = [...box.querySelectorAll(".size-row")];
+  const read = (row) => {
+    const cores = row.querySelector("[data-role=size-cores]").value.trim();
+    const memory = row.querySelector("[data-role=size-memory]").value.trim();
+    const mib = memory === "" ? Number(row.dataset.memory) : Math.round(Number(memory) * 1024);
+    const coresN = cores === "" ? Number(row.dataset.cores) : Number(cores);
+    return {cores: coresN, mib, set: (cores !== "" && coresN !== Number(row.dataset.cores)) || (memory !== "" && mib !== Number(row.dataset.memory)),
+      ok: Number.isFinite(coresN) && Number.isFinite(mib)};
+  };
+  const sizes = rows.map(read);
+  let text;
+  if (sizes.some((x) => !x.ok)) text = "Not a number";
+  else if (rows.length === 1) {
+    const one = sizes[0];
+    text = `${count(one.cores, "core")}, ${gib(one.mib)}${rows[0].dataset.kind === "vm-pool" ? " per job" : ""}${one.set ? "" : ", automatic"}`;
+  } else {
+    const set = rows.filter((r, i) => sizes[i].set).map((r) => r.dataset.guest);
+    text = set.length ? `Set for ${andList(set)}` : "Automatic";
+  }
+  const now = box.querySelector(".set-now");
+  if (now.textContent !== text) now.textContent = text;
+  now.classList.toggle("why", text === "Not a number");
+  for (const row of rows) {
+    row.querySelector("[data-role=size-cores]").max = limits.cores ? String(limits.cores) : "";
+    row.querySelector("[data-role=size-memory]").max = limits.memory_mib ? String(limits.memory_mib / 1024) : "";
+  }
+  const hint = limits.probed
+    ? `Auto, or empty, is the least, which NullBill gives it. At most ${count(limits.cores, "core")} and ${+(limits.memory_mib / 1024).toFixed(2)} GiB, what the server has; the meter above shows what fits.`
+    : "Auto, or empty, is the least, which NullBill gives it. Read the hardware to see what fits.";
+  const node = box.querySelector(".size-hint");
+  if (node.textContent !== hint) node.textContent = hint;
+}
+
+// The sizes form: every guest's, empty for automatic. What is no number
+// goes as typed, for the server to refuse.
+function sizesBody() {
+  const out = {};
+  for (const row of $("pick").querySelectorAll(".size-row")) {
+    const cores = row.querySelector("[data-role=size-cores]").value.trim();
+    const memory = row.querySelector("[data-role=size-memory]").value.trim();
+    const gb = Number(memory);
+    out[row.dataset.guest] = {
+      cores: cores === "" ? null : /^\d+$/.test(cores) ? Number(cores) : cores,
+      memory_mib: memory === "" ? null : Number.isFinite(gb) ? Math.round(gb * 1024) : memory,
+    };
+  }
+  return out;
+}
+
+// Core servers: the guests no tick controls, each with its size.
+function renderCoreSizes(options) {
+  const core = (options && options.core) || [];
+  const box = $("core-sizes");
+  const key = core.map((g) => g.name).join();
+  if (box.dataset.key !== key) {
+    box.replaceChildren(...(core.length ? [sizeBlock("Sizes", core)] : []));
+    box.dataset.key = key;
+  }
+  show("core-group", core.length > 0);
+  paintSizes(core);
+}
+
 // Add a game server: one more server of a game NullBill has, in a guest
 // of its own. Saved at once and ticked; the next setup run makes it.
 function openGameAdd(open) {
@@ -1110,11 +1216,31 @@ function openGameAdd(open) {
   $("game-add-title").focus();
 }
 
-// The server names the game server each refusal is about first ("Creative
-// world: ..."): open those servers' settings, so what to change is in view.
-// The first such row, if any.
-function openRefusedGames(messages) {
+// The server names the guest or game server each refusal is about first
+// ("Creative world: ..."): open those sizes and servers' settings, so what to
+// change is in view. The first such row, if any.
+const SIZE_REFUSAL = /^[^:]+: (its (cores|memory) |\S+ GiB of memory does not fit)/i;
+function openRefused(messages) {
   let first = null;
+  for (const box of $("pick").querySelectorAll(".opt-size")) {
+    let named = false;
+    for (const row of box.querySelectorAll(".size-row")) {
+      const said = messages.filter((m) => SIZE_REFUSAL.test(m) && m.toLowerCase().startsWith(`${row.dataset.label}:`));
+      for (const [role, word] of [["size-cores", "cores"], ["size-memory", "memory"]]) {
+        const input = row.querySelector(`[data-role=${role}]`);
+        if (said.some((m) => m.includes(word))) input.setAttribute("aria-invalid", "true"); else input.removeAttribute("aria-invalid");
+      }
+      named = named || said.length > 0;
+    }
+    if (!named) continue;
+    const row = box.closest(".opt");
+    if (row) row.hidden = false;
+    box.hidden = false;
+    box.open = true;
+    first = first || row || box;
+  }
+  // A size's refusal opens the size alone, not the game server's other settings.
+  messages = messages.filter((m) => !SIZE_REFUSAL.test(m));
   for (const row of $("pick").querySelectorAll(".opt")) {
     const settings = row.querySelector(".game-settings");
     const title = settings && row.querySelector(".opt-title").textContent.toLowerCase();
@@ -1217,7 +1343,10 @@ function renderOptions(st) {
   if (have !== key(items.map((i) => `${i.name} ${`${i.title} ${i.name} ${i.what}`.toLowerCase()}`))) {
     for (const [group, id] of Object.entries(OPTION_GROUPS)) $(id).replaceChildren(optionsHead(), ...items.filter((i) => i.group === group).map(optionRow));
   }
+  sizeLimits = st.options ? st.options.limits : null;
+  renderCoreSizes(st.options);
   for (const item of items) {
+    paintSizes(item.guests);
     const input = $(`opt-${item.name}`);
     input.checked = item.chosen;
     // What cannot work here can still be turned off, never on.
@@ -1352,6 +1481,8 @@ function paintOptions() {
     row.querySelector(".opt-state").replaceChildren(status(st.dot, st.text));
     const asks = row.querySelector(".opt-asks");
     if (asks) asks.hidden = !checked;
+    const size = row.querySelector(".opt-size");
+    if (size) size.hidden = !checked;
     if (item.torrents) paintTorrentsView(item, row);
     const note = row.querySelector(".opt-note");
     const noteText = item.blocked || (checked ? item.note : "");
@@ -1384,6 +1515,7 @@ function paintOptions() {
       ...fact("Turning it on", make("p", {textContent: item.on})),
       ...fact("Turning it off", make("p", {textContent: item.off})));
   }
+  for (const box of $("pick").querySelectorAll(".opt-size")) paintSizeNow(box);
   foldOptions();
   paintBudget(view);
 }
@@ -1611,14 +1743,10 @@ function choicesBody() {
     const eula = row.querySelector("input[data-role=eula]");
     const admins = row.querySelector("input[data-role=admins]");
     const title = row.querySelector("[data-role=title]");
-    const memory = row.querySelector("[data-role=memory]");
-    const size = Number(memory.value);
     games[row.dataset.name] = {
       ...(eula ? {eula: eula.checked} : {}),
       ...(admins ? {admins: admins.value} : {}),
       ...(title ? {title: title.value} : {}),
-      // Empty: the game's own. What is no number goes as typed, for the server to refuse.
-      memory_mib: memory.value.trim() === "" ? null : Number.isFinite(size) ? Math.round(size * 1024) : memory.value,
       settings: Object.fromEntries([...row.querySelectorAll("[data-role=setting]")].map((c) => [c.dataset.key, settingValue(c)])),
       other: row.querySelector("[data-role=other]").value,
     };
@@ -1644,6 +1772,7 @@ function choicesBody() {
   return {
     workloads: [...$("pick").querySelectorAll(".opt-main input:checked")].filter((i) => !i.closest("#extra-rows")).map((i) => i.value),
     games,
+    sizes: sizesBody(),
     ...(torrents ? {torrents} : {}),
     backups: Boolean($("opt-backups") && $("opt-backups").checked),
     console: Boolean($("opt-console") && $("opt-console").checked),
@@ -2560,9 +2689,11 @@ const updateOpen = new Set();
 // The review's guests as rows, for a server whose machines could not be
 // foreseen: what OpenTofu creates, deletes and changes, and nothing more.
 function guestsAsMachines(guests) {
+  // A new size, as preview.py says it: a running guest may restart for it, a pool's next jobs get it.
+  const resized = (g) => g.resized && (g.kind === "vm-pool" ? "New size from the next job on" : "May restart for its new size");
   return guests.map((g) => ({name: g.name, host: false, what: g.change === "keep" ? "unknown" : g.change, why: g.change === "change" ? [andList(g.detail)] : g.detail,
-    effect: g.change === "create" ? "New guest" : g.change === "keep" ? "" : (g.detail[0] || "").split(". ")[0].replace(/\.$/, ""),
-    interrupts: g.change === "delete", restarts: [], restart_note: "", last: null, on_demand: false}));
+    effect: g.change === "create" ? "New guest" : g.change === "keep" ? "" : resized(g) || (g.detail[0] || "").split(". ")[0].replace(/\.$/, ""),
+    interrupts: g.change === "delete" || Boolean(resized(g) && g.kind !== "vm-pool"), restarts: [], restart_note: "", last: null, on_demand: false}));
 }
 function renderReview() {
   const r = state.review;
@@ -5970,7 +6101,7 @@ document.addEventListener("DOMContentLoaded", () => {
       let result;
       try { result = await api("/api/choices", choicesBody()); } catch (error) {
         if (/Tailscale login/.test(error.message)) login(error);
-        const shown = openRefusedGames(error.list || [error.message]);
+        const shown = openRefused(error.list || [error.message]);
         if (shown) showPart("services");
         // Several refusals are a list above the bar, a line each.
         if (!showProblem("choices-refused", error) && shown) shown.scrollIntoView({block: "nearest"});
