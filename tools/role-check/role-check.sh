@@ -11,12 +11,16 @@ pass() {
 }
 
 # Apply a playbook twice; the second run must change nothing.
+# With GUEST_PATH set, the playbook's commands get that PATH, as pct exec
+# hands one to a container's commands (/sbin:/bin:/usr/sbin:/usr/bin).
 converge() {
-  local playbook=$1
+  local playbook=$1 run
   shift
-  ansible-playbook -i localhost, -c local "$@" "/ansible/$playbook" >/tmp/first.log 2>&1 || { cat /tmp/first.log; fail "first run of $playbook"; }
+  run=(ansible-playbook)
+  [ -z "${GUEST_PATH:-}" ] || run=(env "PATH=$GUEST_PATH" "$(command -v ansible-playbook)")
+  "${run[@]}" -i localhost, -c local "$@" "/ansible/$playbook" >/tmp/first.log 2>&1 || { cat /tmp/first.log; fail "first run of $playbook"; }
   pass "first run of $playbook"
-  ansible-playbook -i localhost, -c local "$@" "/ansible/$playbook" >/tmp/second.log 2>&1 || { cat /tmp/second.log; fail "second run of $playbook"; }
+  "${run[@]}" -i localhost, -c local "$@" "/ansible/$playbook" >/tmp/second.log 2>&1 || { cat /tmp/second.log; fail "second run of $playbook"; }
   grep -Eq 'localhost +: ok=[0-9]+ +changed=0 ' /tmp/second.log || { grep -B3 changed: /tmp/second.log; fail "second run of $playbook changed something"; }
   pass "second run of $playbook changes nothing"
 }

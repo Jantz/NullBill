@@ -66,10 +66,15 @@
 # apply lends the guest memory while this runs (apply.stage_torrents). A
 # build that stops part way goes on at the next run; the marker is written
 # last, and the build tree goes once the program is installed.
+# /usr before /: pct exec hands commands PATH=/sbin:/bin:/usr/sbin:/usr/bin,
+# and through /bin CMake took OpenSSL's config from /lib, whose includes it
+# then looked for in /include ("Imported target OpenSSL::Crypto includes
+# non-existent path", the first real build on Debian 13). -U forgets what
+# such a build left in its cache.
 - name: Build qBittorrent without a desktop (takes a while the first time)
   ansible.builtin.shell: |
     set -e
-    cmake -G Ninja -S src -B build -DCMAKE_BUILD_TYPE=Release -DGUI=OFF -DCMAKE_INSTALL_PREFIX={{ qbittorrent_dir }}
+    cmake -G Ninja -S src -B build -U OpenSSL_DIR -DCMAKE_BUILD_TYPE=Release -DGUI=OFF -DCMAKE_INSTALL_PREFIX={{ qbittorrent_dir }}
     cmake --build build -j {{ qbittorrent_build_jobs }}
     cmake --install build
     rm -rf build
@@ -78,6 +83,8 @@
     chdir: "{{ qbittorrent_dir }}"
     executable: /bin/bash
     creates: "{{ qbittorrent_dir }}/.nullbill-built"
+  environment:
+    PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 - name: Releases built before this one
   ansible.builtin.find:

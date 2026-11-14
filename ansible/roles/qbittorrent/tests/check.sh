@@ -13,7 +13,8 @@ source /usr/local/lib/role-check.sh
 
 # As apply passes them: numbers as numbers.
 home=(-e '{"qbittorrent_manage_services": false, "qbittorrent_password": "first-password", "qbittorrent_keep_free_gib": 1}')
-converge qbittorrent.yml "${home[@]}"
+# The PATH pct exec gives: through /bin first CMake once took OpenSSL from /lib.
+GUEST_PATH=/sbin:/bin:/usr/sbin:/usr/bin converge qbittorrent.yml "${home[@]}"
 [ "$(id -u qbt):$(id -g qbt)" = 1000:1000 ] || fail "qbt is uid and gid 1000"
 [ "$(getent passwd qbt | cut -d: -f7)" = /usr/sbin/nologin ] || fail "qbt has no login"
 [ "$(stat -c '%U %a' /etc/nullbill/torrents-password)" = "root 600" ] || fail "the password file is root's alone"

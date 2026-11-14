@@ -96,10 +96,13 @@ The end of the upgrade's log is in the run's details. The whole log is in
 the guest at `/var/log/nb-release-upgrade.log` only until the guest is
 put back.
 
-When the NullBill container's own upgrade fails, the host puts it back
-and the page returns on Debian 12. The log of that try is on the Proxmox
-host, `/root/nullbill/controller-upgrade.log`. NullBill does not try
-again by itself. To try again, delete
+NullBill's own container is upgraded after the setup run has ended and
+written down how it ended, so the run shows as finished. When that
+upgrade fails, the host puts the container back and the page returns on
+Debian 12, with the run still finished. The log of that try is on the
+Proxmox host, `/root/nullbill/controller-upgrade.log`. NullBill tries
+again by itself only once **Update NullBill** brought a new version,
+which may hold the fix. To try again sooner, delete
 `/var/lib/nullbill/controller-release.json` in the NullBill container and
 run setup.
 

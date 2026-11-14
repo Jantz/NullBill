@@ -1,28 +1,61 @@
 #!/usr/bin/env bash
-# tools/upgrade-controller FROM TO [TARGET VMID SNAPSHOT [MEMORY]]: the NullBill
-# container itself from Debian FROM to TO (docs/adr/0022-latest-stable.md).
-# apply starts it as a unit of its own when a full setup run has ended well
-# and every guest runs TO: the page's Python is replaced under it, so
-# nothing of NullBill's may be at work. It upgrades Debian in place with
-# the script the guests got, makes the Python environment again, and
-# restarts the container. With TARGET (the PVE host, as apply reaches it),
-# a failure has the host put the container back from SNAPSHOT, which apply
-# made before it started this. With MEMORY (MiB), apply lent the container
-# more for the upgrade, and the host sets that again before the restart; a
-# container put back has it from its snapshot.
+# tools/upgrade-controller FROM TO [TARGET VMID SNAPSHOT [PID [TRIED]]]: the
+# NullBill container itself from Debian FROM to TO
+# (docs/adr/0022-latest-stable.md). apply starts it as a unit of its own
+# when a full setup run has ended well and every guest runs TO: the page's
+# Python is replaced under it, so nothing of NullBill's may be at work. It
+# upgrades Debian in place with the script the guests got, makes the Python
+# environment again, and restarts the container.
+#
+# With TARGET (the PVE host, as apply reaches it) it first waits for apply
+# (PID) to end, so the run's job has written down how it ended, then has
+# the host snapshot the container as SNAPSHOT: a container put back from it
+# holds a finished run (on the first real run the snapshot came first, and
+# the run put back had never ended). No snapshot, no upgrade, and TRIED
+# (apply's note of this try) goes, so the next run tries again. A container
+# with less memory than the upgrade needs has more while it runs, as the
+# guests have, and its own again before the restart. A failure has the host
+# put the container back from SNAPSHOT, its own memory with it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-from=$1 to=$2 target=${3:-} vmid=${4:-} snapshot=${5:-} memory=${6:-}
+from=$1 to=$2 target=${3:-} vmid=${4:-} snapshot=${5:-} pid=${6:-} tried=${7:-}
+# What a container has for its upgrade: release.MEMORY_MIB.
+lend=2048 memory=
+log=/var/log/nb-release-upgrade.log
+
+host() { ssh -o BatchMode=yes -o ConnectTimeout=10 "$target" "$@"; }
+say() { echo "upgrade-controller: $*" | tee -a "$log"; }
+
+if [ -n "$target" ]; then
+  if [ -n "$pid" ]; then
+    for _ in $(seq 900); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 1
+    done
+    # The job's shell writes its exit code as apply ends.
+    sleep 5
+  fi
+  if ! host "{ ! pct listsnapshot $vmid | grep -qw $snapshot || pct delsnapshot $vmid $snapshot; } && pct snapshot $vmid $snapshot --description 'NullBill, before the Debian upgrade'"; then
+    say "no snapshot could be made before the upgrade; the container stays on Debian $from and the next full setup run tries again"
+    [ -z "$tried" ] || rm -f "$tried"
+    exit 1
+  fi
+  memory=$(host "pct config $vmid" | sed -n 's/^memory: \([0-9]\+\)$/\1/p' || true)
+  if [ -n "$memory" ] && [ "$memory" -lt "$lend" ]; then
+    host "pct set $vmid --memory $lend" || memory=
+  else
+    memory=
+  fi
+fi
 
 back() {
-  echo "upgrade-controller: failed; the log is /var/log/nb-release-upgrade.log"
+  say "failed; the log is $log"
   [ -n "$target" ] || exit 1
   # The log goes back with the container: keep it on the host first.
-  ssh -o BatchMode=yes -o ConnectTimeout=10 "$target" "mkdir -p /root/nullbill && cat > /root/nullbill/controller-upgrade.log" \
-    </var/log/nb-release-upgrade.log || true
+  host "mkdir -p /root/nullbill && cat > /root/nullbill/controller-upgrade.log" <"$log" || true
   # On the host and of its own there: this container is stopped under us.
-  ssh -o BatchMode=yes -o ConnectTimeout=10 "$target" \
-    "systemd-run --quiet --collect --unit nb-controller-back sh -c 'pct stop $vmid; pct rollback $vmid $snapshot && pct start $vmid'"
+  # The snapshot holds the container's own memory.
+  host "systemd-run --quiet --collect --unit nb-controller-back sh -c 'pct stop $vmid; pct rollback $vmid $snapshot && pct start $vmid'"
   exit 1
 }
 trap back ERR
@@ -32,13 +65,13 @@ bash src/nullbill/data/nb-release-upgrade "$from" "$to"
 rm -rf venv
 tools/setup-controller
 unit=/etc/systemd/system/nullbill-web.service
+if [ -n "$memory" ]; then
+  host "pct set $vmid --memory $memory" \
+    || say "the container keeps the memory lent for the upgrade; pct set $vmid --memory $memory on the host sets its own"
+fi
 if [ -d /run/systemd/system ]; then
   cmp -s tools/nullbill-web.service "$unit" || install -m 0644 tools/nullbill-web.service "$unit"
   systemctl daemon-reload
-  if [ -n "$memory" ]; then
-    ssh -o BatchMode=yes -o ConnectTimeout=10 "$target" "pct set $vmid --memory $memory" \
-      || echo "upgrade-controller: the container keeps the memory lent for the upgrade; pct set $vmid --memory $memory on the host sets its own"
-  fi
   # Everything runs what was installed only after a restart.
   systemctl reboot
 fi
