@@ -2937,9 +2937,11 @@ function attentionItems() {
   const s = lastStatus;
   if (s && s.monitoring === "ok") {
     for (const a of s.alerts) add(a.severity === "page" ? "bad" : "warn", alertText(a).what, alertText(a).todo || a.name, [link("Alerts", "#alerts")]);
-    if (s.down.length) add("bad", `${s.down.length} system${s.down.length > 1 ? "s do" : " does"} not answer`, s.down.join(", "),
+    // What an alert already tells of gets no second row.
+    const firing = new Set(s.alerts.map((a) => a.name));
+    if (s.down.length && !firing.has("TargetDown")) add("bad", `${s.down.length} system${s.down.length > 1 ? "s do" : " does"} not answer`, s.down.join(", "),
       signed ? [ask("Ask the agent", "Look at the systems that do not answer, find the cause and propose the fix.")] : []);
-    if (s.reboot_waiting.length) add("warn", "A restart would finish installed updates", s.reboot_waiting.join(", "), []);
+    if (s.reboot_waiting.length && !firing.has("RebootRequired")) add("warn", "A restart would finish installed updates", s.reboot_waiting.join(", "), []);
   } else if (s && built() && s.monitoring !== "not planned" && !SETUP_RUNS.has(runningAction())) {
     add("warn", "Monitoring does not answer", "If setup just finished, wait a minute.", signed ? [ask("Ask the agent", "Monitoring does not answer. Find out why.")] : []);
   }
