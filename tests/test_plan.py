@@ -126,12 +126,34 @@ def test_memory_set_too_high_names_the_guests(facts):
     over = memory_over(build_model(config), small)
     message = errors_of(small, config)[0]
     assert over > 0 and message.startswith("memory: planned guests need ")
-    assert f", {over} MiB more than there is; more memory than the least is set for forgejo, jellyfin, workspace; the host has" in message
+    assert f", {over} MiB more than there is; the host has" in message
+    assert message.endswith(". More memory than the least is set for forgejo, jellyfin, workspace")
     # On demand, the workload that runs then is named with the rest.
     config["power"] = {"agents": {"run": "on-demand"}}
     config["overrides"] = {"workspace": {"memory_mib": 12288}}
     assert memory_over(build_model(config), small) > 0
-    assert errors_of(small, config)[0].endswith("; more memory than the least is set for workspace")
+    assert errors_of(small, config)[0].endswith("). More memory than the least is set for workspace")
+
+
+def test_a_raise_is_refused_at_save_only_when_it_alone_makes_the_choices_not_fit(facts):
+    from nullbill import sizes
+
+    small = facts("small")
+    config = copy.deepcopy(fixture_config("small"))
+    before = build_model(config)
+    slack = -memory_over(before, small)
+    assert slack > 0
+    # Workspace, a container, counts at half: this raise is 512 MiB past what is free.
+    raised = copy.deepcopy(config) | {"overrides": {"workspace": {"memory_mib": 1024 + 2 * slack + 1024}}}
+    after = build_model(raised)
+    said = sizes.too_much(before, after, small)
+    assert len(said) == 1 and f"the server would be {sizes.amount(memory_over(after, small))} short" in said[0]
+    assert memory_over(after, small) == 512
+    # Choices that do not fit anyway (a tick), and a raise beside them: the plan says so, the save is not refused.
+    over = copy.deepcopy(config)
+    over["intent"]["workloads"] = [*over["intent"]["workloads"], "windows-dev"]
+    assert memory_over(build_model(over), small) > 0
+    assert sizes.too_much(build_model(over), build_model(over | {"overrides": raised["overrides"]}), small) == []
 
 
 def test_pinned_pool_count(facts):

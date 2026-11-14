@@ -1219,13 +1219,20 @@ function openGameAdd(open) {
 // The server names the guest or game server each refusal is about first
 // ("Creative world: ..."): open those sizes and servers' settings, so what to
 // change is in view. The first such row, if any.
-const SIZE_REFUSAL = /^[^:]+: (its (cores|memory) |\S+ GiB of memory does not fit)/i;
+// What a size's refusal says after "<guest's name>: ". The name is matched
+// whole, so a title with a colon in it still finds its row.
+const SIZE_REFUSAL = /^(its (cores|memory) |\S+ GiB of memory does not fit|\S+ is not a size|its size is )/i;
+function sizeRefusal(message, label) {
+  return message.toLowerCase().startsWith(`${label}: `) && SIZE_REFUSAL.test(message.slice(label.length + 2));
+}
 function openRefused(messages) {
   let first = null;
+  const labels = [...$("pick").querySelectorAll(".size-row")].map((row) => row.dataset.label);
+  const aboutSize = (m) => labels.some((label) => sizeRefusal(m, label));
   for (const box of $("pick").querySelectorAll(".opt-size")) {
     let named = false;
     for (const row of box.querySelectorAll(".size-row")) {
-      const said = messages.filter((m) => SIZE_REFUSAL.test(m) && m.toLowerCase().startsWith(`${row.dataset.label}:`));
+      const said = messages.filter((m) => sizeRefusal(m, row.dataset.label));
       for (const [role, word] of [["size-cores", "cores"], ["size-memory", "memory"]]) {
         const input = row.querySelector(`[data-role=${role}]`);
         if (said.some((m) => m.includes(word))) input.setAttribute("aria-invalid", "true"); else input.removeAttribute("aria-invalid");
@@ -1240,7 +1247,7 @@ function openRefused(messages) {
     first = first || row || box;
   }
   // A size's refusal opens the size alone, not the game server's other settings.
-  messages = messages.filter((m) => !SIZE_REFUSAL.test(m));
+  messages = messages.filter((m) => !aboutSize(m));
   for (const row of $("pick").querySelectorAll(".opt")) {
     const settings = row.querySelector(".game-settings");
     const title = settings && row.querySelector(".opt-title").textContent.toLowerCase();
@@ -1864,7 +1871,7 @@ const KINDS = {"lxc": "Container", "vm": "VM", "vm-pool": "VM pool"};
 // problem.
 function planProblems(prefix, view) {
   const problems = view.problems || view.errors.map((e) => ({text: e, advice: null}));
-  $(`${prefix}-errors`).replaceChildren(...failItems(problems.map((x) => ({text: sentence(x.text), advice: x.advice}))));
+  $(`${prefix}-errors`).replaceChildren(...failItems(problems.map((x) => ({text: sentence(x.text), items: x.items, advice: x.advice}))));
   const rest = (view.advice || []).filter((a) => !problems.some((x) => x.advice === a));
   $(`${prefix}-advice`).replaceChildren(...rest.map((a) => li(a)));
   show(`${prefix}-advice-head`, rest.length > 0);
@@ -4467,6 +4474,10 @@ function failItems(items) {
     const node = make("li", {className: "fail"});
     if (item.title) node.append(make("b", {className: "fail-title", textContent: item.title}));
     if (item.text) node.append(make("p", {className: "fail-text", textContent: item.text}));
+    if (item.items && item.items.length) {
+      node.append(make("p", {className: "fail-text", textContent: "Set above their least:"}),
+        make("ul", {className: "fail-list"}, ...item.items.map((x) => make("li", {textContent: x}))));
+    }
     if (item.advice) node.append(make("p", {className: "fail-fix"}, make("b", {textContent: "What to do: "}), item.advice));
     if (item.detail) {
       const pre = make("pre", {textContent: item.detail});

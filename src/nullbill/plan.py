@@ -25,6 +25,9 @@ class _Errors(list):
 
 # Planned by itself when a disk is kept and shared, never by intent.
 FILES_WORKLOAD = "files"
+# Ends a memory problem when the owner set guests above their least; the
+# page lists those guests apart (web/server.py's problems).
+RAISED = "More memory than the least is set for "
 
 # Smallstep's apt repository, which every guest with a certificate installs
 # from, and the name it redirects to (catalog.yaml's proxy.allow).
@@ -275,7 +278,7 @@ def _size(
         """The guests among names given more memory than their floor, said
         where it matters: they are what the owner can give back."""
         more = [n for n in names if sizes[n]["memory_mib"] > planned[n]["floor"]["memory_mib"]]
-        return f"; more memory than the least is set for {', '.join(more)}" if more else ""
+        return f". {RAISED}{', '.join(more)}" if more else ""
 
     if always_floor > available:
         which = "guests that always run" if parked else "planned guests"
@@ -283,7 +286,7 @@ def _size(
         if raised(always):
             errors.append(
                 f"memory: {which} need {always_floor} MiB (containers at {container_pct}% of their limit), "
-                f"{always_floor - available} MiB more than there is{raised(always)}; {has}"
+                f"{always_floor - available} MiB more than there is; {has}{raised(always)}"
             )
         else:
             errors.append(f"memory: {which} need {always_floor} MiB at their floors (containers at {container_pct}% of their limit); {has}")

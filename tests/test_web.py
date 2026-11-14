@@ -607,11 +607,38 @@ def test_each_guests_size_is_set_on_the_page_and_only_what_differs_from_the_leas
     # A tick that then does not fit is saved, and the plan names the size set with what to do.
     assert client.call("/api/choices", OWNER | {"workloads": [*OWNER["workloads"], "windows-dev"], "backups": False})[0] == 200
     plan = client.call("/api/state")[1]["plan"]
-    assert "more memory than the least is set for linux-runner, workspace;" in plan["errors"][0]
+    assert plan["errors"][0].endswith(". More memory than the least is set for linux-runner, workspace")
     assert plan["problems"][0]["advice"].startswith("Some guests are given more memory than the least")
+    # On the page the guests are a list apart, the problem's own line without them.
+    assert "More memory" not in plan["problems"][0]["text"]
+    items = plan["problems"][0]["items"]
+    assert items[0].startswith("linux-runner: 3 GiB, its least ") and items[1:] == [f"workspace: {most:g} GiB, its least 1 GiB"]
+    # Raising a guest while the choices do not fit anyway is no refusal: the plan says so, as before.
+    status, _ = client.call(
+        "/api/choices",
+        OWNER | {"workloads": [*OWNER["workloads"], "windows-dev"], "backups": False, "sizes": {"forgejo": {"memory_mib": 2048}}},
+    )
+    assert status == 200 and config()["overrides"]["forgejo"] == {"memory_mib": 2048}
+    assert client.call("/api/state")[1]["plan"]["errors"]
     # Turned off, a guest keeps the size it was given, for when it is on again; the plan still fits.
     assert client.call("/api/choices", OWNER | {"workloads": ["linux-ci"], "backups": False})[0] == 200
     assert "workspace" in config()["overrides"] and client.call("/api/state")[1]["plan"]["errors"] == []
+
+    # A size saved by hand, off the page's steps, survives a save of the form as the page shows it.
+    (app.home / "config.yaml").write_text(yaml.safe_dump(config() | {"overrides": {"forgejo": {"memory_mib": 3000}}}))
+    options = client.call("/api/state")[1]["options"]
+    shown = {
+        g["name"]: {"cores": g["set"].get("cores"), "memory_mib": g["set"].get("memory_mib")}
+        for g in [*(g for i in options["items"] for g in i["guests"]), *options["core"]]
+    }
+    assert shown["forgejo"] == {"cores": None, "memory_mib": 3000}
+    assert client.call("/api/choices", OWNER | {"workloads": ["linux-ci"], "backups": False, "sizes": shown})[0] == 200
+    assert config()["overrides"] == {"forgejo": {"memory_mib": 3000}}
+    # A digit that is no decimal one is a refusal, not a crash.
+    status, answer = client.call(
+        "/api/choices", OWNER | {"workloads": ["linux-ci"], "backups": False, "sizes": {"forgejo": {"cores": "\u00b2"}}}
+    )
+    assert status == 400 and answer["error"].startswith("forgejo: its cores are a whole number")
 
 
 def test_a_choice_turned_off_after_setup_built_it_waits_for_the_owner_before_it_is_deleted(site):

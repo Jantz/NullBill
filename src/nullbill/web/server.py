@@ -65,6 +65,7 @@ from nullbill import (
     torrents,
     version,
 )
+from nullbill import plan as planning
 from nullbill import sizes as sizing
 from nullbill.apply import DISKS_FILE, FULL_NEXT, GUESTS, NTFY, REMOVALS, SPKI, STAGES, Context, built_guests, split_target
 from nullbill.artifacts import render_all
@@ -393,15 +394,32 @@ class Job:
         return "done" if self.rc == 0 else "failed"
 
 
-def problems(view: dict, other: str | None) -> dict:
+def problems(view: dict, other: str | None, model: dict | None = None) -> dict:
     """A view's `errors` with what to do: `problems` pairs each with the
     advice for its cause where the page knows the cause, and `advice` lists
     every line once, in the problems' order, `other` standing in for a
-    cause it does not know."""
+    cause it does not know. A memory problem that names guests set above
+    their least keeps them apart, a line each (`items`), with the model."""
     known = [progress.specific(m) for m in view["errors"]]
-    view["problems"] = [{"text": m, "advice": a} for m, a in zip(view["errors"], known, strict=True)]
+    view["problems"] = [{"text": m, "advice": a} | raised_apart(m, model) for m, a in zip(view["errors"], known, strict=True)]
     view["advice"] = list(dict.fromkeys(a or other for a in known if a or other))
     return view
+
+
+def raised_apart(message: str, model: dict | None) -> dict:
+    """plan's memory problem without its last sentence, and that sentence's
+    guests as items: each by the name the page gives it, with its memory
+    and its least."""
+    if model is None or planning.RAISED not in message:
+        return {}
+    text, names = message.rsplit(f". {planning.RAISED}", 1)
+    items = []
+    for name in names.split(", "):
+        if not sizing.sizable(model, name):
+            return {}
+        set_to = (model.get("overrides", {}).get(name) or {}).get("memory_mib", sizing.least(model, name)["memory_mib"])
+        items.append(f"{sizing.label(model, name)}: {sizing.gib(set_to)}, its least {sizing.gib(sizing.least(model, name)['memory_mib'])}")
+    return {"text": text, "items": items}
 
 
 @dataclass
@@ -1248,7 +1266,7 @@ class App:
         except NullBillError as exc:
             return problems({"items": [], "power": [], "memory": None, "errors": exc.messages, "adds": None, "removes": None}, None)
         out = workloads.options(model, self.facts(), self.existing_guests(), self.home)
-        return problems(out, "Turn off a choice, or change one, until this no longer applies.")
+        return problems(out, "Turn off a choice, or change one, until this no longer applies.", model)
 
     def preview(self, body: dict) -> dict | None:
         """The page's form, not saved: what it would come to."""
@@ -1512,7 +1530,7 @@ class App:
             ticked = new.setdefault("intent", {}).setdefault("workloads", list(DEFAULT_WORKLOADS))
             ticked.append(name)
         if form:
-            self._games_config(new, {name: form})
+            self._games_config(new, {name: form}, facts=self.facts())
         model = build_model(new)
         out = {"name": name, "title": model["games"][name]["title"], "lines": games.describe(model, name, on)}
         if not save:
@@ -1768,15 +1786,20 @@ class App:
         title. With them each guest's size (`sizes`, nullbill/sizes.py);
         a game server's `memory_mib` here, as older pages and the agent's
         add_game_server send it, is read as its size. A key the form leaves
-        out stays as it is. Every problem is raised together, a message
-        each; strict False (the preview) leaves out a size it cannot read."""
+        out stays as it is, and a `memory_mib` of null leaves the size as it
+        is; nothing changes without either form. Every problem is raised
+        together, a message each; strict False (the preview) leaves out a
+        size it cannot read."""
+        if not isinstance(form, dict) and sizes is None:
+            return
         chosen = copy.deepcopy(config.get("games") or {})
         overrides = copy.deepcopy(config.get("overrides") or {})
         # Only games and sizes matter here; the rest of the form may not be whole yet.
         model = build_model({"games": chosen, "services": config.get("services") or {}})
         catalog = build_model({})["games"]
         problems: list[str] = []
-        asked_sizes = {str(k): v for k, v in sizes.items() if isinstance(v, dict)} if isinstance(sizes, dict) else {}
+        # What is not a size is left to sizing.read, which says so.
+        asked_sizes = {str(k): v for k, v in sizes.items()} if isinstance(sizes, dict) else sizes
         for name, asked in (form if isinstance(form, dict) else {}).items():
             if name not in model["games"] or not isinstance(asked, dict):
                 continue
@@ -1793,8 +1816,12 @@ class App:
                     chosen[of] = {k: v for k, v in agreed.items() if k != "eula"}
                     if not chosen[of]:
                         del chosen[of]
-            if "memory_mib" in asked and "memory_mib" not in asked_sizes.get(name, {}):
-                asked_sizes[name] = {**asked_sizes.get(name, {}), "memory_mib": asked["memory_mib"]}
+            if asked.get("memory_mib") is not None and asked_sizes is None:
+                asked_sizes = {}
+            if asked.get("memory_mib") is not None and isinstance(asked_sizes, dict):
+                size = asked_sizes.get(name, {})
+                if isinstance(size, dict) and "memory_mib" not in size:
+                    asked_sizes[name] = {**size, "memory_mib": asked["memory_mib"]}
             # Each part is read on its own, so one refusal does not hide the next.
             found = len(problems)
             if "admins" in catalog[of] and "admins" in asked:
@@ -1973,12 +2000,13 @@ class App:
         config = self.config()
         if config is None or not facts.is_file():
             return {"text": None, "errors": [], "advice": [], "summary": None, "tailnet_policy": None}
+        model = None
         try:
             model = build_model(config)
             text = plan_text(model, facts.read_bytes())
         except NullBillError as exc:
             other = "Change your choices under Setup, What to run, so this no longer applies, and press Save and plan."
-            return problems({"text": None, "errors": exc.messages, "summary": None, "tailnet_policy": None}, other)
+            return problems({"text": None, "errors": exc.messages, "summary": None, "tailnet_policy": None}, other, model)
         _write_private(self.home / "plan.yaml", text)
         loaded = yaml.safe_load(text)
         policy = render_tailnet(loaded, model)["policy.json"]

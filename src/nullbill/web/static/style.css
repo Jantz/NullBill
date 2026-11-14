@@ -777,6 +777,7 @@ select:disabled { color: var(--text-3); background: var(--bg-sub); cursor: not-a
 .fail:last-child { padding-bottom: 2px; }
 .fail-title { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
 .fail-text { max-width: 86ch; overflow-wrap: anywhere; }
+.fail-list { margin: 2px 0 0; padding-left: 20px; max-width: 86ch; }
 .fail-fix { max-width: 86ch; color: var(--text-2); font-size: 13px; }
 .fail-fix b { color: var(--text); font-weight: 500; }
 .fail-more { margin-top: 4px; min-width: 0; }

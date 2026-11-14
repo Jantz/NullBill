@@ -5,6 +5,7 @@ for the page's other features."""
 import base64
 import http.client
 import json
+import re
 import struct
 import time
 import zlib
@@ -443,8 +444,7 @@ def test_the_agent_sets_each_guests_size_as_a_change_and_hears_what_does_not_fit
         "workspace: memory 4 GiB, was 1 GiB (the least)",
     ]
     assert "overrides" not in saved(app)
-    assert approve(client, proposal["id"])[0] == 200
-    settle(client)
+    approved(client, proposal["id"])
     assert saved(app)["overrides"] == {"workspace": {"cores": 2, "memory_mib": 4096}, "forgejo": {"memory_mib": 2048}}
     # Back to the least: automatic again, said as such.
     view = call(client, "set_choices", sizes={"forgejo": {"memory_mib": None}})
@@ -452,8 +452,19 @@ def test_the_agent_sets_each_guests_size_as_a_change_and_hears_what_does_not_fit
     # What cannot be used, or does not fit, is said before any card.
     said = result(call(client, "set_choices", sizes={"workspace": {"cores": 999}, "router": {"memory_mib": 1000}}))
     assert "workspace: its cores are a whole number from 1 to" in said and "router: its memory is from 0.5 GiB" in said
-    said = result(call(client, "set_choices", sizes={"workspace": {"memory_mib": 262144}}))
-    assert "workspace: 256 GiB of memory" in said or "workspace: its memory is from 1 GiB" in said
+    # A VM, which counts in full, given all the memory the server has: more than fits beside the rest.
+    top = int(re.search(r"to (\d+) MiB\)", result(call(client, "set_choices", sizes={"linux-runner": {"memory_mib": 1 << 30}}))).group(1))
+    said = result(call(client, "set_choices", sizes={"linux-runner": {"memory_mib": top}}))
+    assert f"linux-runner: {top / 1024:g} GiB of memory does not fit; the server would be " in said and "At most " in said
+    # What is not a size is said too, never taken for no change.
+    for bad, words in (
+        (["workspace"], "sizes: give each guest's name with its cores and memory_mib"),
+        ({"workspace": 4096}, "workspace: its size is cores and memory_mib"),
+        ({"workspace": {"ram": 4096}}, "workspace: ram is not a size"),
+    ):
+        said = result(call(client, "set_choices", sizes=bad))
+        assert words in said, said
+    assert saved(app)["overrides"] == {"workspace": {"cores": 2, "memory_mib": 4096}, "forgejo": {"memory_mib": 2048}}
 
 
 def test_game_settings_and_when_things_run_are_choices_and_an_agreement_is_the_owners(agent):

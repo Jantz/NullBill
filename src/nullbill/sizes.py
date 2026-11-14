@@ -8,12 +8,14 @@ automatic: nothing is written down and the plan gives the floor. A pool's
 size is each clone's. The nullbill container is install.sh's, which
 OpenTofu does not manage, so it has no size here.
 
-A size is checked on its own (whole cores from the floor to the host's
-threads, memory from the floor to the host's memory in quarter GiB), every
-problem a message of its own. A save that gives guests more memory than
-before and so no longer fits is refused with how much is missing and what
-would fit (`too_much`); a tick that does not fit is saved as before and the
-plan says so.
+A size the form changes is checked on its own (whole cores from the floor
+to the host's threads, memory from the floor to the host's memory in
+quarter GiB), every problem a message of its own; a size the form sends as
+it is saved passes untouched, so a value saved before a rule or the hardware
+changed blocks no other save. A save that gives guests more memory than
+before and so no longer fits, when it fitted before, is refused with how
+much is missing and what would fit (`too_much`); a tick that does not fit
+is saved as before and the plan says so.
 """
 
 import copy
@@ -24,8 +26,9 @@ from nullbill.errors import NullBillError, Refused
 
 KEYS = ("cores", "memory_mib")
 STEP_MIB = 256
-# Without a probe of the host: the most the schema of the owner's own takes.
-MAX_CORES, MAX_MIB = custom.SIZE_LIMITS["cores"][1], custom.SIZE_LIMITS["memory_mib"][1]
+# Without a probe of the host: the most the schema of the owner's own takes
+# for cores, and for memory 64 GiB, what the game form took before sizes.
+MAX_CORES, MAX_MIB = custom.SIZE_LIMITS["cores"][1], 65536
 
 
 def sizable(model: dict, name: str) -> bool:
@@ -72,8 +75,11 @@ def _whole(value: object) -> int | None:
         return value
     if isinstance(value, float) and value.is_integer():
         return int(value)
-    if isinstance(value, str) and value.strip().isdigit():
-        return int(value.strip())
+    if isinstance(value, str) and value.strip().isdecimal():
+        try:
+            return int(value.strip())
+        except ValueError:
+            return None
     return None
 
 
@@ -101,12 +107,17 @@ def read(model: dict, overrides: dict, form: object, facts: dict | None = None, 
     out stays as it is. strict False (the page's preview) keeps the saved
     value for what cannot be read, so the meter follows what can."""
     out = copy.deepcopy(overrides)
-    if not isinstance(form, dict):
+    if form is None:
         return out, []
+    if not isinstance(form, dict):
+        return out, [SHAPE] if strict else []
     most = limits(facts)
     problems: list[str] = []
     for name, asked in form.items():
         if not isinstance(asked, dict):
+            if strict:
+                said = label(model, str(name)) if str(name) in model["services"] else str(name)[:40]
+                problems.append(f"{said}: {GUEST_SHAPE}")
             continue
         if not sizable(model, str(name)):
             if strict:
@@ -114,8 +125,14 @@ def read(model: dict, overrides: dict, form: object, facts: dict | None = None, 
                 problems.append(f"{str(name)[:40]}: {why}")
             continue
         pin = dict(out.get(name) or {})
+        if strict:
+            problems += [f"{label(model, name)}: {str(key)[:40]} {NOT_A_SIZE}" for key in asked if key not in KEYS]
         for key in KEYS:
             if key not in asked:
+                continue
+            if key in pin and _whole(asked[key]) == pin[key]:
+                # As it is saved: kept without a check, which a rule or the
+                # hardware may have moved since.
                 continue
             try:
                 value = _read(model, name, key, asked[key], most, bool(facts))
@@ -134,6 +151,11 @@ def read(model: dict, overrides: dict, form: object, facts: dict | None = None, 
     return out, problems
 
 
+SHAPE = 'sizes: give each guest\'s name with its cores and memory_mib, as in {"forgejo": {"cores": 2, "memory_mib": 2048}}'
+GUEST_SHAPE = 'its size is cores and memory_mib, as in {"cores": 2, "memory_mib": 2048}'
+NOT_A_SIZE = "is not a size; a size is cores and memory_mib"
+
+
 def raise_problems(problems: list[str], headline: str) -> None:
     """Several problems as a headline with a list, one as itself."""
     if len(problems) > 1:
@@ -150,8 +172,9 @@ def too_much(before: dict, after: dict, facts: dict | None) -> list[str]:
     """Why a save that gives guests more memory than before does not fit:
     a message per such guest, with what is missing and the most that fits
     beside the rest. Empty when it fits, when no guest got more, or when it
-    did not fit before either for other reasons than those guests.
-    before, after: merged models."""
+    does not fit with those guests as they were either (a tick or an older
+    size: the plan says so, as before). So what is missing is all this
+    change's. before, after: merged models."""
     if not facts:
         return []
     over = planning.memory_over(after, facts)
@@ -168,7 +191,7 @@ def too_much(before: dict, after: dict, facts: dict | None) -> list[str]:
     back = copy.deepcopy(after)
     for name in more:
         back.setdefault("overrides", {}).setdefault(name, {})["memory_mib"] = was(name)
-    if planning.memory_over(back, facts) >= over:
+    if planning.memory_over(back, facts) > 0:
         return []
     out = []
     for name in more:
