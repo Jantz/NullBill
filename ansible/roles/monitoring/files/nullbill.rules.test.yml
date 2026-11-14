@@ -74,7 +74,7 @@ tests:
         alertname: HostStarted
         exp_alerts:
           - exp_labels: {severity: warn, job: host, instance: "pve.nullbill.internal:9100"}
-            exp_annotations: {summary: "The PVE host started 10m 0s ago, after a power cut or a reboot"}
+            exp_annotations: {summary: "The PVE host started 10m 0s ago, after a power cut or a reboot; nothing to do unless a service stays down"}
       - eval_time: 40m
         alertname: HostStarted
         exp_alerts: []
@@ -87,7 +87,7 @@ tests:
         alertname: DiskAlmostFull
         exp_alerts:
           - exp_labels: {severity: page, instance: "pbs:9100", mountpoint: /, fstype: ext4}
-            exp_annotations: {summary: "pbs:9100 / has under 10% free"}
+            exp_annotations: {summary: "pbs:9100 / has under 10% free; ask the agent what fills it before deleting anything"}
       - eval_time: 14m
         alertname: KeptDiskFull
         exp_alerts: []
@@ -116,7 +116,7 @@ tests:
         alertname: CertificateProbeFailing
         exp_alerts:
           - exp_labels: {severity: page, job: tls, instance: "forgejo:443", guest: forgejo}
-            exp_annotations: {summary: "TLS handshake with forgejo:443 fails"}
+            exp_annotations: {summary: "TLS handshake with forgejo:443 fails; its service may be down or its certificate wrong, so ask the agent to look"}
   # Update alerts, minute by minute (a sample older than five minutes no
   # longer counts). forgejo's runs fail and leave security updates pending;
   # pbs's succeed; router stopped fetching lists and has upgrades off; the
@@ -158,12 +158,12 @@ tests:
         alertname: UnattendedUpgradesFailing
         exp_alerts:
           - exp_labels: {severity: page, instance: "forgejo:9100"}
-            exp_annotations: {summary: "forgejo:9100 has had no successful unattended upgrade for three days"}
+            exp_annotations: {summary: "forgejo:9100 has had no successful unattended upgrade for three days; ask the agent to read /var/log/unattended-upgrades there"}
       - eval_time: 2h
         alertname: UnattendedUpgradesOff
         exp_alerts:
           - exp_labels: {severity: page, instance: "router:9100"}
-            exp_annotations: {summary: "router:9100 has unattended upgrades switched off"}
+            exp_annotations: {summary: "router:9100 has unattended upgrades switched off; ask the agent to switch them on again"}
       - eval_time: 50h
         alertname: PackageListsStale
         exp_alerts:
@@ -173,7 +173,7 @@ tests:
         alertname: RebootRequired
         exp_alerts:
           - exp_labels: {severity: warn, instance: "pve:9100"}
-            exp_annotations: {summary: "pve:9100 needs a reboot to finish installing updates"}
+            exp_annotations: {summary: "pve:9100 needs a reboot to finish installing updates; restart it when nothing is using it"}
       - eval_time: 300h
         alertname: UpdatesWaiting
         exp_alerts: []
@@ -181,7 +181,7 @@ tests:
         alertname: UpdatesWaiting
         exp_alerts:
           - exp_labels: {severity: warn, instance: "pve:9100"}
-            exp_annotations: {summary: "pve:9100 has had updates waiting for two weeks that NullBill does not install by itself"}
+            exp_annotations: {summary: "pve:9100 has had updates waiting for two weeks that NullBill does not install by itself; ask the agent which they are"}
   - interval: 1m
     input_series:
       # forgejo's newest backup stays at the start; git's renews every hour.
@@ -220,7 +220,7 @@ tests:
         alertname: BackupTooOld
         exp_alerts:
           - exp_labels: {severity: page, instance: "pve:9100", vmid: "2017", guest: forgejo}
-            exp_annotations: {summary: "forgejo (2017) has no encrypted backup from the last 26 hours"}
+            exp_annotations: {summary: "forgejo (2017) has no encrypted backup from the last 26 hours; the page's Backups page lists the guests without one, and the agent can read why the nightly backup left it out"}
       - eval_time: 1h50m
         alertname: BackupStatusUnknown
         exp_alerts: []
@@ -236,7 +236,7 @@ tests:
         alertname: BackupMetricsStale
         exp_alerts:
           - exp_labels: {severity: page, instance: "pve:9100", file: "/var/lib/prometheus/node-exporter/nullbill-backups.prom"}
-            exp_annotations: {summary: "pve:9100 has not refreshed its backup metrics for three hours (nb-backup-metrics.timer)"}
+            exp_annotations: {summary: "pve:9100 has not refreshed its backup metrics for three hours (nb-backup-metrics.timer); the backup alerts see nothing until it does, so ask the agent to look"}
   # Samples 4 minutes apart stay inside Prometheus's 5-minute lookback.
   - interval: 4m
     input_series:
@@ -400,7 +400,7 @@ tests:
         alertname: CertificateProbeFailing
         exp_alerts:
           - exp_labels: {severity: page, job: tls, instance: "runner-dispatcher.nullbill.internal:8443", guest: runner-dispatcher}
-            exp_annotations: {summary: "TLS handshake with runner-dispatcher.nullbill.internal:8443 fails"}
+            exp_annotations: {summary: "TLS handshake with runner-dispatcher.nullbill.internal:8443 fails; its service may be down or its certificate wrong, so ask the agent to look"}
       - eval_time: 35m
         alertname: CertificateExpiresSoon
         exp_alerts: []
@@ -451,7 +451,7 @@ tests:
         alertname: UnattendedUpgradesFailing
         exp_alerts:
           - exp_labels: {severity: page, job: node, instance: jellyfin}
-            exp_annotations: {summary: "jellyfin has had no successful unattended upgrade for three days"}
+            exp_annotations: {summary: "jellyfin has had no successful unattended upgrade for three days; ask the agent to read /var/log/unattended-upgrades there"}
       - eval_time: 80h10m
         alertname: PackageListsStale
         exp_alerts:

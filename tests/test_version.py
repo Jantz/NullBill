@@ -90,3 +90,16 @@ def test_answers_nothing_where_git_cannot_say(tmp_path, repos):
     git(checkout, "remote", "set-url", "origin", str(tmp_path / "gone.git"))
     with pytest.raises(NullBillError, match="could not reach the repository"):
         version.fetch(checkout)
+
+
+def test_links_runbooks_to_the_commit_that_runs_only_on_github(tmp_path, repos):
+    _, checkout = repos
+    head = version.head(checkout)
+    # The test's origin is a local path: nothing to link to.
+    assert version.docs(checkout, head) is None
+    for url in ("https://github.com/Example/NullBill", "https://github.com/Example/NullBill.git", "git@github.com:Example/NullBill.git"):
+        git(checkout, "remote", "set-url", "origin", url)
+        assert version.docs(checkout, head) == f"https://github.com/Example/NullBill/blob/{head}/"
+    git(checkout, "remote", "set-url", "origin", "https://example.internal/Example/NullBill")
+    assert version.docs(checkout, head) is None
+    assert version.docs(tmp_path, head) is None

@@ -1647,7 +1647,7 @@ function renderDisks(disks) {
     box.append(make("legend", {}, make("div", {className: "disk-head"},
       make("span", {className: "disk-id", textContent: disk.id}),
       make("span", {className: "meta", textContent: `${disk.size_gib} GiB ${disk.rotational ? "hard disk" : "SSD"}${hours}`}),
-      make("span", {className: "push"}, status(healthKind, `Health ${disk.health}`)))));
+      make("span", {className: "push"}, status(healthKind, disk.health === "PASSED" ? "Healthy" : disk.health === "FAILED" ? "Failing" : "Health not read")))));
     if (disk.health === "FAILED") {
       box.append(make("div", {className: "problem"}, make("p", {textContent: "This disk reports that it is failing. Copy what you need off it soon."})));
     }
@@ -2376,10 +2376,20 @@ function renderDirect(found) {
   // What the server read about the port and what to do, a line each; with
   // a direct path seen in use there is nothing to do.
   const settled = verdict === "measured" || verdict === "open";
-  const notes = settled ? [] : String(found.detail || "").split("; ").filter(Boolean).map(sentence);
+  // What could not be read is one note: a program's output may hold "; " too.
+  const notes = settled ? [] : verdict === "unread" ? [String(found.detail || "")].filter(Boolean)
+    : String(found.detail || "").split("; ").filter(Boolean).map(sentence);
   if (verdict === "unmeasured" && found.kind !== "waiting") notes.unshift("The server asks every device on your tailnet while this tab is open, and a phone that is asleep may not answer. Open this page on the phone, on mobile data, and its path shows here within seconds.");
   show("direct-help", notes.length > 0);
-  $("direct-help").replaceChildren(...notes.map((t) => li(t)));
+  // What the server could not read says so in words; what a program
+  // printed stays under Details.
+  const said = (t) => {
+    const [head, ...rest] = t.split(": ");
+    if (verdict !== "unread" || !rest.length) return li(sentence(t));
+    return make("li", {}, sentence(head), make("details", {className: "fail-more"}, make("summary", {textContent: "Details"}),
+      outputBox(make("pre", {textContent: rest.join(": ")}))));
+  };
+  $("direct-help").replaceChildren(...notes.map(said));
 }
 
 // The port and where a forward made by hand goes, wherever the page names them.
@@ -2522,8 +2532,29 @@ function renderGuide(items) {
 }
 
 // Each count, the guide, the overview and the banner, from state and the run.
+// A runbook the page names in code, such as docs/runbooks/media.md, opens
+// as that file of the NullBill that runs here (version.docs), wherever it
+// is drawn; without a GitHub origin it stays the path it was.
+const DOC_PATH = /^docs\/(?:[\w-]+\/)*[\w.-]+\.md$/;
+function linkDocs(root) {
+  const base = state && state.version && state.version.docs;
+  if (!base || !root.querySelectorAll) return;
+  const found = root.matches && root.matches("code") ? [root] : root.querySelectorAll("code:not([data-doc])");
+  for (const code of found) {
+    if (code.dataset.doc || !DOC_PATH.test(code.textContent.trim()) || code.closest("a")) continue;
+    code.dataset.doc = "1";
+    const a = make("a", {href: base + code.textContent.trim(), target: "_blank", rel: "noopener"});
+    code.replaceWith(a);
+    a.append(code);
+  }
+}
+new MutationObserver((changes) => {
+  for (const c of changes) for (const n of c.addedNodes) if (n.nodeType === 1) linkDocs(n);
+}).observe(document.body, {childList: true, subtree: true});
+
 function paintStates() {
   if (!state) return;
+  linkDocs(document.body);
   const st = state;
   const running = runningAction();
   const items = guideItems(st);
@@ -2875,7 +2906,7 @@ function renderSystemUpdates() {
     show("system-restart-row", false);
     return;
   }
-  $("system-updates").replaceChildren(s.security_waiting.length ? status("warn", `Waiting on ${s.security_waiting.length}`, s.security_waiting.join(", ")) : status("good", "Up to date", "installed nightly"));
+  $("system-updates").replaceChildren(s.security_waiting.length ? status("warn", s.security_waiting.length === 1 ? "Waiting on 1 system" : `Waiting on ${s.security_waiting.length} systems`, s.security_waiting.join(", ")) : status("good", "Up to date", "installed nightly"));
   show("system-restart-row", s.reboot_waiting.length > 0);
   $("system-restart").replaceChildren(status("warn", "Needed", s.reboot_waiting.join(", ")));
 }
@@ -2937,7 +2968,7 @@ function attentionItems() {
   if ((state.removals || []).length && state.removals_stopped) add("bad", `Setup stopped before deleting ${andList(state.removals)}`, "Keep them or confirm the deletion.", [link("Decide", "#setup/build")]);
   const s = lastStatus;
   if (s && s.monitoring === "ok") {
-    for (const a of s.alerts) add(a.severity === "page" ? "bad" : "warn", alertText(a).what, alertText(a).todo || a.name, [link("Alerts", "#alerts")]);
+    for (const a of s.alerts) add(a.severity === "page" ? "bad" : "warn", alertText(a).what, alertText(a).todo || "", [link("Alerts", "#alerts")]);
     // What an alert already tells of gets no second row.
     const firing = new Set(s.alerts.map((a) => a.name));
     if (s.down.length && !firing.has("TargetDown")) add("bad", `${s.down.length} system${s.down.length > 1 ? "s do" : " does"} not answer`, s.down.join(", "),

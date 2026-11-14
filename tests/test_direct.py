@@ -307,7 +307,7 @@ def test_an_answer_that_cannot_be_read_or_is_old_fails(facts):
     failing = {direct.router_command(plan): (255, "", "QEMU guest agent is not running\n")}
     assert kind_and_detail(failing=failing) == (direct.UNREAD, "cannot ask the router: QEMU guest agent is not running")
     failing = {direct.vpn_command(plan): (1, "", "Configuration file 'nodes/pve/lxc/2011.conf' does not exist\n")}
-    assert kind_and_detail(failing=failing)[1].startswith("tailscale status on the vpn guest: Configuration file")
+    assert kind_and_detail(failing=failing)[1].startswith("cannot read Tailscale on the vpn guest: Configuration file")
     # Before nb-portmap's first run there is no file; qm still exits 0.
     missing = guest_exec("", 1, "cat: /var/lib/nullbill-portmap/state.json: No such file or directory\n")
     detail = kind_and_detail(answers={direct.router_command(plan): missing})[1]

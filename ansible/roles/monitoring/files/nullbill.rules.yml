@@ -16,7 +16,7 @@ groups:
         expr: time() - node_boot_time_seconds{job="host"} < 1800
         labels: {severity: warn}
         annotations:
-          summary: "The PVE host started {{ $value | humanizeDuration }} ago, after a power cut or a reboot"
+          summary: "The PVE host started {{ $value | humanizeDuration }} ago, after a power cut or a reboot; nothing to do unless a service stays down"
       # Not a guest that runs on demand and is off (the host's nb-power
       # says which, docs/adr/0013-on-demand.md): that one is down on purpose.
       - alert: TargetDown
@@ -40,7 +40,7 @@ groups:
         for: 15m
         labels: {severity: page}
         annotations:
-          summary: "{{ $labels.instance }} {{ $labels.mountpoint }} has under 10% free"
+          summary: "{{ $labels.instance }} {{ $labels.mountpoint }} has under 10% free; ask the agent what fills it before deleting anything"
       # A writable share with under 1 GiB left, as the files guest sees it
       # (the host reports the same disk; one alert is enough).
       - alert: KeptDiskFull
@@ -95,7 +95,7 @@ groups:
         for: 10m
         labels: {severity: page}
         annotations:
-          summary: "TLS handshake with {{ $labels.instance }} fails"
+          summary: "TLS handshake with {{ $labels.instance }} fails; its service may be down or its certificate wrong, so ask the agent to look"
   # Updates (ansible/roles/updates): node_exporter's apt collector and
   # nb-update-metrics on the host and every Linux guest.
   - name: nullbill-updates
@@ -115,13 +115,13 @@ groups:
         for: 1h
         labels: {severity: page}
         annotations:
-          summary: "{{ $labels.instance }} has had no successful unattended upgrade for three days"
+          summary: "{{ $labels.instance }} has had no successful unattended upgrade for three days; ask the agent to read /var/log/unattended-upgrades there"
       - alert: UnattendedUpgradesOff
         expr: nb_unattended_upgrade_enabled == 0
         for: 1h
         labels: {severity: page}
         annotations:
-          summary: "{{ $labels.instance }} has unattended upgrades switched off"
+          summary: "{{ $labels.instance }} has unattended upgrades switched off; ask the agent to switch them on again"
       - alert: PackageListsStale
         expr: >-
           time() - apt_package_cache_timestamp_seconds > 2 * 86400
@@ -135,7 +135,7 @@ groups:
         for: 3d
         labels: {severity: warn}
         annotations:
-          summary: "{{ $labels.instance }} needs a reboot to finish installing updates"
+          summary: "{{ $labels.instance }} needs a reboot to finish installing updates; restart it when nothing is using it"
       # Updates that do not install by themselves: Proxmox packages and
       # point releases on the host, pinned Grafana or smallstep versions.
       - alert: UpdatesWaiting
@@ -143,7 +143,7 @@ groups:
         for: 14d
         labels: {severity: warn}
         annotations:
-          summary: "{{ $labels.instance }} has had updates waiting for two weeks that NullBill does not install by itself"
+          summary: "{{ $labels.instance }} has had updates waiting for two weeks that NullBill does not install by itself; ask the agent which they are"
   # Backups: nb-backup-metrics on the host, hourly (ansible/roles/host_baseline).
   # A failed nightly job shows as the guest's newest backup growing old.
   - name: nullbill-backups
@@ -162,7 +162,7 @@ groups:
         for: 1h
         labels: {severity: page}
         annotations:
-          summary: "{{ $labels.guest }} ({{ $labels.vmid }}) has no encrypted backup from the last 26 hours"
+          summary: "{{ $labels.guest }} ({{ $labels.vmid }}) has no encrypted backup from the last 26 hours; the page's Backups page lists the guests without one, and the agent can read why the nightly backup left it out"
       - alert: BackupStatusUnknown
         expr: nb_backup_status_ok == 0
         for: 2h
@@ -189,7 +189,7 @@ groups:
         for: 30m
         labels: {severity: page}
         annotations:
-          summary: "{{ $labels.instance }} has not refreshed its backup metrics for three hours (nb-backup-metrics.timer)"
+          summary: "{{ $labels.instance }} has not refreshed its backup metrics for three hours (nb-backup-metrics.timer); the backup alerts see nothing until it does, so ask the agent to look"
   # On demand (docs/adr/0013-on-demand.md): the host's nb-power, every
   # minute, for the workloads that are installed and run only when wanted.
   - name: nullbill-on-demand

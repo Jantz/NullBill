@@ -14,6 +14,7 @@ not hold.
 """
 
 import hashlib
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -43,6 +44,15 @@ def _git(root: Path, *args: str, timeout: float = 30) -> str | None:
 def head(root: Path) -> str | None:
     """The commit that is checked out."""
     return _git(root, "rev-parse", "--verify", "--quiet", "HEAD^{commit}") if (root / ".git").exists() else None
+
+
+def docs(root: Path, commit: str) -> str | None:
+    """Where a browser reads this commit's files, so that the page can link
+    a runbook it names: GitHub's view of the checkout's origin at the commit
+    that runs. None for an origin that is not on GitHub."""
+    url = _git(root, "remote", "get-url", "origin") or ""
+    found = re.fullmatch(r"(?:https://github\.com/|git@github\.com:)([\w.-]+)/([\w.-]+?)(?:\.git)?/?", url)
+    return f"https://github.com/{found[1]}/{found[2]}/blob/{commit}/" if found else None
 
 
 def holds(root: Path, commit: str) -> bool:
