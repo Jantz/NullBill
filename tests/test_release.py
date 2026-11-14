@@ -37,6 +37,8 @@ class Server:
         self.breaks = set()  # guests whose upgrade fails
         self.refuses = set()  # guests whose own measuring finds too little room
         self.silent = set()  # guests that do not answer after their restart
+        self.racy = set()  # guests whose upgrade ends while apply looks
+        self.silent_end = set()  # guests whose upgrade ends without a last word
         self.left = {}  # guest: the last line of an upgrade's result file found in it
         self.asked = []  # guests asked which Debian they run
         self.measured = []  # guests whose room was measured
@@ -73,6 +75,8 @@ class Server:
             self.did("upgrade", vmid)
             if vmid in self.refuses:
                 self.results[vmid] = ["measuring the room for trixie\nrefused: the upgrade needs about 900 MiB free\nfailed\n"]
+            elif vmid in self.silent_end:
+                self.results[vmid] = ["installing trixie\nactive\n", "installing trixie\ninactive\n"]
             elif vmid in self.breaks:
                 self.results[vmid] = [
                     "installing trixie\nactive\n",
@@ -82,9 +86,16 @@ class Server:
                 self.results[vmid] = ["downloading trixie\nactive\n", "installing trixie\nactive\n", "done trixie\ninactive\n"]
                 self.runs[vmid] = "trixie"
             return 0, ""
-        if command.startswith(f"cat {release.RESULT}"):
+        if command.startswith(f"systemctl is-active {release.UNIT}"):
+            assert command.endswith(f"cat {release.RESULT} 2>/dev/null")
             left = self.results[vmid]
-            return 0, left.pop(0) if len(left) > 1 else left[0]
+            *result, unit = (left.pop(0) if len(left) > 1 else left[0]).splitlines()
+            if vmid in self.racy and unit != "active":
+                # The unit ends while it is asked: active, then the file it left.
+                self.racy.discard(vmid)
+                left.insert(0, "\n".join([*result, unit]))
+                return 0, "active\ninstalling trixie\n"
+            return 0, "\n".join([unit, *result]) + "\n"
         if command.startswith("tail -n 25"):
             return 0, "Setting up libc6 ...\ndpkg: error processing package libc6\n"
         raise AssertionError(command)
@@ -345,9 +356,11 @@ def test_one_stage_alone_is_refused_while_guests_from_before_wait(server):
     apply.run_apply(ctx, [("games", lambda c: None)], only="games")
 
 
-def test_nullbills_own_container_is_upgraded_last_by_a_unit_of_its_own(server):
+def test_nullbills_own_container_is_upgraded_last_by_a_unit_of_its_own(server, monkeypatch):
     ctx, host = server()
     own = ctx.bare["guests"]["nullbill"]["vmid"]
+    commit = ["a" * 40]
+    monkeypatch.setattr(apply.version, "head", lambda root: commit[0])
     apply.controller_release(ctx)
     assert host.done == [] and len(host.local_calls) == 1
 
@@ -357,41 +370,45 @@ def test_nullbills_own_container_is_upgraded_last_by_a_unit_of_its_own(server):
 
     (ctx.home / "install.json").write_text(json.dumps({"host": "192.0.2.10", "vmid": own}))
     apply.controller_release(ctx)
-    assert host.done == [("snapshot", "nullbill")]
+    # The tool snapshots once this run has ended, so the snapshot holds its
+    # result; apply touches nothing on the host itself.
+    assert host.done == [] and host.memory == []
+    tried = ctx.home / apply.CONTROLLER_TRIED
     unit = host.local_calls[-1]
     assert unit[:5] == ["systemd-run", "--quiet", "--collect", "--unit", "nullbill-release"]
-    assert unit[5].endswith("tools/upgrade-controller") and unit[6:] == ["bookworm", "trixie", TARGET, str(own), SNAP, "768"]
-    # Lent after the snapshot; the tool gives it back before the restart.
-    assert host.memory == [("nullbill", release.MEMORY_MIB, ["snapshot"])]
-    assert "This page is away for about ten minutes" in ctx.log[-1]
+    assert unit[5].endswith("tools/upgrade-controller")
+    assert unit[6:] == ["bookworm", "trixie", TARGET, str(own), SNAP, str(os.getpid()), str(tried)]
+    assert "moves to Debian 13 once this run has ended" in ctx.log[-1]
 
     # The try is written down before the snapshot, so a container the host
-    # put back holds it: no second try by itself.
-    tried = ctx.home / apply.CONTROLLER_TRIED
-    assert json.loads(tried.read_text())["snapshot"] == SNAP
+    # put back holds it: no second try by itself with the same NullBill.
+    assert json.loads(tried.read_text())["snapshot"] == SNAP and json.loads(tried.read_text())["commit"] == commit[0]
     before = len(host.local_calls)
-    host.done.clear()
     apply.controller_release(ctx)
-    assert host.done == [] and [c for c in host.local_calls[before:] if c[0] == "systemd-run"] == []
+    assert [c for c in host.local_calls[before:] if c[0] == "systemd-run"] == []
     assert "its upgrade failed before and the host put it back" in ctx.log[-1] and "controller-upgrade.log" in ctx.log[-1]
+    # Once NullBill was updated, once more: the update may be the fix.
+    commit[0] = "b" * 40
+    apply.controller_release(ctx)
+    assert "tried once more with this one" in ctx.log[-2] and host.local_calls[-1][5].endswith("tools/upgrade-controller")
+    assert json.loads(tried.read_text())["commit"] == commit[0]
+    # A note from before notes kept the commit counts as an earlier NullBill.
+    tried.write_text(json.dumps({"snapshot": SNAP, "vmid": own, "at": time.time()}))
+    before = len(host.local_calls)
+    apply.controller_release(ctx)
+    assert [c for c in host.local_calls[before:] if c[0] == "systemd-run" and c[-1] != "room"]
 
-    # On the new release the snapshot goes after its week, as the guests' do.
+    # On the new release the snapshot the tool made goes after its week, as the guests' do.
     host.controller = "trixie"
+    host.snapshots[own].add(SNAP)
     apply.controller_release(ctx)
     assert host.done == [] and tried.exists()
     tried.write_text(json.dumps(json.loads(tried.read_text()) | {"at": time.time() - release.KEEP_COPY_S - 1}))
     apply.controller_release(ctx)
     assert host.done == [("delsnapshot", "nullbill")] and not tried.exists()
 
-    host.controller = "bookworm"
-    host.no_snapshot = {own}
-    before = len(host.local_calls)
-    apply.controller_release(ctx)
-    assert "stays on Debian bookworm: no snapshot could be made" in ctx.log[-1] and not tried.exists()
-    assert [c for c in host.local_calls[before:] if c[0] == "systemd-run" and c[-1] != "room"] == []
-
     # Too little room in the container: nothing is tried, and nothing written down to stop a later try.
-    host.no_snapshot = set()
+    host.controller = "bookworm"
     host.own_room = "room 2400 800 300\n"
     host.done.clear()
     apply.controller_release(ctx)
@@ -496,3 +513,23 @@ def test_a_small_container_has_more_memory_for_its_upgrade_and_its_own_after(ser
     assert said and f"not its own {guests['egress-proxy']['memory_mib']}" in said[0] and "the next setup run sets it" in said[0]
     # A VM's memory is left alone.
     assert "router" in upgraded and "router" not in {name for name, *_ in host.memory}
+
+
+def test_an_upgrade_that_ends_while_apply_looks_is_read_as_it_ended(server):
+    """The first real run: the download client's upgrade wrote `done` and
+    ended between apply's two reads, and read as ended without a result."""
+    ctx, host = server()
+    qbt = ctx.bare["guests"]["vpn"]["vmid"]
+    host.racy.add(qbt)
+    apply.stage_release(ctx)
+    assert release.read(ctx.home)["vpn"]["release"] == "trixie" and not host.racy
+    assert not [line for line in ctx.log if "without a result" in line]
+    # A unit that ended and left no last word is still a failure, put back.
+    (ctx.home / release.RECORD).unlink()
+    ctx, host = server()
+    router = ctx.bare["guests"]["router"]["vmid"]
+    host.silent_end = {router}
+    with pytest.raises(ApplyError) as stopped:
+        apply.stage_release(ctx)
+    assert "router: the upgrade to Debian 13 failed: the upgrade ended without a result (at: installing trixie)" in str(stopped.value)
+    assert [what for what, name, *_ in host.done if name == "router"] == ["snapshot", "upgrade", "rollback"]

@@ -47,6 +47,7 @@ from nullbill import (
     release,
     tailscale,
     torrents,
+    version,
 )
 from nullbill.artifacts import write_build
 from nullbill.errors import NullBillError
@@ -1600,10 +1601,14 @@ def upgrade_copied(ctx: Context, name: str, copy: dict) -> None:
     while state == "running":
         time.sleep(release.POLL_S)
         # No answer while systemd or the guest's network restarts under it.
-        rc, out = in_guest(ctx, name, f"cat {release.RESULT} 2>/dev/null; systemctl is-active {release.UNIT} || true", timeout=30)
+        # Whether the unit runs is asked before the file is read: read the
+        # other way round, an upgrade that wrote `done` and ended between the
+        # two reads looked like one that ended without a result, and the
+        # download client's finished upgrade stopped the first real run.
+        rc, out = in_guest(ctx, name, f"systemctl is-active {release.UNIT} || true; cat {release.RESULT} 2>/dev/null", timeout=30)
         lines = out.splitlines() if rc == 0 else []
-        state, said = release.result("\n".join(lines[:-1])) if lines else ("running", last)
-        if state == "running" and lines and lines[-1].strip() in ("inactive", "failed"):
+        state, said = release.result("\n".join(lines[1:])) if lines else ("running", last)
+        if state == "running" and lines and lines[0].strip() in ("inactive", "failed"):
             state, said = "failed", f"the upgrade ended without a result (at: {said or 'its start'})"
         if state == "running" and said != last:
             last = said
@@ -3355,8 +3360,12 @@ def drop_controller_copy(ctx: Context) -> None:
 def controller_release(ctx: Context) -> None:
     """After a full run that ended well: when the container NullBill itself
     runs in (install.sh's, named in install.json) is still on the release
-    before, snapshot it on the host and start tools/upgrade-controller as a
-    unit of its own. The page is away until the container has restarted."""
+    before, start tools/upgrade-controller as a unit of its own. The tool
+    waits for this run to end and its job to write down how it ended, then
+    has the host snapshot the container, so a container put back holds the
+    run's result (on the first real run the snapshot was taken before, and
+    a container put back held a run that never ended). The page is away
+    until the container has restarted."""
     rel = ctx.model["images"]["release"]
     rc, out = ctx.reach.local(["sh", "-c", CODENAME], ctx.home, {}, capture=True)
     if rc == 0 and out.strip() == rel["codename"]:
@@ -3370,14 +3379,23 @@ def controller_release(ctx: Context) -> None:
         return
     snap = release.snapshot(rel)
     tried = ctx.home / CONTROLLER_TRIED
+    commit = version.head(REPO_ROOT) or ""
     if tried.exists():
         # Written before the snapshot, so a container put back from it holds
-        # it: the last try failed. Not again by itself, night after night.
-        ctx.say(
-            f"release: NullBill's own container stays on Debian {rel['from']}: its upgrade failed before and the host put it back. "
-            "The log of that try is /root/nullbill/controller-upgrade.log on the host; docs/runbooks/debian-upgrade.md says how to retry"
-        )
-        return
+        # it: the last try failed. Not again by itself with the same code;
+        # once NullBill was updated, once more, since the update may be the fix.
+        try:
+            before = str(json.loads(tried.read_text()).get("commit") or "")
+        except (OSError, ValueError, AttributeError):
+            before = ""
+        if before == commit:
+            ctx.say(
+                f"release: NullBill's own container stays on Debian {rel['from']}: its upgrade failed before and the host put it back. "
+                "The log of that try is /root/nullbill/controller-upgrade.log on the host; "
+                "docs/runbooks/debian-upgrade.md says how to retry"
+            )
+            return
+        ctx.say("release: NullBill's own upgrade failed before, with an earlier version of NullBill; it is tried once more with this one")
     # Room first, as for the guests: measured by a unit of its own, since
     # the page's own may not write where apt does. No answer is no refusal:
     # the upgrade measures again before it changes anything.
@@ -3390,34 +3408,17 @@ def controller_release(ctx: Context) -> None:
             f"on its disk and {found[1]} MiB are free. The next full setup run looks again"
         )
         return
-    tried.write_text(json.dumps({"snapshot": snap, "vmid": vmid, "at": time.time()}) + "\n")
-    ctx.reach.host(f"pct listsnapshot {vmid} | grep -qw {snap} && pct delsnapshot {vmid} {snap}", timeout=900)
-    rc, out, err = ctx.reach.host(f"pct snapshot {vmid} {snap} --description 'NullBill, before the Debian upgrade'", timeout=900)
-    if rc != 0:
-        tried.unlink(missing_ok=True)
-    if rc != 0:
-        why = (err.strip() or out.strip() or f"exit {rc}").splitlines()[-1][:200]
-        ctx.say(f"release: NullBill's own container stays on Debian {rel['from']}: no snapshot could be made before its upgrade ({why})")
-        return
-    # Memory for the upgrade, as for the guests, after the snapshot. The
-    # tool sets the container's own again before its restart; no answer
-    # about what it has leaves it as it is.
-    rc, out, err = ctx.reach.host(f"pct config {vmid}", timeout=60)
-    found = re.search(r"^memory: (\d+)$", out, re.M) if rc == 0 else None
-    own = int(found.group(1)) if found else 0
-    lent = 0 < own < release.MEMORY_MIB and ctx.reach.host(f"pct set {vmid} --memory {release.MEMORY_MIB}", timeout=120)[0] == 0
+    tried.write_text(json.dumps({"snapshot": snap, "vmid": vmid, "at": time.time(), "commit": commit}) + "\n")
     argv = ["systemd-run", "--quiet", "--collect", "--unit", CONTROLLER_UNIT, str(REPO_ROOT / "tools/upgrade-controller")]
-    argv += [rel["from"], rel["codename"], ctx.target, str(vmid), snap, *([str(own)] if lent else [])]
+    argv += [rel["from"], rel["codename"], ctx.target, str(vmid), snap, str(os.getpid()), str(tried)]
     rc, out = ctx.reach.local(argv, ctx.home, {}, capture=True)
     if rc != 0:
-        if lent:
-            ctx.reach.host(f"pct set {vmid} --memory {own}", timeout=120)
         tried.unlink(missing_ok=True)
         ctx.say(f"release: NullBill's own container stays on Debian {rel['from']}: its upgrade did not start ({out.strip()[:200]})")
         return
     ctx.say(
-        f"release: NullBill's own container moves to Debian {rel['version']} now. This page is away for about ten minutes "
-        "and comes back by itself; if the upgrade fails, the host puts the container back from its snapshot"
+        f"release: NullBill's own container moves to Debian {rel['version']} once this run has ended. This page is away for about "
+        "ten minutes and comes back by itself; if the upgrade fails, the host puts the container back from its snapshot"
     )
 
 

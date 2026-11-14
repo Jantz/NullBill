@@ -39,13 +39,41 @@ if [ "$only" = room ]; then
   trap 'echo "failed: $(tail -n 1 /var/log/nb-release-upgrade.log | cut -c1-300)" >&3' ERR
 else
   : >"$result"
-  trap 'say "failed: $(tail -n 1 /var/log/nb-release-upgrade.log | cut -c1-300)"' ERR
+  trap 'say "failed: $(tail -n 1 /var/log/nb-release-upgrade.log | cut -c1-300)"; apt_on' ERR
 fi
 
 export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 APT_LISTCHANGES_FRONTEND=none
 apt() {
   apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
     -o DPkg::Lock::Timeout=900 -o Acquire::Retries=5 "$@"
+}
+# Debian's own apt runs (apt-daily and unattended-upgrades) hold apt's locks
+# for minutes, and the new apt's package starts its timers again while this
+# runs: masked until this ends or the guest restarts. NullBill's own
+# container failed on its last step on the first real run, "Could not get
+# lock /var/lib/apt/lists/lock", held by apt-daily's apt-get.
+APT_RUNS="apt-daily.timer apt-daily-upgrade.timer apt-daily.service apt-daily-upgrade.service unattended-upgrades.service"
+apt_off() {
+  [ -d /run/systemd/system ] || return 0
+  # shellcheck disable=SC2086 # a list of units
+  systemctl stop $APT_RUNS 2>/dev/null || true
+  # shellcheck disable=SC2086
+  systemctl mask --runtime $APT_RUNS >/dev/null 2>&1 || true
+}
+apt_on() {
+  [ -d /run/systemd/system ] || return 0
+  # shellcheck disable=SC2086
+  systemctl unmask --runtime $APT_RUNS >/dev/null 2>&1 || true
+}
+# apt's cache emptied, waiting for another apt that holds its locks; one
+# that still holds them after five minutes leaves the cache as it is.
+clean() {
+  local _
+  for _ in $(seq 30); do
+    apt-get clean && return 0
+    sleep 10
+  done
+  echo "apt's cache was left as it is: another apt held its lock"
 }
 # shellcheck disable=SC1091
 now() { (. /etc/os-release && echo "$VERSION_CODENAME"); }
@@ -147,17 +175,17 @@ if [ "$(now)" = "$from" ]; then
     say "refused: the upgrade needs about $need MiB free on this guest's disk, and $free MiB are free"
     exit 1
   fi
+fi
+apt_off
+if [ "$(now)" = "$from" ]; then
   say "updating $from"
-  if [ -d /run/systemd/system ]; then
-    systemctl stop apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service 2>/dev/null || true
-  fi
   dpkg --configure -a
   apt update
   hold_others
   apt -f install
   apt dist-upgrade
   # Room for the next release's packages on a small disk.
-  apt-get clean
+  clean
   say "downloading $to"
   for file in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
     [ -f "$file" ] || continue
@@ -203,6 +231,7 @@ if command -v pg_lsclusters >/dev/null; then
 fi
 
 apt autoremove --purge
-apt-get clean
+clean
 let_go
+apt_on
 say "done $(now)"

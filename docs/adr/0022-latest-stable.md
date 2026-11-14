@@ -125,10 +125,12 @@ Debian in the guests is such a step, moved by hand in the table
 - PostgreSQL 15's cluster is moved to 17 by Debian's `pg_upgradecluster`
   in the same step; the old cluster stays on disk, stopped.
 - The container NullBill itself runs in goes last, after the run ended
-  well, as a unit of its own (`tools/upgrade-controller`); the page is
-  away for about ten minutes. A failure has the host roll it back, with
-  the log kept on the host; it is not tried again by itself
-  (`controller-release.json`), and its snapshot goes after a week too.
+  well, as a unit of its own (`tools/upgrade-controller`), which waits
+  for the run to end and write down how it ended before the host takes
+  the snapshot; the page is away for about ten minutes. A failure has the
+  host roll it back, with the log kept on the host; it is tried again by
+  itself only with a newer NullBill (`controller-release.json` holds the
+  commit), and its snapshot goes after a week too.
 - A CI pool's image is made again from the new image by the ci stage.
 - Services of the owner's own stay on the Debian they were made with:
   NullBill does not know their programs.
