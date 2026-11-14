@@ -565,6 +565,8 @@ def _and(names: list[str]) -> str:
 
 
 PARTS_NAMED = 3
+# Inputs whose name in words says too little.
+INPUT_WORDS = {"heap mib": "Java's share of its memory"}
 
 
 def _input_words(playbook_roles: list[str], names: list[str]) -> list[str]:
@@ -582,6 +584,7 @@ def _input_words(playbook_roles: list[str], names: list[str]) -> list[str]:
                 name = name[len(role) + 1 :]
                 break
         words = name.replace("_", " ")
+        words = INPUT_WORDS.get(words, words)
         if inner:
             more = f" and {len(inner) - PARTS_NAMED} more" if len(inner) > PARTS_NAMED else ""
             words += f" ({', '.join(sorted(inner)[:PARTS_NAMED])}{more})"
@@ -667,6 +670,14 @@ class Baseline:
 
 ALL_AGAIN = "The last run's checks failed, so this run goes through every step again."
 IN_PLACE = "OpenTofu changes it in place; Proxmox may restart it for that."
+# New cores or memory. The pinned bpg/proxmox provider restarts a running
+# container for either and a running VM for both, short of memory hotplug,
+# which NullBill does not turn on; a CI pool's image is a template that
+# never runs, and its clones are made from it per job.
+RESIZED = "OpenTofu gives it the new size in place; if it is running, it may restart for that."
+RESIZED_SHORT = "May restart for its new size"
+POOL_RESIZED = "Each job's VM gets the new size from the next job on; jobs that run keep theirs."
+POOL_RESIZED_SHORT = "New size from the next job on"
 CREATED = "New: OpenTofu creates it, and every part of its setup runs for the first time."
 UNKNOWN = "unknown"
 
@@ -719,11 +730,16 @@ def _row(name: str | None, guest: dict | None, lines: list[dict], stuck: str | N
     change = (guest or {}).get("change", "keep")
     again = [line for line in lines if line["does"] == "again"]
     why: list[str] = list((guest or {}).get("detail") or []) if change in ("delete", "change") else []
+    pool = (guest or {}).get("kind") == "vm-pool"
+    # A new size is the run's first effect on the guest, whatever runs in it after.
+    resized = bool((guest or {}).get("resized"))
     if change == "delete":
         what = "delete"
     elif change == "create":
         what, lines, again = "create", [], []
         why.append(CREATED)
+    elif resized:
+        what = "change"
     elif stuck:
         what, again = UNKNOWN, []
         why.append(f"What its setup runs with could not be worked out without the server ({stuck}).")
@@ -735,13 +751,15 @@ def _row(name: str | None, guest: dict | None, lines: list[dict], stuck: str | N
         what = UNKNOWN
     else:
         what = "alone"
+    if change == "change":
+        why.append((POOL_RESIZED if pool else RESIZED) if resized else IN_PLACE)
     for line in again:
         why += [reason for reason in line["why"] if reason not in why]
-    if change == "change":
-        why.append(IN_PLACE)
     effect = Effects(_unique(r for line in again for r in line["effect"].restarts), all(line["effect"].followed for line in again))
     notes = [line["note"] for line in again if line.get("note")]
     effect_text, interrupts = in_short(what, why, effect, [line["short"] for line in again if line.get("short")])
+    if resized:
+        effect_text, interrupts = (POOL_RESIZED_SHORT, False) if pool else (RESIZED_SHORT, True)
     timed = [line["last"] for line in again if line["last"] and line["last"].get("took_s") is not None]
     last = None
     if timed:
@@ -758,7 +776,8 @@ def _row(name: str | None, guest: dict | None, lines: list[dict], stuck: str | N
         "interrupts": interrupts,
         "why": why,
         "restarts": [{"what": r.what, "how": r.how} for r in effect.restarts],
-        "restart_note": " ".join(notes) or restart_note(effect, bool(again)),
+        # Said already by a new size, which may restart the whole guest.
+        "restart_note": " ".join(notes) or ("" if resized and not effect.restarts else restart_note(effect, bool(again))),
         "last": last,
         "on_demand": on_demand,
         "steps": [{k: line[k] for k in ("playbook", "stage", "does")} for line in lines if change != "delete"],

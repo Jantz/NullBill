@@ -135,6 +135,26 @@ def test_a_changed_choice_sets_up_again_only_what_takes_it(ctx, monkeypatch, tai
     assert by_name["factorio"]["what"] == "alone" and by_name["factorio"]["restarts"] == []
 
 
+def test_a_new_size_says_the_guest_may_restart_and_a_pools_next_jobs_get_it(ctx, monkeypatch, tailnet, facts):
+    c = built(ctx, monkeypatch, "games")
+    config = games_config()
+    # Forgejo more cores, Minecraft more memory (Java's share follows), each CI job's VM more memory.
+    config["overrides"] = {"forgejo": {"cores": 2}, "minecraft": {"memory_mib": 4096}, "linux-runner": {"memory_mib": 3072}}
+    new, guests = chosen(c, config, facts)
+    by_name = {m["name"]: m for m in preview.machines(new, base(c), guests)["machines"]}
+    forgejo, minecraft, runner = by_name["forgejo"], by_name["minecraft"], by_name["linux-runner"]
+    assert forgejo["what"] == "change" and forgejo["why"] == ["cores 1 to 2", preview.RESIZED]
+    assert (forgejo["effect"], forgejo["interrupts"], forgejo["restart_note"]) == (preview.RESIZED_SHORT, True, "")
+    # Its server is set up again too (Java's share), and the size still comes first.
+    assert minecraft["what"] == "change" and minecraft["effect"] == preview.RESIZED_SHORT and minecraft["interrupts"]
+    assert minecraft["why"] == ["memory 3.0 GiB to 4.0 GiB", preview.RESIZED, "Changed: Java's share of its memory."]
+    assert minecraft["restarts"] == [{"what": "minecraft", "how": "restart"}]
+    # A pool's image never runs: the next jobs get the new size, and nothing is interrupted.
+    assert runner["what"] == "change" and runner["why"] == ["memory 2.0 GiB to 3.0 GiB", preview.POOL_RESIZED]
+    assert (runner["effect"], runner["interrupts"]) == (preview.POOL_RESIZED_SHORT, False)
+    assert by_name["factorio"]["what"] == "alone"
+
+
 def test_a_new_and_a_dropped_workload_are_created_and_deleted_and_their_neighbours_set_up_again(ctx, monkeypatch, tailnet, facts):
     c = built(ctx, monkeypatch, "games")
     config = games_config()
