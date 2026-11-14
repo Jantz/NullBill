@@ -113,9 +113,11 @@ overrides:
   setup run: switching it later loads the existing map with other mods
   than it was made with.
 - **Memory.** The defaults suit a small world and a few players. Raise
-  **Memory** in the server's settings (`overrides.<name>.memory_mib`) when
-  the server lags or its log says it ran out of memory; the meter above
-  the list shows at once whether that fits.
+  the memory under the server's **Size** (`overrides.<name>.memory_mib`),
+  as for any guest, when the server lags or its log says it ran out of
+  memory; the meter above the list shows at once whether that fits, and
+  Minecraft's Java gets all of it but 1 GiB. Setup may restart the server
+  for a new size.
 - **Only while someone plays.** Under **When they run**, set a game to
   **On demand** and it holds no memory while off. You start it on the
   **Services** page; it stops by itself once nobody has played for 30

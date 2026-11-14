@@ -152,6 +152,23 @@ What is off holds no memory, so more fits on the server than runs at once.
 Choose it under **Setup**, **What to run**, **When they run**;
 [on-demand.md](on-demand.md) has each step.
 
+## Give a server more cores or memory
+
+Under **Setup**, **What to run**, each ticked row has **Size** beside
+**Details**: open it and give each of the row's guests its processor cores
+and its memory in GiB. **Core servers**, below the list, has the same for
+NullBill's own guests (router, VPN, Forgejo and the rest). An empty field
+is the least the guest takes, which NullBill gives it, and is not written
+down; a CI pool's size is that of each job's VM. The memory meter follows
+as you type. Saving refuses more cores than the server has threads, and
+more memory than fits beside the rest, saying how much fits. They are
+`overrides.<name>.cores` and `.memory_mib` in `config.yaml`.
+
+Under **Review and run**, a guest with a new size reads **May restart for
+its new size**: OpenTofu sets it in place, and Proxmox needs a restart of a
+running guest for new cores or memory. A CI pool's next jobs get the new
+size and nothing is interrupted.
+
 ## Run a program NullBill has no support for
 
 Under **Setup**, **What to run**, **Your own services**, press **Ask the
