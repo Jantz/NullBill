@@ -43,6 +43,9 @@ REFUSED = "refused: "
 # archives. So much room, times what a guest downloads, its snapshot may
 # take on the guests' storage.
 SNAPSHOT_TIMES = 5
+# What a container has for its upgrade when it has less: dpkg alone held
+# 200 MiB reading trixie's packages, and apt and package scripts run beside.
+MEMORY_MIB = 2048
 
 
 def room(text: str) -> tuple[int, int, int] | None:

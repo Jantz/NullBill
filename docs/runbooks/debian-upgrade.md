@@ -103,6 +103,11 @@ again by itself. To try again, delete
 `/var/lib/nullbill/controller-release.json` in the NullBill container and
 run setup.
 
+A container with less than 2048 MiB of memory has that much while it is
+upgraded, and its own again after: the upgrade needs more than a small
+guest has. You change nothing for this. A line in the run says so, and
+if the memory could not be set back, the next setup run sets it.
+
 "Too little room to upgrade the guests": nothing was changed. For a guest,
 make its disk larger in Proxmox (the guest, **Resources**, the disk,
 **Volume Action**, **Resize**) or delete what it does not need, then run

@@ -47,6 +47,9 @@ class Server:
         self.done = []  # (what, guest name, more)
         self.local_calls = []
         self.controller = "trixie"
+        self.own_memory = 768  # MiB of the NullBill container
+        self.memory = []  # (guest, MiB set, what was done to it before)
+        self.stuck_memory = set()  # guests whose memory cannot be set back
 
     def did(self, what, vmid, *more):
         self.done.append((what, self.names[int(vmid)], *more))
@@ -127,6 +130,15 @@ class Server:
             self.snapshots[vmid].add(argv[3])
             self.did("snapshot", vmid)
             return 0, "", ""
+        if verb == "set":
+            assert tool == "pct" and argv[3] == "--memory" and len(argv) == 5, command
+            if vmid in self.stuck_memory and int(argv[4]) != release.MEMORY_MIB:
+                return 255, "", "can't lock file '/run/lock/lxc/pve-config.lock'\n"
+            # With what was done before it: lent after the copy, given back last.
+            self.memory.append((self.names[vmid], int(argv[4]), [what for what, n, *_ in self.done if n == self.names[vmid]]))
+            return 0, "", ""
+        if verb == "config":
+            return 0, f"cores: 1\nmemory: {self.own_memory}\nswap: 512\n", ""
         if verb == "reboot":
             self.did("reboot", vmid)
             return 0, "", ""
@@ -348,7 +360,9 @@ def test_nullbills_own_container_is_upgraded_last_by_a_unit_of_its_own(server):
     assert host.done == [("snapshot", "nullbill")]
     unit = host.local_calls[-1]
     assert unit[:5] == ["systemd-run", "--quiet", "--collect", "--unit", "nullbill-release"]
-    assert unit[5].endswith("tools/upgrade-controller") and unit[6:] == ["bookworm", "trixie", TARGET, str(own), SNAP]
+    assert unit[5].endswith("tools/upgrade-controller") and unit[6:] == ["bookworm", "trixie", TARGET, str(own), SNAP, "768"]
+    # Lent after the snapshot; the tool gives it back before the restart.
+    assert host.memory == [("nullbill", release.MEMORY_MIB, ["snapshot"])]
     assert "This page is away for about ten minutes" in ctx.log[-1]
 
     # The try is written down before the snapshot, so a container the host
@@ -455,3 +469,30 @@ def test_the_script_names_what_apply_reads_and_the_catalog_names_the_release():
     model = build_model(fixture_config("small"))
     assert model["images"]["release"] == {"version": "13", "codename": "trixie", "from": "bookworm"}
     assert "trixie" in model["images"]["debian-cloud"]["url"] and "debian-13-" in model["images"]["debian-lxc"]["url"]
+
+
+def test_a_small_container_has_more_memory_for_its_upgrade_and_its_own_after(server):
+    """The first real run: the kernel ended dpkg in the vpn guest's 256 MiB."""
+    ctx, host = server()
+    guests = ctx.bare["guests"]
+    small = {n for n, g in guests.items() if g["kind"] == "lxc" and g["memory_mib"] < release.MEMORY_MIB and g["vmid"] in host.kinds}
+    assert "vpn" in small and guests["vpn"]["memory_mib"] < 1024
+    host.breaks.add(guests["vpn"]["vmid"])
+    host.stuck_memory.add(guests["egress-proxy"]["vmid"])
+    with pytest.raises(ApplyError) as stopped:
+        apply.stage_release(ctx)
+    assert "vpn: the upgrade to Debian 13 failed" in str(stopped.value)
+    upgraded = [name for what, name, *_ in host.done if what == "upgrade"]
+    lent = [(name, before) for name, mib, before in host.memory if mib == release.MEMORY_MIB]
+    # After the copy and before the unit starts, for every small container tried.
+    assert lent == [(name, ["snapshot"]) for name in upgraded if name in small]
+    back = {name: (mib, before) for name, mib, before in host.memory if mib != release.MEMORY_MIB}
+    # Its own again, last: after the restart, and after a guest was put back.
+    assert back["vpn"] == (guests["vpn"]["memory_mib"], ["snapshot", "upgrade", "rollback"])
+    assert set(back) == {name for name, _ in lent} - {"egress-proxy"}
+    assert all(guests[name]["memory_mib"] == mib and before[-1] in ("reboot", "rollback") for name, (mib, before) in back.items())
+    # One that cannot be set back is said, and the run goes on to the next.
+    said = [line for line in ctx.log if "egress-proxy still has" in line]
+    assert said and f"not its own {guests['egress-proxy']['memory_mib']}" in said[0] and "the next setup run sets it" in said[0]
+    # A VM's memory is left alone.
+    assert "router" in upgraded and "router" not in {name for name, *_ in host.memory}

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tools/upgrade-controller FROM TO [TARGET VMID SNAPSHOT]: the NullBill
+# tools/upgrade-controller FROM TO [TARGET VMID SNAPSHOT [MEMORY]]: the NullBill
 # container itself from Debian FROM to TO (docs/adr/0022-latest-stable.md).
 # apply starts it as a unit of its own when a full setup run has ended well
 # and every guest runs TO: the page's Python is replaced under it, so
@@ -7,10 +7,12 @@
 # the script the guests got, makes the Python environment again, and
 # restarts the container. With TARGET (the PVE host, as apply reaches it),
 # a failure has the host put the container back from SNAPSHOT, which apply
-# made before it started this.
+# made before it started this. With MEMORY (MiB), apply lent the container
+# more for the upgrade, and the host sets that again before the restart; a
+# container put back has it from its snapshot.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-from=$1 to=$2 target=${3:-} vmid=${4:-} snapshot=${5:-}
+from=$1 to=$2 target=${3:-} vmid=${4:-} snapshot=${5:-} memory=${6:-}
 
 back() {
   echo "upgrade-controller: failed; the log is /var/log/nb-release-upgrade.log"
@@ -33,6 +35,10 @@ unit=/etc/systemd/system/nullbill-web.service
 if [ -d /run/systemd/system ]; then
   cmp -s tools/nullbill-web.service "$unit" || install -m 0644 tools/nullbill-web.service "$unit"
   systemctl daemon-reload
+  if [ -n "$memory" ]; then
+    ssh -o BatchMode=yes -o ConnectTimeout=10 "$target" "pct set $vmid --memory $memory" \
+      || echo "upgrade-controller: the container keeps the memory lent for the upgrade; pct set $vmid --memory $memory on the host sets its own"
+  fi
   # Everything runs what was installed only after a restart.
   systemctl reboot
 fi

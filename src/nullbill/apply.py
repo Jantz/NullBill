@@ -1552,6 +1552,45 @@ def upgrade_release(ctx: Context, name: str) -> None:
     rel = ctx.model["images"]["release"]
     ctx.say(f"release: {name} runs Debian {rel['from']}; copying it, then upgrading it to {rel['codename']} (Debian {rel['version']})")
     copy = release_copy(ctx, name)
+    # After the copy, so a guest put back has its own memory again.
+    lent = lend_memory(ctx, name)
+    try:
+        upgrade_copied(ctx, name, copy)
+    finally:
+        if lent:
+            give_back_memory(ctx, name)
+
+
+def lend_memory(ctx: Context, name: str) -> bool:
+    """A small container gets release.MEMORY_MIB for its upgrade: dpkg alone
+    held 200 MiB while it read the new release's packages, and the kernel
+    ended it in a container of 256 MiB (the vpn guest, on the first real
+    run). A limit is no reservation, and one guest is upgraded at a time.
+    A VM's memory cannot be changed while it runs and is left alone."""
+    guest = ctx.bare["guests"][name]
+    if guest["kind"] != "lxc" or guest["memory_mib"] >= release.MEMORY_MIB:
+        return False
+    host_out(ctx, "release", f"pct set {guest['vmid']} --memory {release.MEMORY_MIB}")
+    ctx.say(f"release: {name} has {release.MEMORY_MIB} MiB of memory for its upgrade instead of {guest['memory_mib']}")
+    return True
+
+
+def give_back_memory(ctx: Context, name: str) -> None:
+    """Said and not raised: this runs while a failure may be on its way up."""
+    guest = ctx.bare["guests"][name]
+    rc, out, err = ctx.reach.host(f"pct set {guest['vmid']} --memory {guest['memory_mib']}", timeout=120)
+    if rc != 0:
+        why = (err.strip() or out.strip() or f"exit {rc}").splitlines()[-1][:200]
+        ctx.say(
+            f"release: {name} still has {release.MEMORY_MIB} MiB of memory, not its own {guest['memory_mib']} ({why}); "
+            "the next setup run sets it"
+        )
+
+
+def upgrade_copied(ctx: Context, name: str, copy: dict) -> None:
+    """The upgrade of a guest that has its copy: the unit inside it,
+    restart, look. A failure puts the guest back and stops the run."""
+    rel = ctx.model["images"]["release"]
     rc, out = in_guest(ctx, name, release.PLACE, stdin=release.script())
     if rc == 0:
         start = f"systemctl reset-failed {release.UNIT} 2>/dev/null; rm -f {release.RESULT}; "
@@ -3360,9 +3399,19 @@ def controller_release(ctx: Context) -> None:
         why = (err.strip() or out.strip() or f"exit {rc}").splitlines()[-1][:200]
         ctx.say(f"release: NullBill's own container stays on Debian {rel['from']}: no snapshot could be made before its upgrade ({why})")
         return
+    # Memory for the upgrade, as for the guests, after the snapshot. The
+    # tool sets the container's own again before its restart; no answer
+    # about what it has leaves it as it is.
+    rc, out, err = ctx.reach.host(f"pct config {vmid}", timeout=60)
+    found = re.search(r"^memory: (\d+)$", out, re.M) if rc == 0 else None
+    own = int(found.group(1)) if found else 0
+    lent = 0 < own < release.MEMORY_MIB and ctx.reach.host(f"pct set {vmid} --memory {release.MEMORY_MIB}", timeout=120)[0] == 0
     argv = ["systemd-run", "--quiet", "--collect", "--unit", CONTROLLER_UNIT, str(REPO_ROOT / "tools/upgrade-controller")]
-    rc, out = ctx.reach.local([*argv, rel["from"], rel["codename"], ctx.target, str(vmid), snap], ctx.home, {}, capture=True)
+    argv += [rel["from"], rel["codename"], ctx.target, str(vmid), snap, *([str(own)] if lent else [])]
+    rc, out = ctx.reach.local(argv, ctx.home, {}, capture=True)
     if rc != 0:
+        if lent:
+            ctx.reach.host(f"pct set {vmid} --memory {own}", timeout=120)
         tried.unlink(missing_ok=True)
         ctx.say(f"release: NullBill's own container stays on Debian {rel['from']}: its upgrade did not start ({out.strip()[:200]})")
         return
