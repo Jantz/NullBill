@@ -71,10 +71,11 @@ def test_a_game_asks_for_its_agreement_and_its_admins_beside_its_tick(facts):
         "text": "I agree to the Minecraft EULA",
     }
     assert game["admins"] == ["owner_a"] and (game["kind"], game["more"], game["file"]) == ("minecraft", False, "server.properties")
-    # Its settings by name with their values now, and its memory.
+    # Its settings by name with their values now. Its memory is its size, as for every guest.
     set_now = {o["key"]: o["value"] for o in game["options"] if o["value"] != o["default"]}
-    assert set_now == {"difficulty": "hard", "max-players": 8} and game["other"] == ""
-    assert (game["memory_mib"], game["floor_mib"]) == (3072, 3072)
+    assert set_now == {"difficulty": "hard", "max-players": 8} and game["other"] == "" and "memory_mib" not in game
+    size = minecraft["guests"][0]
+    assert (size["memory_mib"], size["least"], size["set"], size["label"]) == (3072, {"cores": 2, "memory_mib": 3072}, {}, "Minecraft")
     # A container counts at half its limit: 3072 MiB for Minecraft.
     assert minecraft["memory_mib"] == 1536 and minecraft["guests"][0]["name"] == "minecraft"
     assert minecraft["note"] == (

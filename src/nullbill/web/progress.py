@@ -92,6 +92,11 @@ STOPPED_ADVICE = (
 # match wins. Anything else gets the stage's own advice.
 ADVICE = [
     (
+        r"more memory than the least is set for",
+        "Some guests are given more memory than the least they take. Under Setup, What to run, open Size in their rows "
+        "(Core servers for NullBill's own) and give them less, or untick a workload, and press Save and plan.",
+    ),
+    (
         r"planned guests need \d+ MiB at their floors|guests need more memory",
         "Your choices need more memory than this server has. Under Setup, What to run, untick a workload "
         "(or the on-site screen) and press Save and plan until Plan shows no problems.",

@@ -519,6 +519,101 @@ def test_what_to_run_says_what_each_choice_takes_and_previews_the_form_unsaved(s
     assert memory["host_mib"] - memory["reserve_mib"] - memory["base_mib"] - memory["chosen_mib"] == memory["free_mib"]
 
 
+def test_each_guests_size_is_set_on_the_page_and_only_what_differs_from_the_least_is_saved(site):
+    app, client = site
+    sign_in(app, client)
+    probed(app, "small")  # 4 threads and 16 GiB, as the owner's server has
+    assert client.call("/api/choices", OWNER | {"backups": False})[0] == 200
+
+    def config():
+        return yaml.safe_load((app.home / "config.yaml").read_text())
+
+    def guest(view, name):
+        return next(g for g in [*(g for i in view["items"] for g in i["guests"]), *view["core"]] if g["name"] == name)
+
+    options = client.call("/api/state")[1]["options"]
+    # Every guest has its size and its least; core servers are listed apart, install.sh's container not at all.
+    assert {"router", "vpn", "forgejo", "monitoring"} <= {g["name"] for g in options["core"]}
+    assert "nullbill" not in {g["name"] for g in options["core"]}
+    assert options["limits"] == {"cores": 4, "memory_mib": 15616, "step_mib": 256, "probed": True}
+    workspace = guest(options, "workspace")
+    assert (workspace["cores"], workspace["memory_mib"], workspace["set"]) == (1, 1024, {})
+    assert workspace["least"] == {"cores": 1, "memory_mib": 1024}
+
+    # The preview follows a size typed and not saved, as it follows a tick.
+    status, view = client.call("/api/choices/preview", OWNER | {"backups": False, "sizes": {"workspace": {"memory_mib": 4096}}})
+    agents = next(i for i in view["items"] if i["name"] == "agents")
+    assert status == 200 and agents["memory_mib"] == 2048 and guest(view, "workspace")["set"] == {"memory_mib": 4096}
+    assert view["memory"]["chosen_mib"] == options["memory"]["chosen_mib"] + 1536 and "overrides" not in config()
+    # What cannot be read yet is left out of the preview, not refused.
+    status, view = client.call(
+        "/api/choices/preview", OWNER | {"backups": False, "sizes": {"workspace": {"cores": "x", "memory_mib": 4096}}}
+    )
+    assert status == 200 and guest(view, "workspace")["set"] == {"memory_mib": 4096}
+
+    # Saved: only what differs from the least. Empty, null and the least are automatic.
+    sizes = {
+        "workspace": {"cores": 2, "memory_mib": 4096},
+        "router": {"cores": "", "memory_mib": 512},
+        "forgejo": {"cores": None, "memory_mib": None},
+        "linux-runner": {"memory_mib": 3072},
+    }
+    assert client.call("/api/choices", OWNER | {"backups": False, "sizes": sizes})[0] == 200
+    assert config()["overrides"] == {"workspace": {"cores": 2, "memory_mib": 4096}, "linux-runner": {"memory_mib": 3072}}
+    plan = yaml.safe_load((app.home / "plan.yaml").read_text())
+    assert (plan["guests"]["workspace"]["cores"], plan["guests"]["workspace"]["memory_mib"]) == (2, 4096)
+    assert plan["guests"]["linux-runner"]["memory_mib"] == 3072  # each job's VM
+    options = client.call("/api/state")[1]["options"]
+    assert guest(options, "workspace")["set"] == {"cores": 2, "memory_mib": 4096}
+    # Saving the form as the page shows it changes nothing; a guest the form leaves out keeps its size.
+    assert client.call("/api/choices", OWNER | {"backups": False, "sizes": {"workspace": {"cores": "2", "memory_mib": 4096}}})[0] == 200
+    assert config()["overrides"]["workspace"] == {"cores": 2, "memory_mib": 4096}
+
+    # Every problem at once, a line each, and nothing saved.
+    before = config()
+    bad = {"workspace": {"cores": 9}, "router": {"memory_mib": 100}, "nullbill": {"cores": 2}, "forgejo": {"memory_mib": 1100}}
+    status, answer = client.call("/api/choices", OWNER | {"backups": False, "sizes": bad})
+    assert status == 400 and config() == before
+    assert answer["headline"] == "Some sizes cannot be used, so nothing was saved"
+    assert answer["errors"] == [
+        "workspace: its cores are a whole number from 1 to 4, as many as the server has threads",
+        "router: its memory is from 0.5 GiB to 15.25 GiB in steps of 0.25 GiB (512 to 15616 MiB)",
+        "nullbill: install.sh made it; change its size in Proxmox",
+        "forgejo: its memory is from 1 GiB to 15.25 GiB in steps of 0.25 GiB (1024 to 15616 MiB)",
+    ]
+    status, answer = client.call("/api/choices", OWNER | {"backups": False, "sizes": {"workspace": {"cores": 0}}})
+    assert status == 400 and answer == {"error": "workspace: its cores are a whole number from 1 to 4, as many as the server has threads"}
+
+    # More memory than the server has is refused, with what is missing and what fits.
+    status, answer = client.call("/api/choices", OWNER | {"backups": False, "sizes": {"workspace": {"memory_mib": 15616}}})
+    assert status == 400 and config() == before
+    assert re.fullmatch(
+        r"workspace: 15\.25 GiB of memory does not fit; the server would be [\d.]+ (GiB|MiB) short\."
+        r" At most [\d.]+ GiB fits beside the rest\.",
+        answer["error"],
+    )
+    most = float(re.search(r"At most ([\d.]+) GiB", answer["error"]).group(1))
+    assert client.call("/api/choices", OWNER | {"backups": False, "sizes": {"workspace": {"memory_mib": int(most * 1024)}}})[0] == 200
+    assert client.call("/api/state")[1]["plan"]["errors"] == []
+    status, answer = client.call("/api/choices", OWNER | {"backups": False, "sizes": {"workspace": {"memory_mib": int(most * 1024) + 256}}})
+    assert status == 400 and "does not fit" in answer["error"]
+    # Two guests given more at once: a line for each, under one headline.
+    status, answer = client.call(
+        "/api/choices", OWNER | {"backups": False, "sizes": {"workspace": {"memory_mib": 15616}, "linux-runner": {"memory_mib": 8192}}}
+    )
+    assert status == 400 and answer["headline"] == "These sizes do not fit in the server's memory, so nothing was saved"
+    assert [line.split(":")[0] for line in answer["errors"]] == ["linux-runner", "workspace"]
+
+    # A tick that then does not fit is saved, and the plan names the size set with what to do.
+    assert client.call("/api/choices", OWNER | {"workloads": [*OWNER["workloads"], "windows-dev"], "backups": False})[0] == 200
+    plan = client.call("/api/state")[1]["plan"]
+    assert "more memory than the least is set for linux-runner, workspace;" in plan["errors"][0]
+    assert plan["problems"][0]["advice"].startswith("Some guests are given more memory than the least")
+    # Turned off, a guest keeps the size it was given, for when it is on again; the plan still fits.
+    assert client.call("/api/choices", OWNER | {"workloads": ["linux-ci"], "backups": False})[0] == 200
+    assert "workspace" in config()["overrides"] and client.call("/api/state")[1]["plan"]["errors"] == []
+
+
 def test_a_choice_turned_off_after_setup_built_it_waits_for_the_owner_before_it_is_deleted(site):
     app, client = site
     sign_in(app, client)

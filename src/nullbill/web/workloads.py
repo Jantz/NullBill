@@ -24,7 +24,7 @@ always runs and shows what runs on demand as sharing what that leaves.
 
 from pathlib import Path
 
-from nullbill import backups, custom, games, power, torrents
+from nullbill import backups, custom, games, power, sizes, torrents
 from nullbill import model as modelling
 from nullbill import plan as planning
 from nullbill.errors import NullBillError
@@ -143,7 +143,7 @@ TEXT = {
         "on": (
             "Setup installs Mojang's own server in a container of its own and makes a new world. "
             "The address is on the Services page; under Access, People, tick it for each friend who may join. "
-            "Its memory is for a small world and a few players; Memory in its settings gives it more."
+            "Its memory is for a small world and a few players; Size gives it more, and Java's share grows with it."
         ),
         "off": (
             "Deletes the server with every world in its list, every player's inventory and its settings. "
@@ -254,12 +254,25 @@ def _own(model: dict, members: list[str], home: Path | None) -> dict:
 
 
 def _size(model: dict, name: str, guest: dict | None) -> dict:
-    """A guest's size: the plan's, or its floor with the owner's overrides."""
+    """A guest's size: the plan's, or its floor with the owner's overrides.
+    least: its floor's cores and memory. set: what the owner set of them
+    (nullbill/sizes.py), absent where it is automatic. sizable: False for
+    the nullbill container, which install.sh makes."""
     svc = model["services"][name]
     over = model.get("overrides", {}).get(name, {})
     size = {key: (guest or {}).get(key) or over.get(key) or svc["floor"][key] for key in planning.SIZE_KEYS}
     count = (guest or {}).get("count") or over.get("count") or 1
-    return {"name": name, "kind": svc["kind"], **size, "count": count if svc["kind"] == "vm-pool" else None}
+    return {
+        "name": name,
+        "kind": svc["kind"],
+        **size,
+        "count": count if svc["kind"] == "vm-pool" else None,
+        "least": sizes.least(model, name),
+        "set": {key: over[key] for key in sizes.KEYS if key in over},
+        "sizable": sizes.sizable(model, name),
+        # What a refusal about its size starts with.
+        "label": sizes.label(model, name),
+    }
 
 
 def _blocked(name: str, facts: dict | None) -> str | None:
@@ -320,8 +333,8 @@ def _note(name: str, plan: dict | None) -> str | None:
 
 def _game(model: dict, name: str) -> dict | None:
     """What the page asks about a game server beside its tick: the
-    agreement the game needs, who its admins are, its settings and its
-    memory. None for every other choice."""
+    agreement the game needs, who its admins are and its settings. Its
+    memory is its size, as for every guest. None for every other choice."""
     game = model["games"].get(name)
     if game is None:
         return None
@@ -333,9 +346,6 @@ def _game(model: dict, name: str) -> dict | None:
         "file": games.SETTINGS_FILE[of],
         "options": games.options(model, name),
         "other": games.other_settings(model, name),
-        "memory_mib": model.get("overrides", {}).get(name, {}).get("memory_mib") or games.floor_mib(model, name),
-        "floor_mib": games.floor_mib(model, name),
-        "max_mib": games.MAX_MEMORY_MIB,
     }
     if "eula" in game:
         out["eula"] = {"agreed": game["eula"], "url": games.EULA, "text": f"I agree to the {games.TITLE[of]} EULA"}
@@ -510,8 +520,12 @@ def options(model: dict, facts: dict | None, existing: set[str] | None, home: Pa
             "base": base,
         }
     kinds = [n for n in games.names(model) if n not in more]
+    # The guests no tick controls, for their sizes: core and the kept disks' shares.
+    core = [n for n, svc in planned.items() if option_of(n, svc, choices) is None and sizes.sizable(model, n)]
     return {
         "items": items,
+        "core": [_size(model, n, plan["guests"].get(n) if plan else None) for n in core],
+        "limits": sizes.limits(facts) | {"step_mib": sizes.STEP_MIB, "probed": bool(facts)},
         # What Add a game server offers, and why it cannot when it cannot.
         "games": {
             "kinds": [{"name": n, "title": games.TITLE[n]} for n in kinds],

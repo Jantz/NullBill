@@ -15,7 +15,7 @@ import yaml
 from fixturedata import fixture_config, games_config
 from pinned import FACTORIO, MINECRAFT
 
-from nullbill import apply, custom, games
+from nullbill import apply, custom, games, sizes
 from nullbill.errors import NullBillError
 from nullbill.firewall import render_firewall
 from nullbill.model import build_model
@@ -301,11 +301,14 @@ def test_settings_from_a_form_keep_only_what_the_owner_changed():
         "Creative world: 'bad key' is not the name of a setting",
         "Creative world: motd is one line of at most 200 characters",
     ]
-    assert games.read_memory(model, name, 3072) is None and games.read_memory(model, name, "") is None
-    assert games.read_memory(model, name, "8192") == 8192
-    for bad in (1024, "much", True, 70000):
-        with pytest.raises(NullBillError, match="Creative world: its memory is from 3 to 64 GiB"):
-            games.read_memory(model, name, bad)
+    # Its memory is its size (nullbill/sizes.py): the least is not written down.
+    assert sizes.read(model, {}, {name: {"memory_mib": 3072}}) == ({}, [])
+    assert sizes.read(model, {name: {"memory_mib": 6144}}, {name: {"memory_mib": ""}}) == ({}, [])
+    assert sizes.read(model, {}, {name: {"memory_mib": "8192"}}) == ({name: {"memory_mib": 8192}}, [])
+    for bad in (1024, "much", True, 300000, 3100):
+        assert sizes.read(model, {}, {name: {"memory_mib": bad}})[1] == [
+            "Creative world: its memory is from 3 GiB to 256 GiB in steps of 0.25 GiB (3072 to 262144 MiB)"
+        ]
 
 
 def test_every_named_option_is_one_the_schema_takes_and_nullbill_does_not_set():
@@ -362,7 +365,8 @@ def test_what_to_run_has_a_row_for_each_server_with_what_the_owner_can_set(facts
     assert row["memory_mib"] == 3072 and "Java gets 5.0 GiB" in row["note"]
     game = row["game"]
     assert (game["kind"], game["kind_title"], game["more"], game["removable"]) == ("minecraft", "Minecraft", True, False)
-    assert (game["memory_mib"], game["floor_mib"], game["file"]) == (6144, 3072, "server.properties")
+    assert game["file"] == "server.properties" and "memory_mib" not in game
+    assert [(g["memory_mib"], g["set"], g["label"]) for g in row["guests"]] == [(6144, {"memory_mib": 6144}, "Creative world")]
     assert game["eula"]["agreed"] and game["eula"]["text"] == "I agree to the Minecraft EULA" and game["admins"] == ["owner_b"]
     assert rows["minecraft"]["game"]["more"] is False and "removable" not in rows["minecraft"]["game"]
     # Off and with no guest on the server: it can be removed. Terraria keeps no admins.
@@ -439,11 +443,12 @@ def test_the_page_adds_a_server_saves_its_settings_and_removes_it_once_gone(site
     assert plan["games"][name]["heap_mib"] == 3072 and plan["guests"][name]["memory_mib"] == 4096
     # Saved again as shown, nothing changes; a key the form leaves out stays.
     row = next(i for i in client.call("/api/state")[1]["options"]["items"] if i["name"] == name)
-    assert row["title"] == "Creative" and row["game"]["other"] == "spawn-protection = 0\n" and row["game"]["memory_mib"] == 4096
+    assert row["title"] == "Creative" and row["game"]["other"] == "spawn-protection = 0\n"
+    assert row["guests"][0]["set"] == {"memory_mib": 4096}
     same = {
         "admins": ", ".join(row["game"]["admins"]),
         "title": row["title"],
-        "memory_mib": row["game"]["memory_mib"],
+        "memory_mib": row["guests"][0]["memory_mib"],
         "settings": {o["key"]: o["value"] for o in row["game"]["options"]},
         "other": row["game"]["other"],
     }
@@ -469,8 +474,9 @@ def test_the_page_adds_a_server_saves_its_settings_and_removes_it_once_gone(site
         "Creative: admins are player names, as shown in the game, separated by commas",
         "Creative: Players at once (max-players) is a whole number from 1 to 200",
         "Creative: NullBill sets server-port itself, so that only the people you let in reach the server",
-        "Creative: its memory is from 3 to 64 GiB (3072 to 65536 MiB)",
         "Minecraft: Difficulty (difficulty) is one of peaceful, easy, normal, hard",
+        # Its memory is its size, read with every guest's and said after the settings.
+        "Creative: its memory is from 3 GiB to 251.5 GiB in steps of 0.25 GiB (3072 to 257536 MiB)",
     ]
     # One problem is one line, with no list.
     status, answer = client.call("/api/choices", body(app, **{name: {"settings": {"server-port": 1}}}))
