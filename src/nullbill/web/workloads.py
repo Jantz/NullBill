@@ -253,11 +253,13 @@ def _own(model: dict, members: list[str], home: Path | None) -> dict:
     }
 
 
-def _size(model: dict, name: str, guest: dict | None) -> dict:
+def _size(model: dict, name: str, guest: dict | None, has: dict[str, int] | None = None) -> dict:
     """A guest's size: the plan's, or its floor with the owner's overrides.
-    least: its floor's cores and memory. set: what the owner set of them
-    (nullbill/sizes.py), absent where it is automatic. sizable: False for
-    the nullbill container, which install.sh makes."""
+    least: its floor's cores, memory and disk. set: what the owner set of
+    them (nullbill/sizes.py), absent where it is automatic. has_disk_gib:
+    its disk on the server as the last setup run measured it, which a disk
+    set may not go below; None before. sizable: False for the nullbill
+    container, which install.sh makes."""
     svc = model["services"][name]
     over = model.get("overrides", {}).get(name, {})
     size = {key: (guest or {}).get(key) or over.get(key) or svc["floor"][key] for key in planning.SIZE_KEYS}
@@ -269,10 +271,22 @@ def _size(model: dict, name: str, guest: dict | None) -> dict:
         "count": count if svc["kind"] == "vm-pool" else None,
         "least": sizes.least(model, name),
         "set": {key: over[key] for key in sizes.KEYS if key in over},
+        "has_disk_gib": (has or {}).get(name),
         "sizable": sizes.sizable(model, name),
         # What a refusal about its size starts with.
         "label": sizes.label(model, name),
     }
+
+
+def _disk_room(plan: dict | None, facts: dict | None) -> dict | None:
+    """The storage the guests' disks are on, what they take of it and what
+    it has free, from the plan; None without one."""
+    storage = planning.guest_storage(facts) if facts else None
+    disk = (plan or {}).get("disk") or {}
+    if storage is None or disk.get("needed_gib") is None:
+        return None
+    taken = disk["needed_gib"] + disk.get("copies_gib", 0) + disk.get("backups_gib", 0)
+    return {"storage": storage["name"], "needed_gib": taken, "free_gib": storage["avail_gib"]}
 
 
 def _blocked(name: str, facts: dict | None) -> str | None:
@@ -442,6 +456,7 @@ def options(model: dict, facts: dict | None, existing: set[str] | None, home: Pa
     planned = planning.planned_services(model, facts)
     share = model["host"].get("container_share_pct", 100)
     console = model["host"]["console"]
+    has = sizes.measured(home)
 
     def counted(size: dict) -> int:
         return planning.counted_mib(size["kind"], size["memory_mib"], share, size["count"] or 1)
@@ -482,7 +497,7 @@ def options(model: dict, facts: dict | None, existing: set[str] | None, home: Pa
                 "own": _own(model, members, home) | {"removable": not chosen and not here} if name in own else None,
                 **_text(model, name),
                 "chosen": chosen,
-                "guests": [_size(model, n, plan["guests"].get(n) if plan else None) for n in members],
+                "guests": [_size(model, n, plan["guests"].get(n) if plan else None, has) for n in members],
                 "memory_mib": console["memory_mib"] if name == CONSOLE else sum(counted(s) for s in least),
                 "disk_gib": sum(s["disk_gib"] * ((s["count"] or 0) + 1) for s in least),
                 "on_server": here,
@@ -524,8 +539,10 @@ def options(model: dict, facts: dict | None, existing: set[str] | None, home: Pa
     core = [n for n, svc in planned.items() if option_of(n, svc, choices) is None and sizes.sizable(model, n)]
     return {
         "items": items,
-        "core": [_size(model, n, plan["guests"].get(n) if plan else None) for n in core],
+        "core": [_size(model, n, plan["guests"].get(n) if plan else None, has) for n in core],
         "limits": sizes.limits(facts) | {"step_mib": sizes.STEP_MIB, "probed": bool(facts)},
+        # The guests' disks against the storage they are on, as plan counts them.
+        "disk": _disk_room(plan, facts),
         # What Add a game server offers, and why it cannot when it cannot.
         "games": {
             "kinds": [{"name": n, "title": games.TITLE[n]} for n in kinds],

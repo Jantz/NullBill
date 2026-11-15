@@ -566,9 +566,10 @@ TOOLS = [
                 "sizes": {
                     "type": "object",
                     "description": "Each guest's size, by the guest's name as status lists it under sizes (a game server's "
-                    "memory too): cores (whole) and memory_mib (in steps of 256), each at least the guest's least and at most "
-                    "the server's threads and memory. null or the least makes it automatic again. A CI pool's size is each job "
-                    "VM's. Refused when more memory no longer fits; then say what fits.",
+                    "memory too): cores (whole), memory_mib (in steps of 256) and disk_gib (whole GiB), each at least the guest's "
+                    "least and at most the server's threads, memory and free storage. null or the least makes it automatic again. "
+                    "A disk only grows: never less than has_disk_gib, what it has on the server; setup grows it while the guest "
+                    "runs. A CI pool's size is each job VM's. Refused when more memory or disk no longer fits; then say what fits.",
                 },
                 "torrents": {
                     "type": "object",

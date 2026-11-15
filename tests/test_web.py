@@ -20,7 +20,7 @@ from fixturedata import fixture_config, write_raw
 from gitrepos import commit, git, make
 from pinned import MINECRAFT
 
-from nullbill import applied, apply, browserca, direct, preview, release
+from nullbill import applied, apply, browserca, direct, preview, release, sizes
 from nullbill.errors import NullBillError, Refused
 from nullbill.model import build_model
 from nullbill.probe import parse
@@ -552,10 +552,10 @@ def test_each_guests_size_is_set_on_the_page_and_only_what_differs_from_the_leas
     # Every guest has its size and its least; core servers are listed apart, install.sh's container not at all.
     assert {"router", "vpn", "forgejo", "monitoring"} <= {g["name"] for g in options["core"]}
     assert "nullbill" not in {g["name"] for g in options["core"]}
-    assert options["limits"] == {"cores": 4, "memory_mib": 15616, "step_mib": 256, "probed": True}
+    assert options["limits"] == {"cores": 4, "memory_mib": 15616, "disk_gib": 350, "step_mib": 256, "probed": True}
     workspace = guest(options, "workspace")
     assert (workspace["cores"], workspace["memory_mib"], workspace["set"]) == (1, 1024, {})
-    assert workspace["least"] == {"cores": 1, "memory_mib": 1024}
+    assert workspace["least"] == {"cores": 1, "memory_mib": 1024, "disk_gib": 32} and workspace["has_disk_gib"] is None
 
     # The preview follows a size typed and not saved, as it follows a tick.
     status, view = client.call("/api/choices/preview", OWNER | {"backups": False, "sizes": {"workspace": {"memory_mib": 4096}}})
@@ -656,6 +656,60 @@ def test_each_guests_size_is_set_on_the_page_and_only_what_differs_from_the_leas
         "/api/choices", OWNER | {"workloads": ["linux-ci"], "backups": False, "sizes": {"forgejo": {"cores": "\u00b2"}}}
     )
     assert status == 400 and answer["error"].startswith("forgejo: its cores are a whole number")
+
+
+def test_each_guests_disk_is_set_on_the_page_only_grows_and_must_fit_the_storage(site):
+    app, client = site
+    sign_in(app, client)
+    probed(app, "small")  # local-lvm has 350 GiB free
+    assert client.call("/api/choices", OWNER | {"backups": False})[0] == 200
+
+    def config():
+        return yaml.safe_load((app.home / "config.yaml").read_text())
+
+    def guest(view, name):
+        return next(g for g in [*(g for i in view["items"] for g in i["guests"]), *view["core"]] if g["name"] == name)
+
+    options = client.call("/api/state")[1]["options"]
+    room = options["disk"]
+    assert room["storage"] == "local-lvm" and room["free_gib"] == 350 and 0 < room["needed_gib"] < 350
+    # Saved: only what differs from the least, as for cores and memory.
+    asked = {"workspace": {"disk_gib": 64}, "forgejo": {"disk_gib": 32}}
+    assert client.call("/api/choices", OWNER | {"backups": False, "sizes": asked})[0] == 200
+    assert config()["overrides"] == {"workspace": {"disk_gib": 64}}
+    assert yaml.safe_load((app.home / "plan.yaml").read_text())["guests"]["workspace"]["disk_gib"] == 64
+    after = client.call("/api/state")[1]["options"]
+    assert after["disk"]["needed_gib"] == room["needed_gib"] + 32 and guest(after, "workspace")["set"] == {"disk_gib": 64}
+
+    # A disk only grows: below what the server has (setup measured it) is refused, with how much it has.
+    (app.home / sizes.DISKS).write_text(json.dumps({"disks": {"workspace": 64, "forgejo": 40}}))
+    options = client.call("/api/state")[1]["options"]
+    assert guest(options, "forgejo")["has_disk_gib"] == 40
+    lower = {"forgejo": {"disk_gib": 36}, "workspace": {"disk_gib": 40}}
+    status, answer = client.call("/api/choices", OWNER | {"backups": False, "sizes": lower})
+    assert status == 400 and config()["overrides"] == {"workspace": {"disk_gib": 64}}
+    assert answer["errors"] == [
+        "forgejo: its disk has 40 GiB on the server and a disk only grows, so 40 GiB or more",
+        "workspace: its disk has 64 GiB on the server and a disk only grows, so 64 GiB or more",
+    ]
+    # Automatic stays automatic: setup keeps the larger disk as it is.
+    assert client.call("/api/choices", OWNER | {"backups": False, "sizes": {"forgejo": {"disk_gib": None}}})[0] == 200
+    status, answer = client.call("/api/choices", OWNER | {"backups": False, "sizes": {"forgejo": {"disk_gib": 351}}})
+    assert status == 400
+    assert answer["error"] == "forgejo: its disk is a whole number of GiB from 40 to 350, what the server's storage has free"
+
+    # More than the storage has room for beside the rest is refused, with what fits.
+    status, answer = client.call("/api/choices", OWNER | {"backups": False, "sizes": {"workspace": {"disk_gib": 300}}})
+    assert status == 400 and config()["overrides"] == {"workspace": {"disk_gib": 64}}
+    found = re.fullmatch(
+        r"workspace: a 300 GiB disk does not fit; storage local-lvm would be (\d+) GiB short\. At most (\d+) GiB fits beside the rest\.",
+        answer["error"],
+    )
+    assert found and int(found[2]) == 300 - int(found[1])
+    assert client.call("/api/choices", OWNER | {"backups": False, "sizes": {"workspace": {"disk_gib": int(found[2])}}})[0] == 200
+    assert client.call("/api/state")[1]["plan"]["errors"] == []
+    status, _ = client.call("/api/choices", OWNER | {"backups": False, "sizes": {"workspace": {"disk_gib": int(found[2]) + 1}}})
+    assert status == 400
 
 
 def test_a_choice_turned_off_after_setup_built_it_waits_for_the_owner_before_it_is_deleted(site):

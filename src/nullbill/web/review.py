@@ -56,7 +56,12 @@ def _changed(was: dict, now: dict) -> list[str]:
         before, after = was.get(key), now.get(key)
         if before == after:
             continue
-        if key in SIZES and before is not None and after is not None:
+        if key == "disk_gib" and isinstance(before, int) and isinstance(after, int):
+            # apply grows a disk and never shrinks one (apply.grow_disks):
+            # a smaller size changes nothing.
+            if after > before:
+                out.append(f"disk grows from {before} GiB to {after} GiB")
+        elif key in SIZES and before is not None and after is not None:
             out.append(f"{SIZES[key]} {_size(key, before)} to {_size(key, after)}")
         elif key == "count" and before and after:
             out.append(f"{after} at a time, {before} before")
@@ -94,7 +99,9 @@ def guests(now: dict, was: dict | None, existing: set[str] | None, losses: dict[
                 "detail": detail,
                 # New cores or memory: OpenTofu sets them in place (preview.py says what that does).
                 "resized": change == "change" and any(old.get(k) not in (None, guest.get(k)) for k in ("cores", "memory_mib")),
-                **{k: guest.get(k) for k in ("kind", "zone", "cores", "memory_mib", "count")},
+                # Only its disk differs: apply grows it while it runs, or keeps a larger one.
+                "disk_only": change == "change" and len(detail) == 1 and (guest.get("disk_gib") or 0) > (old.get("disk_gib") or 1 << 30),
+                **{k: guest.get(k) for k in ("kind", "zone", "cores", "memory_mib", "disk_gib", "count")},
             }
         )
     for name in sorted(existing - set(planned)):
@@ -106,7 +113,8 @@ def guests(now: dict, was: dict | None, existing: set[str] | None, losses: dict[
                 "change": "delete",
                 "detail": [note],
                 "resized": False,
-                **{k: old.get(k) for k in ("kind", "zone", "cores", "memory_mib", "count")},
+                "disk_only": False,
+                **{k: old.get(k) for k in ("kind", "zone", "cores", "memory_mib", "disk_gib", "count")},
             }
         )
     return rows

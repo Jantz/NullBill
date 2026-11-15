@@ -683,6 +683,9 @@ ON_DEMAND_RESIZED = (
 ON_DEMAND_RESIZED_SHORT = "May restart for its new size if running"
 POOL_RESIZED = "Each job's VM gets the new size from the next job on; jobs that run keep theirs."
 POOL_RESIZED_SHORT = "New size from the next job on"
+# Only a disk differs: apply grows it (apply.grow_disks), or keeps a larger one.
+GROWN = "Setup grows its disk while it runs; nothing restarts for that. A disk never shrinks."
+POOL_GROWN = "Its image is made again with the new disk; jobs that run keep theirs, and new ones wait until it is baked."
 CREATED = "New: OpenTofu creates it, and every part of its setup runs for the first time."
 UNKNOWN = "unknown"
 
@@ -757,8 +760,10 @@ def _row(name: str | None, guest: dict | None, lines: list[dict], stuck: str | N
         what = UNKNOWN
     else:
         what = "alone"
-    if change == "change":
-        why.append((POOL_RESIZED if pool else ON_DEMAND_RESIZED if on_demand else RESIZED) if resized else IN_PLACE)
+    if change == "change" and resized:
+        why.append(POOL_RESIZED if pool else ON_DEMAND_RESIZED if on_demand else RESIZED)
+    elif change == "change":
+        why.append((POOL_GROWN if pool else GROWN) if (guest or {}).get("disk_only") else IN_PLACE)
     for line in again:
         why += [reason for reason in line["why"] if reason not in why]
     effect = Effects(_unique(r for line in again for r in line["effect"].restarts), all(line["effect"].followed for line in again))

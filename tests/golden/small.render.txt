@@ -1210,7 +1210,8 @@ WantedBy=timers.target
         ],
         "lifecycle": {
           "ignore_changes": [
-            "operating_system"
+            "operating_system",
+            "disk[0].size"
           ]
         }
       },
@@ -1239,7 +1240,7 @@ WantedBy=timers.target
         },
         "disk": {
           "datastore_id": "local-lvm",
-          "size": 2
+          "size": 4
         },
         "operating_system": {
           "template_file_id": "${proxmox_download_file.debian_lxc.id}",
@@ -1276,7 +1277,8 @@ WantedBy=timers.target
         ],
         "lifecycle": {
           "ignore_changes": [
-            "operating_system"
+            "operating_system",
+            "disk[0].size"
           ]
         }
       },
@@ -1305,7 +1307,7 @@ WantedBy=timers.target
         },
         "disk": {
           "datastore_id": "local-lvm",
-          "size": 2
+          "size": 4
         },
         "operating_system": {
           "template_file_id": "${proxmox_download_file.debian_lxc.id}",
@@ -1342,7 +1344,8 @@ WantedBy=timers.target
         ],
         "lifecycle": {
           "ignore_changes": [
-            "operating_system"
+            "operating_system",
+            "disk[0].size"
           ]
         }
       },
@@ -1408,7 +1411,8 @@ WantedBy=timers.target
         ],
         "lifecycle": {
           "ignore_changes": [
-            "operating_system"
+            "operating_system",
+            "disk[0].size"
           ]
         }
       },
@@ -1474,7 +1478,8 @@ WantedBy=timers.target
         ],
         "lifecycle": {
           "ignore_changes": [
-            "operating_system"
+            "operating_system",
+            "disk[0].size"
           ]
         }
       },
@@ -1540,7 +1545,8 @@ WantedBy=timers.target
         ],
         "lifecycle": {
           "ignore_changes": [
-            "operating_system"
+            "operating_system",
+            "disk[0].size"
           ]
         }
       },
@@ -1606,7 +1612,8 @@ WantedBy=timers.target
         ],
         "lifecycle": {
           "ignore_changes": [
-            "operating_system"
+            "operating_system",
+            "disk[0].size"
           ]
         }
       },
@@ -1672,7 +1679,8 @@ WantedBy=timers.target
         ],
         "lifecycle": {
           "ignore_changes": [
-            "operating_system"
+            "operating_system",
+            "disk[0].size"
           ]
         }
       },
@@ -1701,7 +1709,7 @@ WantedBy=timers.target
         },
         "disk": {
           "datastore_id": "local-lvm",
-          "size": 16
+          "size": 32
         },
         "operating_system": {
           "template_file_id": "${proxmox_download_file.debian_lxc.id}",
@@ -1739,6 +1747,7 @@ WantedBy=timers.target
         "lifecycle": {
           "ignore_changes": [
             "operating_system",
+            "disk[0].size",
             "mount_point",
             "device_passthrough"
           ]
@@ -1807,7 +1816,8 @@ WantedBy=timers.target
         ],
         "lifecycle": {
           "ignore_changes": [
-            "operating_system"
+            "operating_system",
+            "disk[0].size"
           ]
         },
         "pool_id": "agent-managed"
@@ -1984,7 +1994,8 @@ WantedBy=timers.target
         },
         "lifecycle": {
           "ignore_changes": [
-            "disk[0].file_id"
+            "disk[0].file_id",
+            "disk[0].size"
           ]
         },
         "depends_on": [
@@ -2092,7 +2103,8 @@ WantedBy=timers.target
         },
         "lifecycle": {
           "ignore_changes": [
-            "disk[0].file_id"
+            "disk[0].file_id",
+            "disk[0].size"
           ],
           "prevent_destroy": true
         },
@@ -2184,6 +2196,7 @@ WantedBy=timers.target
         "lifecycle": {
           "ignore_changes": [
             "disk[0].file_id",
+            "disk[0].size",
             "template"
           ]
         },

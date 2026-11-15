@@ -143,8 +143,11 @@ def _container(name: str, guest: dict, plan: dict, model: dict, storage: str) ->
     }
     # The template is what a container is made from. A newer pin must not
     # make OpenTofu replace a container that exists, with all it holds; the
-    # release stage upgrades its Debian in place (release.py).
-    _ignore(container, "operating_system")
+    # release stage upgrades its Debian in place (release.py). Its disk
+    # only grows, and apply grows it (apply.grow_disks): the provider would
+    # make a container again for a disk smaller than it has, which one grown
+    # by hand in Proxmox is.
+    _ignore(container, "operating_system", "disk[0].size")
     if model["services"][name].get("gpu"):
         # apply gives it the GPU's device nodes as root over SSH (PVE allows
         # device passthrough to root@pam alone; ansible/roles/inference).
@@ -274,6 +277,9 @@ def _vm(name: str, guest: dict, plan: dict, model: dict, storage: str) -> dict:
         # As for a container's template: the image a VM that exists was
         # made from stays; a pool's golden image is replaced on purpose.
         _ignore(vm, "disk[0].file_id")
+    # As for a container: apply grows the disk with its file system inside
+    # (apply.grow_disks); a pool's golden image is made again at its size.
+    _ignore(vm, "disk[0].size")
     vm["depends_on"] = [_bridge_ref(b) for b in bridges]
     gpus = _passed_gpus(plan, name)
     if gpus:

@@ -446,8 +446,8 @@ def test_evacuating_needs_room_on_a_storage_for_containers(facts):
     f = mounted(facts, used_gib=1500)
     messages = errors(f, {OLD: {"use": "pbs", "wipe": True, "evacuate": "local-lvm"}})
     need = "the copy needs 1576 GiB (the files and 5 %, plus 1 GiB each)"
-    assert f"disks.{OLD}.evacuate: {need}, local-lvm has 1152 GiB free after the guests' disks" in messages
-    assert "disk: guests need 512 GiB, storage local-lvm has 88 GiB free besides 1576 GiB for copies of kept disks" in messages
+    assert f"disks.{OLD}.evacuate: {need}, local-lvm has 1144 GiB free after the guests' disks" in messages
+    assert "disk: guests need 520 GiB, storage local-lvm has 88 GiB free besides 1576 GiB for copies of kept disks" in messages
     # A copy that fits shrinks the CI pools instead: it stays on the storage for good.
     p = plan(mounted(facts, used_gib=600), {OLD: {"use": "pbs", "wipe": True, "evacuate": "local-lvm"}})
     assert p["disk"]["copies_gib"].value == 631 and p["disk"]["needed_gib"].value <= 1664 - 631

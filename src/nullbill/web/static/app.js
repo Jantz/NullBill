@@ -1096,11 +1096,13 @@ function gameTools(item) {
   return make("div", {className: "own-tools"}, make("div", {className: "row"}, remove, said));
 }
 
-// Size: each guest's cores and memory (web/workloads.py's guests,
+// Size: each guest's cores, memory and disk (web/workloads.py's guests,
 // nullbill/sizes.py). Empty is the least the guest takes, which is what
-// NullBill gives it; only what differs from that is saved. Closed under a
+// NullBill gives it; only what differs from that is saved. A disk only
+// grows, so it starts at what the guest has on the server. Closed under a
 // line that says what is chosen, like a row's other settings.
 let sizeLimits = null;
+let diskRoom = null;
 function sizeBlock(title, guests) {
   const rows = guests.map((g) => {
     const id = `size-${g.name}`;
@@ -1109,19 +1111,27 @@ function sizeBlock(title, guests) {
     const memory = make("input", {type: "number", id: `${id}-memory`, min: String(g.least.memory_mib / 1024), step: "0.25", inputMode: "decimal",
       placeholder: "Auto"});
     memory.dataset.role = "size-memory";
+    const lowDisk = Math.max(g.least.disk_gib, g.has_disk_gib || 0);
+    const disk = make("input", {type: "number", id: `${id}-disk`, min: String(lowDisk), step: "1", inputMode: "numeric", placeholder: "Auto"});
+    disk.dataset.role = "size-disk";
     const kind = g.kind === "vm-pool" ? "Each CI job's VM" : g.kind === "vm" ? "VM" : "Container";
     const of = make("span", {className: "sr-only", textContent: ` of ${g.name}`});
+    const has = g.has_disk_gib && g.has_disk_gib > g.least.disk_gib ? `; ${g.has_disk_gib} GiB of disk on the server now` : "";
+    const least = `${kind}, at least ${count(g.least.cores, "core")}, ${gib(g.least.memory_mib)} and ${g.least.disk_gib} GiB of disk${has}`;
     const row = make("div", {className: "size-row"},
       make("div", {className: "size-name"}, make("span", {className: "name", textContent: g.name}),
-        make("span", {className: "hint", id: `${id}-least`, textContent: `${kind}, at least ${count(g.least.cores, "core")} and ${gib(g.least.memory_mib)}`})),
+        make("span", {className: "hint", id: `${id}-least`, textContent: least})),
       make("label", {className: "size-field"}, make("span", {className: "label"}, "Cores", of), cores),
-      make("label", {className: "size-field"}, make("span", {className: "label"}, "Memory, GiB", of.cloneNode(true)), memory));
-    for (const input of [cores, memory]) input.setAttribute("aria-describedby", `${id}-least`);
+      make("label", {className: "size-field"}, make("span", {className: "label"}, "Memory, GiB", of.cloneNode(true)), memory),
+      make("label", {className: "size-field"}, make("span", {className: "label"}, "Disk, GiB", of.cloneNode(true)), disk));
+    for (const input of [cores, memory, disk]) input.setAttribute("aria-describedby", `${id}-least`);
     row.dataset.guest = g.name;
     row.dataset.label = g.label.toLowerCase();
     row.dataset.kind = g.kind;
     row.dataset.cores = String(g.least.cores);
     row.dataset.memory = String(g.least.memory_mib);
+    row.dataset.disk = String(g.least.disk_gib);
+    row.dataset.hasDisk = String(lowDisk);
     return row;
   });
   return make("details", {className: "opt-settings opt-size"}, make("summary", {}, title, make("span", {className: "set-now"})),
@@ -1135,6 +1145,7 @@ function paintSizes(guests) {
     if (!row) continue;
     row.querySelector("[data-role=size-cores]").value = g.set.cores ? String(g.set.cores) : "";
     row.querySelector("[data-role=size-memory]").value = g.set.memory_mib ? String(g.set.memory_mib / 1024) : "";
+    row.querySelector("[data-role=size-disk]").value = g.set.disk_gib ? String(g.set.disk_gib) : "";
   }
 }
 
@@ -1145,17 +1156,22 @@ function paintSizeNow(box) {
   const read = (row) => {
     const cores = row.querySelector("[data-role=size-cores]").value.trim();
     const memory = row.querySelector("[data-role=size-memory]").value.trim();
+    const disk = row.querySelector("[data-role=size-disk]").value.trim();
     const mib = memory === "" ? Number(row.dataset.memory) : Math.round(Number(memory) * 1024);
     const coresN = cores === "" ? Number(row.dataset.cores) : Number(cores);
-    return {cores: coresN, mib, set: (cores !== "" && coresN !== Number(row.dataset.cores)) || (memory !== "" && mib !== Number(row.dataset.memory)),
-      ok: Number.isFinite(coresN) && Number.isFinite(mib)};
+    // Automatic keeps a disk the server has larger as it is.
+    const diskN = disk === "" ? Number(row.dataset.hasDisk) : Number(disk);
+    return {cores: coresN, mib, disk: diskN,
+      set: (cores !== "" && coresN !== Number(row.dataset.cores)) || (memory !== "" && mib !== Number(row.dataset.memory)) ||
+        (disk !== "" && diskN !== Number(row.dataset.disk)),
+      ok: Number.isFinite(coresN) && Number.isFinite(mib) && Number.isFinite(diskN)};
   };
   const sizes = rows.map(read);
   let text;
   if (sizes.some((x) => !x.ok)) text = "Not a number";
   else if (rows.length === 1) {
     const one = sizes[0];
-    text = `${count(one.cores, "core")}, ${gib(one.mib)}${rows[0].dataset.kind === "vm-pool" ? " per job" : ""}${one.set ? "" : ", automatic"}`;
+    text = `${count(one.cores, "core")}, ${gib(one.mib)}, ${one.disk} GiB disk${rows[0].dataset.kind === "vm-pool" ? " per job" : ""}${one.set ? "" : ", automatic"}`;
   } else {
     const set = rows.filter((r, i) => sizes[i].set).map((r) => r.dataset.guest);
     text = set.length ? `Set for ${andList(set)}` : "Automatic";
@@ -1166,10 +1182,12 @@ function paintSizeNow(box) {
   for (const row of rows) {
     row.querySelector("[data-role=size-cores]").max = limits.cores ? String(limits.cores) : "";
     row.querySelector("[data-role=size-memory]").max = limits.memory_mib ? String(limits.memory_mib / 1024) : "";
+    row.querySelector("[data-role=size-disk]").max = limits.disk_gib ? String(Math.max(limits.disk_gib, Number(row.dataset.hasDisk))) : "";
   }
+  const room = diskRoom ? ` Disks take ${diskRoom.needed_gib} of the ${diskRoom.free_gib} GiB free on ${diskRoom.storage}.` : "";
   const hint = limits.probed
-    ? `Auto, or empty, is the least, which NullBill gives it. At most ${count(limits.cores, "core")} and ${+(limits.memory_mib / 1024).toFixed(2)} GiB, what the server has; the meter above shows what fits.`
-    : "Auto, or empty, is the least, which NullBill gives it. Read the hardware to see what fits.";
+    ? `Auto, or empty, is the least, which NullBill gives it. At most ${count(limits.cores, "core")} and ${+(limits.memory_mib / 1024).toFixed(2)} GiB, what the server has; the meter above shows what fits.${room} A disk only grows, never shrinks.`
+    : "Auto, or empty, is the least, which NullBill gives it. Read the hardware to see what fits. A disk only grows, never shrinks.";
   const node = box.querySelector(".size-hint");
   if (node.textContent !== hint) node.textContent = hint;
 }
@@ -1181,10 +1199,12 @@ function sizesBody() {
   for (const row of $("pick").querySelectorAll(".size-row")) {
     const cores = row.querySelector("[data-role=size-cores]").value.trim();
     const memory = row.querySelector("[data-role=size-memory]").value.trim();
+    const disk = row.querySelector("[data-role=size-disk]").value.trim();
     const gb = Number(memory);
     out[row.dataset.guest] = {
       cores: cores === "" ? null : /^\d+$/.test(cores) ? Number(cores) : cores,
       memory_mib: memory === "" ? null : Number.isFinite(gb) ? Math.round(gb * 1024) : memory,
+      disk_gib: disk === "" ? null : /^\d+$/.test(disk) ? Number(disk) : disk,
     };
   }
   return out;
@@ -1475,6 +1495,7 @@ function optionState(item, checked) {
 function paintOptions() {
   const view = optionsView;
   if (!view) return;
+  diskRoom = view.disk || null;
   paintWhen(view, false);
   const share = view.memory ? view.memory.share_pct : 100;
   for (const item of view.items) {

@@ -155,6 +155,31 @@ def test_a_new_size_says_the_guest_may_restart_and_a_pools_next_jobs_get_it(ctx,
     assert by_name["factorio"]["what"] == "alone"
 
 
+def test_a_larger_disk_grows_while_the_guest_runs_and_a_pools_image_is_made_again(ctx, monkeypatch, tailnet, facts):
+    c = built(ctx, monkeypatch, "games")
+    config = games_config()
+    config["overrides"] = {"factorio": {"disk_gib": 40}}
+    new, guests = chosen(c, config, facts)
+    by_name = {m["name"]: m for m in preview.machines(new, base(c), guests)["machines"]}
+    factorio, runner = by_name["factorio"], by_name["linux-runner"]
+    assert factorio["what"] == "change" and factorio["why"] == ["disk grows from 8 GiB to 40 GiB", preview.GROWN]
+    assert (factorio["effect"], factorio["interrupts"]) == ("disk grows from 8 GiB to 40 GiB", False)
+    assert runner["what"] == "alone"
+    # A pool's job VMs get their disk from the image, which is made again.
+    pool = {"change": "change", "disk_only": True, "kind": "vm-pool", "detail": ["disk grows from 32 GiB to 48 GiB"]}
+    row = preview._row("linux-runner", pool, [], None, False)
+    assert row["why"] == ["disk grows from 32 GiB to 48 GiB", preview.POOL_GROWN] and not row["interrupts"]
+    # Smaller than what was built: a disk never shrinks, so nothing changes.
+    was = {"guests": {"factorio": {"kind": "lxc", "cores": 1, "memory_mib": 1536, "disk_gib": 40}}}
+    now = {"guests": {"factorio": {"kind": "lxc", "cores": 1, "memory_mib": 1536, "disk_gib": 8}}}
+    row = review.guests(now, was, {"factorio"}, {})[0]
+    assert (row["change"], row["detail"], row["disk_only"]) == ("keep", [], False)
+    # A disk that grows beside new cores: the new size says what happens first.
+    now["guests"]["factorio"] |= {"cores": 2, "disk_gib": 48}
+    row = review.guests(now, was, {"factorio"}, {})[0]
+    assert row["detail"] == ["cores 1 to 2", "disk grows from 40 GiB to 48 GiB"] and row["resized"] and not row["disk_only"]
+
+
 def test_a_new_size_keeps_what_could_not_be_worked_out_and_an_on_demand_guest_restarts_only_if_running():
     resized = {"change": "change", "resized": True, "detail": ["cores 1 to 2"]}
     row = preview._row("forgejo", resized, [], "the step-ca token", False)

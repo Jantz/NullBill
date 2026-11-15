@@ -19,7 +19,7 @@ host:
 disk:
   storage: local-lvm
   # Includes one golden template per pool.
-  needed_gib: 1628
+  needed_gib: 1636
   free_gib: 1664
   # Holds the downloaded container template and cloud image.
   media: local
@@ -97,7 +97,7 @@ guests:
     zone: access
     cores: 1
     memory_mib: 256
-    disk_gib: 2
+    disk_gib: 4
     vmid: 2011
     ip: 10.42.6.11
   step-ca:
@@ -105,7 +105,7 @@ guests:
     zone: mgmt
     cores: 1
     memory_mib: 256
-    disk_gib: 2
+    disk_gib: 4
     vmid: 2012
     ip: 10.42.1.12
   postgres:
@@ -195,7 +195,7 @@ guests:
     zone: inference
     cores: 1
     memory_mib: 1024
-    disk_gib: 4
+    disk_gib: 8
     vmid: 2021
     ip: 10.42.4.21
   windows-runner:

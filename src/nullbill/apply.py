@@ -49,6 +49,7 @@ from nullbill import (
     torrents,
     version,
 )
+from nullbill import sizes as sizing
 from nullbill.artifacts import write_build
 from nullbill.errors import NullBillError
 from nullbill.flows import PROXIED, TAILSCALE_PORT, mac
@@ -830,6 +831,101 @@ def place_datastore(ctx: Context) -> None:
         ctx.say(f"tofu: the backups' volume grows from {size} to {want_size} GiB")
 
 
+# Asks the host for each guest's config and state in one go (grow_disks).
+DISKS_LOOK = ": nb-disks;"
+# Inside a Linux VM after its disk grew: the kernel reads the disk's new
+# size, growpart (Debian's cloud images carry it) grows the root partition
+# and resize2fs the file system on it, while it runs. growpart says 1 when
+# there is nothing to grow.
+GROW_ROOT = (
+    'set -e; src=$(findmnt -no SOURCE /); [ "$(findmnt -no FSTYPE /)" = ext4 ]; '
+    'part=$(basename "$src"); disk=$(lsblk -no PKNAME "$src"); '
+    'echo 1 > "/sys/class/block/$disk/device/rescan"; '
+    'growpart "/dev/$disk" "$(cat "/sys/class/block/$part/partition")" || [ $? -eq 1 ]; resize2fs "$src"'
+)
+
+
+def disk_key(guest: dict) -> str:
+    """The root disk in a guest's PVE config, as tofu.py makes it."""
+    return "rootfs" if guest["kind"] == "lxc" else "sata0" if guest["zone"] == "windows" else "scsi0"
+
+
+def disk_mib(config: str, key: str) -> int | None:
+    """The size of a guest's disk `key` in `pct config` or `qm config`, in MiB."""
+    for line in config.splitlines():
+        name, _, value = line.partition(": ")
+        if name != key:
+            continue
+        size = next((f.removeprefix("size=") for f in value.split(",") if f.startswith("size=")), "")
+        units = {"M": 1, "G": 1024, "T": 1024 * 1024}
+        if size[-1:] not in units or not size[:-1].replace(".", "", 1).isdigit():
+            return None
+        return int(float(size[:-1]) * units[size[-1]])
+    return None
+
+
+def grow_disks(ctx: Context) -> None:
+    """Each guest's disk grown to the plan's size, once OpenTofu made what
+    was missing; OpenTofu leaves the size of a disk that exists alone. A
+    container's file system grows with it (pct resize); a Linux VM grows
+    its partition and file system while it runs, or at its next start by
+    cloud-init. A disk never shrinks: a larger one, grown by hand or for a
+    size set before, stays as it is. Records what each guest has for the
+    page (sizes.DISKS), which refuses less. A pool's golden image is made
+    again at its size by the ci stage (bake)."""
+    guests = {n: g for n, g in ctx.bare["guests"].items() if g["kind"] != "vm-pool" and not g.get("installed")}
+    if not guests:
+        return
+    items = " ".join(f"{g['vmid']}:{'pct' if g['kind'] == 'lxc' else 'qm'}" for g in guests.values())
+    out = host_out(
+        ctx,
+        "tofu",
+        f'{DISKS_LOOK} for v in {items}; do echo "== ${{v%%:*}}"; '
+        '${v#*:} config "${v%%:*}" --current 2>/dev/null; ${v#*:} status "${v%%:*}" 2>/dev/null; done; true',
+    )
+    found: dict[str, str] = {}
+    for section in out.split("== ")[1:]:
+        vmid, _, rest = section.partition("\n")
+        found[vmid.strip()] = rest
+    has: dict[str, int] = {}
+    for name, guest in guests.items():
+        config = found.get(str(guest["vmid"]), "")
+        mib = disk_mib(config, disk_key(guest))
+        if mib is None:
+            continue
+        want = guest["disk_gib"]
+        has[name] = -(-mib // 1024)
+        if mib > want * 1024:
+            ctx.say(f"tofu: {name} keeps its {has[name]} GiB disk; a disk never shrinks, and the plan asks for {want} GiB")
+            continue
+        if mib == want * 1024:
+            continue
+        if guest["kind"] == "lxc":
+            host_out(ctx, "tofu", f"pct resize {guest['vmid']} rootfs {want}G")
+            ctx.say(f"tofu: {name}'s disk grows from {sizes_gib(mib)} to {want} GiB")
+        else:
+            host_out(ctx, "tofu", f"qm disk resize {guest['vmid']} {disk_key(guest)} {want}G")
+            ctx.say(f"tofu: {name}'s disk grows from {sizes_gib(mib)} to {want} GiB" + grow_inside(ctx, name, guest, config))
+        has[name] = want
+    (ctx.home / sizing.DISKS).write_text(json.dumps({"disks": has, "at": int(time.time())}, indent=2) + "\n")
+
+
+def sizes_gib(mib: int) -> str:
+    return f"{round(mib / 1024, 2):g} GiB"
+
+
+def grow_inside(ctx: Context, name: str, guest: dict, state: str) -> str:
+    """What a VM's grown disk takes inside it, said after the growth."""
+    if guest["zone"] == "windows":
+        return "; Windows uses the room once you extend drive C: in its Disk Management"
+    if "status: running" not in state:
+        return "; its file system grows at its next start"
+    rc, said = in_guest(ctx, name, GROW_ROOT, timeout=120)
+    if rc != 0:
+        return f"; its file system grows at its next start (growing it now failed: {said.strip()[-200:]})"
+    return ", its file system with it"
+
+
 def storage_disks(ctx: Context) -> None:
     """Each disk the plan pins as storage, as an LVM-thin PVE storage of its
     own (nb-storage-disk); before OpenTofu, like the backup disk."""
@@ -1429,6 +1525,7 @@ def stage_tofu(ctx: Context) -> None:
     place_datastore(ctx)
     storage_disks(ctx)
     run_tofu(ctx, "tofu", init=True, downloads=True)
+    grow_disks(ctx)
     forget_remade_vms(ctx)
     move_copies(ctx)
     attach_shares(ctx)
@@ -2491,15 +2588,23 @@ def bake(ctx: Context, name: str, guest: dict) -> bool:
     made_from = {"release": ctx.model["images"]["release"]["codename"]}
     inputs = hashlib.sha256(json.dumps(runner | made_from, sort_keys=True).encode()).hexdigest()
     inputs_file = f"{BAKING_DIR}/{name}.inputs"
-    if "template: 1" in host_out(ctx, "ci", f"qm config {vmid}"):
+    config = host_out(ctx, "ci", f"qm config {vmid}")
+    if "template: 1" in config:
         recorded = host_out(ctx, "ci", f"cat {ci.TEXTFILE_DIR}/{ci.baked_file(name)} 2>/dev/null || true")
         baked = ci.baked_time(recorded)
         same = host_out(ctx, "ci", f"cat {inputs_file} 2>/dev/null || true").strip() == inputs
-        if baked is not None and time.time() - baked < ci.REBAKE_AFTER_S and same:
+        # OpenTofu leaves a disk's size alone (tofu.py): a job VM's disk is
+        # the image's, so a new size makes the image again.
+        mib = disk_mib(config, disk_key(guest))
+        sized = mib is None or mib == guest["disk_gib"] * 1024
+        if baked is not None and time.time() - baked < ci.REBAKE_AFTER_S and same and sized:
             ctx.say(f"ci: {name}'s golden image is baked")
             applied.note(ctx.home, name, applied.IMAGE, stage="ci", baked=baked, settings=image_print(ctx, name))
             return False
-        if same:
+        if not sized:
+            now = f"{guest['disk_gib']} GiB"
+            ctx.say(f"ci: {name}'s golden image has a {sizes_gib(mib or 0)} disk and its job VMs get {now} now; baking it again")
+        elif same:
             ctx.say(f"ci: {name}'s golden image is over {ci.REBAKE_AFTER_S // 86400} days old; baking it again")
         else:
             ctx.say(f"ci: {name}'s golden image was baked with other settings; baking it again")

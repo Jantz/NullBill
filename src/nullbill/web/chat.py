@@ -1143,9 +1143,12 @@ def size_lines(model: dict, was: dict, now_: dict) -> list[str]:
                 continue
             if key == "cores":
                 said = [f"{v or least[key]} core{'' if (v or least[key]) == 1 else 's'}{'' if v else ' (the least)'}" for v in (new, old)]
+            elif key == "disk_gib":
+                said = [f"{v or least[key]} GiB{'' if v else ' (the least)'}" for v in (new, old)]
             else:
                 said = [f"{sizes.gib(v or least[key])}{'' if v else ' (the least)'}" for v in (new, old)]
-            out.append(f"{title}: {'' if key == 'cores' else 'memory '}{said[0]}, was {said[1]}")
+            what = {"cores": "", "memory_mib": "memory ", "disk_gib": "disk "}[key]
+            out.append(f"{title}: {what}{said[0]}, was {said[1]}")
     return out
 
 
@@ -1328,13 +1331,14 @@ class Tools:
                 | ({"game_server_of": i["game"]["kind"]} if i.get("game") else {})
                 for i in options["items"]
             ],
-            # Each guest's cores and memory (MiB) as planned, the least it
-            # takes, and what the owner set (set_choices sizes); a pool's are
-            # each job VM's. Only what is ticked, and the core servers, which
-            # no tick controls.
+            # Each guest's cores, memory (MiB) and disk (GiB) as planned, the
+            # least it takes, what the owner set (set_choices sizes) and the
+            # disk it has on the server; a pool's are each job VM's. Only
+            # what is ticked, and the core servers, which no tick controls.
             "sizes": [
                 {"guest": g["name"], "of": i["name"] if i else "core servers", "cores": g["cores"], "memory_mib": g["memory_mib"]}
-                | {"least": g["least"], "set_by_owner": g["set"]}
+                | {"disk_gib": g["disk_gib"], "least": g["least"], "set_by_owner": g["set"]}
+                | ({"has_disk_gib": g["has_disk_gib"]} if g.get("has_disk_gib") else {})
                 | ({"per_job_vm": True} if g["kind"] == "vm-pool" else {})
                 for i, g in [
                     *((i, g) for i in options["items"] if i["chosen"] for g in i["guests"]),
@@ -1343,6 +1347,7 @@ class Tools:
                 if g.get("sizable", True)
             ],
             "memory_free_mib": (options["memory"] or {}).get("free_mib"),
+            "disk": options.get("disk"),
             "plan_fits": bool(plan.get("text")) and not plan.get("errors"),
             "plan_errors": plan.get("errors"),
             # The plan's `installed` means made by install.sh (the nullbill

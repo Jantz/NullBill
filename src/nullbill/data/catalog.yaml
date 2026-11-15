@@ -165,13 +165,13 @@ services:
     kind: lxc
     zone: access
     workload: core
-    floor: {cores: 1, memory_mib: 256, disk_gib: 2}
+    floor: {cores: 1, memory_mib: 256, disk_gib: 4}
   step-ca:
     id: 12
     kind: lxc
     zone: mgmt
     workload: core
-    floor: {cores: 1, memory_mib: 256, disk_gib: 2}
+    floor: {cores: 1, memory_mib: 256, disk_gib: 4}
     ports:
       - {port: 443, proto: tcp, from: ["zone:*"]}
   postgres:
@@ -274,7 +274,7 @@ services:
       - coverartarchive.org
       - .archive.org
     # Transcoding takes the cores; the library's index and artwork the disk.
-    floor: {cores: 2, memory_mib: 2048, disk_gib: 16}
+    floor: {cores: 2, memory_mib: 2048, disk_gib: 32}
     share:
       title: Jellyfin
       what: Films, series and music
@@ -424,7 +424,7 @@ services:
     # LiteLLM alone holds about 330 MiB; with nginx, the certificate renewer
     # and the hourly apt jobs a 512 MiB container sat full and stopped
     # answering.
-    floor: {cores: 1, memory_mib: 1024, disk_gib: 4}
+    floor: {cores: 1, memory_mib: 1024, disk_gib: 8}
     # By address: that is where the gateway shows the certificate devices
     # trust (browserca.py).
     share:

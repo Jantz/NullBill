@@ -431,21 +431,25 @@ def test_the_agent_sets_each_guests_size_as_a_change_and_hears_what_does_not_fit
         "of": "agents",
         "cores": 1,
         "memory_mib": 1024,
-        "least": {"cores": 1, "memory_mib": 1024},
+        "disk_gib": 32,
+        "least": {"cores": 1, "memory_mib": 1024, "disk_gib": 32},
         "set_by_owner": {},
     }
     assert sizes["router"]["of"] == "core servers" and sizes["linux-runner"]["per_job_vm"] is True and "nullbill" not in sizes
-    view = call(client, "set_choices", sizes={"workspace": {"cores": 2, "memory_mib": 4096}, "forgejo": {"memory_mib": 2048}})
+    view = call(
+        client, "set_choices", sizes={"workspace": {"cores": 2, "memory_mib": 4096, "disk_gib": 64}, "forgejo": {"memory_mib": 2048}}
+    )
     proposal = kinds(view, "proposal")[-1]
     assert (proposal["tier"], proposal["title"]) == ("change", "Change what to run")
     assert proposal["lines"] == [
         "forgejo: memory 2 GiB, was 1 GiB (the least)",
         "workspace: 2 cores, was 1 core (the least)",
         "workspace: memory 4 GiB, was 1 GiB (the least)",
+        "workspace: disk 64 GiB, was 32 GiB (the least)",
     ]
     assert "overrides" not in saved(app)
     approved(client, proposal["id"])
-    assert saved(app)["overrides"] == {"workspace": {"cores": 2, "memory_mib": 4096}, "forgejo": {"memory_mib": 2048}}
+    assert saved(app)["overrides"] == {"workspace": {"cores": 2, "memory_mib": 4096, "disk_gib": 64}, "forgejo": {"memory_mib": 2048}}
     # Back to the least: automatic again, said as such.
     view = call(client, "set_choices", sizes={"forgejo": {"memory_mib": None}})
     assert kinds(view, "proposal")[-1]["lines"] == ["forgejo: memory 1 GiB (the least), was 2 GiB"]
@@ -458,13 +462,13 @@ def test_the_agent_sets_each_guests_size_as_a_change_and_hears_what_does_not_fit
     assert f"linux-runner: {top / 1024:g} GiB of memory does not fit; the server would be " in said and "At most " in said
     # What is not a size is said too, never taken for no change.
     for bad, words in (
-        (["workspace"], "sizes: give each guest's name with its cores and memory_mib"),
-        ({"workspace": 4096}, "workspace: its size is cores and memory_mib"),
+        (["workspace"], "sizes: give each guest's name with its cores, memory_mib and disk_gib"),
+        ({"workspace": 4096}, "workspace: its size is cores, memory_mib and disk_gib"),
         ({"workspace": {"ram": 4096}}, "workspace: ram is not a size"),
     ):
         said = result(call(client, "set_choices", sizes=bad))
         assert words in said, said
-    assert saved(app)["overrides"] == {"workspace": {"cores": 2, "memory_mib": 4096}, "forgejo": {"memory_mib": 2048}}
+    assert saved(app)["overrides"] == {"workspace": {"cores": 2, "memory_mib": 4096, "disk_gib": 64}, "forgejo": {"memory_mib": 2048}}
 
 
 def test_game_settings_and_when_things_run_are_choices_and_an_agreement_is_the_owners(agent):

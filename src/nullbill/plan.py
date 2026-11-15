@@ -393,6 +393,37 @@ def memory_over(model: dict, facts: dict) -> int:
     return always + largest - (facts["memory_mib"] - reserve(model, facts)[0])
 
 
+def disk_copies(model: dict, name: str) -> int:
+    """How many times a guest's disk counts on the storage at the least:
+    a pool's golden image and each job VM of a pinned count, or one (the
+    plan takes clones back until disk fits); once for any other guest."""
+    return _disk_times(model, model["services"][name]["kind"], name)
+
+
+def _disk_times(model: dict, kind: str, name: str) -> int:
+    return 1 + model.get("overrides", {}).get(name, {}).get("count", 1) if kind == "vm-pool" else 1
+
+
+def disk_over(model: dict, facts: dict) -> int:
+    """How many GiB the guests' disks come to beyond what the storage they
+    are on has free, counted as _size counts them with a pool at its
+    fewest job VMs, the copies of kept disks and, without a disk of its
+    own, the backups' volume at its full size: a larger disk must not
+    leave the backups less. Zero or less fits."""
+    storage = guest_storage(facts)
+    if storage is None:
+        return 0
+    planned = planned_services(model, facts)
+    overrides = model.get("overrides", {})
+    need = sum(
+        overrides.get(n, {}).get("disk_gib", svc["floor"]["disk_gib"]) * _disk_times(model, svc["kind"], n) for n, svc in planned.items()
+    )
+    need += legacy.reserved_gib(model, facts).get(storage["name"], 0)
+    if "pbs" in planned and not backups.separate_disk(model, facts):
+        need += model.get("backups", {}).get("size_gib") or backups.SAME_DISK_GIB
+    return need - storage["avail_gib"]
+
+
 def reserve(model: dict, facts: dict) -> tuple[int, str]:
     """Memory left to PVE: less on small hosts, plus ZFS's ARC where ZFS is in use."""
     host = model["host"]

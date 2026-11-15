@@ -19,7 +19,7 @@ host:
 disk:
   storage: local-lvm
   # Includes one golden template per pool.
-  needed_gib: 264
+  needed_gib: 284
   free_gib: 350
   # The backups, in a volume beside the guests: PBS has no disk of its own.
   backups_gib: 64
@@ -93,7 +93,7 @@ guests:
     zone: access
     cores: 1
     memory_mib: 256
-    disk_gib: 2
+    disk_gib: 4
     vmid: 2011
     ip: 10.42.6.11
   step-ca:
@@ -101,7 +101,7 @@ guests:
     zone: mgmt
     cores: 1
     memory_mib: 256
-    disk_gib: 2
+    disk_gib: 4
     vmid: 2012
     ip: 10.42.1.12
   postgres:
@@ -157,7 +157,7 @@ guests:
     zone: media
     cores: 2
     memory_mib: 2048
-    disk_gib: 16
+    disk_gib: 32
     vmid: 2024
     ip: 10.42.7.24
   linux-runner:

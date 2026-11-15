@@ -95,7 +95,7 @@ def test_floors_over_capacity_fail(facts):
         "memory: planned guests need 16384 MiB at their floors (containers at 50% of their limit); "
         "the host has 15848 MiB minus a 3072 MiB host reserve"
     )
-    assert messages[1] == "disk: guests need 440 GiB, storage local-lvm has 350 GiB free"
+    assert messages[1] == "disk: guests need 444 GiB, storage local-lvm has 350 GiB free"
 
 
 def test_overrides_are_checked(facts):

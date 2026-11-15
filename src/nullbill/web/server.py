@@ -1794,7 +1794,9 @@ class App:
         return {"ok": True, "id": found.get("id"), "view": self.game_view(name, fresh=True)}, left == 0
 
     @staticmethod
-    def _games_config(config: dict, form: object, sizes: object = None, facts: dict | None = None, strict: bool = True) -> None:
+    def _games_config(
+        config: dict, form: object, sizes: object = None, facts: dict | None = None, strict: bool = True, has: dict | None = None
+    ) -> None:
         """What the page asks beside each game server's tick, put into
         config.yaml: the owner's agreement to the game's EULA (once for all
         its servers), the admins' names, the server's settings (`settings`
@@ -1805,7 +1807,8 @@ class App:
         out stays as it is, and a `memory_mib` of null leaves the size as it
         is; nothing changes without either form. Every problem is raised
         together, a message each; strict False (the preview) leaves out a
-        size it cannot read."""
+        size it cannot read. has: each guest's disk on the server
+        (sizes.measured), which a disk set may not go below."""
         if not isinstance(form, dict) and sizes is None:
             return
         chosen = copy.deepcopy(config.get("games") or {})
@@ -1864,7 +1867,7 @@ class App:
                 chosen[name] = game
             else:
                 chosen.pop(name, None)
-        overrides, wrong = sizing.read(model, overrides, asked_sizes, facts, strict)
+        overrides, wrong = sizing.read(model, overrides, asked_sizes, facts, strict, has)
         titles = tuple(f"{g['title']}:" for g in model["games"].values())
         about_games = all(message.startswith(titles) for message in wrong)
         sizing.raise_problems(
@@ -1900,7 +1903,7 @@ class App:
         keys = owner.keys(config)
         config["people"] = {"owner": {"role": "owner", "login": login} | ({"ssh_keys": keys} if keys else {}), **people}
         facts = self.facts()
-        self._games_config(config, body.get("games"), body.get("sizes"), facts, strict=saving)
+        self._games_config(config, body.get("games"), body.get("sizes"), facts, strict=saving, has=sizing.measured(self.home))
         self._torrents_config(config, body.get("torrents"))
         if not saving:
             # A pasted WireGuard file counts in the preview once it reads;
@@ -1946,6 +1949,9 @@ class App:
                 return config
             sizing.raise_problems(
                 sizing.too_much(before, after, facts), "These sizes do not fit in the server's memory, so nothing was saved"
+            )
+            sizing.raise_problems(
+                sizing.disk_too_much(before, after, facts), "These disks do not fit on the server's storage, so nothing was saved"
             )
         return config
 

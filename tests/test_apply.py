@@ -27,6 +27,7 @@ from nullbill import (
     owner,
     power,
     release,
+    sizes,
     torrents,
 )
 from nullbill.apply import ApplyError, Context, connection, run_apply
@@ -146,6 +147,10 @@ class FakeReach:
         self.power_on = set()
         self.power_started = []
         self.power_room = 2
+        # Guests' root disks as `pct config` or `qm config` list them, by
+        # VMID: (config key, GiB, running); none is read as no disk known.
+        self.root_disks = {}
+        self.grown_inside = []
 
     def mark(self, machine, command):
         """apply's reads and writes of the marks on one machine."""
@@ -182,6 +187,9 @@ class FakeReach:
             if self.portmap is None:
                 return 0, guest_exec("", 1, f"cat: {direct.ROUTER_STATE}: No such file or directory\n"), ""
             return 0, guest_exec(f"{json.dumps(self.portmap)}\n{ROUTER_CLOCK}\n"), ""
+        if "qm guest exec " in command and "growpart" in command:
+            self.grown_inside.append(int(command.split("qm guest exec ")[1].split()[0]))
+            return 0, guest_exec(""), ""
         if "qm guest exec " in command:
             vmid = int(command.split("qm guest exec ")[1].split()[0])
             key = self.agent_keys.get(vmid)
@@ -263,6 +271,21 @@ class FakeReach:
         if command.startswith("bash -c ") and "qm status" in command:
             self.timeouts.append(timeout)
             return 0, "", ""
+        if command.startswith(apply.DISKS_LOOK):
+            out = ""
+            for item in command.split(" for v in ")[1].split("; do ")[0].split():
+                vmid = int(item.split(":")[0])
+                out += f"== {vmid}\n"
+                if vmid in self.root_disks:
+                    key, size, running = self.root_disks[vmid]
+                    out += f"{key}: local-lvm:vm-{vmid}-disk-0,size={size}G\nstatus: {'running' if running else 'stopped'}\n"
+            return 0, out, ""
+        if command.startswith(("pct resize ", "qm disk resize ")) and not command.startswith("qm disk resize 2015 virtio1 "):
+            words = command.split()
+            vmid, key, size = (int(words[2]), words[3], words[4]) if words[0] == "pct" else (int(words[3]), words[4], words[5])
+            assert self.root_disks[vmid][0] == key
+            self.root_disks[vmid] = (key, int(size.removesuffix("G")), self.root_disks[vmid][2])
+            return 0, "", ""
         if command.startswith("qm config 2015 ") and self.datastore:
             storage, size = self.datastore
             return 0, f"name: pbs\nvirtio1: {storage}:vm-2015-disk-1,backup=0,serial=nb-backups,size={size}G\n", ""
@@ -274,7 +297,10 @@ class FakeReach:
             self.datastore = (self.datastore[0], int(command.split()[5].removesuffix("G")))
             return 0, "", ""
         if command.startswith("qm config "):
-            return 0, "template: 1\n" if command.split()[2] in self.templates else "name: x\n", ""
+            vmid = command.split()[2]
+            disk = self.root_disks.get(int(vmid))
+            disk_line = f"{disk[0]}: local-lvm:base-{vmid}-disk-0,size={disk[1]}G\n" if disk else ""
+            return 0, ("template: 1\n" if vmid in self.templates else "name: x\n") + disk_line, ""
         if command.startswith("qm shutdown "):
             self.templates.add(command.split()[2])
             return 0, "", ""
@@ -1247,6 +1273,18 @@ def test_ci_stage_bakes_each_golden_image_once_then_runs_the_dispatcher(ctx):
     apply.stage_ci(c)
     assert [call[1] for call in c.reach.calls if call[0] == "playbook"] == []
 
+    # OpenTofu leaves a disk's size alone: an image whose disk is not the
+    # job VMs' size is made again, and then kept.
+    c.reach.root_disks[2030] = ("scsi0", 16, False)
+    c.reach.calls.clear()
+    apply.stage_ci(c)
+    assert "ci: linux-runner's golden image has a 16 GiB disk and its job VMs get 32 GiB now; baking it again" in c.log
+    assert [call[1] for call in c.reach.calls if call[0] == "local" and call[1][:2] == ["tofu", "plan"]] == [tofu[0]]
+    c.reach.root_disks[2030] = ("scsi0", 32, False)
+    c.reach.calls.clear()
+    apply.stage_ci(c)
+    assert [call[1] for call in c.reach.calls if call[0] == "playbook"] == []
+
 
 def test_retiring_a_golden_image_destroys_only_its_pool_clones(ctx, monkeypatch):
     """A VM of the owner's inside the clone range, or a template, is never a
@@ -1405,6 +1443,73 @@ def test_the_backups_volume_moves_to_a_disk_plugged_in_later_and_grows(ctx):
     assert any("moving the backups from local-lvm to nb-pbs-disk" in line for line in c.log)
     apply.place_datastore(c)  # in place: nothing more
     assert [call[1] for call in c.reach.calls if call[0] == "host" and call[1].startswith("qm disk")] == disk
+
+
+def test_each_guests_disk_grows_to_its_size_with_its_file_system_and_never_shrinks(ctx):
+    """OpenTofu leaves a disk's size alone; after it, apply grows each disk
+    the plan gives more: a container's with pct (its file system grows with
+    it), a running Linux VM's partition and file system inside it, a VM
+    that is off at its next start, Windows' by the owner. A larger disk
+    stays, and what each has is written down for the page."""
+    config = fixture_config("mid")
+    config["overrides"] = {"workspace": {"disk_gib": 80}, "router": {"disk_gib": 10}, "windows-dev": {"disk_gib": 120}}
+    c = ctx("mid", config=config)
+    c.reach.root_disks = {
+        2019: ("rootfs", 32, True),  # workspace
+        2001: ("scsi0", 4, True),  # router, running
+        2015: ("scsi0", 8, False),  # pbs, as planned
+        2022: ("sata0", 96, True),  # windows-dev
+        2011: ("rootfs", 6, True),  # vpn, grown by hand past its plan
+        2014: ("rootfs", 20, False),  # monitoring, off and smaller than its plan
+    }
+    apply.grow_disks(c)
+    resized = [call[1] for call in c.reach.calls if call[1].startswith(("pct resize", "qm disk resize"))]
+    assert resized == [
+        "qm disk resize 2001 scsi0 10G",
+        "pct resize 2014 rootfs 32G",
+        "pct resize 2019 rootfs 80G",
+        "qm disk resize 2022 sata0 120G",
+    ]
+    assert c.reach.grown_inside == [2001]
+    log = "\n".join(c.log)
+    assert "tofu: router's disk grows from 4 GiB to 10 GiB, its file system with it" in log
+    assert "tofu: workspace's disk grows from 32 GiB to 80 GiB" in log
+    assert "tofu: windows-dev's disk grows from 96 GiB to 120 GiB; Windows uses the room once you extend drive C:" in log
+    assert "tofu: vpn keeps its 6 GiB disk; a disk never shrinks, and the plan asks for 4 GiB" in log
+    recorded = json.loads((c.home / sizes.DISKS).read_text())["disks"]
+    assert recorded == {"router": 10, "vpn": 6, "monitoring": 32, "pbs": 8, "workspace": 80, "windows-dev": 120}
+    assert sizes.measured(c.home) == recorded
+    # Again: nothing more to grow.
+    before = len(c.reach.calls)
+    apply.grow_disks(c)
+    assert not [call for call in c.reach.calls[before:] if call[1].startswith(("pct resize", "qm disk resize"))]
+
+
+def test_a_vm_that_is_off_grows_its_file_system_at_its_next_start_and_a_failure_inside_stops_nothing(ctx):
+    config = fixture_config("mid")
+    config["overrides"] = {"router": {"disk_gib": 10}, "pbs": {"disk_gib": 12}}
+    c = ctx("mid", config=config)
+    c.reach.root_disks = {2001: ("scsi0", 4, False), 2015: ("scsi0", 8, True)}
+    real = c.reach.host
+
+    def host(command, stdin=None, timeout=900):
+        if "growpart" in command:
+            return 0, guest_exec("", 1, "resize2fs: Permission denied\n"), ""
+        return real(command, stdin, timeout)
+
+    c.reach.host = host
+    apply.grow_disks(c)
+    log = "\n".join(c.log)
+    assert "tofu: router's disk grows from 4 GiB to 10 GiB; its file system grows at its next start" in log
+    assert "tofu: pbs's disk grows from 8 GiB to 12 GiB; its file system grows at its next start (growing it now failed: " in log
+
+
+def test_opentofu_leaves_each_disks_size_to_apply(ctx):
+    c = ctx("mid")
+    resources = json.loads(c.files["tofu/main.tf.json"])["resource"]
+    for kind in ("proxmox_virtual_environment_container", "proxmox_virtual_environment_vm"):
+        for name, guest in resources[kind].items():
+            assert "disk[0].size" in guest["lifecycle"]["ignore_changes"], name
 
 
 def test_the_backups_volume_grows_with_its_pin_and_never_shrinks(ctx):
