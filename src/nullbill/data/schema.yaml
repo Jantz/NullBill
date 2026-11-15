@@ -399,6 +399,9 @@ $defs:
       # It is in the list only because another needs it, and leaves with
       # the last that does.
       for_others: {type: boolean}
+      # Modrinth marks it as made for a player's own game; the owner added
+      # it anyway, since another on the server needs it there.
+      players_only: {type: boolean}
 
   # One more server of a game: a guest, a workload and a rule for when it
   # runs, all of this entry's name (model.py's _more_games makes them from

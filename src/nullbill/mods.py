@@ -153,10 +153,13 @@ def role_mods(model: dict, name: str) -> list[dict]:
 # Modrinth, read.
 
 
-def _facets(kind: str, version: str) -> list[list[str]]:
+def _facets(kind: str, version: str, typed: bool) -> list[list[str]]:
     out = [[f"categories:{loader}" for loader in LOADERS[kind]], [f"versions:{version}"], [f"project_type:{PROJECT[kind]}"]]
-    if kind == "fabric":
-        # Not what only a player's own game runs (shaders' helpers, maps).
+    if kind == "fabric" and not typed:
+        # The most used, unasked: not what only a player's own game runs
+        # (shaders' helpers, maps). A name typed finds those too, marked,
+        # since a server mod may need one on the server (VoxyServer needs
+        # Voxy).
         out.append(["server_side:required", "server_side:optional"])
     return out
 
@@ -173,8 +176,9 @@ def search(ask: Fetch, model: dict, name: str, query: object) -> list[dict]:
     first; an empty query lists the most used of all."""
     kind = _kind_that_takes(model, name)
     version, have = model["games"][name]["version"], {mod["project"] for mod in model["games"][name].get("mods") or []}
-    params = {"query": read_query(query), "limit": str(HITS), "index": "relevance" if read_query(query) else "downloads"}
-    found = ask("search", params | {"facets": _facets(kind, version)})
+    typed = read_query(query)
+    params = {"query": typed, "limit": str(HITS), "index": "relevance" if typed else "downloads"}
+    found = ask("search", params | {"facets": _facets(kind, version, bool(typed))})
     hits = found.get("hits") if isinstance(found, dict) else None
     if not isinstance(hits, list):
         raise NullBillError("Modrinth's answer was not a list of projects")
@@ -190,6 +194,7 @@ def search(ask: Fetch, model: dict, name: str, query: object) -> list[dict]:
                 "by": _line(hit.get("author"), 40),
                 "downloads": int(hit.get("downloads") or 0),
                 "players_need": hit.get("client_side") == "required",
+                "players_only": hit.get("server_side") == "unsupported",
                 "added": hit["slug"] in have,
                 "link": f"{SITE}/project/{hit['slug']}",
             }
@@ -251,6 +256,8 @@ def _entry(kind: str, version: str, project: dict, found: dict) -> dict:
     }
     if project.get("client_side") == "required":
         entry["players_need"] = True
+    if project.get("server_side") == "unsupported":
+        entry["players_only"] = True
     return entry
 
 
@@ -281,8 +288,6 @@ def resolve(ask: Fetch, model: dict, name: str, project: object, replace: bool =
             if not for_others:
                 raise NullBillError(f"{title} is in {game['title']}'s list already")
             continue
-        if info.get("server_side") == "unsupported":
-            raise NullBillError(f"{title} is for a player's own game only; a server does not run it")
         found = _newest(ask, kind, version, str(info["id"]))
         if found is None:
             raise NullBillError(f"{title} has no version for {LABEL[kind]} on Minecraft {version}")
@@ -307,6 +312,29 @@ def resolve(ask: Fetch, model: dict, name: str, project: object, replace: bool =
         needs = [slug[other] for other in entry.pop("_needs") if other in slug]
         if needs:
             entry["needs"] = needs
+    return out
+
+
+def asks(model: dict, name: str, entries: list[dict]) -> list[str]:
+    """What the owner should know before these entries join a server's
+    list: nothing, unless one is new there and Modrinth marks it as made
+    for a player's own game. Such a mod belongs on a server only when
+    another one there needs it: VoxyServer runs on the server and needs
+    Voxy beside it, which Modrinth marks for players' games (and which
+    brings Sodium, marked the same)."""
+    have = {mod["id"] for mod in model["games"][name].get("mods") or []}
+    new = [e["title"] for e in entries if e.get("players_only") and e["id"] not in have]
+    if not new:
+        return []
+    kind, them = server(model, name), "it" if len(new) == 1 else "them"
+    titles = " and ".join([", ".join(new[:-1]), new[-1]] if len(new) > 1 else new)
+    out = [
+        f"Modrinth marks {titles} as made for a player's own game, not for a server.",
+        f"Add {them} only when another {WORD[kind]} on this server needs {them} there"
+        + (", as VoxyServer needs Voxy." if kind == "fabric" else "."),
+    ]
+    if kind == "fabric":
+        out.append("Fabric does not start a mod whose own file says it is for players' games only; it then sits in the list unused.")
     return out
 
 
@@ -467,6 +495,7 @@ def view(model: dict, name: str) -> dict:
                 "file": mod["file"],
                 "players_need": bool(mod.get("players_need")),
                 "for_others": bool(mod.get("for_others")),
+                "players_only": bool(mod.get("players_only")),
                 "needs": list(mod.get("needs", [])),
                 "link": f"{SITE}/project/{mod['project']}",
             }
@@ -484,5 +513,7 @@ def describe(entries: list[dict]) -> list[str]:
             line += ", which another needs"
         if entry.get("players_need"):
             line += "; every player needs it in their own game too"
+        if entry.get("players_only"):
+            line += "; Modrinth marks it as made for players' games"
         out.append(line)
     return out

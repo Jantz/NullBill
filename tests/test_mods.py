@@ -147,8 +147,9 @@ def test_what_modrinth_answers_is_taken_only_in_the_shape_the_guest_may_fetch():
             mods.resolve(tampered(change), model, "minecraft", "lithium")
     with pytest.raises(NullBillError, match="has no .jar file|not one NullBill takes"):
         mods.resolve(tampered(odd_name), model, "minecraft", "lithium")
-    with pytest.raises(NullBillError, match="Lithium is for a player's own game only"):
-        mods.resolve(tampered(lambda found: found.update(server_side="unsupported")), model, "minecraft", "lithium")
+    # What Modrinth marks as made for players' games is said with the entry.
+    (entry,) = mods.resolve(tampered(lambda found: found.update(server_side="unsupported")), model, "minecraft", "lithium")
+    assert entry["players_only"] is True and "Modrinth marks it as made for players' games" in mods.describe([entry])[0]
     with pytest.raises(NullBillError, match="Lithium has no version for Fabric on Minecraft"):
         mods.resolve(tampered(lambda found: found.update(status="draft")), model, "minecraft", "lithium")
     # What every player needs too is said with the entry.
@@ -262,7 +263,7 @@ def test_a_further_server_has_its_own_kind_and_list_and_the_games_pins(facts):
     assert games.variables(plan, model, "minecraft")["game_minecraft_server"] == "vanilla"
 
 
-@pytest.mark.parametrize(("kind", "projects"), [("paper", ["chunky"]), ("fabric", ["lithium", "chunky"])])
+@pytest.mark.parametrize(("kind", "projects"), [("paper", ["chunky"]), ("fabric", ["lithium", "chunky", "voxyserver", "voxy"])])
 def test_the_role_check_installs_what_the_page_would_have_added(facts, kind, projects):
     """The Minecraft role's check runs Paper and Fabric with
     tests/<kind>.json over tests/vars.json: keep them equal to what apply
@@ -283,13 +284,50 @@ def test_the_role_check_installs_what_the_page_would_have_added(facts, kind, pro
     assert path.read_text() == want
 
 
+def test_a_mod_made_for_players_games_joins_only_with_the_owners_yes():
+    """VoxyServer runs on the server and needs Voxy beside it, which
+    Modrinth marks as made for a player's own game and which brings Sodium,
+    marked the same. Fabric starts Voxy there (its own file says any side)
+    and not Sodium (it says client), which the role check shows on the
+    real server."""
+    config = with_kind("fabric", "lithium", "chunky", "voxyserver")
+    model = build_model(config)
+    # The most used, unasked, are what a server runs; a name typed finds the others, marked.
+    assert ["server_side:required", "server_side:optional"] in mods._facets("fabric", "26.3", False)
+    assert not any(f[0].startswith("server_side:") for f in mods._facets("fabric", "26.3", True))
+    hits = {h["project"]: h for h in mods.search(modrinth, model, "minecraft", "voxy")}
+    assert hits["voxy"]["players_only"] is True and hits["voxyserver"]["players_only"] is False and hits["voxyserver"]["added"]
+    (server,) = [m for m in listed(config) if m["project"] == "voxyserver"]
+    assert server["players_need"] is True and "players_only" not in server and mods.asks(model, "minecraft", [server]) == []
+    voxy, sodium = mods.resolve(modrinth, model, "minecraft", "voxy")
+    assert (voxy["project"], voxy["players_only"], voxy["needs"]) == ("voxy", True, ["fabric-api", "sodium"])
+    assert (sodium["project"], sodium["players_only"], sodium["for_others"]) == ("sodium", True, True)
+    # Sodium's release, which Voxy's own file asks for, before its betas.
+    assert sodium["file"] == "sodium-fabric-0.9.2+mc26.3.jar"
+    assert mods.asks(model, "minecraft", [voxy, sodium]) == [
+        "Modrinth marks voxy and Sodium as made for a player's own game, not for a server.",
+        "Add them only when another mod on this server needs them there, as VoxyServer needs Voxy.",
+        "Fabric does not start a mod whose own file says it is for players' games only; it then sits in the list unused.",
+    ]
+    config = mods.put(config, model, "minecraft", [voxy, sodium])
+    model = build_model(config)
+    assert mods.problems(model, "minecraft") == []
+    # Once in the list, an update of it asks nothing again.
+    assert mods.asks(model, "minecraft", [voxy, sodium]) == []
+    view = {m["project"]: m for m in mods.view(model, "minecraft")["mods"]}
+    assert view["voxy"]["players_only"] and view["sodium"]["players_only"] and not view["voxyserver"]["players_only"]
+    # Sodium leaves with Voxy, the one that needed it.
+    _, gone = mods.drop(config, model, "minecraft", "voxy")
+    assert gone == ["voxy", "Sodium"]
+
+
 def test_verify_asks_the_guest_which_server_and_files_it_holds(facts):
     config = with_kind("fabric", "lithium", "chunky")
     model = build_model(config)
     plan = strip_notes(build_plan(model, facts("large")))
     (check,) = [c for c in games.commands(plan, model) if c[0] == "minecraft runs Fabric with its mods"]
     assert check[1].endswith("nb-game mods") or "nb-game mods" in check[1]
-    assert check[2] == "fabric Chunky-Fabric-1.5.66.jar fabric-api-0.166.0+26.3.jar lithium-fabric-0.26.3+mc26.3.jar"
+    assert check[2] == "fabric Chunky-Fabric-1.5.66.jar fabric-api-0.166.2+26.3.jar lithium-fabric-0.26.3+mc26.3.jar"
     model = build_model(games_config())
     plan = strip_notes(build_plan(model, facts("large")))
     assert ("minecraft runs Mojang's own server", "vanilla") in [(c[0], c[2]) for c in games.commands(plan, model)]
@@ -386,7 +424,7 @@ def test_the_page_changes_the_kind_and_the_list_and_says_whether_the_server_runs
     assert client.call("/api/game?name=minecraft&fresh=1")[1]["view"]["server"] == "fabric"
     view = client.call("/api/game/mods?name=minecraft")[1]["view"]
     assert view["applied"] is False and view["players"] == host.report["players"]
-    host.report["mods"].append("fabric-api-0.166.0+26.3.jar")
+    host.report["mods"].append("fabric-api-0.166.2+26.3.jar")
     client.call("/api/game?name=minecraft&fresh=1")
     assert client.call("/api/game/mods?name=minecraft")[1]["view"]["applied"] is True
     # A guest from before this was built says nothing: it runs Mojang's.
@@ -429,10 +467,28 @@ def test_the_page_takes_newer_versions_only_when_asked(site):
     answer = post(action="update")[1]
     assert answer["updated"][0]["from"] == "0.1" and saved(app)["mods"][0]["file"] == "lithium-fabric-0.26.3+mc26.3.jar"
     assert post(action="update")[1]["updates"] == []
+    # A mod made for players' games: asked first, then added with what it needs.
+    post(action="add", project="voxyserver")
+    status, answer = post(action="add", project="voxy")
+    assert status == 200 and (answer["ok"], answer["title"], answer["adding"]) == (False, "Minecraft", ["voxy"])
+    assert answer["costs"][0] == "Modrinth marks voxy and Sodium as made for a player's own game, not for a server."
+    assert [m["project"] for m in saved(app)["mods"]] == ["lithium", "voxyserver"]
+    answer = post(action="add", project="voxy", yes=True)[1]
+    assert answer["ok"] and answer["added"][2].startswith("Sodium mc26.3-0.9.2-fabric")
+    marked = [(m["project"], m["players_only"]) for m in answer["view"]["mods"]]
+    assert marked[2:] == [("voxy", True), ("fabric-api", False), ("sodium", True)]
+    # An update that would bring one in asks the same.
+    config = yaml.safe_load((app.home / "config.yaml").read_text())
+    config["games"]["minecraft"]["mods"] = [m for m in config["games"]["minecraft"]["mods"] if m["project"] != "sodium"]
+    config["games"]["minecraft"]["mods"][2] |= {"sha512": "0" * 128}
+    (app.home / "config.yaml").write_text(yaml.safe_dump(config))
+    answer = post(action="update")[1]
+    assert answer["ok"] is False and answer["adding"] == ["Sodium"] and len(saved(app)["mods"]) == 4
+    assert post(action="update", yes=True)[1]["ok"] and len(saved(app)["mods"]) == 5
     # Modrinth away: said in its own words, nothing changed.
     app.modrinth = lambda path, params=None: (_ for _ in ()).throw(NullBillError("Modrinth did not answer (timed out)"))
     status, answer = post(action="add", project="chunky")
-    assert status == 400 and answer["error"] == "Modrinth did not answer (timed out)" and len(saved(app)["mods"]) == 1
+    assert status == 400 and answer["error"] == "Modrinth did not answer (timed out)" and len(saved(app)["mods"]) == 5
 
 
 # The agent.
@@ -450,7 +506,7 @@ def test_the_agent_reads_searches_and_changes_a_servers_mods_as_a_change(agent, 
     assert "project: lithium" in result(call(client, "game_mods", name="minecraft", action="search", query="lithium"))
     view = call(client, "game_mods", name="minecraft", action="add", project="chunky")
     assert kinds(view, "ran")[-1]["title"] == "Add Chunky to Minecraft"
-    assert "saved: Minecraft runs fabric with mods: Chunky 1.5.66, Fabric API 0.166.0+26.3." in result(view)
+    assert "saved: Minecraft runs fabric with mods: Chunky 1.5.66, Fabric API 0.166.2+26.3." in result(view)
     assert "start_job apply with stage games" in result(view)
     assert [m["project"] for m in config["now"]["games"]["minecraft"]["mods"]] == ["chunky", "fabric-api"]
     assert "updates: none" in result(call(client, "game_mods", name="minecraft", action="check"))
@@ -464,6 +520,16 @@ def test_the_agent_reads_searches_and_changes_a_servers_mods_as_a_change(agent, 
     assert "is no Minecraft server" in result(call(client, "game_mods", name="terraria", action="list"))
     assert "action is list, search" in result(call(client, "game_mods", name="minecraft", action="upload"))
     assert "Modrinth has nothing of that name" in result(call(client, "game_mods", name="minecraft", action="add", project="nope"))
+    # A mod made for players' games: the agent is told to ask the owner first.
+    call(client, "game_mods", name="minecraft", action="server", server="fabric", yes=True)
+    said = result(call(client, "game_mods", name="minecraft", action="add", project="voxy"))
+    assert "adding voxy to Minecraft needs the owner's yes first: Modrinth marks voxy and Sodium" in said and "yes=true" in said
+    assert "mods" not in config["now"]["games"]["minecraft"]
+    view = call(client, "game_mods", name="minecraft", action="add", project="voxy", yes=True)
+    assert kinds(view, "ran")[-1]["title"] == "Add voxy to Minecraft"
+    assert [m["project"] for m in config["now"]["games"]["minecraft"]["mods"]] == ["voxy", "fabric-api", "sodium"]
+    said = result(call(client, "game_mods", name="minecraft", action="list"))
+    assert "players_only: true" in said
 
 
 def test_the_agent_asks_in_manual_mode_with_what_comes_along(agent, monkeypatch):
@@ -478,7 +544,7 @@ def test_the_agent_asks_in_manual_mode_with_what_comes_along(agent, monkeypatch)
     assert (proposal["tier"], proposal["title"]) == ("change", "Add Chunky to Minecraft")
     assert proposal["lines"] == [
         "Chunky 1.5.66 (Chunky-Fabric-1.5.66.jar)",
-        "Fabric API 0.166.0+26.3 (fabric-api-0.166.0+26.3.jar), which another needs",
+        "Fabric API 0.166.2+26.3 (fabric-api-0.166.2+26.3.jar), which another needs",
         "From Modrinth, taken by its SHA-512; someone else's program, run inside this game server only",
         "The server gets it with setup's games stage, which restarts it",
     ]

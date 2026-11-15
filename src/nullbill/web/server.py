@@ -1677,7 +1677,8 @@ class App:
         """Search Modrinth, or change a Minecraft server's kind or its
         list of plugins or mods. A change of kind that costs something (the
         list, or which servers open the world) changes nothing and says
-        what, until it comes with `yes`."""
+        what, until it comes with `yes`; so does adding or updating to
+        what Modrinth marks as made for a player's own game."""
         config = self.config()
         if config is None:
             raise NullBillError("nothing is chosen yet; save your choices under Setup, What to run, first")
@@ -1701,6 +1702,10 @@ class App:
             ]
             if action == "check" or not found:
                 return {"ok": True, "updates": updates, "view": self.mods_view(name)}
+            costs = mods.asks(model, name, found)
+            if costs and body.get("yes") is not True:
+                new_ones = [e["title"] for e in found if e.get("players_only") and e["project"] not in have]
+                return {"ok": False, "costs": costs, "title": title, "adding": new_ones}
             new, out = mods.put(config, model, name, found), {"updated": updates}
         elif action == "server":
             new, gone = mods.set_server(config, model, name, body.get("server"))
@@ -1710,6 +1715,9 @@ class App:
             out = {"dropped": gone}
         elif action == "add":
             entries = mods.resolve(self.modrinth, model, name, body.get("project"))
+            costs = mods.asks(model, name, entries)
+            if costs and body.get("yes") is not True:
+                return {"ok": False, "costs": costs, "title": title, "adding": [entries[0]["title"]]}
             new, out = mods.put(config, model, name, entries), {"added": mods.describe(entries)}
         elif action == "remove":
             new, gone = mods.drop(config, model, name, body.get("project"))

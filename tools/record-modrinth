@@ -23,10 +23,12 @@ OUT = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "modrinth.
 # what is only looked up; last, each one's newest version is asked for.
 ASKED = {
     "paper": {"search": ["", "chunky"], "add": ["chunky"], "look": []},
-    "fabric": {"search": ["", "lithium"], "add": ["lithium", "chunky"], "look": ["fabric-api"]},
+    # VoxyServer needs Voxy and Sodium on the server, which Modrinth marks
+    # as made for players' games (mods.asks); Voxy brings Sodium.
+    "fabric": {"search": ["", "lithium", "voxy"], "add": ["lithium", "chunky", "voxyserver", "voxy"], "look": ["fabric-api"]},
 }
 KEEP = {
-    "hit": ("slug", "title", "description", "author", "downloads", "client_side"),
+    "hit": ("slug", "title", "description", "author", "downloads", "client_side", "server_side"),
     "project": ("slug", "id", "title", "client_side", "server_side", "project_type"),
     "version": ("status", "version_type", "date_published", "version_number", "loaders", "game_versions"),
 }
@@ -51,8 +53,10 @@ def trim(path: str, answer: object) -> object:
                     {"project_id": d.get("project_id"), "dependency_type": d.get("dependency_type")} for d in v.get("dependencies") or []
                 ],
             }
-            # The newest few: the tests take the newest.
-            for v in answer[:3]
+            # The newest few, and the newest of each channel, which
+            # mods.py takes first (Sodium's release behind its betas).
+            for i, v in enumerate(answer)
+            if i < 3 or all(w.get("version_type") != v.get("version_type") for w in answer[:i])
         ]
     return {k: answer.get(k) for k in KEEP["project"]}
 

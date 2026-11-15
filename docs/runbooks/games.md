@@ -321,6 +321,19 @@ What you should know before adding one:
 - A mod marked **Players need it too** must be in each player's own game
   (with Fabric installed there), in a version that fits. Tell your
   friends which; the page does not send it to them.
+- Some mods for the server need mods that Modrinth marks as made for a
+  player's own game. VoxyServer (distant terrain for players with Voxy)
+  is one: the server needs Voxy beside it. The search finds such mods
+  when you type their name and marks them **Made for players' games**;
+  adding one asks first. Say yes only when a mod on your server needs
+  it. For VoxyServer: add **VoxyServer**, then **Voxy** (Sodium comes
+  with it), and press **Apply to the server**. Fabric runs Voxy on the
+  server and leaves Sodium unused there. Each player needs Voxy, Sodium
+  and VoxyServer in their own game.
+  VoxyServer's settings are in `/var/lib/minecraft/config/voxyserver.json`
+  and on the console (`voxyserver config list`, `voxyserver stats`). It
+  turns terrain into distant views on the server, which takes CPU: give
+  the server more cores under its **Size** if it lags.
 - A plugin's or mod's own settings are files in the server's home
   (`/var/lib/minecraft/plugins/<name>/` for Paper, `/var/lib/minecraft/config/`
   for Fabric), not on the page. Many also take commands on the console

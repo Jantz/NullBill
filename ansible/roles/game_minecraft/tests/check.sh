@@ -273,9 +273,21 @@ test ! -e /opt/minecraft/paper || fail "Paper's files are gone once the server i
 [ "$(nb-game mods)" = "fabric $(files_of fabric)" ] || { nb-game mods; ls /opt/minecraft/mods; fail "nb-game mods names Fabric and its mods, and the plugin is gone"; }
 [ "$(stat -c '%U' /opt/minecraft/fabric/*.jar /opt/minecraft/mods/*.jar | sort -u)" = root ] || fail "Fabric and its mods are root's"
 game_says minecraft 'Loading Minecraft .* with Fabric Loader' 5 || fail "the server that runs is Fabric"
-for mod in lithium chunky fabric-api; do
+for mod in lithium chunky fabric-api voxy voxyserver; do
   grep -Eq -- "- $mod " /tmp/minecraft.log || { grep -A40 'Loading .* mods' /tmp/minecraft.log | head -60; fail "Fabric loaded $mod"; }
 done
+# VoxyServer needs Voxy, which Modrinth marks as made for players' games
+# (mods.asks) and which brings Sodium. Voxy's own file says any side, so
+# the server runs it; Sodium's says client, so Fabric does not start it,
+# and Voxy's own server-side stand-in (sodiumprovider) answers for it.
+if grep -Eq -- "- sodium " /tmp/minecraft.log; then fail "Fabric started Sodium on the server"; fi
+grep -q 'sodiumprovider' /tmp/minecraft.log || { grep -i sodium /tmp/minecraft.log | head; fail "Voxy's stand-in for Sodium runs on the server"; }
+grep -q 'VoxyServer initialized' /tmp/minecraft.log || fail "VoxyServer started"
+nb-game console "voxyserver stats"
+game_says minecraft 'voxelized' 30 || fail "VoxyServer answers on the console"
+if grep -q 'engine not started' /tmp/minecraft.log; then grep -B2 -A2 'engine not started' /tmp/minecraft.log; fail "Voxy's engine runs on the server"; fi
+grep -A12 'voxelized' /tmp/minecraft.log | head -14
+test -s /var/lib/minecraft/config/voxyserver.json || fail "VoxyServer wrote its settings where the guide says"
 test ! -e /var/lib/minecraft/mods || [ -z "$(ls /var/lib/minecraft/mods)" ] || fail "Fabric reads its mods from the role's directory alone"
 world list
 world_is "[(x['id'], x['title'], x['active'], x.get('paper')) for x in w['worlds']] == [('w1', 'First world', False, True), ('w5', 'New world after Paper', True, None)]" \
@@ -284,7 +296,7 @@ if world use w1; then fail "ran a Paper world under Fabric"; fi
 world_is "'only a Paper server opens it now' in w['error']" || fail "says why the Paper world does not run here"
 [ "$(nb-game players)" = 0 ] || fail "the server still answers after the refusal"
 systemctl stop minecraft
-pass "Fabric: the role's pinned loader runs with Lithium, Chunky and the Fabric API Chunky needs; the world Paper opened is kept, not run"
+pass "Fabric: the role's pinned loader runs with Lithium, Chunky and the Fabric API Chunky needs, and VoxyServer with Voxy beside it; the world Paper opened is kept, not run"
 
 # A changed mod file is fetched again, not run: the pin is the file's hash.
 echo tampered >>/opt/minecraft/mods/"$(files_of fabric | cut -d' ' -f1)"

@@ -1,4 +1,129 @@
 {
+ "project/AANobbMI": {
+  "client_side": "required",
+  "id": "AANobbMI",
+  "project_type": "mod",
+  "server_side": "unsupported",
+  "slug": "sodium",
+  "title": "Sodium"
+ },
+ "project/AANobbMI/version {\"game_versions\": [\"26.3\"], \"loaders\": [\"fabric\"]}": [
+  {
+   "date_published": "2026-11-12T01:12:30.154674Z",
+   "dependencies": [],
+   "files": [
+    {
+     "filename": "sodium-fabric-0.9.3-beta.5+mc26.3.jar",
+     "hashes": {
+      "sha512": "343e63958e3867077ecbfa752dbc0ce079e1244d7a125309258ade62bc13aecb95c47378d4f42e76369c957c1f97c29dd751551151b65136830374d553cd275c"
+     },
+     "primary": true,
+     "url": "https://cdn.modrinth.com/data/AANobbMI/versions/v7Lw0h1m/sodium-fabric-0.9.3-beta.5%2Bmc26.3.jar"
+    }
+   ],
+   "game_versions": [
+    "26.3"
+   ],
+   "loaders": [
+    "fabric"
+   ],
+   "status": "listed",
+   "version_number": "mc26.3-0.9.3-beta.5-fabric",
+   "version_type": "beta"
+  },
+  {
+   "date_published": "2026-11-08T03:54:24.496862Z",
+   "dependencies": [],
+   "files": [
+    {
+     "filename": "sodium-fabric-0.9.3-beta.4+mc26.3.jar",
+     "hashes": {
+      "sha512": "b989a358a070f54d9f10a68b029a886b653050fe94a4179ca349a670f1aa4985af493d1616bcd0630fc908e8d96f93ba6f473a68bca3428bc07ecaca3241b030"
+     },
+     "primary": true,
+     "url": "https://cdn.modrinth.com/data/AANobbMI/versions/2MZWfUts/sodium-fabric-0.9.3-beta.4%2Bmc26.3.jar"
+    }
+   ],
+   "game_versions": [
+    "26.3"
+   ],
+   "loaders": [
+    "fabric"
+   ],
+   "status": "listed",
+   "version_number": "mc26.3-0.9.3-beta.4-fabric",
+   "version_type": "beta"
+  },
+  {
+   "date_published": "2026-11-07T02:07:28.269034Z",
+   "dependencies": [],
+   "files": [
+    {
+     "filename": "sodium-fabric-0.9.3-beta.3+mc26.3.jar",
+     "hashes": {
+      "sha512": "c5ae8fc39fb36ee2e4b74fd8dae712b334052ccf6be7908d9b79233d9a772a070d9296f1bb439e79d0863a298a9684e94ae18e3d45174b8ec779b1f63b7ca964"
+     },
+     "primary": true,
+     "url": "https://cdn.modrinth.com/data/AANobbMI/versions/aFVpk3tG/sodium-fabric-0.9.3-beta.3%2Bmc26.3.jar"
+    }
+   ],
+   "game_versions": [
+    "26.3"
+   ],
+   "loaders": [
+    "fabric"
+   ],
+   "status": "listed",
+   "version_number": "mc26.3-0.9.3-beta.3-fabric",
+   "version_type": "beta"
+  },
+  {
+   "date_published": "2026-09-20T21:27:07.494280Z",
+   "dependencies": [],
+   "files": [
+    {
+     "filename": "sodium-fabric-0.9.3-alpha.1+mc26.3.jar",
+     "hashes": {
+      "sha512": "8aa044fea0185855e2ca0971b4e3b3bc1ee4c616e3a7d6ca4d4b979fbb99340678c0bf6acd16be04095bc885b75b4caf95401486e91b65239385e98fab6d3542"
+     },
+     "primary": true,
+     "url": "https://cdn.modrinth.com/data/AANobbMI/versions/v4PSXean/sodium-fabric-0.9.3-alpha.1%2Bmc26.3.jar"
+    }
+   ],
+   "game_versions": [
+    "26.3"
+   ],
+   "loaders": [
+    "fabric"
+   ],
+   "status": "listed",
+   "version_number": "mc26.3-0.9.3-alpha.1-fabric",
+   "version_type": "alpha"
+  },
+  {
+   "date_published": "2026-09-15T15:57:23.369305Z",
+   "dependencies": [],
+   "files": [
+    {
+     "filename": "sodium-fabric-0.9.2+mc26.3.jar",
+     "hashes": {
+      "sha512": "f3f260f204b8ce5e8777c2c73f537956755ec61f3817b0b78b5e5568e8aa40f14891f146475075109747665c7c88a45ca0ca9a8df3c68d79c58ecdaa8d8c4b93"
+     },
+     "primary": true,
+     "url": "https://cdn.modrinth.com/data/AANobbMI/versions/bAZQdGpg/sodium-fabric-0.9.2%2Bmc26.3.jar"
+    }
+   ],
+   "game_versions": [
+    "26.3"
+   ],
+   "loaders": [
+    "fabric"
+   ],
+   "status": "listed",
+   "version_number": "mc26.3-0.9.2-fabric",
+   "version_type": "release"
+  }
+ ],
  "project/P7dR8mSH": {
   "client_side": "optional",
   "id": "P7dR8mSH",
@@ -8,6 +133,29 @@
   "title": "Fabric API"
  },
  "project/P7dR8mSH/version {\"game_versions\": [\"26.3\"], \"loaders\": [\"fabric\"]}": [
+  {
+   "date_published": "2026-11-11T13:38:52.250683Z",
+   "dependencies": [],
+   "files": [
+    {
+     "filename": "fabric-api-0.166.2+26.3.jar",
+     "hashes": {
+      "sha512": "fb686a9fa923248328107a12498229d6951e316257f18b7d0e4cbd6885ba447ed50a44076a8a5ba47cfe2043b329db3587ab000aeab1face26b2587a5d4ba6b5"
+     },
+     "primary": true,
+     "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/Zns5SSRA/fabric-api-0.166.2%2B26.3.jar"
+    }
+   ],
+   "game_versions": [
+    "26.3"
+   ],
+   "loaders": [
+    "fabric"
+   ],
+   "status": "listed",
+   "version_number": "0.166.2+26.3",
+   "version_type": "release"
+  },
   {
    "date_published": "2026-11-09T15:27:33.590886Z",
    "dependencies": [],
@@ -52,29 +200,6 @@
    ],
    "status": "listed",
    "version_number": "0.165.2+26.3",
-   "version_type": "release"
-  },
-  {
-   "date_published": "2026-10-23T08:35:46.648085Z",
-   "dependencies": [],
-   "files": [
-    {
-     "filename": "fabric-api-0.165.0+26.3.jar",
-     "hashes": {
-      "sha512": "0a4b8a14e847b71567b557b43d906c2167fa263eeeef37454a821ba286996e3da1616dc2d9647736d28a250d5ecf400541cae808359b29a62324a8a6f2ad5e30"
-     },
-     "primary": true,
-     "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/EQKgpeKu/fabric-api-0.165.0%2B26.3.jar"
-    }
-   ],
-   "game_versions": [
-    "26.3"
-   ],
-   "loaders": [
-    "fabric"
-   ],
-   "status": "listed",
-   "version_number": "0.165.0+26.3",
    "version_type": "release"
   }
  ],
@@ -248,6 +373,39 @@
    "version_type": "release"
   }
  ],
+ "project/fNtGd1cx": {
+  "client_side": "required",
+  "id": "fNtGd1cx",
+  "project_type": "mod",
+  "server_side": "required",
+  "slug": "voxyserver",
+  "title": "Voxy Server"
+ },
+ "project/fNtGd1cx/version {\"game_versions\": [\"26.3\"], \"loaders\": [\"fabric\"]}": [
+  {
+   "date_published": "2026-10-19T21:21:48.506204Z",
+   "dependencies": [],
+   "files": [
+    {
+     "filename": "VoxyServer-1.2.5-36.3.jar",
+     "hashes": {
+      "sha512": "478bde9e74ef4271926571113e079558361967ba49261893f5bf13e20c1bed0e2e92973fd07f95f4917ead703106e0ebe7b77b3b053f9cf0db2db11695b8129d"
+     },
+     "primary": true,
+     "url": "https://cdn.modrinth.com/data/fNtGd1cx/versions/Rrtp8wi8/VoxyServer-1.2.5-36.3.jar"
+    }
+   ],
+   "game_versions": [
+    "26.3"
+   ],
+   "loaders": [
+    "fabric"
+   ],
+   "status": "listed",
+   "version_number": "1.2.5",
+   "version_type": "release"
+  }
+ ],
  "project/fabric-api": {
   "client_side": "optional",
   "id": "P7dR8mSH",
@@ -256,6 +414,56 @@
   "slug": "fabric-api",
   "title": "Fabric API"
  },
+ "project/fxxUqruK": {
+  "client_side": "required",
+  "id": "fxxUqruK",
+  "project_type": "mod",
+  "server_side": "unsupported",
+  "slug": "voxy",
+  "title": "voxy"
+ },
+ "project/fxxUqruK/version {\"game_versions\": [\"26.3\"], \"loaders\": [\"fabric\"]}": [
+  {
+   "date_published": "2026-10-19T17:51:51.526548Z",
+   "dependencies": [
+    {
+     "dependency_type": "optional",
+     "project_id": "mOgUt4GM"
+    },
+    {
+     "dependency_type": "required",
+     "project_id": "P7dR8mSH"
+    },
+    {
+     "dependency_type": "optional",
+     "project_id": "YL57xq9U"
+    },
+    {
+     "dependency_type": "required",
+     "project_id": "AANobbMI"
+    }
+   ],
+   "files": [
+    {
+     "filename": "voxy-0.2.20-beta.jar",
+     "hashes": {
+      "sha512": "ab502017b3241e1307717ca426ba564f1450ddb7d9d37e95759e57ee5edc7cb014aa48628f51f6010ffd2a410dadf1f4eea7ba86c0da6233059c0a6120157a01"
+     },
+     "primary": true,
+     "url": "https://cdn.modrinth.com/data/fxxUqruK/versions/iIrM8ZKQ/voxy-0.2.20-beta.jar"
+    }
+   ],
+   "game_versions": [
+    "26.3"
+   ],
+   "loaders": [
+    "fabric"
+   ],
+   "status": "listed",
+   "version_number": "0.2.20-beta",
+   "version_type": "beta"
+  }
+ ],
  "project/gvQqBUqZ": {
   "client_side": "optional",
   "id": "gvQqBUqZ",
@@ -346,13 +554,30 @@
   "slug": "lithium",
   "title": "Lithium"
  },
+ "project/voxy": {
+  "client_side": "required",
+  "id": "fxxUqruK",
+  "project_type": "mod",
+  "server_side": "unsupported",
+  "slug": "voxy",
+  "title": "voxy"
+ },
+ "project/voxyserver": {
+  "client_side": "required",
+  "id": "fNtGd1cx",
+  "project_type": "mod",
+  "server_side": "required",
+  "slug": "voxyserver",
+  "title": "Voxy Server"
+ },
  "search {\"facets\": [[\"categories:fabric\"], [\"versions:26.3\"], [\"project_type:mod\"], [\"server_side:required\", \"server_side:optional\"]], \"index\": \"downloads\", \"limit\": \"20\", \"query\": \"\"}": {
   "hits": [
    {
     "author": "modmuss50",
     "client_side": "optional",
     "description": "Lightweight and modular API providing common hooks and intercompatibility measures utilized by mods using the Fabric toolchain.",
-    "downloads": 285626775,
+    "downloads": 287695787,
+    "server_side": "optional",
     "slug": "fabric-api",
     "title": "Fabric API"
    },
@@ -360,7 +585,8 @@
     "author": "shedaniel",
     "client_side": "optional",
     "description": "Configuration Library for Minecraft Mods",
-    "downloads": 184783970,
+    "downloads": 186144419,
+    "server_side": "optional",
     "slug": "cloth-config",
     "title": "Cloth Config API"
    },
@@ -368,7 +594,8 @@
     "author": "malte0811",
     "client_side": "optional",
     "description": "Memory usage optimizations",
-    "downloads": 166369942,
+    "downloads": 167680326,
+    "server_side": "optional",
     "slug": "ferrite-core",
     "title": "FerriteCore"
    },
@@ -376,7 +603,8 @@
     "author": "jellysquid3",
     "client_side": "optional",
     "description": "No-compromises game logic optimization mod, useful for both single-player games and multi-player servers.",
-    "downloads": 142428003,
+    "downloads": 143693072,
+    "server_side": "optional",
     "slug": "lithium",
     "title": "Lithium"
    },
@@ -384,7 +612,8 @@
     "author": "isxander",
     "client_side": "optional",
     "description": "A builder-based configuration library for Minecraft!",
-    "downloads": 134646075,
+    "downloads": 135563920,
+    "server_side": "optional",
     "slug": "yacl",
     "title": "YetAnotherConfigLib (YACL)"
    },
@@ -392,7 +621,8 @@
     "author": "modmuss50",
     "client_side": "optional",
     "description": "This is a mod that enables usage of the Kotlin programming language for Fabric mods.",
-    "downloads": 130460522,
+    "downloads": 131310402,
+    "server_side": "optional",
     "slug": "fabric-language-kotlin",
     "title": "Fabric Language Kotlin"
    },
@@ -400,7 +630,8 @@
     "author": "thexaero",
     "client_side": "required",
     "description": "Displays a map of the nearby world terrain, players, mobs, entities in the corner of your screen. Lets you create waypoints which help you find the locations you've marked.",
-    "downloads": 120043094,
+    "downloads": 120731190,
+    "server_side": "optional",
     "slug": "xaeros-minimap",
     "title": "Xaero's Minimap"
    },
@@ -408,7 +639,8 @@
     "author": "shedaniel",
     "client_side": "required",
     "description": "An intermediary api aimed to ease developing multiplatform mods.",
-    "downloads": 108044205,
+    "downloads": 108720801,
+    "server_side": "required",
     "slug": "architectury-api",
     "title": "Architectury API"
    },
@@ -416,15 +648,26 @@
     "author": "thexaero",
     "client_side": "required",
     "description": "Adds a full screen world map which shows you what you have explored in the world. Works great together with Xaero's Minimap.",
-    "downloads": 105364944,
+    "downloads": 105995155,
+    "server_side": "optional",
     "slug": "xaeros-world-map",
     "title": "Xaero's World Map"
+   },
+   {
+    "author": "Miraculixx",
+    "client_side": "optional",
+    "description": "Mine the whole vein on mining a single ore/block. Make the tedious mining experience to something satisfying and fun! FTB Ultimine alternative",
+    "downloads": 103746760,
+    "server_side": "required",
+    "slug": "veinminer",
+    "title": "VeinMiner"
    },
    {
     "author": "squeek502",
     "client_side": "optional",
     "description": "Food/hunger-related HUD improvements",
-    "downloads": 98478318,
+    "downloads": 99185992,
+    "server_side": "optional",
     "slug": "appleskin",
     "title": "AppleSkin"
    },
@@ -432,7 +675,8 @@
     "author": "mezz",
     "client_side": "optional",
     "description": "View Items and Recipes",
-    "downloads": 85203568,
+    "downloads": 85776153,
+    "server_side": "optional",
     "slug": "jei",
     "title": "Just Enough Items (JEI)"
    },
@@ -440,7 +684,8 @@
     "author": "Gecko",
     "client_side": "required",
     "description": "A 3D animation library for entities, blocks, items, armor, and more!",
-    "downloads": 76829816,
+    "downloads": 77436149,
+    "server_side": "optional",
     "slug": "geckolib",
     "title": "Geckolib"
    },
@@ -448,7 +693,8 @@
     "author": "henkelmax",
     "client_side": "optional",
     "description": "A working voice chat in Minecraft!",
-    "downloads": 76314422,
+    "downloads": 76827176,
+    "server_side": "optional",
     "slug": "simple-voice-chat",
     "title": "Simple Voice Chat"
    },
@@ -456,7 +702,8 @@
     "author": "Patbox",
     "client_side": "optional",
     "description": "Placeholder and Text manipulation library for your Minecraft mods.",
-    "downloads": 74682442,
+    "downloads": 75440950,
+    "server_side": "optional",
     "slug": "placeholder-api",
     "title": "Text Placeholder API"
    },
@@ -464,7 +711,8 @@
     "author": "Snownee",
     "client_side": "optional",
     "description": "Shows information about what you are looking at. (Hwyla/Waila fork for Minecraft 1.16+)",
-    "downloads": 73694439,
+    "downloads": 74149270,
+    "server_side": "optional",
     "slug": "jade",
     "title": "Jade \ud83d\udd0d"
    },
@@ -472,7 +720,8 @@
     "author": "isxander",
     "client_side": "required",
     "description": "A zoom mod with infinite customizability.",
-    "downloads": 72232092,
+    "downloads": 72716289,
+    "server_side": "unsupported",
     "slug": "zoomify",
     "title": "Zoomify (Zoom)"
    },
@@ -480,7 +729,8 @@
     "author": "Fuzs",
     "client_side": "required",
     "description": "NeoForge's & Forge's config systems provided to other modding ecosystems. Designed for a multiloader architecture.",
-    "downloads": 71227933,
+    "downloads": 71700253,
+    "server_side": "required",
     "slug": "forge-config-api-port",
     "title": "Forge Config API Port"
    },
@@ -488,7 +738,8 @@
     "author": "Serilum",
     "client_side": "optional",
     "description": "\ud83c\udf93 Collective is a shared library with common code for all of Serilum's mods.",
-    "downloads": 70719621,
+    "downloads": 71192776,
+    "server_side": "optional",
     "slug": "collective",
     "title": "Collective"
    },
@@ -496,27 +747,21 @@
     "author": "Keksuccino",
     "client_side": "required",
     "description": "Customize Minecraft's menus with ease!",
-    "downloads": 70167925,
+    "downloads": 70457328,
+    "server_side": "optional",
     "slug": "fancymenu",
     "title": "FancyMenu"
-   },
-   {
-    "author": "Fuzs",
-    "client_side": "required",
-    "description": "Why is it called Puzzles? That's the puzzle.",
-    "downloads": 66476648,
-    "slug": "puzzles-lib",
-    "title": "Puzzles Lib"
    }
   ]
  },
- "search {\"facets\": [[\"categories:fabric\"], [\"versions:26.3\"], [\"project_type:mod\"], [\"server_side:required\", \"server_side:optional\"]], \"index\": \"relevance\", \"limit\": \"20\", \"query\": \"lithium\"}": {
+ "search {\"facets\": [[\"categories:fabric\"], [\"versions:26.3\"], [\"project_type:mod\"]], \"index\": \"relevance\", \"limit\": \"20\", \"query\": \"lithium\"}": {
   "hits": [
    {
     "author": "jellysquid3",
     "client_side": "optional",
     "description": "No-compromises game logic optimization mod, useful for both single-player games and multi-player servers.",
-    "downloads": 142428003,
+    "downloads": 143693072,
+    "server_side": "optional",
     "slug": "lithium",
     "title": "Lithium"
    },
@@ -524,7 +769,8 @@
     "author": "LithiumPlus",
     "client_side": "required",
     "description": "A villager extension mod, adding new villager types, trades and beautiful workstations.",
-    "downloads": 9155182,
+    "downloads": 9201303,
+    "server_side": "required",
     "slug": "villagersplus",
     "title": "VillagersPlus"
    },
@@ -532,7 +778,8 @@
     "author": "LithiumPlus",
     "client_side": "required",
     "description": "A mod that adds structures, mobs, bosses and blocks themed around the graveyard.",
-    "downloads": 5634892,
+    "downloads": 5652014,
+    "server_side": "required",
     "slug": "the-graveyard-fabric",
     "title": "The Graveyard (Fabric/Neoforge)"
    },
@@ -540,17 +787,140 @@
     "author": "LithiumPlus",
     "client_side": "required",
     "description": "Add or replace the trades of any villager, change the currency, gate trades behind conditions and reprice them, all from a datapack.",
-    "downloads": 88572,
+    "downloads": 98987,
+    "server_side": "required",
     "slug": "villagerstradingplus",
     "title": "VillagersTradingPlus"
+   },
+   {
+    "author": "Ahaduzzamankhan",
+    "client_side": "required",
+    "description": "InputBooster \u2013 Ultra-fast input polling for Minecraft PvP, capturing missed clicks, maintaining sprint, and improving combat responsiveness, even at low FPS. Compatible with Fabric and performance mods like Sodium & Lithium.",
+    "downloads": 28675,
+    "server_side": "unsupported",
+    "slug": "inputbooster",
+    "title": "inputbooster"
    },
    {
     "author": "Krixishere",
     "client_side": "required",
     "description": "Throttles distant mob AI, culls off-screen entities, slows down far-away block entity ticking (except the ones you'd actually notice, like hoppers and pistons), and cuts particle count \u2014 deferring to Sodium/Lithium/EntityCulling instead of fighting them.",
-    "downloads": 15200,
+    "downloads": 16006,
+    "server_side": "required",
     "slug": "boosters",
     "title": "Boosters"
+   }
+  ]
+ },
+ "search {\"facets\": [[\"categories:fabric\"], [\"versions:26.3\"], [\"project_type:mod\"]], \"index\": \"relevance\", \"limit\": \"20\", \"query\": \"voxy\"}": {
+  "hits": [
+   {
+    "author": "cortex",
+    "client_side": "required",
+    "description": "A Level of Detail rendering mod",
+    "downloads": 7780937,
+    "server_side": "unsupported",
+    "slug": "voxy",
+    "title": "voxy"
+   },
+   {
+    "author": "iseeethan",
+    "client_side": "required",
+    "description": "A extremely efficent and optimized generator for voxy, with SERVER support! Previously \"Voxy WorldGen\"",
+    "downloads": 1233266,
+    "server_side": "required",
+    "slug": "voxy-worldgen",
+    "title": "Voxygen"
+   },
+   {
+    "author": "XANTHA",
+    "client_side": "required",
+    "description": "Render distant Voxy LODs on servers",
+    "downloads": 373344,
+    "server_side": "required",
+    "slug": "voxy-server-side",
+    "title": "Voxy Server Side"
+   },
+   {
+    "author": "ImGRUI",
+    "client_side": "required",
+    "description": "Adds features that shouldn't be in Voxy.",
+    "downloads": 372474,
+    "server_side": "unsupported",
+    "slug": "voxy-extra",
+    "title": "Voxy Extra"
+   },
+   {
+    "author": "PooSmacker",
+    "client_side": "required",
+    "description": "Voxy server is a fabric server side mod that voxelizes chunks into LODs using voxy and streams them to connected clients.",
+    "downloads": 82619,
+    "server_side": "required",
+    "slug": "voxyserver",
+    "title": "Voxy Server"
+   },
+   {
+    "author": "DunneWorteI",
+    "client_side": "required",
+    "description": "Fixes voxy's LoD water seam/gap.",
+    "downloads": 29982,
+    "server_side": "unsupported",
+    "slug": "voxy-seam-fix",
+    "title": "Voxy Seam Fix"
+   },
+   {
+    "author": "Kishku7",
+    "client_side": "optional",
+    "description": "Pre-generates chunks fast, and safely: an adaptive throttle paces generation against server tick-health so it can run with players online. Builds Distant Horizons / voxy LOD data as it goes and serves it to clients. Fabric, Forge, NeoForge and Paper/Folia.",
+    "downloads": 259576,
+    "server_side": "optional",
+    "slug": "chunksmith",
+    "title": "Chunksmith"
+   },
+   {
+    "author": "Cat4blep",
+    "client_side": "required",
+    "description": "Makes distant players visible far beyond vanilla entity tracking, Compatible with Voxy and Distant Horizons",
+    "downloads": 58844,
+    "server_side": "required",
+    "slug": "seeu",
+    "title": "SeeU"
+   },
+   {
+    "author": "bitvox",
+    "client_side": "required",
+    "description": "Unofficial multiplayer support for Voxy: servers send distant terrain and far-away players to clients. Also fills Xaero's World Map and JourneyMap, and works with Distant Horizons servers. The same mod as Voxy Server Side.",
+    "downloads": 58277,
+    "server_side": "required",
+    "slug": "lod-server-support",
+    "title": "LOD Server Support"
+   },
+   {
+    "author": "Hikmen",
+    "client_side": "required",
+    "description": "ColorLight is a mod that adds colored lighting and is compatible with many popular mods. The mod has support for some mods: Voxy, Distant Horizon, Sable (Create aeronautical), LambDinamycLight, FlyWheel (Create).",
+    "downloads": 17607,
+    "server_side": "unsupported",
+    "slug": "colorlight",
+    "title": "ColorLight"
+   },
+   {
+    "author": "Jokypond",
+    "client_side": "required",
+    "description": "Small mod that mixins into Voxy to make it \"work\" with Minecraft launchers on Android.",
+    "downloads": 11041,
+    "server_side": "unsupported",
+    "slug": "poxy",
+    "title": "Poxy"
+   },
+   {
+    "author": "Kletterstein92",
+    "client_side": "optional",
+    "description": "Automates Chunky + Voxy workflow with a in-game GUI without having the player to run commands manually.",
+    "downloads": 5463,
+    "server_side": "required",
+    "slug": "render-distance-plus",
+    "title": "Render Distance+"
    }
   ]
  },
@@ -560,7 +930,8 @@
     "author": "Miraculixx",
     "client_side": "optional",
     "description": "Mine the whole vein on mining a single ore/block. Make the tedious mining experience to something satisfying and fun! FTB Ultimine alternative",
-    "downloads": 101952008,
+    "downloads": 103746760,
+    "server_side": "required",
     "slug": "veinminer",
     "title": "VeinMiner"
    },
@@ -568,7 +939,8 @@
     "author": "henkelmax",
     "client_side": "optional",
     "description": "A working voice chat in Minecraft!",
-    "downloads": 76314422,
+    "downloads": 76827176,
+    "server_side": "optional",
     "slug": "simple-voice-chat",
     "title": "Simple Voice Chat"
    },
@@ -576,7 +948,8 @@
     "author": "frikinjay",
     "client_side": "unsupported",
     "description": "Improves performance by tweaking mob despawn rules. Say bye to pesky unintentional persistent mobs.",
-    "downloads": 25459582,
+    "downloads": 25620108,
+    "server_side": "required",
     "slug": "lmd",
     "title": "Let Me Despawn"
    },
@@ -584,7 +957,8 @@
     "author": "pop4959",
     "client_side": "optional",
     "description": "Pre-generates chunks, quickly and efficiently",
-    "downloads": 20121464,
+    "downloads": 20300659,
+    "server_side": "optional",
     "slug": "chunky",
     "title": "Chunky"
    },
@@ -592,7 +966,8 @@
     "author": "Miraculixx",
     "client_side": "optional",
     "description": "Veinminer Addon - Adds vineminer enchantment to enchanting tables. Only tools with the enchantment can veinmine",
-    "downloads": 18190172,
+    "downloads": 18314230,
+    "server_side": "required",
     "slug": "veinminer-enchantment",
     "title": "VeinMiner Enchantment"
    },
@@ -600,7 +975,8 @@
     "author": "mysticdrew",
     "client_side": "optional",
     "description": "Real-time map used for mapping in-game or your browser as you explore.",
-    "downloads": 15458776,
+    "downloads": 15530586,
+    "server_side": "optional",
     "slug": "journeymap",
     "title": "JourneyMap"
    },
@@ -608,7 +984,8 @@
     "author": "me4502",
     "client_side": "unsupported",
     "description": "A Minecraft Map Editor... that runs in-game!\nWith selections, schematics, copy and paste, brushes, and scripting.\nUse it in creative, or use it temporarily in survival.",
-    "downloads": 11819305,
+    "downloads": 11914424,
+    "server_side": "required",
     "slug": "worldedit",
     "title": "WorldEdit"
    },
@@ -616,7 +993,8 @@
     "author": "KosmX",
     "client_side": "required",
     "description": "Create your own emotes in Minecraft.",
-    "downloads": 7984347,
+    "downloads": 8029010,
+    "server_side": "required",
     "slug": "emotecraft",
     "title": "Emotecraft"
    },
@@ -624,7 +1002,8 @@
     "author": "mysticdrew",
     "client_side": "required",
     "description": "Forge and Fabric Unified Networking Solution",
-    "downloads": 4492980,
+    "downloads": 4549559,
+    "server_side": "required",
     "slug": "common-network",
     "title": "Common Network"
    },
@@ -632,15 +1011,26 @@
     "author": "kpids",
     "client_side": "required",
     "description": "A proximity voice chat mod with audio positioning and lots of features",
-    "downloads": 4149739,
+    "downloads": 4168135,
+    "server_side": "required",
     "slug": "plasmo-voice",
     "title": "Plasmo Voice"
+   },
+   {
+    "author": "js802025",
+    "client_side": "optional",
+    "description": "A calculator in your chat with shortcuts designed for Minecraft",
+    "downloads": 3587826,
+    "server_side": "optional",
+    "slug": "calcmod",
+    "title": "CalcMod"
    },
    {
     "author": "kennytv",
     "client_side": "optional",
     "description": "Allow newer Java Edition clients to connect to older servers.",
-    "downloads": 3464258,
+    "downloads": 3501943,
+    "server_side": "optional",
     "slug": "viaversion",
     "title": "ViaVersion"
    },
@@ -648,7 +1038,8 @@
     "author": "LopyMine",
     "client_side": "required",
     "description": "Allows you to pat ANY loved and unloved living mobs in Minecraft!",
-    "downloads": 3221645,
+    "downloads": 3271059,
+    "server_side": "optional",
     "slug": "patpat",
     "title": "PatPat [Mod & Plugin]"
    },
@@ -656,7 +1047,8 @@
     "author": "tom5454",
     "client_side": "required",
     "description": "Customize your minecraft avatar!",
-    "downloads": 3182077,
+    "downloads": 3198852,
+    "server_side": "unsupported",
     "slug": "custom-player-models",
     "title": "Customizable Player Models"
    },
@@ -664,7 +1056,8 @@
     "author": "lucko",
     "client_side": "unsupported",
     "description": "A permissions plugin/mod for Minecraft servers.",
-    "downloads": 3040868,
+    "downloads": 3073134,
+    "server_side": "required",
     "slug": "luckperms",
     "title": "LuckPerms"
    },
@@ -672,7 +1065,8 @@
     "author": "kennytv",
     "client_side": "optional",
     "description": "Allow older Java Edition clients to connect to newer servers.",
-    "downloads": 2319293,
+    "downloads": 2341401,
+    "server_side": "optional",
     "slug": "viabackwards",
     "title": "ViaBackwards"
    },
@@ -680,7 +1074,8 @@
     "author": "Jodek",
     "client_side": "optional",
     "description": "Armor stands get arms automatically when placed",
-    "downloads": 2172604,
+    "downloads": 2178368,
+    "server_side": "required",
     "slug": "armor-stand-arms",
     "title": "Armor Stand Arms"
    },
@@ -688,7 +1083,8 @@
     "author": "SRTeam",
     "client_side": "required",
     "description": "\ud83c\udfa8 Ability to restore/change skins on servers! (Offline and Online Mode)",
-    "downloads": 1796658,
+    "downloads": 1814317,
+    "server_side": "required",
     "slug": "skinsrestorer",
     "title": "SkinsRestorer"
    },
@@ -696,7 +1092,8 @@
     "author": "GeyserMC",
     "client_side": "unsupported",
     "description": "A bridge/proxy allowing you to connect to Minecraft: Java Edition servers with Minecraft: Bedrock Edition.",
-    "downloads": 1519240,
+    "downloads": 1537260,
+    "server_side": "required",
     "slug": "geyser",
     "title": "Geyser"
    },
@@ -704,17 +1101,10 @@
     "author": "NEZNAMY",
     "client_side": "unsupported",
     "description": "An all-in-one solution that works",
-    "downloads": 1346640,
+    "downloads": 1359978,
+    "server_side": "required",
     "slug": "tab-was-taken",
     "title": "TAB"
-   },
-   {
-    "author": "me4502",
-    "client_side": "unsupported",
-    "description": "WorldGuard lets you and players guard areas of land against griefers and undesirables as well as tweak and disable various gameplay features of Minecraft.",
-    "downloads": 997019,
-    "slug": "worldguard",
-    "title": "WorldGuard"
    }
   ]
  },
@@ -724,7 +1114,8 @@
     "author": "pop4959",
     "client_side": "optional",
     "description": "Pre-generates chunks, quickly and efficiently",
-    "downloads": 20121464,
+    "downloads": 20300659,
+    "server_side": "optional",
     "slug": "chunky",
     "title": "Chunky"
    },
@@ -732,7 +1123,8 @@
     "author": "pop4959",
     "client_side": "optional",
     "description": "An add-on for Chunky which lets you create and manage world borders",
-    "downloads": 391481,
+    "downloads": 394402,
+    "server_side": "optional",
     "slug": "chunkyborder",
     "title": "Chunky Border"
    },
@@ -740,7 +1132,8 @@
     "author": "nbohnenkamp-design",
     "client_side": "unsupported",
     "description": "A configurable single-biome world generator for Paper and Purpur, built for PvP. Custom terrain, automatic resets, multiple biomes, Chunky pregeneration support.",
-    "downloads": 373,
+    "downloads": 390,
+    "server_side": "required",
     "slug": "cpvpsinglebiome",
     "title": "CPVPSingleBiome"
    }

@@ -489,7 +489,9 @@ TOOLS = [
         "when setup's games stage runs (start_job apply, stage games), which restarts it. Changing the kind drops the "
         "list (a plugin is no mod), and a world Paper has opened opens only under Paper afterwards (leaving Paper sets it "
         "aside and starts a new world): the tool says what a change costs, which needs the owner's yes and yes=true. "
-        "Only Modrinth, only for Minecraft.",
+        "A mod Modrinth marks as made for a player's own game (players_only) is added only with the owner's yes and "
+        "yes=true, and only when another mod on the server needs it there: VoxyServer needs Voxy, which brings Sodium; search "
+        "finds such mods by name. Only Modrinth, only for Minecraft.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -501,7 +503,10 @@ TOOLS = [
                     "description": "With add and remove: the project's name as search and list give it, such as lithium.",
                 },
                 "server": {"enum": ["vanilla", "paper", "fabric"], "description": "With server: the kind to run."},
-                "yes": {"type": "boolean", "description": "With server: go ahead with what the change costs, once the owner agreed."},
+                "yes": {
+                    "type": "boolean",
+                    "description": "With server, add or update: go ahead with what the tool said it costs, once the owner agreed.",
+                },
                 "why": WHY,
             },
             "required": ["name", "action"],

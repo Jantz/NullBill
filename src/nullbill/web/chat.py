@@ -2238,7 +2238,7 @@ class Tools:
             }[view["applied"]]
             out[f"{view['word'] or 'mod'}s"] = [
                 {k: m[k] for k in ("project", "title", "version", "file")}
-                | {k: m[k] for k in ("players_need", "for_others", "needs") if m[k]}
+                | {k: m[k] for k in ("players_need", "players_only", "for_others", "needs") if m[k]}
                 for m in view["mods"]
             ]
             return yaml.safe_dump(out, sort_keys=False, width=200, allow_unicode=True)
@@ -2263,8 +2263,16 @@ class Tools:
             what = f"Run {mods.LABEL[body['server']]} on {title}"
         elif action == "add":
             entries = mods.resolve(self.app.modrinth, model, name, body["project"])
+            costs = mods.asks(model, name, entries)
+            if costs and not yes:
+                raise NullBillError(
+                    f"adding {entries[0]['title']} to {title} needs the owner's yes first: "
+                    + " ".join(costs)
+                    + " Ask the owner (ask_owner), then send it with yes=true"
+                )
             lines = [
                 *mods.describe(entries),
+                *costs,
                 "From Modrinth, taken by its SHA-512; someone else's program, run inside this game server only",
             ]
             what = f"Add {entries[0]['title']} to {title}"
@@ -2276,7 +2284,13 @@ class Tools:
             found = mods.newer(self.app.modrinth, model, name)
             if not found:
                 return f"every {mods.WORD.get(kind, 'mod')} of {title} is the newest for its Minecraft; nothing to update"
-            lines = mods.describe(found)
+            costs = mods.asks(model, name, found)
+            if costs and not yes:
+                raise NullBillError(
+                    f"the update brings what needs the owner's yes first: {' '.join(costs)} "
+                    "Ask the owner (ask_owner), then send it with yes=true"
+                )
+            lines = [*mods.describe(found), *costs]
             what = f"Update {title}'s {mods.WORD.get(kind, 'mod')}s"
         lines.append(then)
         verdict = gate.change("changes which server or which plugins or mods a Minecraft server runs, from its next setup run on")

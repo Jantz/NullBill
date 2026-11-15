@@ -49,9 +49,24 @@
       "sha512": "6f0323daa69d61bd3b3fbe9d8b713664d9b7c69182183f8dcff6362b43783639778a96e32215dbfd329588f06b60a5d93656dbb1d391c660db203482aa972d5e"
     },
     {
-      "file": "fabric-api-0.166.0+26.3.jar",
-      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/998R2rNP/fabric-api-0.166.0%2B26.3.jar",
-      "sha512": "de0d1a502cfcfcc594e0338e91c2fcf92a1239d47904ac2c3c50980ee132c676dba6abd81cd9449cdb0383657683c286f5bfc5c1bc1609c6b13bd569d36351d2"
+      "file": "fabric-api-0.166.2+26.3.jar",
+      "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/Zns5SSRA/fabric-api-0.166.2%2B26.3.jar",
+      "sha512": "fb686a9fa923248328107a12498229d6951e316257f18b7d0e4cbd6885ba447ed50a44076a8a5ba47cfe2043b329db3587ab000aeab1face26b2587a5d4ba6b5"
+    },
+    {
+      "file": "VoxyServer-1.2.5-36.3.jar",
+      "url": "https://cdn.modrinth.com/data/fNtGd1cx/versions/Rrtp8wi8/VoxyServer-1.2.5-36.3.jar",
+      "sha512": "478bde9e74ef4271926571113e079558361967ba49261893f5bf13e20c1bed0e2e92973fd07f95f4917ead703106e0ebe7b77b3b053f9cf0db2db11695b8129d"
+    },
+    {
+      "file": "voxy-0.2.20-beta.jar",
+      "url": "https://cdn.modrinth.com/data/fxxUqruK/versions/iIrM8ZKQ/voxy-0.2.20-beta.jar",
+      "sha512": "ab502017b3241e1307717ca426ba564f1450ddb7d9d37e95759e57ee5edc7cb014aa48628f51f6010ffd2a410dadf1f4eea7ba86c0da6233059c0a6120157a01"
+    },
+    {
+      "file": "sodium-fabric-0.9.2+mc26.3.jar",
+      "url": "https://cdn.modrinth.com/data/AANobbMI/versions/bAZQdGpg/sodium-fabric-0.9.2%2Bmc26.3.jar",
+      "sha512": "f3f260f204b8ce5e8777c2c73f537956755ec61f3817b0b78b5e5568e8aa40f14891f146475075109747665c7c88a45ca0ca9a8df3c68d79c58ecdaa8d8c4b93"
     }
   ]
 }

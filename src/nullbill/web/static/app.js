@@ -3341,7 +3341,13 @@ function setModsRoom(view) {
 
 function modsAct(button, feedback, name, body, busy, done) {
   return press(button, feedback, busy, async () => {
-    const answer = await api("/api/game/mods", {name, ...body});
+    let answer = await api("/api/game/mods", {name, ...body});
+    if (!answer.ok && answer.costs) {
+      // A mod Modrinth marks as made for players' games: the owner's call.
+      const ok = await confirmDialog({title: `Add ${andList(answer.adding)} to ${answer.title}?`, text: "Before you add:", points: answer.costs, yes: "Add anyway"});
+      if (!ok) return "";
+      answer = await api("/api/game/mods", {name, ...body, yes: true});
+    }
     if (answer.view) setModsRoom(answer.view);
     return typeof done === "function" ? done(answer) : done;
   });
@@ -3431,6 +3437,7 @@ function modRow(v, m, said) {
   const name = make("div", {className: "world-name"},
     make("a", {className: "name link", href: m.link, target: "_blank", rel: "noopener noreferrer", textContent: m.title}),
     m.players_need ? make("span", {className: "badge warn", textContent: "Players need it too", title: `Every player needs ${m.title} in their own game to join.`}) : null,
+    m.players_only ? make("span", {className: "badge plain", textContent: "Made for players' games", title: `Modrinth marks ${m.title} as made for a player's own game; it is here because another mod on the server needs it.`}) : null,
     make("span", {className: "sub", textContent: facts}));
   const remove = make("button", {type: "button", className: "btn small ghost"}, "Remove", make("span", {className: "sr-only", textContent: ` ${m.title}`}));
   remove.addEventListener("click", () => modsAct(remove, said, v.name, {action: "remove", project: m.project}, "Removing…",
@@ -3463,6 +3470,7 @@ function modSearchForm(room, forms) {
       return make("li", {}, make("div", {className: "world-name"},
         make("a", {className: "name link", href: h.link, target: "_blank", rel: "noopener noreferrer", textContent: h.title}),
         h.players_need ? make("span", {className: "badge warn", textContent: "Players need it too"}) : null,
+        h.players_only ? make("span", {className: "badge plain", textContent: "Made for players' games", title: "Modrinth marks it as made for a player's own game. Add it only when another mod on the server needs it."}) : null,
         make("span", {className: "sub", textContent: [h.what, h.by ? `By ${h.by}` : "", `${howMany(h.downloads)} downloads`].filter(Boolean).join(" · ")})),
         make("span", {className: "row world-actions"}, add));
     }));

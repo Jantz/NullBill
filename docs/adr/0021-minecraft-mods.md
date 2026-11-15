@@ -82,6 +82,27 @@ the NullBill container, asks Modrinth and writes the list:
 - check for updates says which have another file now; update takes them.
   Nothing updates by itself: a mod's new version is new code.
 
+**A mod Modrinth marks as made for a player's own game** (its
+`server_side` is `unsupported`) joins a server's list only on the owner's
+yes (2026-11-15). Search shows such mods only for a typed name, marked;
+add and update say what follows and change nothing until the owner
+agreed (`mods.asks`, the page's question, the agent's `yes=true`), and
+the list marks each one (`players_only`). The case is VoxyServer: it runs
+on the server and needs Voxy beside it, marked for players' games and
+not named by VoxyServer's Modrinth entry; Voxy brings Sodium, its
+Modrinth dependency, marked the same. What Modrinth says is the author's
+label; what a Fabric server does is up to each file's own
+`fabric.mod.json`. Voxy's (0.2.20-beta) says any side, so the server
+runs it. Sodium's says client, so Fabric Loader (0.20.1,
+`ModDiscoverer`) leaves it out; Voxy's dependency on it is met on a
+server by a stand-in Voxy carries inside its own file (`sodiumprovider`,
+server only, `provides: sodium`). The Minecraft role's check runs all
+three on the real Fabric server. NullBill does not
+read the files' own word (it would download every file to the page
+first); the owner's yes is the guard, and a mod that stops the server
+from starting is removed like any other. Not done: a table of known companions
+(VoxyServer brings Voxy): it would go stale with the mods.
+
 The list also keeps each file's loaders and Minecraft versions, so plan
 refuses, with the words to fix it, what the server would crash on: a mod
 on Paper, a plugin on Fabric, anything on Mojang's server, a file for
