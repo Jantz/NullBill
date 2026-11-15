@@ -326,7 +326,7 @@ services:
       - api.minecraftservices.com
       - sessionserver.mojang.com
       - api.mojang.com
-    # Java's heap is memory_mib less 1024 for the JVM itself and the system.
+    # Java's heap is about two thirds of memory_mib (games.heap_mib): 2048 at the floor.
     floor: {cores: 2, memory_mib: 3072, disk_gib: 16}
     share:
       title: Minecraft

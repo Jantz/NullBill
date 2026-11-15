@@ -143,11 +143,23 @@ def test_settings_are_defaults_then_the_owners_then_nullbills(facts):
 def test_minecrafts_heap_follows_the_containers_memory(facts):
     config = games_config()
     plan, _ = planned(facts, config)
-    assert plan["games"]["minecraft"]["heap_mib"] == plan["guests"]["minecraft"]["memory_mib"] - games.JVM_OVERHEAD_MIB
+    assert plan["games"]["minecraft"]["heap_mib"] == games.heap_mib(plan["guests"]["minecraft"]["memory_mib"]) == 2048
     config["overrides"] = {"minecraft": {"memory_mib": 6144}}
     plan, model = planned(facts, config)
-    assert plan["games"]["minecraft"]["heap_mib"] == 5120
-    assert games.variables(plan, model, "minecraft")["game_minecraft_heap_mib"] == 5120
+    assert plan["games"]["minecraft"]["heap_mib"] == 4096
+    assert games.variables(plan, model, "minecraft")["game_minecraft_heap_mib"] == 4096
+
+
+def test_minecraft_keeps_a_third_of_its_memory_beside_the_heap():
+    # 5120 MiB with a 4096 MiB heap: Java held 4.9 GB with Voxy and Chunky,
+    # the guest had no page cache left and thrashed the host's disk.
+    assert games.heap_mib(5120) == 3328
+    assert games.heap_mib(6656) == 4352
+    for memory in range(3072, 32769, 256):
+        heap = games.heap_mib(memory)
+        assert heap % 256 == 0
+        assert memory - heap >= max(games.JVM_OVERHEAD_MIB, memory / 3)
+        assert memory - heap < max(games.JVM_OVERHEAD_MIB, memory / 3) + 256
 
 
 def test_a_moved_port_reaches_the_server_and_the_plan(facts):

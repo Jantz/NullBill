@@ -286,7 +286,7 @@ games:
     version: '26.3'
     # Players need Minecraft: Java Edition 26.3, the same version as the server.
     port: tcp/25565
-    # Java's heap: the container's memory less 1024 MiB for Java itself and the system. Raise overrides.minecraft.memory_mib for a larger world or more players.
+    # Java's heap: about two thirds of the container's memory; the rest, at least 1024 MiB, is for Java beside its heap, mods and the world's files. Raise overrides.minecraft.memory_mib for a larger world, more players or mods.
     heap_mib: 2048
     admins:
       - owner_a

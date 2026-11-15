@@ -83,7 +83,7 @@ def test_a_further_server_is_a_game_server_like_the_catalogs(facts):
         "version": MINECRAFT,
         "port": "tcp/25565",
         "game": "minecraft",
-        "heap_mib": 6144 - games.JVM_OVERHEAD_MIB,
+        "heap_mib": 4096,
         "admins": ["owner_b"],
     }
     assert plan["games"]["factorio-2"]["space_age"] is True and plan["games"]["factorio"]["space_age"] is False
@@ -101,7 +101,7 @@ def test_each_server_gets_its_games_role_with_its_own_settings(facts):
     )
     # The same variables by name, so the role needs to know nothing of it.
     assert set(first) == set(second)
-    assert second["game_minecraft_port"] == 25565 and second["game_minecraft_heap_mib"] == 5120 and second["game_minecraft_eula"] is True
+    assert second["game_minecraft_port"] == 25565 and second["game_minecraft_heap_mib"] == 4096 and second["game_minecraft_eula"] is True
     assert second["game_minecraft_settings"] == {
         "white-list": False,
         "motd": "Creative world",
@@ -382,7 +382,7 @@ def test_what_to_run_has_a_row_for_each_server_with_what_the_owner_can_set(facts
     row = rows["minecraft-creative"]
     assert (row["title"], row["chosen"], row["on_server"]) == ("Creative world", True, ["minecraft-creative"])
     assert row["what"] == rows["minecraft"]["what"] and "tick it for each friend" in row["on"] and row["off"] == rows["minecraft"]["off"]
-    assert row["memory_mib"] == 3072 and "Java gets 5.0 GiB" in row["note"]
+    assert row["memory_mib"] == 3072 and "Java gets 4.0 GiB" in row["note"]
     game = row["game"]
     assert (game["kind"], game["kind_title"], game["more"], game["removable"]) == ("minecraft", "Minecraft", True, False)
     assert game["file"] == "server.properties" and "memory_mib" not in game
@@ -460,7 +460,7 @@ def test_the_page_adds_a_server_saves_its_settings_and_removes_it_once_gone(site
     }
     assert config["overrides"] == {name: {"memory_mib": 4096}} and config["games"]["minecraft"] == {"eula": True}
     plan = yaml.safe_load((app.home / "plan.yaml").read_text())
-    assert plan["games"][name]["heap_mib"] == 3072 and plan["guests"][name]["memory_mib"] == 4096
+    assert plan["games"][name]["heap_mib"] == 2560 and plan["guests"][name]["memory_mib"] == 4096
     # Saved again as shown, nothing changes; a key the form leaves out stays.
     row = next(i for i in client.call("/api/state")[1]["options"]["items"] if i["name"] == name)
     assert row["title"] == "Creative" and row["game"]["other"] == "spawn-protection = 0\n"

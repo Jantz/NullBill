@@ -98,7 +98,7 @@ games:
       max_players: 8
       game_password: a-word-for-friends
 overrides:
-  minecraft: {memory_mib: 6144} # more memory: Java gets all but 1024 MiB of it
+  minecraft: {memory_mib: 6144} # more memory: Java's heap gets 4096 MiB of it
 ```
 
 - NullBill sets a few options itself and refuses them among the settings:
@@ -116,8 +116,13 @@ overrides:
   the memory under the server's **Size** (`overrides.<name>.memory_mib`),
   as for any guest, when the server lags or its log says it ran out of
   memory; the meter above the list shows at once whether that fits, and
-  Minecraft's Java gets all of it but 1 GiB. Setup may restart the server
-  for a new size.
+  Minecraft's Java gets about two thirds of it as its heap. The rest is
+  for Java beside its heap, mods and the world's files: Java takes about
+  1 GiB more than its heap, more with mods such as Voxy, and a container
+  with nothing left for the world's files reads them from disk over and
+  over, slows the whole server and stalls until the game's watchdog stops
+  it. Pregenerating with Chunky fills the heap; give the server more memory
+  first. Setup may restart the server for a new size.
 - **Only while someone plays.** Under **When they run**, set a game to
   **On demand** and it holds no memory while off. You start it on the
   **Services** page; it stops by itself once nobody has played for 30
