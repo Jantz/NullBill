@@ -31,8 +31,16 @@ from nullbill.results import Result
 NB_GAME = "/usr/local/sbin/nb-game"
 # A new world is made at the first start; Terraria's largest takes longest.
 START_WAIT_S = 600
-# What Java takes besides its heap, and the guest's own system, in MiB.
+# What Minecraft's container keeps back from Java's heap, in MiB: a third
+# of its memory, at least JVM_OVERHEAD_MIB. Java takes more than its heap
+# (its own code, threads, the garbage collector, mods' native memory), and
+# the guest needs page cache for the world's files. A fixed 1024 left no
+# cache once Voxy and Chunky ran: Java held 4.9 GB beside a 4096 MiB heap
+# in 5120 MiB, the guest reread its files from disk without end, and the
+# watchdog stopped the hung server (2026-11-15).
 JVM_OVERHEAD_MIB = 1024
+HEAP_KEEP_DIVISOR = 3
+HEAP_STEP_MIB = 256
 EULA = "https://aka.ms/MinecraftEULA"
 # Mojang's services, by the names its discovery document gives
 # (https://discovery.minecraftservices.com/minecraft/client). The server
@@ -257,7 +265,10 @@ def managed(game: str, key: str) -> bool:
 
 
 def heap_mib(memory_mib: int) -> int:
-    return memory_mib - JVM_OVERHEAD_MIB
+    """Java's heap for a container of memory_mib: what is left once a third
+    (at least JVM_OVERHEAD_MIB) is kept back, down to a step of 256."""
+    kept = max(JVM_OVERHEAD_MIB, memory_mib // HEAP_KEEP_DIVISOR)
+    return (memory_mib - kept) // HEAP_STEP_MIB * HEAP_STEP_MIB
 
 
 def plan_section(model: dict, planned_services: dict, sizes: dict, errors: list[str]) -> Note | dict:
@@ -314,8 +325,9 @@ def plan_section(model: dict, planned_services: dict, sizes: dict, errors: list[
                     entry["mods"] = [f"{m['title']} {m['version']}" for m in listed]
             entry["heap_mib"] = Note(
                 heap_mib(sizes[name]["memory_mib"]),
-                f"Java's heap: the container's memory less {JVM_OVERHEAD_MIB} MiB for Java itself and the system. "
-                f"Raise overrides.{name}.memory_mib for a larger world or more players.",
+                f"Java's heap: about two thirds of the container's memory; the rest, at least {JVM_OVERHEAD_MIB} MiB, "
+                "is for Java beside its heap, mods and the world's files. "
+                f"Raise overrides.{name}.memory_mib for a larger world, more players or mods.",
             )
         if of == "factorio":
             if not allows(allow, FACTORIO_AUTH):
