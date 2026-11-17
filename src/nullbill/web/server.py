@@ -3604,7 +3604,7 @@ def watch(app: App) -> None:
         try:
             app.chat.notice_jobs()
             app.chat.watch_turn()
-        except Exception as exc:
+        except Exception as exc:  # a watcher that dies would stop for good
             print(f"nullbill-web: agent watcher: {exc}", file=sys.stderr, flush=True)
 
 

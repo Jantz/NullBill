@@ -597,7 +597,7 @@ class Chat:
                 f"home network {st['lan']['state']}",
             ]
             return "[Status: " + ", ".join(parts) + "]"
-        except Exception:
+        except Exception:  # a status line must never stop a turn
             return ""
 
     def notes(self) -> str:
@@ -1850,7 +1850,7 @@ class Tools:
         if {"games", "power", "torrents", "sizes"} & set(changes):
             # What the form comes to in config.yaml, with nothing saved.
             old = self.app.config() or {}
-            new = self.app._choices_config(after | {"disks": {}})
+            new = self.app._choices_config(after | {"disks": {}})  # the page's own form reader
             build_model(new)
             titles = {n: g.get("title", n) for n, g in build_model({})["games"].items()}
             for name in sorted({*old.get("games", {}), *new.get("games", {})}):

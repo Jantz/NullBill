@@ -377,7 +377,7 @@ def offered(names: list[str], weekly: bool, unread: dict[str, str]) -> dict[str,
                 edits = FOLLOW_MINECRAFT[name](minecraft_version(out.get("minecraft", [])))
             else:
                 edits = SOURCES[name]()
-        except (Exception, SystemExit) as error:
+        except (Exception, SystemExit) as error:  # one vendor's bad day leaves the other pins moving
             unread[name] = f"{type(error).__name__}: {error}"
             continue
         new = next(str(value) for file, key, value in edits if (file, key) == (pin["file"], pin["key"]))
