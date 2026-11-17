@@ -38,6 +38,32 @@ def test_says_which_commit_runs_and_what_main_holds_beyond_it(repos):
     assert version.changes(checkout, role, role) == []
 
 
+def test_a_merge_is_not_what_a_version_is_called_nor_a_change_of_its_own(repos):
+    """main moves by fast-forward to a branch that merged main into itself."""
+    work, checkout = repos
+    first = version.head(checkout)
+    git(work, "checkout", "-q", "-b", "work-branch")
+    (work / "page.css").write_text("body {}\n")
+    git(work, "add", "page.css")
+    git(work, "commit", "-q", "-m", "Page: a new colour")
+    change = git(work, "rev-parse", "HEAD")
+    git(work, "checkout", "-q", "main")
+    other = commit(work, "two\n", "Docs: a word")
+    git(work, "checkout", "-q", "work-branch")
+    git(work, "merge", "-q", "--no-ff", "-m", "Merge remote-tracking branch 'origin/main' into work-branch", "main")
+    merge = git(work, "rev-parse", "HEAD")
+    git(work, "push", "-q", "origin", "HEAD:main")
+    assert version.fetch(checkout) == merge
+    about = version.describe(checkout, merge)
+    assert about["id"] == merge[:12] and about["subject"] in ("Page: a new colour", "Docs: a word")
+    assert {c["id"] for c in version.changes(checkout, first, merge)} == {change[:12], other[:12]}
+    # A span that holds a merge and nothing else still reads as one change.
+    git(checkout, "checkout", "-q", "--detach", other)
+    git(checkout, "merge", "-q", "--no-ff", "-m", "Merge the page", change)
+    only = git(checkout, "rev-parse", "HEAD")
+    assert [c["subject"] for c in version.changes(checkout, merge, only)] == ["Merge the page"]
+
+
 def test_only_what_setup_builds_from_changes_the_setup_digest(repos):
     work, checkout = repos
     seen = []

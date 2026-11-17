@@ -1935,7 +1935,8 @@ function renderPlan(plan) {
       make("td", {textContent: (KINDS[g.kind] || g.kind) + (g.count ? ` of ${g.count}` : "")}),
       make("td", {className: "hide-phone muted", textContent: g.zone || ""}),
       make("td", {className: "num", textContent: g.cores ?? ""}),
-      make("td", {className: "num", textContent: g.memory_mib ? gib(g.memory_mib) + (g.count ? " each" : "") : ""}))));
+      make("td", {className: "num", textContent: g.memory_mib ? gib(g.memory_mib) + (g.count ? " each" : "") : ""}),
+      make("td", {className: "num hide-phone", textContent: g.disk_gib ? `${g.disk_gib} GiB${g.count ? " each" : ""}` : ""}))));
   }
   $("tailnet-policy").textContent = plan.tailnet_policy || "";
   show("tailnet-details", Boolean(plan.tailnet_policy));
@@ -1985,6 +1986,7 @@ function renderAgentSignin(st) {
   const kind = st.agent_credential;
   $("agent-label").textContent = kind ? "Replace it with a new API key or subscription token" : "API key or subscription token";
   $("signin-state").replaceChildren(kind ? status("good", `Signed in with ${kind === "API key" ? "an API key" : "a subscription token"}`) : status("warn", "Not signed in"));
+  settle($("agent-form"), Boolean(kind));
 }
 
 function renderMode(settings) {
@@ -2005,6 +2007,7 @@ function renderAgentPowers(on) {
 
 function renderAgentGithub(login) {
   $("github-state").replaceChildren(login ? status("good", `Saved, as ${login} on GitHub`) : status("", "Not set"));
+  settle($("agent-github-form"), Boolean(login));
   show("agent-github-remove", Boolean(login));
 }
 
@@ -2465,6 +2468,11 @@ function renderTrust(trust) {
 // ring until everything is done.
 function runningAction() { return job && job.view && job.view.state === "running" ? job.view.action : null; }
 
+// Whether the last reading of the path shows the server on the tailnet: the
+// port was read, or devices answered, which only a joined server hears.
+function joinedTailnet(p) {
+  return Boolean(p && p.kind && (!["waiting", "unread"].includes(p.kind) || (p.devices || []).length > 0));
+}
 function guideItems(st) {
   const apply = st.last_jobs.apply;
   const running = runningAction();
@@ -2487,7 +2495,8 @@ function guideItems(st) {
     SETUP_RUNS.has(running) ? ["running", "Running now."]
       : !apply ? ["todo", "Shows what it builds, then builds it in about 20 minutes."]
       : built() && apply.state === "done" ? (due.length ? ["attention", due[0].text] : ["done", `Finished ${ago(apply.started)}.`])
-      : apply.state === "running" ? ["running", "Running now."] : ["attention", "Stopped. Activity says why."]]);
+      : apply.state === "running" ? ["running", "Running now."]
+      : ["attention", apply.stopped ? "Stopped before it finished." : apply.error && apply.error.stage_text ? `Failed at "${apply.error.stage_text}".` : "Failed before it finished."]]);
   const needed = items.length;
   // Done only for what the page can see: a test alert opened on a device,
   // this page reached over Tailscale, this browser trusting the certificate.
@@ -2495,10 +2504,10 @@ function guideItems(st) {
   items.push(["alerts", "Get alerts on your phone",
     heard ? ["done", `A test alert reached a device ${ago(heard)}.`] : ["todo", "Subscribe to your ntfy topic, send a test alert and tap it."]]);
   const joined = st.lan.via_vpn || st.lan.state === "closed";
-  const onTailnet = st.direct && st.direct.kind && !["waiting", "unread"].includes(st.direct.kind);
+  const onTailnet = joinedTailnet(st.direct);
   items.push(["access/tailscale", "Reach it over Tailscale",
     joined ? ["done", "This page answers over Tailscale."]
-      : st.tailscale_key ? ["attention", "Auth key saved: run setup."]
+      : st.tailscale_key ? (SETUP_RUNS.has(running) ? ["todo", "The running setup joins the server to your network."] : ["attention", "Auth key saved: run setup."])
       : onTailnet ? ["todo", "The server is on your tailnet: open this page over Tailscale."]
       : st.tailscale_client ? ["todo", "Add an auth key next."] : ["todo", "Add an OAuth client."]]);
   items.push(["access/lan", "Close Proxmox to the home network",
@@ -2511,13 +2520,21 @@ function guideItems(st) {
   return items.map(([href, title, [kind, sub]], i) => ({href, title, kind, sub, later: i >= needed}));
 }
 
+// The step to take now: what runs, else what needs the owner, else the
+// first step after the last one done. A step skipped on the way (the agent
+// is not needed to set up) does not hold the marker back.
+function guideCurrent(items) {
+  const last = items.reduce((at, item, i) => (item.kind === "done" && !item.later ? i : at), -1);
+  return items.find((i) => i.kind === "running") || items.find((i) => i.kind === "attention" && !i.later)
+    || items.find((item, i) => i > last && item.kind !== "done") || items.find((i) => i.kind !== "done");
+}
 function guideList(items) {
-  const current = items.find((i) => i.kind !== "done");
+  const current = guideCurrent(items);
   return items.map((item, i) => {
     const mark = make("span", {className: "step-mark", ariaHidden: "true"},
       item.kind === "done" ? icon("check") : item.kind === "attention" ? "!" : item.kind === "running" ? "" : String(i + 1));
     const word = {done: "done", attention: "needs you", running: "running", todo: "to do"}[item.kind];
-    const go = item === current ? make("span", {className: "go"}, item.kind === "attention" ? "Fix" : "Start", icon("chevron-right"))
+    const go = item === current ? make("span", {className: "go"}, item.kind === "running" ? "Watch" : item.kind === "attention" ? "Fix" : "Start", icon("chevron-right"))
       : item.later && item.kind !== "done" ? make("span", {className: "later", textContent: "Recommended"}) : null;
     return make("li", {className: `${item.kind}${item === current ? " current" : ""}`},
       make("a", {href: `#${item.href}`}, mark,
@@ -2573,6 +2590,13 @@ new MutationObserver((changes) => {
   for (const c of changes) for (const n of c.addedNodes) if (n.nodeType === 1) linkDocs(n);
 }).observe(document.body, {childList: true, subtree: true});
 
+// A step that is done shows its state and one button, which brings its
+// form back. The form stays while it holds the focus or something typed.
+function settle(form, done) {
+  const busy = form.contains(document.activeElement) || [...form.querySelectorAll("input")].some((i) => i.value);
+  if (!done || !busy) delete form.dataset.open;
+  form.classList.toggle("settled", done && !form.dataset.open);
+}
 function paintStates() {
   if (!state) return;
   linkDocs(document.body);
@@ -2608,12 +2632,14 @@ function paintStates() {
   // this very page came over it.
   const ts = items.find((i) => i.href === "access/tailscale");
   const p = pathNow();
-  const onTailnet = Boolean(p && p.kind && !["waiting", "unread"].includes(p.kind));
+  const onTailnet = joinedTailnet(p);
   $("tailscale-state").replaceChildren(ts.kind === "done" || onTailnet ? status("good", "Connected") : st.tailscale_key ? status("warn", "Auth key saved: run setup")
     : st.tailscale_client ? status("", "Client saved; add an auth key") : status("", "Not set up"));
   $("ts-dot-client").classList.toggle("done", st.tailscale_client);
   $("ts-dot-key").classList.toggle("done", ts.kind === "done" || onTailnet);
   show("tailscale-client-saved", st.tailscale_client);
+  settle($("tailscale-client-form"), st.tailscale_client);
+  settle($("vpn-form"), ts.kind === "done" || onTailnet);
   renderDirect(pathNow());
   renderPortMapping(st.port_mapping, pathNow());
   renderLan(st.lan);
@@ -2643,15 +2669,16 @@ function paintStates() {
 // Before Run setup: what is in place, and what is missing.
 function renderReady() {
   const items = [];
-  const ok = (good, text, href) => items.push(make("li", {className: good ? "ok" : "warn"}, icon(good ? "check" : "alert"),
+  // What keeps setup from starting reads apart from what is only worth knowing.
+  const ok = (good, text, href, advice) => items.push(make("li", {className: good ? "ok" : advice ? "hint" : "warn"}, icon(good ? "check" : advice ? "info" : "alert"),
     href ? make("a", {href, textContent: text}) : make("span", {textContent: text})));
   ok(state.probed, state.probed ? "The hardware is read." : "Read the hardware first.", state.probed ? "" : "#setup/hardware");
   if (choicesDirty()) ok(false, "Your choices are not saved.", "#setup/choices");
   if (state.plan.errors.length) ok(false, "The plan does not fit yet.", "#setup/plan");
   else if (state.plan.text) ok(true, "The plan fits.");
   else ok(false, "Save your choices to make a plan.", "#setup/choices");
-  if (!(state.chat && state.chat.signed_in)) ok(false, "No agent yet: setup runs, but nobody looks into a failure for you.", "#agent/settings");
-  if (!state.tailscale_client && !(state.lan.via_vpn || state.lan.state === "closed")) ok(false, "No Tailscale client: setup runs, but the server stays off Tailscale.", "#access/tailscale");
+  if (!(state.chat && state.chat.signed_in)) ok(false, "No agent yet: setup runs, but nobody looks into a failure for you.", "#agent/settings", true);
+  if (!state.tailscale_client && !(state.lan.via_vpn || state.lan.state === "closed")) ok(false, "No Tailscale client: setup runs, but the server stays off Tailscale.", "#access/tailscale", true);
   const removals = state.removals || [];
   $("ready-list").replaceChildren(...items);
   show("removals", removals.length > 0);
@@ -2763,8 +2790,9 @@ function renderReview() {
   const r = state.review;
   const due = setupDue();
   const running = SETUP_RUNS.has(runningAction());
-  $("review-state").replaceChildren(running ? status("run", "Running") : !setupReady() ? status("", "Not ready")
-    : due.length ? status("warn", built() ? "Changes wait" : "Ready to build") : status("good", "Nothing waits"));
+  // A running setup is drawn right under this heading and says so itself.
+  $("review-state").replaceChildren(...running ? [] : [!setupReady() ? status("", "Not ready")
+    : due.length ? status("warn", built() ? "Changes wait" : "Ready to build") : status("good", "Nothing waits")]);
   $("review-reasons").replaceChildren(...(due.length
     ? due.map((x) => make("li", {className: "warn"}, icon(x.kind === "first" ? "info" : "alert"), make("span", {textContent: x.text})))
     : [make("li", {className: "ok"}, icon("check"), make("span", {textContent: "Nothing waits: the server follows your saved choices and this version of NullBill. A run now checks every part again and repairs what drifted."}))]));
@@ -2783,8 +2811,10 @@ function renderReview() {
   const erased = (r.disks || []).filter((d) => d.erases);
   const restart = again.filter((m) => m.interrupts);
   const parts = [];
+  // The first run makes every machine: their names, not a row of "New guest" each.
+  const first = !built() && created.length > 0 && machines.every((m) => m.what === "create" || m.what === "unknown");
   if (deleted.length) parts.push(`${deleted.length} deleted`);
-  if (created.length) parts.push(`${created.length} created`);
+  if (created.length && !first) parts.push(`${created.length} created`);
   if (changed.length) parts.push(`${changed.length} changed`);
   if (erased.length) parts.push(`${count(erased.length, "disk")} erased`);
   if (restart.length) parts.push(`${restart.length} may restart`);
@@ -2798,7 +2828,10 @@ function renderReview() {
   show("review-full", Boolean(seen && seen.full));
   const shared = new Map();
   const guestOf = new Map(guests.map((g) => [g.name, g]));
-  const rows = byImpact(machines).flatMap((m) => machineRows(m, shared, reviewOpen, "review-why", guestOf.get(m.name)));
+  const rows = first ? [] : byImpact(machines).flatMap((m) => machineRows(m, shared, reviewOpen, "review-why", guestOf.get(m.name)));
+  show("review-new", first && created.length > 0);
+  $("review-new-title").textContent = `Created (${created.length})`;
+  $("review-new-names").replaceChildren(...created.map((m) => make("li", {textContent: m.name})));
   for (const d of r.disks || []) {
     rows.push(make("tr", {className: d.erases ? "review-delete" : ""},
       make("td", {}, make("div", {className: "review-name"}, make("span", {className: "name", textContent: `Disk ${d.id}`})), make("span", {className: "sub effect-narrow", textContent: d.text})),
@@ -2973,6 +3006,8 @@ const DUE_TITLES = {
   update: "The last update has not reached the server yet",
   key: "A Tailscale auth key waits for a setup run",
 };
+// The monitoring role's alerts about the systems' own updates.
+const UPDATE_ALERTS = new Set(["RebootRequired", "SecurityUpdatesPending", "UpdatesWaiting", "UnattendedUpgradesFailing", "UnattendedUpgradesOff", "PackageListsStale"]);
 function attentionItems() {
   const out = [];
   const signed = Boolean(state.chat && state.chat.signed_in);
@@ -3000,7 +3035,10 @@ function attentionItems() {
   if ((state.removals || []).length && state.removals_stopped) add("bad", `Setup stopped before deleting ${andList(state.removals)}`, "Keep them or confirm the deletion.", [link("Decide", "#setup/build")]);
   const s = lastStatus;
   if (s && s.monitoring === "ok") {
-    for (const a of s.alerts) add(a.severity === "page" ? "bad" : "warn", alertText(a).what, alertText(a).todo || "", [link("Alerts", "#alerts")]);
+    // An alert about backups or updates leads to the page that settles it.
+    const where = (a) => (a.name.startsWith("Backup") ? link("Backups", "#backups")
+      : UPDATE_ALERTS.has(a.name) ? link("Updates", "#updates") : link("Alerts", "#alerts"));
+    for (const a of s.alerts) add(a.severity === "page" ? "bad" : "warn", alertText(a).what, alertText(a).todo || "", [where(a)]);
     // What an alert already tells of gets no second row.
     const firing = new Set(s.alerts.map((a) => a.name));
     if (s.down.length && !firing.has("TargetDown")) add("bad", `${s.down.length} system${s.down.length > 1 ? "s do" : " does"} not answer`, s.down.join(", "),
@@ -3041,6 +3079,75 @@ function attentionItems() {
   return out;
 }
 
+// The Overview leads with one answer: what the server is doing or needs
+// now. A live run first, then what needs the owner (one thing by its own
+// name, several by their number, each a row below), else that all is well,
+// with what that was read from. Before anything is built it is the next
+// step of the setup guide below.
+function overallNow(att) {
+  const view = latestView();
+  if (view && view.state === "running") {
+    const steps = view.progress.steps || [];
+    const done = steps.filter((x) => x.status === "done").length;
+    const now = steps.find((x) => x.status === "running");
+    const name = jobName(view);
+    const watch = make("a", {className: "btn small primary", href: `#activity/${view.id}`, textContent: "Watch"});
+    return {kind: "run", title: `${name} ${name.endsWith("s") ? "are" : "is"} running`, rows: att, actions: [watch],
+      sub: [steps.length > 1 ? `Stage ${Math.min(steps.length, done + 1)} of ${steps.length}` : "", now ? now.text : "Starting", duration(view.seconds)].filter(Boolean).join(" · "),
+      fill: steps.length > 1 ? Math.max(2, Math.round((100 * done) / steps.length)) : null};
+  }
+  const pressing = att.filter((a) => a.kind !== "info");
+  const notes = att.filter((a) => a.kind === "info");
+  if (pressing.length === 1) return {...pressing[0], rows: notes};
+  if (pressing.length > 1) {
+    const bad = pressing.filter((a) => a.kind === "bad").length;
+    const parts = [bad ? count(bad, "problem") : "", pressing.length - bad ? count(pressing.length - bad, "warning") : ""].filter(Boolean);
+    return {kind: bad ? "bad" : "warn", title: `${pressing.length} things need attention`, sub: parts.join(", "), actions: [], rows: att};
+  }
+  if (!built()) {
+    // Not built yet: the next step of the guide, with its button in sight.
+    const items = guideItems(state);
+    const next = guideCurrent(items);
+    const done = items.filter((i) => i.kind === "done").length;
+    const go = next ? [make("a", {className: "btn small primary", href: `#${next.href}`, textContent: next.title})] : [];
+    return {kind: "", title: "Set up your server", sub: `${done} of ${items.length} steps done${next ? ` · Next: ${next.title}` : ""}`, actions: go, rows: notes};
+  }
+  const s = lastStatus;
+  if (!s) return {kind: "", title: "Asking the server", sub: "", actions: [], rows: notes};
+  if (s.monitoring !== "ok") return {kind: "", title: "Built", sub: "Monitoring is not part of the plan, so nothing here says how the systems are.", actions: [], rows: notes};
+  const c = state.checks;
+  const off = (s.off || []).length;
+  const sub = [`All ${s.targets} systems answer${off ? `, ${off} off until needed` : ""}`, "no alerts",
+    c && !c.counts.FAIL && !c.counts.DEGRADED ? `checks passed ${ago(c.at)}` : ""].filter(Boolean).join(" · ");
+  return {kind: "good", title: "All clear", sub, actions: [], rows: notes};
+}
+function paintOverall() {
+  if (!state) return;
+  const o = overallNow(attentionItems());
+  show("overall", Boolean(o));
+  if (!o) return;
+  $("overall").dataset.kind = o.kind;
+  $("overall-mark").replaceChildren(...(o.kind === "run" ? [] : [icon(o.kind === "good" ? "check" : o.kind === "bad" || o.kind === "warn" ? "alert" : "info")]));
+  $("overall-title").textContent = o.title;
+  $("overall-sub").textContent = o.sub || "";
+  show("overall-sub", Boolean(o.sub));
+  show("overall-bar", o.fill !== null && o.fill !== undefined);
+  $("overall-fill").style.width = `${o.fill || 0}%`;
+  show("attention-list", o.rows.length > 0);
+  // A run repaints this every second: the buttons stay the same nodes, and
+  // keep the focus, until what they belong to changes.
+  const drawn = JSON.stringify([o.kind, o.title, o.rows.map((a) => [a.kind, a.title, a.sub])]);
+  if ($("overall").dataset.drawn === drawn) return;
+  $("overall").dataset.drawn = drawn;
+  $("overall-actions").replaceChildren(...(o.actions || []));
+  $("attention-list").replaceChildren(...o.rows.map((a) => make("li", {},
+    make("span", {className: `dot ${a.kind}`, ariaHidden: "true"}),
+    make("span", {className: "row-text"}, make("span", {className: "row-title", textContent: a.title}),
+      make("span", {className: "sr-only", textContent: a.kind === "bad" ? " (problem)" : a.kind === "info" ? " (note)" : " (warning)"}),
+      a.sub ? make("span", {className: "row-sub", textContent: ` ${a.sub}`}) : null),
+    make("span", {className: "row"}, ...a.actions))));
+}
+
 function renderOverview() {
   const st = state;
   const hw = st.hardware;
@@ -3048,15 +3155,7 @@ function renderOverview() {
   $("host-line").textContent = [install.node, install.host].filter(Boolean).join(" · ");
   $("overview-sub").textContent = hw ? [`${hw.cpu || "CPU"}, ${hw.threads} threads`, hw.memory_mib ? gib(hw.memory_mib) : "", hw.pve_version ? `Proxmox VE ${hw.pve_version}` : ""].filter(Boolean).join(" · ")
     : install.host ? `Proxmox at ${install.host}. Read the hardware to begin.` : "";
-  // Needs attention.
-  const att = attentionItems();
-  show("attention", att.length > 0);
-  $("attention-list").replaceChildren(...att.map((a) => make("li", {},
-    make("span", {className: `dot ${a.kind}`, ariaHidden: "true"}),
-    make("span", {className: "row-text"}, make("span", {className: "row-title", textContent: a.title}),
-      make("span", {className: "sr-only", textContent: a.kind === "bad" ? " (problem)" : a.kind === "info" ? " (note)" : " (warning)"}),
-      a.sub ? make("span", {className: "row-sub", textContent: ` ${a.sub}`}) : null),
-    make("span", {className: "row"}, ...a.actions))));
+  paintOverall();
   // Health, once something is built.
   const s = lastStatus;
   show("health", built());
@@ -3070,10 +3169,10 @@ function renderOverview() {
     if (s && s.monitoring === "ok") {
       const off = s.off || [];
       cell("Systems", `${s.targets - s.down.length} of ${s.targets} up`, s.down.length ? "bad" : "good",
-        s.down.length ? `Down: ${s.down.join(", ")}` : off.length ? `Off on demand: ${off.join(", ")}` : "", off.length && !s.down.length ? "#services" : null);
+        s.down.length ? `Down: ${s.down.join(", ")}` : off.length ? `Off until needed: ${off.join(", ")}` : "", "#services");
       cell("Alerts", s.alerts.length ? `${s.alerts.length} firing` : "None firing", s.alerts.length ? (s.alerts.some((a) => a.severity === "page") ? "bad" : "warn") : "good", "", "#alerts");
       cell("Security updates", s.security_waiting.length ? `${s.security_waiting.length} waiting` : "Up to date", s.security_waiting.length ? "warn" : "good",
-        s.security_waiting.length ? s.security_waiting.join(", ") : "Installed nightly");
+        s.security_waiting.length ? s.security_waiting.join(", ") : "Installed nightly", "#updates");
     } else {
       cell("Monitoring", !s ? "Asking…" : s.monitoring === "not planned" ? "Not planned" : "Not answering", !s ? "" : s.monitoring === "not planned" ? "" : "warn", "");
     }
@@ -3788,7 +3887,7 @@ function renderServices(st) {
     const row = make("tr", {className: "link-row"},
       make("td", {}, make("div", {className: "svc"}, toggle, make("span", {className: "name", textContent: s.title})), said),
       make("td", {className: "state-cell"}),
-      make("td", {className: "hide-phone mono", textContent: first.replace(/^[A-Z][^:]{0,40}: /, "")}),
+      make("td", {className: "hide-phone mono addr", textContent: first.replace(/^[A-Z][^:]{0,40}: /, "")}),
       make("td", {className: "hide-narrow mono nowrap", textContent: (s.user || "").split(",")[0]}),
       make("td", {className: "actions"}, openLink(s)));
     row.dataset.watch = s.watch || "";
@@ -4150,7 +4249,9 @@ function renderBackups() {
   if (!holder) paintBackupsForm();
 
   // What is backed up, and what is not.
-  const rows = live && live.state === "ok" ? live.guests : b.covered.map((name) => ({name}));
+  // What needs a look comes first: no backup at all, then the late ones.
+  const worry = (g) => (g.last === null ? 0 : live.late.includes(g.name) ? 1 : 2);
+  const rows = live && live.state === "ok" ? [...live.guests].sort((a, b2) => worry(a) - worry(b2)) : b.covered.map((name) => ({name}));
   show("backups-what", rows.length > 0);
   // Without a reading there is nothing to say per service: the names alone, not a column of "no reading".
   const read = Boolean(live && live.state === "ok");
@@ -4414,17 +4515,23 @@ async function openRun(id, focus) {
 
 // The followed run's card goes where the owner looks at it: its own page,
 // or under Build while a setup run goes.
+const BUILD_SLOTS = ["job-slot", "build-job", "build-job-top"];
 function placeJob() {
   if (!job) return;
   const onRun = currentView === "activity" && currentSub === job.id;
   const onBuild = currentView === "setup" && currentStep === "build" && SETUP_RUNS.has(job.view.action) && !job.view.only;
-  const target = onRun ? $("job-slot") : onBuild ? $("build-job") : null;
+  // On the review, a run that is live or failed leads: it is what the
+  // owner came for. A finished one stays below the review of the next.
+  const live = job.view.state === "running";
+  const leads = live || (job.view.state === "failed" && !job.view.stopped);
+  const target = onRun ? $("job-slot") : onBuild ? $(leads ? "build-job-top" : "build-job") : null;
   if (target && job.node.parentElement !== target) {
-    for (const slot of [$("job-slot"), $("build-job")]) if (slot !== target && slot.contains(job.node)) slot.replaceChildren();
+    for (const slot of BUILD_SLOTS.map($)) if (slot !== target && slot.contains(job.node)) slot.replaceChildren();
     target.replaceChildren(job.node);
   }
   if (onRun) $("crumb-run").textContent = jobName(job.view);
-  show("build-start", !(onBuild && job.view.state === "running"));
+  // While it runs there is no next run to review yet.
+  show("build-review", !(onBuild && live));
 }
 
 function follow(first, watched, feedback) {
@@ -4580,8 +4687,10 @@ function failItems(items) {
 function drawJob(current, view) {
   const node = current.node;
   const p = view.progress;
-  // A run that went well folds its stages and log away; a live or failed one shows them.
-  if (node.dataset.state !== view.state) node.querySelector(".job-more").open = view.state !== "done";
+  // A live run shows its stages and log. A finished one folds them away, and
+  // so does a failed one whose card above them says where and why it failed.
+  const told = (p.error && (p.error.stage_text || p.error.items.length)) || (p.verify && p.verify.problems.length);
+  if (node.dataset.state !== view.state) node.querySelector(".job-more").open = view.state === "running" || (view.state === "failed" && !told);
   node.dataset.state = view.state;
   paintPill(latestView());
   node.querySelector(".job-title").textContent = p.title;
@@ -4629,7 +4738,7 @@ function drawJob(current, view) {
   const againButton = node.querySelector(".job-again");
   const canAgain = view.state === "done" && ["apply", "verify", "rebake-ci", "upgrade", "remove-guests"].includes(view.action);
   // On its review a setup run starts from the button above it.
-  const reviewed = SETUP_RUNS.has(view.action) && node.parentElement === $("build-job");
+  const reviewed = SETUP_RUNS.has(view.action) && ["build-job", "build-job-top"].includes((node.parentElement || {}).id);
   againButton.hidden = !canAgain || reviewed;
   againButton.textContent = view.action === "verify" ? "Run the checks again" : view.action === "upgrade" ? "Check and update again" : "Review and run again";
   node.querySelector(".job-stages").hidden = !steps.length;
@@ -6286,6 +6395,14 @@ document.addEventListener("DOMContentLoaded", () => {
   $("backups-key-get").addEventListener("click", () => setTimeout(() => loadBackups().catch(() => {}), 1500));
   $("start-setup").addEventListener("click", () => startJob("apply", $("start-setup"), $("build-result")));
   $("update-now").addEventListener("click", () => startJob("upgrade", $("update-now"), $("update-result")));
+  for (const button of document.querySelectorAll("[data-unsettle]")) {
+    button.addEventListener("click", () => {
+      const form = button.closest("form");
+      form.dataset.open = "1";
+      form.classList.remove("settled");
+      form.querySelector("input").focus();
+    });
+  }
   $("nightly").addEventListener("change", async () => {
     const on = $("nightly").checked;
     say("nightly-result", "busy", "Saving…");

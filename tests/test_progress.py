@@ -315,6 +315,8 @@ def test_failed_checks_are_listed():
         {"status": "FAIL", "text": "lan: 8006 answers from the LAN", "name": "lan", "detail": "8006 answers from the LAN"}
     ]
     assert view["error"]["message"] == "1 check failed."
+    # One failed check gets the checks' advice, as several do, not the advice for a setup run.
+    assert view["error"]["advice"].startswith("Look at the failing checks below.")
 
 
 def test_checks_that_did_not_run_are_listed_with_why():

@@ -1892,6 +1892,13 @@ def test_the_page_holds_every_element_and_icon_its_script_asks_for():
     assert used - icons == set()
 
 
+def test_the_alerts_the_overview_sends_to_updates_are_the_monitoring_roles():
+    static = Path(web.__file__).parent / "static"
+    named = set(re.findall(r'"(\w+)"', (static / "app.js").read_text().split("const UPDATE_ALERTS = new Set(")[1].split(")")[0]))
+    rules = (Path(web.__file__).parents[3] / "ansible" / "roles" / "monitoring" / "files" / "nullbill.rules.yml").read_text()
+    assert named and named <= set(re.findall(r"alert: (\w+)", rules))
+
+
 def test_connections_stay_open_and_close_without_a_reset(site):
     """Phones on mobile data reach the page through Tailscale's userspace
     stack, which turns a reset into a lost page: one connection carries

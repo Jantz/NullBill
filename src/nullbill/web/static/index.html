@@ -176,15 +176,20 @@
         <div><h1 id="h-overview" tabindex="-1">Overview</h1><p class="page-sub" id="overview-sub"></p></div>
       </header>
 
-      <section class="block" id="guide-inline" aria-labelledby="h-guide" hidden>
-        <div class="block-head"><h2 id="h-guide">Set up your server</h2><span class="meta" id="guide-progress"></span>
-          <button type="button" class="btn small push" data-ask="Set this server up with me: read the hardware, suggest what it should run in a few lines, make the plan fit, then start setup. Ask me where the choice is mine, and fix what breaks." id="guide-agent"><svg class="icon" aria-hidden="true"><use href="#i-agent"/></svg>Let the agent do it</button></div>
-        <ol class="steps" id="guide-list"></ol>
+      <section class="overall" id="overall" aria-labelledby="overall-title" hidden>
+        <div class="overall-head">
+          <span class="overall-mark" id="overall-mark" aria-hidden="true"></span>
+          <div class="overall-text"><h2 id="overall-title"></h2><p id="overall-sub"></p></div>
+          <div class="row overall-actions" id="overall-actions"></div>
+        </div>
+        <div class="overall-bar" id="overall-bar" aria-hidden="true" hidden><span id="overall-fill"></span></div>
+        <ul class="rows" id="attention-list" aria-label="Needs attention"></ul>
       </section>
 
-      <section class="block" id="attention" aria-labelledby="h-attention" hidden>
-        <div class="block-head"><h2 id="h-attention">Needs attention</h2></div>
-        <ul class="rows" id="attention-list"></ul>
+      <section class="block" id="guide-inline" aria-labelledby="h-guide" hidden>
+        <div class="block-head"><h2 id="h-guide">Setup steps</h2><span class="meta" id="guide-progress"></span>
+          <button type="button" class="btn small push" data-ask="Set this server up with me: read the hardware, suggest what it should run in a few lines, make the plan fit, then start setup. Ask me where the choice is mine, and fix what breaks." id="guide-agent"><svg class="icon" aria-hidden="true"><use href="#i-agent"/></svg>Let the agent do it</button></div>
+        <ol class="steps" id="guide-list"></ol>
       </section>
 
       <section class="block" id="health" aria-labelledby="h-health" hidden>
@@ -277,7 +282,7 @@
         <section class="block" id="backups-what" aria-labelledby="h-backups-what" hidden>
           <div class="block-head"><h2 id="h-backups-what">What is backed up</h2><span class="meta" id="backups-schedule"></span></div>
           <div class="review-names" id="backups-names" hidden><ul aria-labelledby="h-backups-what"></ul></div>
-          <div class="table-wrap" id="backups-table"><table class="table">
+          <div class="table-wrap" id="backups-table"><table class="table dense">
             <caption class="sr-only">Each service's newest backup</caption>
             <thead><tr><th scope="col">Service</th><th scope="col">Newest backup</th></tr></thead>
             <tbody id="backups-rows"></tbody></table></div>
@@ -486,9 +491,9 @@
             <ul class="legend" id="memory-legend"></ul>
             <p id="plan-ok-text" class="help"></p>
           </div>
-          <div class="table-wrap"><table class="table">
+          <div class="table-wrap"><table class="table dense">
             <caption class="sr-only">What the plan builds</caption>
-            <thead><tr><th scope="col">Guest</th><th scope="col">Kind</th><th scope="col" class="hide-phone">Zone</th><th scope="col" class="num">Cores</th><th scope="col" class="num">Memory</th></tr></thead>
+            <thead><tr><th scope="col">Guest</th><th scope="col">Kind</th><th scope="col" class="hide-phone">Zone</th><th scope="col" class="num">Cores</th><th scope="col" class="num">Memory</th><th scope="col" class="num hide-phone">Disk</th></tr></thead>
             <tbody id="plan-guests"></tbody></table></div>
         </div>
         <details id="plan-details" class="disclosure"><summary>The full plan</summary><pre id="plan" aria-label="The full plan"></pre></details>
@@ -497,6 +502,9 @@
 
       <section class="step" id="step-build" aria-labelledby="h-step-build" hidden>
         <div class="block-head"><h2 id="h-step-build" tabindex="-1">Review and run setup</h2><span class="meta" id="review-state"></span></div>
+        <!-- A run that is live, or failed and waits for the owner, comes first; the review of the next run follows. -->
+        <div id="build-job-top"></div>
+        <div id="build-review">
         <p class="help">What the next run does to the server. Nothing changes before you start it; parts that are unchanged are skipped.</p>
 
         <section class="review-part" aria-labelledby="h-review-why">
@@ -509,6 +517,7 @@
           <h3 id="h-review-what">What it does to the server</h3>
           <ul id="review-summary" class="review-summary" aria-label="In short"></ul>
           <p class="note" id="review-unknown" hidden><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><span>This server was built by an earlier NullBill that kept no record of its guests, so the page cannot tell new guests from old ones here. This run makes that record.</span></p>
+          <div class="review-names" id="review-new" hidden><h4 id="review-new-title"></h4><ul id="review-new-names" aria-labelledby="review-new-title"></ul><p class="foot-note">Each one's size is under <a href="#setup/plan">Plan</a>.</p></div>
           <div class="table-wrap" id="review-table" hidden><table class="table review">
             <caption class="sr-only">What this setup run creates, deletes, changes and sets up again. Open a row for why.</caption>
             <thead><tr><th scope="col">Machine</th><th scope="col">This run</th><th scope="col" class="hide-phone">What happens</th><th scope="col" class="num hide-narrow">Took last time</th></tr></thead>
@@ -542,6 +551,7 @@
           <button type="button" class="btn primary" id="start-setup"><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg><span id="start-setup-text">Start setup</span></button>
           <p class="feedback" id="build-result" role="status"></p>
           <span class="meta push" id="start-note"></span>
+        </div>
         </div>
         <div id="build-job"></div>
       </section>
@@ -634,11 +644,11 @@
             <div class="setting-text"><h2><span class="num-mark" id="ts-dot-client">1</span>OAuth client</h2>
               <p>Lets setup put your access rules in place.</p>
               <ol class="mini-steps"><li>In the Tailscale admin console, open <b>Settings, Trust credentials</b>.</li><li>Add an OAuth client with <b>Policy file</b> and <b>DNS</b>, both write.</li><li>Optional: <b>Users</b>, write, so removing a person here also removes their Tailscale account.</li></ol>
-              <p id="tailscale-client-saved" class="saved" hidden><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg>Saved. Paste a new one to replace it.</p></div>
+              <p id="tailscale-client-saved" class="saved" hidden><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg>Saved.</p></div>
             <div class="setting-control">
               <label class="field"><span class="label">Client ID</span><input id="tailscale-client-id" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="tailscale-client-result"></label>
               <label class="field"><span class="label">Client secret</span><input id="tailscale-client-secret" type="password" autocomplete="new-password" placeholder="tskey-client-…" aria-describedby="tailscale-client-result"></label>
-              <div class="row"><button type="submit" class="btn">Save client</button><p class="feedback" id="tailscale-client-result" role="status"></p></div>
+              <div class="row"><button type="button" class="btn settled-only" data-unsettle>Replace the client</button><button type="submit" class="btn">Save client</button><p class="feedback" id="tailscale-client-result" role="status"></p></div>
             </div>
           </form>
           <form id="vpn-form" class="setting" novalidate>
@@ -648,7 +658,8 @@
               <p id="vpn-saved" class="saved" hidden><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg>A key waits for the next setup run.</p></div>
             <div class="setting-control">
               <label class="field"><span class="label">Auth key</span><input id="tailscale-key" type="password" autocomplete="new-password" placeholder="tskey-auth-…" aria-describedby="vpn-result"></label>
-              <div class="row"><button type="submit" class="btn">Save auth key</button><p class="feedback" id="vpn-result" role="status"></p></div>
+              <p class="saved settled-only"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg>The server has joined your network. It needs a new key only after you remove it from Tailscale.</p>
+              <div class="row"><button type="button" class="btn settled-only" data-unsettle>Use a new key</button><button type="submit" class="btn">Save auth key</button><p class="feedback" id="vpn-result" role="status"></p></div>
             </div>
           </form>
           <div class="setting" id="sec-portmap">
@@ -820,7 +831,7 @@
             <div class="setting-control">
               <label class="field"><span class="label" id="agent-label">API key or subscription token</span>
                 <input id="agent-credential" type="password" autocomplete="new-password" spellcheck="false" placeholder="sk-ant-…" aria-describedby="agent-result"></label>
-              <div class="row"><button type="submit" class="btn">Sign in the agent</button><p class="feedback" id="agent-result" role="status"></p></div>
+              <div class="row"><button type="submit" class="btn">Sign in the agent</button><button type="button" class="btn settled-only" data-unsettle>Use another key or token</button><p class="feedback" id="agent-result" role="status"></p></div>
               <details class="disclosure small"><summary>Where do I get one?</summary>
                 <p><b>Claude Pro or Max:</b> on any computer with Claude Code, run <code>claude setup-token</code> and paste what it prints; it lasts a year. <b>API:</b> make a key at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer">console.anthropic.com</a>; that works from a phone too.</p></details>
             </div>
@@ -869,7 +880,7 @@
               <p class="status-line" id="github-state"></p></div>
             <div class="setting-control">
               <label class="field"><span class="label">GitHub token</span><input id="agent-github-token" type="password" autocomplete="new-password" spellcheck="false" placeholder="github_pat_…" aria-describedby="agent-github-result"></label>
-              <div class="row"><button type="submit" class="btn">Save token</button><button type="button" id="agent-github-remove" class="btn ghost" hidden>Remove</button><p class="feedback" id="agent-github-result" role="status"></p></div>
+              <div class="row"><button type="submit" class="btn">Save token</button><button type="button" class="btn settled-only" data-unsettle>Replace the token</button><button type="button" id="agent-github-remove" class="btn ghost" hidden>Remove</button><p class="feedback" id="agent-github-result" role="status"></p></div>
             </div>
           </form>
 

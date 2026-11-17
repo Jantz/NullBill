@@ -319,7 +319,7 @@ def test_an_answer_that_cannot_be_read_or_is_old_fails(facts):
     # The timer stopped: the mapping it reported has run out since.
     old = guest_exec(f"{json.dumps(portmap_state(at=ROUTER_CLOCK - 3 * 3600))}\n{ROUTER_CLOCK}\n")
     detail = kind_and_detail(answers={direct.router_command(plan): old})[1]
-    assert detail == "nb-portmap on the router last ran 180 minutes ago; nullbill-portmap.timer runs it every 15"
+    assert detail.startswith("the server last asked the home router for the port 3 hours ago and should ask every 15 minutes, so")
 
 
 def test_the_record_for_the_page_never_holds_a_public_address(facts, tmp_path):

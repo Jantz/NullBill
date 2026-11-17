@@ -152,7 +152,8 @@ class Server:
         if self.state == "degraded":
             peers = [tailscale_peer("phone"), tailscale_peer("laptop", cur_addr="192.168.1.20:41641")]
         try:
-            state = portmap_state(at=int(time.time()) - 60)
+            # A minute before the stand-in router's own clock (conftest.ROUTER_CLOCK).
+            state = portmap_state()
             answers = direct_answers(plan, state=state, peers=peers, pongs={"phone": "DERP(fra)"})
         except (KeyError, StopIteration):
             answers = {}

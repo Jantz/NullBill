@@ -66,12 +66,16 @@ def reader(root: Path, commit: str):
 
 
 def describe(root: Path, commit: str) -> dict | None:
-    """A commit as the page shows it."""
+    """A commit as the page shows it. main moves by fast-forward to branches
+    that merged main into themselves, so its newest commit is often a merge
+    whose subject names a branch: the subject shown is that of the newest
+    commit that changed something."""
     out = _git(root, "show", "-s", "--format=%H%x00%ct%x00%s", commit)
     if not out:
         return None
     full, when, subject = out.split("\0", 2)
-    return {"id": full[:12], "commit": full, "time": int(when), "subject": subject}
+    said = _git(root, "log", "-1", "--no-merges", "--format=%s", full)
+    return {"id": full[:12], "commit": full, "time": int(when), "subject": said or subject}
 
 
 def _in_setup(path: str) -> bool:
@@ -97,7 +101,9 @@ def changes(root: Path, old: str, new: str) -> list[dict]:
     """The commits `new` holds and `old` does not, newest first, each with
     `setup`: whether it changes what setup builds."""
     span = f"{old}..{new}"
-    listed = _git(root, "log", "--format=%H%x00%ct%x00%s", span)
+    # A merge changes nothing its parents did not; only when the span holds
+    # nothing else is it listed, so that the span never reads as empty.
+    listed = _git(root, "log", "--no-merges", "--format=%H%x00%ct%x00%s", span) or _git(root, "log", "--format=%H%x00%ct%x00%s", span)
     excluded = [f":(exclude){p}" for p in NOT_SETUP]
     touching = _git(root, "log", "--format=%H", span, "--", *SETUP_PATHS, *excluded)
     if listed is None or touching is None:

@@ -234,7 +234,7 @@ ADVICE = [
         "the server's own log says why: in Proxmox open the game's container and run journalctl -u followed by the game's name.",
     ),
     (r"is still copying", "A copy is still running on the host. Wait for it to finish, then run setup again."),
-    (r"checks failed", "Look at the failing checks below. Fix what they name, then run the checks again."),
+    (r"^\d+ checks? failed", "Look at the failing checks below. Fix what they name, then run the checks again."),
 ]
 STAGE_ADVICE = {
     PREPARE: "Fix what the message names under Setup, then run setup again.",

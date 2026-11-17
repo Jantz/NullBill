@@ -262,6 +262,14 @@ def forward(port: int, address: str | None, why: dict) -> str:
     return f"on the home router, turn on UPnP or NAT-PMP; {by_hand}"
 
 
+def _span(seconds: int) -> str:
+    """A length of time in its largest whole unit: 3 hours, 2 days."""
+    for size, word in ((86400, "day"), (3600, "hour"), (60, "minute")):
+        if seconds >= size:
+            return f"{seconds // size} {word}{'' if seconds // size == 1 else 's'}"
+    return "under a minute"
+
+
 def judge(asked: bool, state: dict, clock: int, seen: list[tuple[str, int]]) -> Finding:
     """What nb-portmap's state and Tailscale's own endpoints say together."""
     port = state.get("port") or TAILSCALE_PORT
@@ -276,7 +284,9 @@ def judge(asked: bool, state: dict, clock: int, seen: list[tuple[str, int]]) -> 
         return finding(OFF, f"{unknown}; to have it open, {by_hand}")
     age = clock - int(state.get("at") or 0)
     if age > STALE_S:
-        return finding(UNREAD, f"nb-portmap on the router last ran {age // 60} minutes ago; nullbill-portmap.timer runs it every 15")
+        heard = f"the server last asked the home router for the port {_span(age)} ago and should ask every 15 minutes"
+        stopped = "if a setup run does not change this, nullbill-portmap.timer on the router has stopped"
+        return finding(UNREAD, f"{heard}, so what it heard then says nothing about now; {stopped}")
     method, external = state.get("method"), _endpoint(state.get("external") or "")
 
     def behind(opened: bool) -> str:

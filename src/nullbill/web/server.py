@@ -3104,6 +3104,7 @@ def plan_summary(plan: dict) -> dict:
             "zone": g.get("zone"),
             "cores": g.get("cores"),
             "memory_mib": g.get("memory_mib"),
+            "disk_gib": g.get("disk_gib"),
             "count": g.get("count"),
             "installed": bool(g.get("installed")),
         }
