@@ -29,9 +29,8 @@ DIR = "browser-ca"
 CA_DAYS = 3650
 # Apple refuses a TLS certificate valid for longer than 825 days, from any root.
 DAYS = 825
-# apply issues a new one when fewer days than this are left; verify warns at WARN_DAYS.
+# apply issues a new one when fewer days than this are left.
 RENEW_DAYS = 90
-WARN_DAYS = 30
 NAME = "NullBill browser CA"
 
 

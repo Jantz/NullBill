@@ -36,10 +36,10 @@ PLAYBOOK = "qbittorrent.yml"
 # The guest's memory limit while the role builds qBittorrent: release 5.3.0
 # built with one compiler under a 2 GiB limit (docker --memory 2g).
 BUILD_MEMORY_MIB = 2048
-# Where the client sees its folder of the kept disk, and where unfinished
-# downloads wait inside it (with a .ignore file, so Jellyfin skips them).
+# Where the client sees its folder of the kept disk. Unfinished downloads
+# wait in its `incomplete` folder (nb-torrents), with a .ignore file so
+# Jellyfin skips them.
 STORE = "/downloads"
-INCOMPLETE = "incomplete"
 # The kept disks' files belong to uid 1000 in an unprivileged container
 # (legacy.SHARE_UID); the client runs as that uid.
 UID = legacy.SHARE_UID

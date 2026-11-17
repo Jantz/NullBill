@@ -389,7 +389,7 @@ def address(plan: dict, name: str, model: dict, by_name: bool = False) -> str:
     return f"{host}:{port(model, name)[0]}"
 
 
-def _checks(plan: dict, model: dict, name: str) -> list[tuple[str, str, str]]:
+def _checks(model: dict, name: str) -> list[tuple[str, str, str]]:
     """(label, command in the game's guest, expected output)."""
     game = model["games"][name]
     field = 'python3 -c \'import json, sys; s = json.load(sys.stdin); print(s["version"], s["running"])\''
@@ -417,7 +417,7 @@ def commands(plan: dict, model: dict) -> list[tuple[str, str, str]]:
     out = []
     for name in planned(plan, model):
         vmid = plan["guests"][name]["vmid"]
-        out += [(label, f"pct exec {vmid} -- bash -c {shlex.quote(command)}", want) for label, command, want in _checks(plan, model, name)]
+        out += [(label, f"pct exec {vmid} -- bash -c {shlex.quote(command)}", want) for label, command, want in _checks(model, name)]
     return out
 
 
@@ -467,12 +467,6 @@ def options(model: dict, name: str) -> list[dict]:
         default = start.get(option["key"], option.get("default"))
         out.append(_field(option, default, have.get(option["key"], default)))
     return out
-
-
-def new_world_keys(game: str) -> list[str]:
-    """Every setting that counts only when a world is made: what New world
-    asks, and what the settings say of the server's first world."""
-    return list(dict.fromkeys([o["key"] for o in NEW_WORLD[game]] + [o["key"] for o in OPTIONS[game] if o.get("new_world")]))
 
 
 def new_world_options(model: dict, name: str) -> list[dict]:

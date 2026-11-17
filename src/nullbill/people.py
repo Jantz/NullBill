@@ -93,10 +93,6 @@ def reach(model: dict, plan: dict | None, name: str, shared: bool | None = None)
     return out
 
 
-def owner_login(config: dict) -> str:
-    return next((p["login"] for p in config.get("people", {}).values() if p.get("role") == OWNER), "")
-
-
 def save(config: dict, model: dict, name: str, login: str, services: list[str]) -> dict:
     """The config with one person added, or their login and services changed.
     The owner is set under Setup, not here."""

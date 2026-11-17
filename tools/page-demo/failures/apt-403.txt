@@ -1,0 +1,30 @@
+TASK [forgejo : Install the packages Forgejo needs] ****************************
+[ERROR]: Task failed: Module failed: non-zero return code
+Origin: /opt/nullbill/ansible/roles/forgejo/tasks/main.yml:5:7
+
+3   gather_facts: false
+4   tasks:
+5     - name: Install the packages Forgejo needs
+        ^ column 7
+
+fatal: [forgejo]: FAILED! => 
+    changed: false
+    cmd: |-
+        apt-get -y install nginx
+
+        exit 100
+    delta: '0:00:00.002876'
+    msg: non-zero return code
+    rc: 100
+    stderr: |-
+        E: Failed to fetch http://deb.debian.org/debian/pool/main/n/nginx/nginx_1.22.1-9_amd64.deb  403  Forbidden [IP: 10.20.0.3 3128]
+        E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?
+    stderr_lines: <omitted>
+    stdout: |-
+        Reading package lists...
+
+        Building dependency tree...
+    stdout_lines: <omitted>
+
+PLAY RECAP *********************************************************************
+forgejo                    : ok=0    changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0

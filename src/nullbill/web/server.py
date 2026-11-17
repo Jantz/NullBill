@@ -1733,7 +1733,7 @@ class App:
         """(file name, bytes, the stream, what to call when done) for one
         of a server's worlds: the guest writes it out as one file, which
         then comes through the host as it is."""
-        model, plan, target = self._game_guest(name)
+        _, plan, target = self._game_guest(name)
         rc, out, err = self.host_long(target, games.guest_command(plan, name, "world", "export", gameroom.world_id(ident)))
         found = gameroom.answer(out, err, rc)
         if not found["ok"]:
@@ -3116,7 +3116,7 @@ class PageServer(http.server.ThreadingHTTPServer):
     request_queue_size = 128
     daemon_threads = True
 
-    def shutdown_request(self, request) -> None:  # noqa: ANN001
+    def shutdown_request(self, request) -> None:
         try:
             request.shutdown(socket.SHUT_WR)
             request.settimeout(LINGER_S)
@@ -3177,7 +3177,7 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
             self.send(403, b"NullBill is closed to this network; open it over Tailscale.\n", "text/plain; charset=utf-8")
             return True
 
-        def do_GET(self) -> None:  # noqa: N802
+        def do_GET(self) -> None:
             if self.closed():
                 return
             path, _, query = self.path.partition("?")
@@ -3339,7 +3339,7 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 return self.json(200, app.job_view(job, offset(query)))
             return self.json(404, {"error": "not found"})
 
-        def do_POST(self) -> None:  # noqa: N802
+        def do_POST(self) -> None:
             if self.path.partition("?")[0] == "/api/game/world":
                 return self.world_upload()
             # The body is read before any answer: on a kept-alive
@@ -3555,7 +3555,7 @@ def tools_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
             self.end_headers()
             self.wfile.write(body)
 
-        def do_POST(self) -> None:  # noqa: N802
+        def do_POST(self) -> None:
             # Read the body first: a reply before it is read can reach a
             # client still sending it as a broken pipe.
             length = int(self.headers.get("Content-Length") or 0)
@@ -3604,7 +3604,7 @@ def watch(app: App) -> None:
         try:
             app.chat.notice_jobs()
             app.chat.watch_turn()
-        except Exception as exc:  # noqa: BLE001 - a watcher that dies would stop for good
+        except Exception as exc:
             print(f"nullbill-web: agent watcher: {exc}", file=sys.stderr, flush=True)
 
 

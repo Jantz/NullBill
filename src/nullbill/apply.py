@@ -2079,7 +2079,7 @@ SHIPPER_DAYS = 825
 EC = ["-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes"]
 
 
-def openssl(ctx: Context, stage: str, args: list[str]) -> int:
+def openssl(ctx: Context, args: list[str]) -> int:
     directory = ctx.home / SHIPPER_CA
     directory.mkdir(mode=0o700, exist_ok=True)
     rc, _ = ctx.reach.local(["openssl", *args], directory, {}, capture=True)
@@ -2092,7 +2092,7 @@ def shipper_ca(ctx: Context, stage: str) -> str:
     crt = ctx.home / SHIPPER_CA / "ca.crt"
     if not crt.exists():
         args = ["req", "-x509", *EC, "-days", "3650", "-subj", "/CN=NullBill log shipper CA", "-keyout", "ca.key", "-out", "ca.crt"]
-        if openssl(ctx, stage, args) != 0:
+        if openssl(ctx, args) != 0:
             raise ApplyError(stage, "openssl could not make the log shipper CA")
         ctx.say(f"{stage}: made the log shipper CA in {crt.parent}")
     return crt.read_text()
@@ -2103,14 +2103,14 @@ def shipper_cert(ctx: Context, stage: str, name: str) -> tuple[str, str]:
     shipper_ca(ctx, stage)
     directory = ctx.home / SHIPPER_CA
     crt, key = directory / f"{name}.crt", directory / f"{name}.key"
-    if not crt.exists() or openssl(ctx, stage, ["x509", "-checkend", str(30 * 86400), "-noout", "-in", crt.name]) != 0:
+    if not crt.exists() or openssl(ctx, ["x509", "-checkend", str(30 * 86400), "-noout", "-in", crt.name]) != 0:
         steps = (
             ["req", *EC, "-subj", f"/CN={name}", "-keyout", key.name, "-out", f"{name}.csr"],
             ["x509", "-req", "-in", f"{name}.csr", "-CA", "ca.crt", "-CAkey", "ca.key", "-CAcreateserial"]
             + ["-days", str(SHIPPER_DAYS), "-out", crt.name],
         )
         for args in steps:
-            if openssl(ctx, stage, args) != 0:
+            if openssl(ctx, args) != 0:
                 raise ApplyError(stage, f"openssl could not make {name}'s log shipper certificate")
         ctx.say(f"{stage}: made {name}'s log shipper certificate")
     return crt.read_text(), key.read_text()

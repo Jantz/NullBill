@@ -12,15 +12,15 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, "/opt/nullbill/tests")
-from fixturedata import fixture_config, write_raw  # noqa: E402
+from fixturedata import fixture_config, write_raw
 
-from nullbill import apply  # noqa: E402
-from nullbill.artifacts import render_all  # noqa: E402
-from nullbill.errors import NullBillError  # noqa: E402
-from nullbill.model import build_model  # noqa: E402
-from nullbill.plan import build_plan  # noqa: E402
-from nullbill.probe import parse  # noqa: E402
-from nullbill.secretfile import Secrets, Sops  # noqa: E402
+from nullbill import apply
+from nullbill.artifacts import render_all
+from nullbill.errors import NullBillError
+from nullbill.model import build_model
+from nullbill.plan import build_plan
+from nullbill.probe import parse
+from nullbill.secretfile import Secrets, Sops
 
 TARGET = "root@10.42.1.254"
 HOME = Path(os.environ["NULLBILL_HOME"])

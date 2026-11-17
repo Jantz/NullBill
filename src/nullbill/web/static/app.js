@@ -2633,7 +2633,7 @@ function paintStates() {
   // What a finished run says changes with the time that has passed since.
   if (job && job.view && job.view.state !== "running") drawOutcome(job.node, job.view);
   paintPill(latestView());
-  renderOverview(items);
+  renderOverview();
   renderRuns();
   renderFiring();
   paintBanner();
@@ -3028,7 +3028,7 @@ function attentionItems() {
   return out;
 }
 
-function renderOverview(items) {
+function renderOverview() {
   const st = state;
   const hw = st.hardware;
   const install = st.install || {};
@@ -4009,7 +4009,7 @@ async function loadBackups() {
   renderBackups();
 }
 
-function backupPlace(p, b) {
+function backupPlace(p) {
   const size = `${p.size_gib} GiB ${p.rotational ? "hard disk" : "SSD"}`;
   const failing = p.health === "FAILED" ? " It reports that it is failing." : "";
   switch (p.kind) {
@@ -4123,7 +4123,7 @@ function renderBackups() {
         `Nothing to plug in.${room} Lost if this disk fails.`,
         system.allowed ? "" : `Not offered: ${system.why.charAt(0).toLowerCase()}${system.why.slice(1)}`),
       ...b.places.map((p) => {
-        const [title, desc, why, cls] = backupPlace(p, b);
+        const [title, desc, why, cls] = backupPlace(p);
         return option(radio(p.id, Boolean(why)), title, desc, why, cls);
       }));
     const size = $("backups-size");

@@ -163,7 +163,7 @@ def test_loki_query_finds_the_marker_and_prints_its_uids():
     asked = []
 
     class Loki(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):  # noqa: N802
+        def do_GET(self):
             asked.append(urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query))
             streams = [{"stream": {"job": "commands", "host": "workspace", "uid": "1001"}, "values": [["1", "ssh: echo m"]]}]
             body = json.dumps({"status": "success", "data": {"resultType": "streams", "result": streams}}).encode()

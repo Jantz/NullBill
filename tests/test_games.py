@@ -260,7 +260,7 @@ def test_the_admins_check_reads_nb_game(facts, tmp_path, monkeypatch):
     fake.chmod(0o755)
     monkeypatch.setattr(games, "NB_GAME", str(fake))
     plan, model = planned(facts)
-    (script,) = [c for label, c, _ in games._checks(plan, model, "minecraft") if label.endswith("config.yaml")]
+    (script,) = [c for label, c, _ in games._checks(model, "minecraft") if label.endswith("config.yaml")]
 
     def run(listed: str) -> str:
         (tmp_path / "admins").write_text(listed)

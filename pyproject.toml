@@ -47,4 +47,10 @@ extend-include = [
 ]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "B", "UP"]
+# RUF100: a `noqa` that silences nothing is removed, not kept.
+select = ["E", "F", "W", "I", "B", "UP", "RUF100"]
+
+[tool.ruff.lint.per-file-ignores]
+# A role's files are inputs of its playbook: changing one, even a comment,
+# sets its machines up again at the next run.
+"ansible/**" = ["RUF100"]

@@ -55,10 +55,6 @@ def docs(root: Path, commit: str) -> str | None:
     return f"https://github.com/{found[1]}/{found[2]}/blob/{commit}/" if found else None
 
 
-def holds(root: Path, commit: str) -> bool:
-    return _git(root, "cat-file", "-e", f"{commit}^{{commit}}") is not None
-
-
 def reader(root: Path, commit: str):
     """Reads a file's text as that commit holds it, None when it has none
     (nullbill/pins.py reads the pins of two commits this way)."""

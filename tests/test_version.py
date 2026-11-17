@@ -83,7 +83,6 @@ def test_answers_nothing_where_git_cannot_say(tmp_path, repos):
     assert version.head(tmp_path) is None
     assert version.setup_digest(tmp_path) is None
     assert version.describe(checkout, "0" * 40) is None
-    assert not version.holds(checkout, "0" * 40) and version.holds(checkout, version.head(checkout))
     assert version.changes(checkout, "0" * 40, "HEAD") == []
     with pytest.raises(NullBillError, match="not installed with install.sh"):
         version.fetch(tmp_path)

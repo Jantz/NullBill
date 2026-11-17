@@ -533,10 +533,11 @@ def classify(command: str, protected: set[str] | None = None, depth: int = 0) ->
             segment = []
         elif PUNCTUATION.fullmatch(token):
             # A redirection: the fd number, if any, is the end of segment.
-            fd = segment.pop() if segment and segment[-1].isdigit() else ""
+            if segment and segment[-1].isdigit():
+                segment.pop()
             target = tokens[i + 1] if i + 1 < len(tokens) else ""
             i += 1
-            verdict = verdict.worse(redirect(fd, token, target, protected))
+            verdict = verdict.worse(redirect(token, target, protected))
         else:
             segment.append(token)
         i += 1
@@ -678,7 +679,7 @@ def holds_secrets(path: str) -> bool:
     return any(place == path or place.startswith(path.rstrip("/") + "/") for place in SECRET_PLACES)
 
 
-def redirect(fd: str, op: str, target: str, protected: set[str]) -> Verdict:
+def redirect(op: str, target: str, protected: set[str]) -> Verdict:
     if op in {"<<", "<<-", "<<<"}:
         return read()
     if op in {">&", "<&"} and (target.isdigit() or target == "-"):

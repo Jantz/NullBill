@@ -15,6 +15,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -746,6 +747,12 @@ def test_a_world_comes_down_as_the_file_the_guest_wrote(site):
     assert status == 200 and data == host.sent
     assert headers["Content-Disposition"] == 'attachment; filename="terraria-Expert-run.wld"'
     assert headers["Content-Length"] == str(len(host.sent)) and headers["Content-Type"] == "application/octet-stream"
+    # The guest hears that the file was sent once the last byte left, which
+    # the browser may have before the server's thread gets there.
+    for _ in range(100):
+        if host.calls[-1][:2] == ["world", "sent"]:
+            break
+        time.sleep(0.05)
     assert host.calls[-3:] == [["world", "export", "w2"], ["pipe", "--", "cat", host.file], ["world", "sent", host.file]]
     # The guest names the file; the page reads nothing else through it.
     host.file = "/etc/shadow"

@@ -597,7 +597,7 @@ class Chat:
                 f"home network {st['lan']['state']}",
             ]
             return "[Status: " + ", ".join(parts) + "]"
-        except Exception:  # noqa: BLE001 - a status line must never stop a turn
+        except Exception:
             return ""
 
     def notes(self) -> str:
@@ -1402,7 +1402,7 @@ class Tools:
             raise NullBillError(f"no job {job_id}; list_jobs names them")
         return job
 
-    def t_read_job(self, id: str, lines: int = 200, find: str = "") -> str:  # noqa: A002
+    def t_read_job(self, id: str, lines: int = 200, find: str = "") -> str:
         job = self._job(id)
         view = self.app.job_view(job)
         text = job.log.read_text(errors="replace")
@@ -1423,7 +1423,7 @@ class Tools:
         head = f"job {job.id}: {view['state']} (exit {view['rc']}), {view['seconds']} s, started by {job.by}\n"
         return head + ("stages: " + ", ".join(steps) + "\n" if steps else "") + yaml.safe_dump(summary, width=200) + "\n".join(body)
 
-    def t_wait_for_job(self, id: str, seconds: int = 300) -> str:  # noqa: A002
+    def t_wait_for_job(self, id: str, seconds: int = 300) -> str:
         job = self._job(id)
         deadline = now() + max(1, min(int(seconds), WAIT_MAX_S))
         while job.state() == "running" and now() < deadline:
@@ -1432,7 +1432,7 @@ class Tools:
             return f"{job.id} is still running. Use watch_job and end your turn; you are told when it ends."
         return self.t_read_job(id, lines=60)
 
-    def t_watch_job(self, id: str) -> str:  # noqa: A002
+    def t_watch_job(self, id: str) -> str:
         job = self._job(id)
         if job.state() != "running":
             return self.t_read_job(id, lines=60)
@@ -1742,7 +1742,7 @@ class Tools:
         action = {"act": "command", "where": where, "command": command, "background": bool(background)}
         return self.gated(action, verdict, why, f"Run on {place}" + (" in the background" if background else ""))
 
-    def t_read_run(self, id: str, where: str = "host", lines: int = 200) -> str:  # noqa: A002
+    def t_read_run(self, id: str, where: str = "host", lines: int = 200) -> str:
         if not re.fullmatch(r"[0-9a-f]{8}", str(id)):
             raise NullBillError("id is the 8 characters run_command gave")
         n = max(1, min(int(lines), 2000))
@@ -1850,7 +1850,7 @@ class Tools:
         if {"games", "power", "torrents", "sizes"} & set(changes):
             # What the form comes to in config.yaml, with nothing saved.
             old = self.app.config() or {}
-            new = self.app._choices_config(after | {"disks": {}})  # noqa: SLF001 - the page's own form reader
+            new = self.app._choices_config(after | {"disks": {}})
             build_model(new)
             titles = {n: g.get("title", n) for n, g in build_model({})["games"].items()}
             for name in sorted({*old.get("games", {}), *new.get("games", {})}):
@@ -1946,7 +1946,7 @@ class Tools:
         verdict = gate.risky("removes a person, and their Tailscale account with them", "remove")
         return self.gated({"act": "unperson", "name": name, "lines": lines}, verdict, why, f"Remove {name}")
 
-    def t_stop_job(self, id: str, why: str = "") -> str:  # noqa: A002
+    def t_stop_job(self, id: str, why: str = "") -> str:
         job = self._job(id)
         if job.state() != "running":
             return f"{job.id} is not running any more ({job.state()})"
