@@ -1348,6 +1348,8 @@ dialog::backdrop { background: var(--scrim); }
   .services .hide-narrow { display: none; }
   /* The address gives way first, cut short: the open row has all of it. */
   .services td.addr { max-width: 0; width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+@container main (min-width: 561px) and (max-width: 900px) {
   .services .svc .name { white-space: nowrap; }
   .services .state-cell { min-width: 132px; }
 }
@@ -1398,6 +1400,9 @@ dialog::backdrop { background: var(--scrim); }
   .services .demand-acts { flex-wrap: wrap; justify-content: flex-end; }
 }
 @container main (max-width: 560px) {
+  /* A page's search box goes under its title, not squeezed beside it. */
+  .page-head { flex-wrap: wrap; }
+  .page-head > .filter { flex: 1 1 100%; width: auto; margin-left: 0; }
   /* Needs attention: the text takes the width, its buttons a line under it. */
   .rows > li { flex-wrap: wrap; row-gap: 8px; }
   .rows > li > .row { flex-basis: calc(100% - 20px); margin-left: 20px; }
