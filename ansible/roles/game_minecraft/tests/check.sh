@@ -89,8 +89,15 @@ pass "a player who is not signed in to Mojang is refused: the server asked Mojan
 nb-game console "say hello from nb-game"
 game_says minecraft '\[Server\] hello from nb-game' 15 || fail "the console line reached the server"
 # How apply makes an admin: Mojang's own developer, an account that exists.
-nb-game console "op jeb_"
-game_says minecraft 'Made jeb_ a server operator' 30 || fail "op on the console"
+# Mojang answers a name lookup from a busy address with 429 now and then (CI's
+# runners share theirs), which the server reports as "That player does not
+# exist": asked again after a pause, a few times.
+for try in 1 2 3 4 5; do
+  nb-game console "op jeb_"
+  if game_says minecraft 'Made jeb_ a server operator' 30; then break; fi
+  if [ "$try" = 5 ] || ! grep -q 'status=429' /tmp/minecraft.log; then fail "op on the console"; fi
+  sleep 45
+done
 python3 -c 'import json; assert [o["name"] for o in json.load(open("/var/lib/minecraft/ops.json"))] == ["jeb_"]' || fail "ops.json names the admin"
 pass "nb-game types on the server's console; op makes an admin and ops.json names them"
 

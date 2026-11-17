@@ -177,7 +177,12 @@ def test_probe_commands_work_in_bash():
 
     def answer():
         conn, _ = server.accept()
-        conn.recv(1024)
+        # All of the request, as a proxy reads it: bash's printf writes it
+        # line by line, and an answer after the first line closed the
+        # connection under the rest (rc=141) on a busy machine.
+        asked = b""
+        while not asked.endswith(b"\r\n\r\n") and (more := conn.recv(1024)):
+            asked += more
         conn.sendall(b"HTTP/1.1 403 Forbidden\r\n\r\n")
         conn.close()
 

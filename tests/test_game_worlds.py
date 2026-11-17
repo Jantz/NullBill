@@ -749,10 +749,9 @@ def test_a_world_comes_down_as_the_file_the_guest_wrote(site):
     assert headers["Content-Length"] == str(len(host.sent)) and headers["Content-Type"] == "application/octet-stream"
     # The guest hears that the file was sent once the last byte left, which
     # the browser may have before the server's thread gets there.
-    for _ in range(100):
-        if host.calls[-1][:2] == ["world", "sent"]:
-            break
-        time.sleep(0.05)
+    deadline = time.monotonic() + 30
+    while host.calls[-1][:2] != ["world", "sent"] and time.monotonic() < deadline:
+        test_web.real_sleep(0.05)  # the site fixture stubs time.sleep
     assert host.calls[-3:] == [["world", "export", "w2"], ["pipe", "--", "cat", host.file], ["world", "sent", host.file]]
     # The guest names the file; the page reads nothing else through it.
     host.file = "/etc/shadow"
