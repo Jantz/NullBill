@@ -40,6 +40,33 @@ def test_a_failed_first_run_stops_in_its_stage_with_the_programs_words(demo, tmp
     assert error["stage_text"] == "Set up Forgejo (Git and CI)" and "Install the packages Forgejo needs" in error["message"]
 
 
+def test_the_page_shows_a_server_whose_records_are_missing_or_cut_short(demo, tmp_path, monkeypatch):
+    """A server built by an older NullBill lacks the records newer versions
+    write, and a run cut off while writing leaves half a file: the page
+    says less then, and still answers."""
+    monkeypatch.setenv("NULLBILL_HOME", "")
+    app = demo.build(tmp_path, "healthy")
+    records = sorted(p for p in app.home.glob("*.json") if p.name not in ("install.json", "demo.json", "demo-secrets.json"))
+    assert {"applied.json", "disks.json", "guests.json", "releases.json", "guest-disks.json"} <= {p.name for p in records}
+    for record in records:
+        whole = record.read_bytes()
+        for damaged in (None, b"[]", whole[: len(whole) // 2]):
+            if damaged is None:
+                record.unlink()
+            else:
+                record.write_bytes(damaged)
+            app.version_seen = app.foreseen = None
+            state = app.state(True)
+            assert state["built"] and state["options"], record.name
+            record.write_bytes(whole)
+    # None of them at once: built before any of these were written.
+    for record in records:
+        record.unlink()
+    app.version_seen = app.foreseen = None
+    state = app.state(True)
+    assert state["built"] and state["job"]["state"] == "done" and app.status()["monitoring"] == "ok"
+
+
 def test_every_state_is_listed_in_the_readme(demo):
     readme = (SERVE.parent / "README.md").read_text()
     assert all(f"| `{state}` |" in readme for state in demo.STATES)

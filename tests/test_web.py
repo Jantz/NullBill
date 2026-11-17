@@ -41,7 +41,11 @@ if sys.argv[1] == "probe":
     print("probe stored")
 elif sys.argv[1] == "upgrade" and "NB_TEST_CHECKOUT" in os.environ:
     from nullbill import upgrade
-    upgrade.upgrade(pathlib.Path(os.environ["NB_TEST_CHECKOUT"]), home, finish=lambda argv: None)
+    def finish(argv):
+        # tools/finish-upgrade, which fails while the test says so.
+        if (home / "finish-fails").exists():
+            sys.exit("tools/finish-upgrade failed")
+    upgrade.upgrade(pathlib.Path(os.environ["NB_TEST_CHECKOUT"]), home, finish=finish)
 else:
     print("ran", " ".join(sys.argv[1:]))
     sys.exit(3 if "--stage" in sys.argv else 0)
@@ -2824,6 +2828,99 @@ def test_the_night_sets_up_only_what_the_night_installed(installed, monkeypatch)
     monkeypatch.setattr(app, "start", taken)
     assert app.scheduled(night(2)) is None
     assert app.nightly()["day"] != time.strftime("%Y-%m-%d", time.localtime(night(2)))
+
+
+def test_an_update_that_did_not_finish_is_said_and_finished_by_the_next_try(installed, monkeypatch):
+    app, client, work = installed
+    sign_in(app, client)
+    monkeypatch.setattr(app, "tell", lambda text, tag, title="": None)
+    wait(client, client.call("/api/jobs", {"action": "probe"})[1]["id"])
+    client.call("/api/choices", {"workloads": ["agents"], "backups": False, "owner_login": "owner-a@example.internal"})
+    wait(client, setup(client)[1]["id"])
+    # The night installs an update whose second half fails: the checkout
+    # has moved, the programs around it have not.
+    newest = commit(work, "- name: install\n", "Forgejo: a newer release", "ansible/roles/forgejo/tasks/main.yml")
+    (app.home / "finish-fails").write_text("")
+    job = app.scheduled(night(1))
+    assert job.action == "upgrade" and wait(client, job.id)["state"] == "failed"
+    assert git(app.repo, "rev-parse", "HEAD") == newest
+    app.scheduled(night(1))
+    assert app.nightly()["ended"]["how"] == "failed"
+    about = client.call("/api/state")[1]["version"]
+    assert about["available"] == [] and about["last"]["finished"] is False
+    # Update NullBill again finds nothing newer and does that half; while it
+    # still fails the page keeps saying so.
+    assert wait(client, client.call("/api/jobs", {"action": "upgrade"})[1]["id"])["state"] == "failed"
+    assert client.call("/api/state")[1]["version"]["last"]["finished"] is False
+    # The next night tries by itself, and sets up what the night installed.
+    (app.home / "finish-fails").unlink()
+    runs = len(app.setup_runs())
+    assert a_night(app, client, night(2))["how"] == "done"
+    assert client.call("/api/state")[1]["version"]["last"]["finished"] is True
+    assert [(j.action, j.by) for j in app.setup_runs()][runs:] == [("apply", "nightly")]
+
+
+def test_a_setup_run_records_the_plan_of_the_choices_as_saved_not_the_one_last_looked_at(site):
+    app, client = site
+    sign_in(app, client)
+    wait(client, client.call("/api/jobs", {"action": "probe"})[1]["id"])
+    client.call("/api/choices", {"workloads": ["agents"], "backups": False, "owner_login": "owner-a@example.internal"})
+    wait(client, setup(client)[1]["id"])
+    # plan.yaml is written when the page is looked at. A run nobody looked
+    # at the page before (the night's, the agent's) plans anew.
+    stale = app.home / "plan.yaml"
+    planned = stale.read_text()
+    stale.write_text("guests: {}\n")
+    job = app.start("apply", by=web.NIGHTLY_BY)
+    assert wait(client, job.id)["state"] == "done"
+    assert job.plan_file.read_text() == planned == stale.read_text()
+    assert client.call("/api/state")[1]["review"]["reasons"] == []
+
+
+def test_a_job_record_the_page_cannot_read_does_not_keep_it_from_starting(site):
+    app, client = site
+    sign_in(app, client)
+    done = wait(client, client.call("/api/jobs", {"action": "probe"})[1]["id"])
+    jobs = app.home / "jobs"
+    for name, text in {"a": "{}", "b": "[]", "c": '{"action": "apply", "args": 3, "started": "then"}', "d": '{"action": "apply"'}.items():
+        (jobs / f"20260101T000000000-{name}.json").write_text(text)
+        (jobs / f"20260101T000000000-{name}.log").write_text("")
+    restarted(app)
+    assert list(app.jobs) == [done["id"]]
+    assert client.call("/api/state")[1]["last_jobs"]["probe"]["id"] == done["id"]
+
+
+def test_the_schedule_goes_on_after_a_minute_that_failed(site, monkeypatch):
+    app, _ = site
+    cert, key = web.ensure_certificate(app.home)
+    tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    good, minutes, looked = cert.read_bytes(), [], []
+
+    class Ended(BaseException):
+        pass
+
+    def sleep(_seconds):
+        minutes.append(1)
+        if len(minutes) == 1:
+            # apply is writing the page's certificate anew: half a file.
+            cert.write_bytes(good[:40])
+        elif len(minutes) == 2:
+            cert.write_bytes(good)
+        elif len(minutes) == 5:
+            raise Ended
+
+    def scheduled(now):
+        looked.append(now)
+        if len(looked) == 2:
+            raise RuntimeError("a record of an older version")
+
+    monkeypatch.setattr(web.time, "sleep", sleep)
+    monkeypatch.setattr(app, "scheduled", scheduled)
+    with pytest.raises(Ended):
+        web.schedule(app, tls, cert, key)
+    # The first minute's certificate did not load and nothing else ran; the
+    # second loaded it; the third's look failed; the fourth went on.
+    assert len(looked) == 3 and tls.cert_store_stats() is not None
 
 
 def test_a_setup_run_from_before_the_page_noted_its_version_is_found_in_gits_record(installed):

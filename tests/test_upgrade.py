@@ -37,6 +37,34 @@ def test_moves_to_mains_newest_commit_then_finishes_outside_the_pages_sandbox(re
     assert json.loads((tmp_path / "home" / upgrade.LAST).read_text()) == moved
 
 
+def test_an_update_whose_second_half_failed_is_finished_by_the_next_upgrade(repos, tmp_path):
+    work, checkout = repos
+    newest = commit(work, "two\n", "second")
+    home, said, finished = tmp_path / "home", [], []
+
+    def fails(argv):
+        raise NullBillError("tools/finish-upgrade failed")
+
+    with pytest.raises(NullBillError, match="finish-upgrade failed"):
+        upgrade.upgrade(checkout, home, say=said.append, finish=fails)
+    # The checkout has moved, so nothing newer is found from now on; the
+    # record is what says the programs around it are the old version's.
+    assert git(checkout, "rev-parse", "HEAD") == newest
+    assert upgrade.unfinished(home, newest) and not upgrade.unfinished(home, None)
+    with pytest.raises(NullBillError):
+        upgrade.upgrade(checkout, home, say=said.append, finish=fails)
+    assert upgrade.unfinished(home, newest)
+    assert upgrade.upgrade(checkout, home, say=said.append, finish=finished.append) == newest
+    assert len(finished) == 1 and finished[0][-1] == str(checkout / "tools" / "finish-upgrade")
+    assert "did not finish last time" in said[-2] and not upgrade.unfinished(home, newest)
+    moved = json.loads((home / upgrade.LAST).read_text())
+    assert moved["finished"] is True and moved["to"] == newest
+    assert upgrade.upgrade(checkout, home, say=said.append, finish=finished.append) is None and len(finished) == 1
+    # A record from before `finished` was written counts as finished.
+    (home / upgrade.LAST).write_text(json.dumps({"from": moved["from"], "to": newest, "at": 1.0}))
+    assert not upgrade.unfinished(home, newest)
+
+
 def test_files_it_checks_out_stay_readable_under_the_pages_umask(repos, tmp_path):
     # The page's UMask=0077 made changed files root-only, and nbagent could
     # not start its tools (python -m nullbill agent-tools).

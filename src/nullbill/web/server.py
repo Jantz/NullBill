@@ -64,6 +64,7 @@ from nullbill import (
     release,
     tailscale,
     torrents,
+    upgrade,
     version,
 )
 from nullbill import plan as planning
@@ -79,7 +80,6 @@ from nullbill.render import strip_notes
 from nullbill.secretfile import Codec, Secrets, Sops
 from nullbill.tailnet import TAG, render_tailnet
 from nullbill.tailscale import MissingScope, Tailnet, TailscaleError
-from nullbill.upgrade import LAST as LAST_UPDATE
 from nullbill.web import backupview, chat, demand, gameroom, progress, workloads
 from nullbill.web import review as reviewing
 from nullbill.web.services import PASSWORDS, services, shares
@@ -839,8 +839,11 @@ class App:
         storage = guest_storage(facts) if facts.get("storage") else None
         # What the last setup run mounted read-write (apply's disks.json);
         # the probe may be older than that run.
-        record = self.home / DISKS_FILE
-        mounted = json.loads(record.read_text()).get("mounts", []) if record.exists() else []
+        try:
+            mounted = json.loads((self.home / DISKS_FILE).read_text()).get("mounts", [])
+        except (OSError, ValueError, AttributeError):
+            # No run wrote it yet, or one was cut off while writing it.
+            mounted = []
         # A blank disk the plan took for the backups without a pin.
         try:
             backup_disk = backups.disk(self.saved_plan())
@@ -2363,6 +2366,12 @@ class App:
             raise NullBillError(f"unknown action {action!r}")
         if action in REMOVE_ACTIONS:
             self.confirm_removals(guests)
+        if action in SETUP_ACTIONS and not stage:
+            # The run plans from config.yaml itself. plan.yaml is written
+            # when someone looks at the page, so at night, after an update or
+            # after the agent saved choices it can be an older plan, and the
+            # run would be recorded as having built that one.
+            self.plan()
         with self.lock:
             if any(j.state() == "running" for j in self.jobs.values()):
                 raise NullBillError("another job is still running")
@@ -2430,14 +2439,18 @@ class App:
     def load_jobs(self) -> None:
         """Jobs an earlier server started, finished or still running."""
         for meta_file in sorted((self.home / "jobs").glob("*.json")):
-            try:
-                meta = json.loads(meta_file.read_text())
-            except ValueError:
-                continue
             job_id = meta_file.stem
             log = meta_file.with_suffix(".log")
+            # A record cut short or written by another version is left out:
+            # one unreadable file must not keep the page from starting.
+            try:
+                meta = json.loads(meta_file.read_text())
+                job = Job(job_id, str(meta["action"]), list(meta["args"]), log, float(meta["started"]), by=str(meta.get("by", "owner")))
+            except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+                print(f"nullbill-web: {meta_file.name} left out: {exc!r}", file=sys.stderr, flush=True)
+                continue
             if job_id not in self.jobs and log.exists():
-                self.jobs[job_id] = Job(job_id, meta["action"], meta["args"], log, meta["started"], by=meta.get("by", "owner"))
+                self.jobs[job_id] = job
 
     def rebake_due(self, now: float) -> bool:
         """Sunday's 03:00 hour, once a week, after a first apply made the CI pools."""
@@ -2541,6 +2554,16 @@ class App:
             except NullBillError:
                 return None
             head = version.head(self.repo)
+            if upgrade.unfinished(self.home, head):
+                # The checkout is there, the programs around it are not:
+                # upgrade does that half again. Setup follows as for any
+                # update, so only after one the night installed (`to`).
+                try:
+                    job = self.start("upgrade", by=NIGHTLY_BY)
+                except NullBillError:
+                    return None
+                keep(step="updating", job=job.id)
+                return job
             if not newest or not version.behind(self.repo, head, newest):
                 keep(step="updated")
                 return None
@@ -2791,7 +2814,7 @@ class App:
             return None
         check = self.update_check()
         built = self.last_setup()
-        moved = self.home / LAST_UPDATE
+        moved = self.home / upgrade.LAST
         key = (head, check.get("commit"), built.id if built else None, moved.stat().st_mtime if moved.exists() else None)
         if self.version_seen is None or self.version_seen[0] != key:
             newest = check.get("commit")
@@ -2809,6 +2832,8 @@ class App:
                 record = json.loads(moved.read_text()) if moved.exists() else None
                 if record and record["to"] == head:
                     last = {"at": record["at"], "from": record["from"][:12], "changes": version.changes(self.repo, record["from"], head)}
+                    # False: the checkout moved and tools/finish-upgrade did not end well.
+                    last["finished"] = record.get("finished") is not False
             except (ValueError, KeyError, TypeError):
                 last = None
             view = {
@@ -3608,6 +3633,24 @@ def watch(app: App) -> None:
             print(f"nullbill-web: agent watcher: {exc}", file=sys.stderr, flush=True)
 
 
+def schedule(app: App, tls: ssl.SSLContext, cert: Path, key: Path) -> None:
+    """Each minute: the page's certificate when apply signed it anew, then
+    what is due (App.scheduled)."""
+    loaded = cert.stat().st_mtime
+    while True:
+        time.sleep(SCHEDULE_CHECK_S)
+        try:
+            # apply's ca stage signs the same key anew (apply.page_certificate);
+            # connections from now on get the new certificate.
+            if cert.stat().st_mtime != loaded:
+                tls.load_cert_chain(cert, key)
+                loaded = cert.stat().st_mtime
+                print(f"nullbill web: new certificate, SHA-256 {fingerprint(cert)}", flush=True)
+            app.scheduled(time.time())
+        except Exception as exc:  # the nightly update and the weekly image would stop until a restart
+            print(f"nullbill-web: schedule: {exc!r}", file=sys.stderr, flush=True)
+
+
 def serve(home: Path, listen: str) -> None:
     host, _, port = listen.rpartition(":")
     app = App(home)
@@ -3618,19 +3661,7 @@ def serve(home: Path, listen: str) -> None:
     server, tls = make_server(app, (host or "0.0.0.0", int(port)), cert, key)
     print(f"nullbill web on https://{listen}, certificate SHA-256 {fingerprint(cert)}", flush=True)
 
-    def schedule() -> None:
-        loaded = cert.stat().st_mtime
-        while True:
-            time.sleep(SCHEDULE_CHECK_S)
-            # apply's ca stage signs the same key anew (apply.page_certificate);
-            # connections from now on get the new certificate.
-            if cert.stat().st_mtime != loaded:
-                loaded = cert.stat().st_mtime
-                tls.load_cert_chain(cert, key)
-                print(f"nullbill web: new certificate, SHA-256 {fingerprint(cert)}", flush=True)
-            app.scheduled(time.time())
-
-    threading.Thread(target=schedule, daemon=True).start()
+    threading.Thread(target=schedule, args=(app, tls, cert, key), daemon=True).start()
     try:
         serve_tools(app)
     except (OSError, KeyError) as exc:

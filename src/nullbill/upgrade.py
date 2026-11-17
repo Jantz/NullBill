@@ -16,6 +16,9 @@ holds, never a commit made on this machine.
 
 Each move is written to $NULLBILL_HOME/web/last-update.json (LAST) before
 the page restarts, so the restarted page can say what it was updated from.
+The record says `finished: false` until tools/finish-upgrade ended well: the
+checkout has moved by then, so a second `upgrade` finds nothing newer, and
+only the record tells it that the second half is still to do.
 """
 
 import json
@@ -48,8 +51,24 @@ def _finish(argv: Sequence[str]) -> None:
         )
 
 
+def record(home: Path) -> dict:
+    try:
+        found = json.loads((home / LAST).read_text())
+    except (OSError, ValueError):
+        return {}
+    return found if isinstance(found, dict) else {}
+
+
+def unfinished(home: Path, head: str | None) -> bool:
+    """Whether the checkout moved to head and finish-upgrade did not end
+    well after: the programs around NullBill are still the old version's."""
+    last = record(home)
+    return bool(head) and last.get("to") == head and last.get("finished") is False
+
+
 def upgrade(root: Path, home: Path, say: Callable[[str], None] = print, finish: Callable[[Sequence[str]], None] = _finish) -> str | None:
-    """The commit NullBill moved to, or None when it already was there."""
+    """The commit NullBill moved to (or finished moving to), or None when
+    it already was there."""
     if not (root / ".git").exists():
         raise NullBillError(f"{root} is not a git checkout; install NullBill with install.sh to update it this way")
     if _git(root, "status", "--porcelain", "--untracked-files=no"):
@@ -57,18 +76,27 @@ def upgrade(root: Path, home: Path, say: Callable[[str], None] = print, finish: 
     old = _git(root, "rev-parse", "HEAD")
     _git(root, "fetch", "--quiet", "origin", BRANCH)
     new = _git(root, "rev-parse", "FETCH_HEAD")
+    argv = [*FINISH, "-p", f"Environment=NULLBILL_HOME={home}", "-p", "Environment=HOME=/root", str(root / "tools" / "finish-upgrade")]
+    path = home / LAST
     if new == old:
-        say(f"NullBill is at {BRANCH}'s newest commit, {old[:12]}")
-        return None
+        if not unfinished(home, old):
+            say(f"NullBill is at {BRANCH}'s newest commit, {old[:12]}")
+            return None
+        say(f"The update to {old[:12]} did not finish last time; finishing it now")
+        finish(argv)
+        path.write_text(json.dumps(record(home) | {"finished": True}) + "\n")
+        say(f"NullBill is at {old[:12]}; the page restarted with it")
+        return old
     ahead = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", new, old], check=False).returncode == 0
     if ahead:
         raise NullBillError(f"{root} is at {old[:12]}, newer than {BRANCH} ({new[:12]}); NullBill does not go back by itself")
     say(f"Updating NullBill from {old[:12]} to {new[:12]}:")
     say(_git(root, "log", "--format=  %h %s", f"{old}..{new}") or f"  (from {old[:12]}, which {BRANCH} no longer holds)")
     _git(root, "checkout", "--quiet", "--detach", new)
-    record = home / LAST
-    record.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    record.write_text(json.dumps({"from": old, "to": new, "at": time.time()}) + "\n")
-    finish([*FINISH, "-p", f"Environment=NULLBILL_HOME={home}", "-p", "Environment=HOME=/root", str(root / "tools" / "finish-upgrade")])
+    moved = {"from": old, "to": new, "at": time.time()}
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path.write_text(json.dumps(moved | {"finished": False}) + "\n")
+    finish(argv)
+    path.write_text(json.dumps(moved | {"finished": True}) + "\n")
     say(f"NullBill is at {new[:12]}; the page restarted with it")
     return new

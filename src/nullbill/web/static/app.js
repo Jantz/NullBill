@@ -2831,30 +2831,41 @@ function renderReview() {
 
 // Updates: NullBill's own version, whether the server was built with it,
 // and the systems' security updates.
+function updateUnfinished() {
+  const v = state.version;
+  return Boolean(v && v.last && v.last.finished === false);
+}
 function renderUpdates() {
   const v = state.version;
   const waiting = v ? v.server.changes : [];
   const n = v ? v.available.length : 0;
   const behind = Boolean(v && v.server.follows === false);
+  // The checkout moved and the second half of the update failed: pressing
+  // Update again does that half (nullbill/upgrade.py).
+  const half = updateUnfinished();
   show("updates-none", !v);
   show("updates-body", Boolean(v));
   show("version-line", Boolean(v));
-  show("update-btn", n > 0);
+  show("update-btn", n > 0 || half);
   $("update-count").textContent = n ? String(n) : "";
-  $("update-btn").title = n ? `${count(n, "change")} to NullBill wait to be installed` : "";
-  setNav("updates", n ? String(n) : behind ? "!" : "", n ? "run" : "warn", n ? `${count(n, "change")} available` : behind ? "the server waits for a setup run" : "");
-  setCount($("more-updates-badge"), n ? String(n) : behind ? "!" : "", n ? "run" : "warn", n ? `${count(n, "change")} available` : behind ? "the server waits for a setup run" : "");
+  $("update-btn").title = n ? `${count(n, "change")} to NullBill wait to be installed` : half ? "The last update did not finish" : "";
+  const mark = n ? String(n) : half || behind ? "!" : "";
+  const markTitle = n ? `${count(n, "change")} available` : half ? "the last update did not finish" : behind ? "the server waits for a setup run" : "";
+  setNav("updates", mark, n ? "run" : "warn", markTitle);
+  setCount($("more-updates-badge"), mark, n ? "run" : "warn", markTitle);
   if (!v) return;
   const short = v.current.id.slice(0, 7);
   $("version-line").replaceChildren(make("span", {textContent: `NullBill ${short}`}),
     ...(n ? [make("span", {className: "dot info", ariaHidden: "true"}), make("span", {className: "sr-only", textContent: `, ${count(n, "change")} available`})] : []));
   $("version-current").replaceChildren(make("code", {textContent: short}), make("span", {className: "meta", textContent: ` ${day(v.current.time)} · ${v.current.subject}`}));
   const checked = v.checked ? `checked ${ago(v.checked)}` : "not checked yet";
-  $("version-newest").replaceChildren(v.check_error ? status("warn", "Could not check", sentence(v.check_error))
+  $("version-newest").replaceChildren(half ? status("bad", "The last update did not finish", "Activity has the run and why it failed")
+    : v.check_error ? status("warn", "Could not check", sentence(v.check_error))
     : n ? status("info", `${count(n, "change")} available`, checked)
     : v.checked ? status("good", "Up to date", checked) : status("", "Not checked yet"));
   const now = $("update-now");
-  now.hidden = n === 0;
+  now.hidden = n === 0 && !half;
+  now.querySelector("span").textContent = half && n === 0 ? "Finish the update" : "Update NullBill";
   $("update-check").classList.toggle("primary", false);
   show("update-available", n > 0);
   $("update-available-title").textContent = n ? `What the update brings (${needSetup(v.available)})` : "";
@@ -3005,7 +3016,9 @@ function attentionItems() {
       [make("a", {className: "btn small primary", href: "#setup/build", textContent: "Review and run"})]);
   }
   const fresh = (state.version && state.version.available) || [];
-  if (fresh.length && runningAction() !== "upgrade") {
+  if (updateUnfinished() && runningAction() !== "upgrade") {
+    add("bad", "The last NullBill update did not finish", "The new version is here, but the programs around it were not set up for it.", [link("Finish it", "#updates")]);
+  } else if (fresh.length && runningAction() !== "upgrade") {
     add("info", "A NullBill update is available", `${count(fresh.length, "change")}, ${needSetup(fresh)}.`, [link("See the update", "#updates")]);
   }
   if (built() && state.backups.ready && !state.backups.on && !state.backups.built) {
