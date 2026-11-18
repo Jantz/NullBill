@@ -8,6 +8,11 @@
     that: monitoring_probe_ca | length > 0
     fail_msg: monitoring_probe_ca is empty; apply sets it to step-ca's and the browser CA's roots
 
+- name: Loki's readers are IPv4 addresses
+  ansible.builtin.assert:
+    that: monitoring_loki_readers | reject('match', '^([0-9]{1,3}\.){3}[0-9]{1,3}$') | list | length == 0
+    fail_msg: monitoring_loki_readers must list IPv4 addresses only
+
 - name: Certificate from the tls_cert role
   ansible.builtin.stat:
     path: "/etc/nullbill/tls/{{ monitoring_tls_name }}.key"

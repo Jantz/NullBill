@@ -2138,7 +2138,13 @@ def monitoring_inputs(ctx: Context) -> dict:
         "monitoring_ntfy_url": NTFY + topic if topic else "",
         "monitoring_healthchecks_url": ctx.secrets.data.get("healthchecks_url", ""),
         "monitoring_https_proxy": proxy_url(ctx, "monitoring"),
+        # Who may query Loki through the gate: the operator's agent (its
+        # rules point it there). Grafana and verify ask Loki on localhost.
+        "monitoring_loki_readers": [guests[n]["ip"] for n in LOKI_READERS if n in guests],
     }
+
+
+LOKI_READERS = ("operator",)
 
 
 def monitoring_vars(ctx: Context) -> dict:

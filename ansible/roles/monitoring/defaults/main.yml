@@ -16,10 +16,13 @@ monitoring_loki_version: 3.7.9
 monitoring_prometheus_listen: "0.0.0.0:9090"
 
 # Loki itself, on localhost. Other guests reach it through nginx on 3100
-# with TLS: anyone the firewall admits may query, only a log shipper with a
-# certificate from monitoring_shipper_ca may push, and nobody may delete.
+# with TLS: only the addresses in monitoring_loki_readers (and localhost)
+# may query, only a log shipper with a certificate from
+# monitoring_shipper_ca may push, and nobody may delete.
 monitoring_loki_internal_port: 3101
 monitoring_loki_port: 3100
+# IPv4 addresses that may query Loki through the gate: the operator's.
+monitoring_loki_readers: []
 # Grafana, on localhost too. Browsers reach it through nginx with TLS on
 # monitoring_grafana_port, with the browser CA's certificate (apply sets
 # monitoring_browser_cert and _key, src/nullbill/browserca.py) or, without

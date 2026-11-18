@@ -21,9 +21,17 @@ server {
         proxy_pass http://127.0.0.1:{{ monitoring_loki_internal_port }};
     }
 
-    # Reads: queries, labels, series and tail. GET only, so deletes and
-    # ruler changes never reach Loki.
+    # Reads: queries, labels, series and tail, only from the guests that
+    # read Loki (monitoring_loki_readers; Grafana and verify ask Loki on
+    # localhost). Loki holds every agent command and every root command on
+    # the host, which a game server or a CI clone has no business reading.
+    # GET only, so deletes and ruler changes never reach Loki.
     location /loki/api/v1/ {
+        allow 127.0.0.1;
+{% for reader in monitoring_loki_readers %}
+        allow {{ reader }};
+{% endfor %}
+        deny all;
         limit_except GET {
             deny all;
         }

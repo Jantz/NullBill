@@ -994,6 +994,8 @@ def test_monitoring_stage_watches_every_guest_and_alerts_the_owner(ctx):
     assert variables["monitoring_healthchecks_url"] == "https://hc-ping.com/example-check"
     assert variables["monitoring_https_proxy"] == "http://10.42.2.10:3128"
     assert variables["monitoring_shipper_ca"] == (c.home / "shipper-ca" / "ca.crt").read_text()
+    # Every zone may push to Loki's gate; only the operator may read through it.
+    assert variables["monitoring_loki_readers"] == [c.bare["guests"]["operator"]["ip"]]
     assert c.secrets.data["grafana_admin_password"] == "password-of-2014"
 
 

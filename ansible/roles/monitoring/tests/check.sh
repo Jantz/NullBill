@@ -13,11 +13,13 @@ install -d -m 0755 /etc/nullbill/tls
 install -m 0644 /tmp/pki/loki.crt /etc/nullbill/tls/monitoring.nullbill.internal.crt
 install -m 0640 /tmp/pki/loki.key /etc/nullbill/tls/monitoring.nullbill.internal.key
 vars=$(mktemp)
-python3 - "$vars" <<'PY'
+python3 - "$vars" "$guest" <<'PY'
 import json, sys
 read = lambda f: open(f"/tmp/pki/{f}").read()
 json.dump({
     "monitoring_shipper_ca": read("shipper-ca.crt"),
+    # The one reader through the gate, as apply passes the operator's address.
+    "monitoring_loki_readers": [sys.argv[2]],
     # As apply.both_roots: step-ca's root, then the browser CA's.
     "monitoring_probe_ca": read("ca.crt").strip() + "\n" + open("/tmp/browser/browser-ca.crt").read(),
     "monitoring_browser_cert": open("/tmp/browser/browser.crt").read(),
@@ -136,7 +138,20 @@ for _ in $(seq 20); do
 done
 [ "$found" = 1 ] || fail "query the pushed line back without a certificate"
 grep -q FailedLogins <<<"$(curl -fsS http://127.0.0.1:3101/prometheus/api/v1/rules)" || fail "loki ruler loaded FailedLogins"
-pass "loki stores lines a shipper pushes, anyone may query them, and the failed-login rule is loaded"
+# query [curl options...]: one query through the gate; prints the HTTP status.
+query() {
+  curl -sS -o /dev/null -w '%{http_code}' "${tls[@]}" "$@" -G "$gate/loki/api/v1/query_range" --data-urlencode 'query={job="auth"}'
+}
+test "$(query --resolve "monitoring.nullbill.internal:3100:$guest")" = 200 || fail "the reader's address cannot query"
+# Any other address in NullBill: a game server, a CI clone, the workspace.
+for path in "query_range?query=%7Bjob%3D%22auth%22%7D" "query?query=%7Bjob%3D%22auth%22%7D" labels series tail "label/job/values"; do
+  code=$(curl -sS -o /dev/null -w '%{http_code}' "${tls[@]}" --interface 127.0.0.2 "$gate/loki/api/v1/$path")
+  test "$code" = 403 || fail "an address that is no reader got $code for /loki/api/v1/$path"
+done
+code=$(curl -sS -o /dev/null -w '%{http_code}' "${tls[@]}" "${shipper[@]}" --interface 127.0.0.2 -G "$gate/loki/api/v1/query_range" --data-urlencode 'query={job="auth"}')
+test "$code" = 403 || fail "a shipper certificate from an address that is no reader read Loki ($code)"
+test "$(push "${shipper[@]}" --interface 127.0.0.2)" = 204 || fail "a shipper pushes from an address that is no reader"
+pass "loki stores lines a shipper pushes from anywhere, only its readers may query them, and the failed-login rule is loaded"
 
 test "$(push)" = 403 || fail "push without a certificate"
 code=$(push --cert /tmp/pki/rogue.crt --key /tmp/pki/rogue.key || true)
