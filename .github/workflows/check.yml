@@ -73,6 +73,14 @@ jobs:
           if tools/ci-passed-on-pr "$JOB"; then
             echo "PASSED_ON_PR=1" >> "$GITHUB_ENV"
           fi
+      # The repository is public: a commit under a real name or address keeps it there.
+      - name: Check who wrote the pull request's commits
+        if: matrix.parts == 'static' && github.event_name == 'pull_request'
+        env:
+          NB_OWNER: ${{ github.repository_owner }} <${{ github.repository_owner_id }}+${{ github.repository_owner }}@users.noreply.github.com>
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: tools/check-authors "$BASE" "$HEAD"
       - name: Install gitleaks 8.21.2
         if: matrix.parts == 'static' && env.PASSED_ON_PR != '1'
         run: |

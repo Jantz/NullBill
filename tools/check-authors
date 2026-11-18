@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Fails when a commit in BASE..HEAD was authored or committed by anyone but
+# the owner's GitHub noreply identity, GitHub's own committer (an edit on
+# github.com), or Dependabot. The repository is public: a real name or a
+# private address in a commit stays in its history.
+#
+#     tools/check-authors BASE HEAD
+#
+# The owner's identity is NB_OWNER ("Name <id+login@users.noreply.github.com>");
+# CI builds it from the repository owner's login and id, never a real name.
+# Without it, this checkout's git config user.name and user.email.
+set -euo pipefail
+
+[ $# = 2 ] || { echo "usage: tools/check-authors BASE HEAD" >&2; exit 2; }
+base=$1 head=$2
+owner=${NB_OWNER:-"$(git config user.name) <$(git config user.email)>"}
+case "$owner" in
+  *" <"*"@users.noreply.github.com>") ;;
+  *) echo "tools/check-authors: the owner's identity ($owner) is not a GitHub noreply address" >&2; exit 2 ;;
+esac
+allowed=("$owner" "GitHub <noreply@github.com>" "dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>")
+
+bad=0
+while IFS=$'\t' read -r commit author committer; do
+  for who in "$author" "$committer"; do
+    ok=0
+    for one in "${allowed[@]}"; do
+      [ "$who" = "$one" ] && ok=1
+    done
+    # GitHub's own committer signs web edits only: their author is the owner.
+    if [ "$who" = "${allowed[1]}" ] && [ "$who" = "$author" ]; then
+      ok=0
+    fi
+    if [ "$ok" = 0 ]; then
+      # The identity itself stays out of the log, which is public too.
+      echo "tools/check-authors: ${commit:0:12}: its $([ "$who" = "$author" ] && echo author || echo committer) is not the owner's noreply identity, GitHub's or Dependabot's"
+      bad=1
+    fi
+  done
+done < <(git log --format='%H%x09%an <%ae>%x09%cn <%ce>' "$base..$head")
+exit "$bad"

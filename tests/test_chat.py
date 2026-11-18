@@ -425,7 +425,7 @@ def test_the_backup_server_cannot_be_destroyed(agent, tmp_path):
 
 def test_status_does_not_call_planned_guests_not_installed(agent, monkeypatch):
     # The plan's `installed` is "made by install.sh"; as "installed: false"
-    # the agent told Jan most running guests were not installed.
+    # the agent told the owner most running guests were not installed.
     app, _, _ = agent
     plan = yaml.safe_load((Path(__file__).parent / "golden" / "small.plan.yaml").read_text())
     state = app.state
@@ -439,7 +439,7 @@ def test_status_does_not_call_planned_guests_not_installed(agent, monkeypatch):
 
 
 def test_long_output_is_shown_by_its_end_and_copied_whole(agent):
-    # Jan copied the panel and got "[1250 characters cut]" and empty blocks.
+    # The owner copied the panel and got "[1250 characters cut]" and empty blocks.
     app, client, _ = agent
     whole = "".join(f"line {i}\n" for i in range(2000))
     chat = app.chat
