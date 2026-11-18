@@ -1,6 +1,7 @@
 """host_baseline's nb-backup-metrics against a pvesh stand-in, and the
 alert rule it feeds."""
 
+import hashlib
 import json
 import os
 import re
@@ -22,6 +23,10 @@ f="$NB_FAKE/$(printf %s "$2" | tr / _).json"
 [ -f "$f" ] || { echo "no such path $2" >&2; exit 1; }
 cat "$f"
 """
+
+
+def sha12(text):
+    return hashlib.sha256(text.encode()).hexdigest()[:12]
 
 
 def run(tmp_path, answers):
@@ -83,6 +88,10 @@ FAKE_CLIENT = """#!/bin/sh
 echo "$*" >>"$NB_FAKE/restores"
 [ "$PBS_PASSWORD" = token-secret ] && [ "$PBS_FINGERPRINT" = aa:bb ] && [ -f "${10}" ] || { echo "bad call" >&2; exit 2; }
 [ -f "$NB_FAKE/broken" ] && { echo "Error: unable to decrypt" >&2; exit 255; }
+# A guest's root may have made etc/hostname, or etc, a link to a host file.
+case "$4" in ct/2010/*) [ -f "$NB_FAKE/link-at" ] && {
+    at=$(cat "$NB_FAKE/link-at"); mkdir -p "$(dirname "$6/$at")"; ln -s "$(cat "$NB_FAKE/link-to")" "$6/$at"; exit 0
+} ;; esac
 mkdir -p "$6/etc"
 case "$4" in ct/2010/*) cat "$NB_FAKE/hostname-2010" ;; ct/2017/*) echo forgejo ;; esac >"$6/etc/hostname"
 """
@@ -142,7 +151,9 @@ def test_a_failed_restore_test_says_so_and_is_tried_again(tmp_path, monkeypatch)
     who = 'vmid="2010",guest="router"'
     out, got, _ = restoring(tmp_path, monkeypatch, [ct(2010, 1001)])
     assert got[f"nb_backup_restore_ok{{{who}}}"] == "0"
-    assert out.strip().endswith("restore test of router failed: etc/hostname holds 'someone-else', expected 'router'")
+    said = f"restore test of router failed: etc/hostname differs from 'router' (12 bytes, sha256 {sha12('someone-else')})"
+    assert out.strip().endswith(said)
+    assert "someone-else" not in (tmp_path / "state/restore-test.json").read_text()
     (tmp_path / "fake/broken").write_text("")
     out, got, calls = restoring(tmp_path, monkeypatch, [ct(2010, 1001)])
     assert len(calls) == 2 and out.strip().endswith("failed: Error: unable to decrypt")
@@ -150,6 +161,25 @@ def test_a_failed_restore_test_says_so_and_is_tried_again(tmp_path, monkeypatch)
     (tmp_path / "fake/hostname-2010").write_text("router\n")
     out, got, calls = restoring(tmp_path, monkeypatch, [ct(2010, 1001)])
     assert len(calls) == 3 and got[f"nb_backup_restore_ok{{{who}}}"] == "1"
+
+
+def test_a_restored_link_is_refused_unread(tmp_path, monkeypatch):
+    """A container's root makes etc/hostname, or etc, a link to a host file;
+    pxar restores the link, and the test, run as root on the host, must not
+    follow it into the state file, the journal or the metrics."""
+    fake = tmp_path / "fake"
+    (fake / "etc-dir").mkdir(parents=True)
+    secret = tmp_path / "authkey.key"
+    secret.write_text("host-secret\n")
+    (fake / "etc-dir/hostname").write_text("host-secret\n")
+    for at, to in (("etc/hostname", secret), ("etc", fake / "etc-dir"), ("etc/hostname", "/dev/zero")):
+        (fake / "link-at").write_text(at)
+        (fake / "link-to").write_text(str(to))
+        out, got, _ = restoring(tmp_path, monkeypatch, [ct(2010, 1001)])
+        assert got['nb_backup_restore_ok{vmid="2010",guest="router"}'] == "0"
+        assert out.strip().endswith("restore test of router failed: etc/hostname in the backup is not a regular file"), out
+        assert "host-secret" not in out + (tmp_path / "state/restore-test.json").read_text()
+        (tmp_path / "state/restore-test.json").unlink()
 
 
 def test_unreachable_storage_reports_status_and_no_ages(tmp_path):

@@ -11,6 +11,7 @@ storage the guests are on. The second kind survives a broken guest, a bad
 update and a mistake, not the disk; the plan and verify say so.
 """
 
+import hashlib
 import json
 import shlex
 from collections.abc import Callable
@@ -29,6 +30,8 @@ SCHEDULE = "02:00"
 MAX_AGE_H = 26
 # PVE keeps the storage's token secret (.pw) and encryption key (.enc) here.
 PRIV_DIR = "/etc/pve/priv/storage"
+# The most of a restored etc/hostname the restore test reads.
+HOSTNAME_MAX = 256
 
 # The disk the plan pins for PBS becomes an LVM volume group and a PVE
 # storage of this name on the host (nb-backup-disk); the pbs VM's datastore
@@ -142,8 +145,19 @@ def _restore_command(storage: dict, snapshot: str) -> str:
         f'PBS_PASSWORD="$(cat {priv}.pw)" PBS_FINGERPRINT={shlex.quote(storage["fingerprint"])} '
         f'proxmox-backup-client restore --repository {shlex.quote(repo)} {shlex.quote(snapshot)} root.pxar "$d" '
         f"--pattern etc/hostname --keyfile {priv}.enc >/dev/null; "
-        'cat "$d/etc/hostname"'
+        # A guest's root chooses what its backup holds: a link to a host file
+        # (pxar keeps links) or a device would be read as root on the host.
+        'f="$d/etc/hostname"; if [ -L "$d/etc" ] || [ ! -d "$d/etc" ] || [ -L "$f" ] || [ ! -f "$f" ]; then '
+        'echo "etc/hostname in the backup is not a regular file" >&2; exit 3; fi; '
+        f'head -c {HOSTNAME_MAX} -- "$f"'
     )
+
+
+def _differs(got: str) -> str:
+    """What a wrong etc/hostname is said as: never its text, which a guest's
+    root wrote and the verify log would carry."""
+    raw = got.strip().encode()
+    return f"{len(raw)} bytes, sha256 {hashlib.sha256(raw).hexdigest()[:12]}"
 
 
 def skipped(plan: dict, reason: str) -> list[Result]:
@@ -191,7 +205,7 @@ def check(plan: dict, target: str, run: Runner, now: Clock) -> list[Result]:
     if rc != 0:
         results.append(Result("FAIL", "restore test", f"{snapshot}: {(err or out).strip()[:120]}"))
     elif out.strip() != name:
-        results.append(Result("FAIL", "restore test", f"{snapshot}: etc/hostname is {out.strip()!r}, expected {name!r}"))
+        results.append(Result("FAIL", "restore test", f"{snapshot}: etc/hostname differs from {name!r} ({_differs(out)})"))
     else:
         results.append(Result("PASS", "restore test", f"etc/hostname from {snapshot}"))
     return results

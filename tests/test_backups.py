@@ -142,7 +142,7 @@ def test_missing_backup_and_wrong_restore_fail(facts):
     results = statuses(backups.check(plan, TARGET, without_router, time.time))
     assert results["router has an encrypted backup under 26 h old"] == ("FAIL", "no backup")
     status, detail = results["restore test"]
-    assert status == "FAIL" and "expected" in detail
+    assert status == "FAIL" and "differs from" in detail and "something-else" not in detail
 
 
 def test_unreadable_storage_fails(facts):
@@ -181,6 +181,65 @@ def test_restore_command_runs_in_bash(tmp_path, monkeypatch):
     env = {"PATH": f"{bindir}:/usr/bin:/bin"}
     done = subprocess.run(["bash", "-c", command], capture_output=True, text=True, env=env)
     assert (done.returncode, done.stdout) == (0, "forgejo\n"), done.stderr
+
+
+def test_restore_command_refuses_a_restored_link(tmp_path, monkeypatch):
+    """A container's root can make etc/hostname, or etc, a link to a host
+    file (pxar keeps links) or a device; the restore test runs as root on the
+    host, so it reads none of them and says only that it was not a file."""
+    priv = tmp_path / "priv"
+    priv.mkdir()
+    (priv / f"{backups.STORAGE}.pw").write_text("pw\n")
+    (priv / f"{backups.STORAGE}.enc").write_text("{}")
+    secret = tmp_path / "authkey.key"
+    secret.write_text("host-secret\n")
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / "elsewhere/hostname").write_text("host-secret\n")
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    client = bindir / "proxmox-backup-client"
+    client.write_text('#!/usr/bin/env bash\ndest=$6; mkdir -p "$(dirname "$dest/$NB_AT")"; ln -s "$NB_TO" "$dest/$NB_AT"\n')
+    client.chmod(0o755)
+    monkeypatch.setattr(backups, "PRIV_DIR", str(priv))
+    storage = {"server": "10.42.1.15", "datastore": "backups", "username": backups.TOKEN_ID, "fingerprint": "aa:bb"}
+    command = backups._restore_command(storage, "ct/2017/2027-01-15T02:00:00Z")
+    for at, to in (("etc/hostname", secret), ("etc", tmp_path / "elsewhere"), ("etc/hostname", "/dev/zero")):
+        env = {"PATH": f"{bindir}:/usr/bin:/bin", "NB_AT": at, "NB_TO": str(to)}
+        done = subprocess.run(["bash", "-c", command], capture_output=True, text=True, env=env, timeout=30)
+        assert done.returncode != 0 and done.stdout == ""
+        assert done.stderr.strip() == "etc/hostname in the backup is not a regular file"
+
+    def host(target, command):
+        if command == backups.LIST:
+            return 0, json.dumps([{"vmid": 2017, "ctime": time.time(), "encrypted": "aa", "volid": "nb-pbs:backup/ct/2017/x"}]), ""
+        if command.startswith("pvesh get /storage/"):
+            return 0, json.dumps(storage), ""
+        return 3, "", "etc/hostname in the backup is not a regular file\n"
+
+    plan = {"backups": {"status": "ok"}, "guests": {"forgejo": {"vmid": 2017, "kind": "lxc"}}}
+    monkeypatch.setattr(backups, "enabled", lambda plan: True)
+    (result,) = [r for r in backups.check(plan, TARGET, host, time.time) if r.name == "restore test"]
+    assert result.status == "FAIL" and result.detail.endswith("etc/hostname in the backup is not a regular file")
+
+
+def test_restore_command_reads_at_most_a_short_file(tmp_path, monkeypatch):
+    """A huge etc/hostname is read only as far as HOSTNAME_MAX, and a wrong
+    one is said by its length and digest, never by its text."""
+    priv = tmp_path / "priv"
+    priv.mkdir()
+    (priv / f"{backups.STORAGE}.pw").write_text("pw\n")
+    (priv / f"{backups.STORAGE}.enc").write_text("{}")
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    client = bindir / "proxmox-backup-client"
+    client.write_text('#!/usr/bin/env bash\nmkdir -p "$6/etc"; head -c 100000 /dev/zero | tr "\\0" x >"$6/etc/hostname"\n')
+    client.chmod(0o755)
+    monkeypatch.setattr(backups, "PRIV_DIR", str(priv))
+    storage = {"server": "10.42.1.15", "datastore": "backups", "username": backups.TOKEN_ID, "fingerprint": "aa:bb"}
+    command = backups._restore_command(storage, "ct/2017/2027-01-15T02:00:00Z")
+    done = subprocess.run(["bash", "-c", command], capture_output=True, text=True, env={"PATH": f"{bindir}:/usr/bin:/bin"})
+    assert (done.returncode, done.stdout) == (0, "x" * backups.HOSTNAME_MAX), done.stderr
+    assert backups._differs("x" * backups.HOSTNAME_MAX).startswith(f"{backups.HOSTNAME_MAX} bytes, sha256 ")
 
 
 def test_backups_can_be_switched_off(facts):

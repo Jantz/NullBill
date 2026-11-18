@@ -19,8 +19,10 @@ Only files are read, into a temporary directory; no guest is touched.
 A systemd timer runs it every hour.
 """
 
+import hashlib
 import json
 import os
+import stat
 import subprocess
 import tempfile
 import time
@@ -35,6 +37,7 @@ RESTORE = STATE_DIR / "restore-test.json"
 # PVE keeps the storage's token secret (.pw) and encryption key (.enc) here.
 PRIV = Path(os.environ.get("NB_PRIV_DIR", "/etc/pve/priv/storage"))
 RESTORE_FILE = "etc/hostname"
+RESTORE_MAX = 256
 RESTORE_TIMEOUT_S = 600
 OUT = "nullbill-backups.prom"
 
@@ -124,7 +127,34 @@ def read_back(entry: dict) -> str:
             raise Unavailable(
                 (done.stderr or done.stdout).strip().splitlines()[-1][:200] if (done.stderr or done.stdout).strip() else "failed"
             )
-        return (Path(tmp) / RESTORE_FILE).read_text().strip()
+        return regular_file(Path(tmp), RESTORE_FILE)
+
+
+def regular_file(root: Path, name: str) -> str:
+    """At most RESTORE_MAX bytes of a restored file that is a plain file under
+    plain directories. A guest's root chooses what its backup holds: a link to
+    a host file (pxar keeps links), a device or a FIFO is refused unread."""
+    here, refused = root, Unavailable(f"{name} in the backup is not a regular file")
+    for part in Path(name).parent.parts:
+        here = here / part
+        if not stat.S_ISDIR(os.lstat(here).st_mode):
+            raise refused
+    if not stat.S_ISREG(os.lstat(root / name).st_mode):
+        raise refused
+    fd = os.open(root / name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise refused
+        return os.read(fd, RESTORE_MAX).decode(errors="replace").strip()
+    finally:
+        os.close(fd)
+
+
+def differs(got: str) -> str:
+    """A wrong file's length and digest, never its text: a guest's root wrote
+    it, and the state file and the journal would carry it."""
+    raw = got.encode()
+    return f"{len(raw)} bytes, sha256 {hashlib.sha256(raw).hexdigest()[:12]}"
 
 
 def restore_test(entries: list[dict], vmids: list[int], guest: dict[int, str], now: int) -> dict | None:
@@ -149,7 +179,7 @@ def restore_test(entries: list[dict], vmids: list[int], guest: dict[int, str], n
     try:
         got = read_back(entry)
         ok = bool(want) and got == want
-        detail = "" if ok else f"{RESTORE_FILE} holds {got!r}, expected {want!r}"
+        detail = "" if ok else f"{RESTORE_FILE} differs from {want!r} ({differs(got)})"
     except (Unavailable, OSError, KeyError, subprocess.TimeoutExpired) as e:
         ok, detail = False, str(e)[:200]
     last = {"ok": ok, "at": now, "vmid": vmid, "guest": want, "backup": int(entry["ctime"]), "night": night, "detail": detail}
