@@ -114,6 +114,21 @@ def test_the_nightlys_update_moves_only_pins_and_no_further_than_it_looked(repos
     assert upgrade.upgrade(checkout, tmp_path, say=lambda _: None, finish=lambda _: None) == code
 
 
+def test_refuses_a_main_whose_history_was_rewritten(repos, tmp_path):
+    # A force-pushed main is not an update: the Update button used to check
+    # out whatever main now held, as long as it was not older.
+    work, checkout = repos
+    running = commit(work, "two\n", "second")
+    upgrade.upgrade(checkout, tmp_path, say=lambda _: None, finish=lambda _: None)
+    git(work, "reset", "-q", "--hard", "HEAD~1")
+    (work / "README").write_text("someone else's\n")
+    git(work, "commit", "-q", "-am", "rewritten")
+    git(work, "push", "-q", "--force", "origin", "HEAD:main")
+    with pytest.raises(NullBillError, match="history was rewritten"):
+        upgrade.upgrade(checkout, tmp_path, say=lambda _: None, finish=pytest.fail)
+    assert git(checkout, "rev-parse", "HEAD") == running and (checkout / "README").read_text() == "two\n"
+
+
 def test_refuses_what_is_not_a_checkout(tmp_path):
     with pytest.raises(NullBillError, match="not a git checkout"):
         upgrade.upgrade(tmp_path, tmp_path, finish=pytest.fail)

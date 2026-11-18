@@ -12,7 +12,9 @@ end it. A running apply or verify is not affected: the page refuses to start
 a job while another runs.
 
 Only main is followed: what the page installs is what the public repository
-holds, never a commit made on this machine.
+holds, never a commit made on this machine. And only forward: a main that no
+longer holds the commit running here had its history rewritten, and is
+refused; the owner installs again by hand if they trust it.
 
 Each move is written to $NULLBILL_HOME/web/last-update.json (LAST) before
 the page restarts, so the restarted page can say what it was updated from.
@@ -42,6 +44,10 @@ def _git(root: Path, *args: str) -> str:
     if done.returncode != 0:
         raise NullBillError(f"git {' '.join(args)}: {done.stderr.strip() or done.stdout.strip()}")
     return done.stdout.strip()
+
+
+def _ancestor(root: Path, older: str, newer: str) -> bool:
+    return subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", older, newer], check=False).returncode == 0
 
 
 def _finish(argv: Sequence[str]) -> None:
@@ -100,9 +106,16 @@ def upgrade(
         path.write_text(json.dumps(record(home) | {"finished": True}) + "\n")
         say(f"NullBill is at {old[:12]}; the page restarted with it")
         return old
-    ahead = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", new, old], check=False).returncode == 0
-    if ahead:
+    if _ancestor(root, new, old):
         raise NullBillError(f"{root} is at {old[:12]}, newer than {BRANCH} ({new[:12]}); NullBill does not go back by itself")
+    # Main only ever moves forward. A main that no longer holds the commit
+    # running here was rewritten (a force-push), which is no update to take
+    # by a press of a button.
+    if not _ancestor(root, old, new):
+        raise NullBillError(
+            f"{BRANCH} ({new[:12]}) no longer holds {old[:12]}, the commit NullBill runs: its history was rewritten, "
+            "so NullBill does not update from it. Install NullBill again by hand if you trust the new history"
+        )
     if only_pins:
         from nullbill import version
 
@@ -110,7 +123,7 @@ def upgrade(
         if why:
             raise NullBillError(f"{new[:12]} changes more than pinned versions ({why[0]}); it waits for Update NullBill on Updates")
     say(f"Updating NullBill from {old[:12]} to {new[:12]}:")
-    say(_git(root, "log", "--format=  %h %s", f"{old}..{new}") or f"  (from {old[:12]}, which {BRANCH} no longer holds)")
+    say(_git(root, "log", "--format=  %h %s", f"{old}..{new}"))
     _git(root, "checkout", "--quiet", "--detach", new)
     moved = {"from": old, "to": new, "at": time.time()}
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
