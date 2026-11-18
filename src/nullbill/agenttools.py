@@ -536,7 +536,7 @@ TOOLS = [
     {
         "name": "set_choices",
         "description": "Change what the server runs (the Setup page's choices); the next setup run builds it. Disks "
-        "are the owner's to change on the Setup page.",
+        "and the owner's Tailscale login are the owner's to change on the Setup page.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -548,7 +548,6 @@ TOOLS = [
                 },
                 "backups": {"type": "boolean"},
                 "console": {"type": "boolean"},
-                "owner_login": {"type": "string"},
                 "gpus": {"type": "object", "description": "PCI address to the card's memory in GB, for cards the probe could not read."},
                 "games": {
                     "type": "object",

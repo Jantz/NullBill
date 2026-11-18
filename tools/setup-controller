@@ -83,6 +83,15 @@ if ! id nbagent >/dev/null 2>&1; then
   useradd --system --home-dir /var/lib/nullbill-agent --create-home --shell /usr/sbin/nologin nbagent
 fi
 chmod 0700 /var/lib/nullbill-agent
+# Root-owned settings for any run of the agent CLI in this container: its
+# own Read, Grep and Glob never reach /proc (the CLI's credential is in its
+# environment), /etc, other homes or $NULLBILL_HOME, and no shell or file
+# writes, whatever the flags of a turn say (web/chat.py permission_rules).
+install -d -m 0755 /etc/claude-code
+"$root/venv/bin/python3" -c 'import json, sys; from nullbill.web.chat import managed_settings
+json.dump(managed_settings(sys.argv[1]), sys.stdout, indent=2)' "$home" >/etc/claude-code/managed-settings.json.tmp
+chmod 0644 /etc/claude-code/managed-settings.json.tmp
+mv /etc/claude-code/managed-settings.json.tmp /etc/claude-code/managed-settings.json
 
 install -d -m 0700 "$home" /root/.ssh
 if [ ! -f /root/.ssh/id_ed25519 ]; then
