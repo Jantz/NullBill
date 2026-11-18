@@ -1219,6 +1219,7 @@ def test_ci_stage_bakes_each_golden_image_once_then_runs_the_dispatcher(ctx):
             "name": "linux-runner",
             "template": 2030,
             "vmids": [6000, 6001],
+            "clone_range": "10.42.3.128/26",
             "labels": ["linux"],
             "runner_labels": ["linux:host"],
             "max_job_seconds": 21600,

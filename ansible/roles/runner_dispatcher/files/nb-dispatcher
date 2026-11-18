@@ -14,6 +14,14 @@ Every few seconds, for each pool in the config:
    fetches the registration from GET /handoff/<nonce> on this service, once.
    It then runs that one job (forgejo-runner one-job --handle) and powers
    off.
+
+   The serial is no secret from a PVE token with VM.Audit (the runtime
+   agent's has it everywhere), so a nonce alone does not get the
+   registration: the request must come from the pool's clone range (the
+   pve-firewall's ipfilter keeps clones in it, and only clones reach this
+   port) and from a port below 1024, which only root binds. The agent
+   reaches clones over SSH as its own unprivileged user only. A request that
+   fails either is refused and leaves the nonce for the clone.
 4. Destroy clones that are stopped, and stop clones past the pool's time
    limit or whose nonce was never fetched. Delete registrations whose clone
    is gone (Forgejo deletes an ephemeral runner itself once its job ends).
@@ -25,6 +33,7 @@ ones finish their job. Installed and run by the runner_dispatcher role.
 """
 
 import http.server
+import ipaddress
 import json
 import os
 import secrets
@@ -42,6 +51,8 @@ NONCE_BYTES = 16
 CLONE_TIMEOUT_S = 300
 # A clone must fetch its job this soon after it was started.
 BOOT_GRACE_S = 300
+# Ports below this only root may bind (Debian's ip_unprivileged_port_start).
+PRIVILEGED_BELOW = 1024
 
 
 def log(message: str) -> None:
@@ -153,12 +164,21 @@ class Dispatcher:
         self.handoffs: dict[str, dict] = {}  # nonce -> what the clone fetches, once
         self.clones: dict[int, dict] = {}  # vmid -> {handle, nonce, runner_id, started, fetched}
 
-    def take(self, nonce: str) -> dict | None:
+    def take(self, nonce: str, client: tuple[str, int]) -> dict | None:
+        """The registration for a nonce, once, to its clone's root only: from
+        the pool's clone range and a privileged port. None otherwise, and
+        the nonce stays for the clone."""
+        address, port = client
         with self.lock:
-            handoff = self.handoffs.pop(nonce, None)
-            if handoff:
-                self.clones[handoff["vmid"]]["fetched"] = True
-            return handoff and handoff["payload"]
+            handoff = self.handoffs.get(nonce)
+            if handoff is None:
+                return None
+            if port >= PRIVILEGED_BELOW or not in_range(address, handoff["range"]):
+                log(f"refused a handoff for clone {handoff['vmid']} from {address}:{port}: not root on one of its pool's clones")
+                return None
+            del self.handoffs[nonce]
+            self.clones[handoff["vmid"]]["fetched"] = True
+            return handoff["payload"]
 
     def step(self) -> None:
         live = self.pve.clones()
@@ -188,7 +208,7 @@ class Dispatcher:
             }
             with self.lock:
                 self.clones[vmid] = {"handle": job["handle"], "runner_id": runner["id"], "started": time.monotonic(), "fetched": False}
-                self.handoffs[nonce] = {"vmid": vmid, "payload": payload}
+                self.handoffs[nonce] = {"vmid": vmid, "range": pool["clone_range"], "payload": payload}
             log(f"job {job['id']} ({job['name']}): cloning {pool['template']} to {vmid}")
             try:
                 self.pve.clone(pool["template"], vmid, name, nonce)
@@ -235,11 +255,18 @@ class Dispatcher:
             self.forgejo.unregister(clone["runner_id"])
 
 
+def in_range(address: str, network: str) -> bool:
+    try:
+        return ipaddress.ip_address(address) in ipaddress.ip_network(network)
+    except ValueError:
+        return False
+
+
 def serve(conf: dict, dispatcher: Dispatcher) -> Callable[[], None]:
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 - http.server's naming
             nonce = self.path.removeprefix("/handoff/")
-            handoff = dispatcher.take(nonce) if self.path.startswith("/handoff/") else None
+            handoff = dispatcher.take(nonce, self.client_address[:2]) if self.path.startswith("/handoff/") else None
             body = json.dumps(handoff).encode() if handoff else b"{}"
             self.send_response(200 if handoff else 404)
             self.send_header("Content-Type", "application/json")

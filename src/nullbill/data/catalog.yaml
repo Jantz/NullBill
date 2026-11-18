@@ -240,8 +240,9 @@ services:
     description: Clones a golden VM per job. Lives outside build.
     floor: {cores: 1, memory_mib: 256, disk_gib: 4}
     ports:
-      # Each clone fetches its one-time runner registration here at boot.
-      - {port: 8443, proto: tcp, from: ["zone:build", "service:monitoring"]}
+      # Each clone fetches its one-time runner registration here at boot;
+      # nothing else in build (the workspace, where the agent is) reaches it.
+      - {port: 8443, proto: tcp, from: ["service:linux-runner", "service:monitoring"]}
   files:
     id: 23
     kind: lxc

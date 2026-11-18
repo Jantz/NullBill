@@ -15,8 +15,10 @@ trap '{{ ci_runner_poweroff }}' EXIT
 job=/run/nb-runner
 install -d -m 0700 -o runner -g runner "$job"
 # The nonce is good for one fetch; curl retries only refused connections
-# and errors before a response.
-curl -fsS --retry 20 --retry-connrefused --retry-delay 3 --max-time 20 \
+# and errors before a response. The dispatcher hands it only to a port
+# below 1024, which only root binds: the serial is no secret from PVE's
+# auditors, and the agent may be on this clone as its unprivileged user.
+curl -fsS --retry 20 --retry-connrefused --retry-delay 3 --max-time 20 --local-port 600-1023 \
   "{{ ci_runner_dispatcher_url }}/handoff/$serial" >"$job/job.json"
 python3 -I - "$job" <<'PY'
 import json, os, sys

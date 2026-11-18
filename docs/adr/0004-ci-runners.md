@@ -20,9 +20,9 @@ when the job ends.
 | --- | --- | --- |
 | Golden image | Debian with `forgejo-runner` (pinned by checksum) and a boot unit. apply bakes it, then converts it to a PVE template. | `ansible/roles/ci_runner`, `tofu.py` |
 | Dispatcher | Polls Forgejo for waiting jobs. Per job, it registers an ephemeral runner, clones the template into the `nb-ci` pool with a random one-time nonce in the SMBIOS serial, and starts the clone. It destroys the clone when it stops. | `ansible/roles/runner_dispatcher` (`nb-dispatcher`) |
-| Handoff | At boot the clone reads its serial and fetches its registration once over TLS (`:8443`). It runs exactly that job (`one-job --handle`) as the unprivileged `runner` user, then powers off. | `nb-runner-job` |
+| Handoff | At boot the clone reads its serial and fetches its registration once over TLS (`:8443`), as root from a port below 1024; the dispatcher answers only such a request from the pool's clone range, and a refused one leaves the nonce. It runs exactly that job (`one-job --handle`) as the unprivileged `runner` user, then powers off. | `nb-runner-job`, `nb-dispatcher` |
 | PVE token | Clone the templates; create, start, stop, set the serial of, and destroy VMs in `nb-ci`; disk on the guest storage; the pool zones' bridges. Nothing on `/` or any other guest. | `ci.py`, `tofu.py` |
-| Network | Clones live in `build`. They reach Forgejo on 443, the dispatcher on 8443, and the internet only through the egress proxy. The dispatcher, outside `build`, alone reaches the PVE API. | `catalog.yaml`, `flows.py` |
+| Network | Clones live in `build`. They reach Forgejo on 443, the dispatcher on 8443 (nothing else in `build` does), and the internet only through the egress proxy. The dispatcher, outside `build`, alone reaches the PVE API. | `catalog.yaml`, `flows.py` |
 | Limits | Clones that never fetch their job are stopped after 5 minutes. A pool has a time limit per job and a fixed VMID range no larger than the zone's DHCP range. | `nb-dispatcher`, `plan.py` |
 
 Alternatives considered:
@@ -33,6 +33,18 @@ Alternatives considered:
   values in the VM config, where anything with `VM.Audit` reads them, and
   that includes the agent. The serial holds only a nonce, which is useless
   once fetched.
+
+  2026-11-18: before it is fetched, the nonce was enough. The agent reads
+  every clone's serial with its token (PVEAuditor on `/`), and the
+  workspace, where it has a shell, is in `build`, which reached 8443: it
+  could take a clone's registration first, run the job itself and get its
+  Actions secrets. Now only the pool's clone range reaches 8443 (the clones'
+  ipfilter keeps them in it) and the dispatcher hands a registration only
+  to a request from that range and from a port below 1024, which only
+  root binds; the agent reaches clones over SSH as its unprivileged
+  `agent` user. Root on one clone (a job that gets root) with a nonce from
+  the agent could still take another clone's; binding each clone to its
+  own address needs addresses fixed per VMID, which DHCP does not give.
 - **Let the clone register itself with a shared token.** A job could then
   read the token and register runners of its own.
 

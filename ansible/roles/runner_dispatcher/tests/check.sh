@@ -61,7 +61,8 @@ print(json.dumps({
     "runner_dispatcher_pve_ca": open("/tmp/pki/ca.crt").read(),
     "runner_dispatcher_forgejo_ca": open("/tmp/forgejo-ca.pem").read(),
     "runner_dispatcher_node": "pve",
-    "runner_dispatcher_pools": [{"name": "linux-runner", "template": 2030, "vmids": [6000, 6001], "labels": ["linux"],
+    # The "clone" fetches from 127.0.0.1 here; 127.0.0.5 stands for an address outside the range.
+    "runner_dispatcher_pools": [{"name": "linux-runner", "template": 2030, "vmids": [6000, 6001], "clone_range": "127.0.0.0/30", "labels": ["linux"],
                                  "runner_labels": ["linux:host"], "max_job_seconds": 600}],
     "runner_dispatcher_interval_seconds": 2,
     "runner_dispatcher_manage_services": False,
@@ -78,7 +79,7 @@ out=$(/usr/local/sbin/nb-runner-job) || fail "job pickup without a serial"
 grep -q 'not a dispatched clone' <<<"$out" || fail "job pickup without a serial: $out"
 pass "the golden image does nothing at boot without a job"
 
-python3 /ansible/roles/runner_dispatcher/tests/fake_pve.py /tmp/pki/pve.nullbill.internal.crt /tmp/pki/pve.nullbill.internal.key \
+NB_HANDOFF_CA=/tmp/pki/ca.crt python3 /ansible/roles/runner_dispatcher/tests/fake_pve.py /tmp/pki/pve.nullbill.internal.crt /tmp/pki/pve.nullbill.internal.key \
   "$pve_token" "$state" >/tmp/fake-pve.log 2>&1 &
 setpriv --reuid=nb-dispatcher --regid=nb-dispatcher --init-groups \
   /usr/local/sbin/nb-dispatcher /etc/nullbill/dispatcher/config.json >/tmp/dispatcher.log 2>&1 &
@@ -130,6 +131,14 @@ code=$(curl -sS -o /dev/null -w '%{http_code}' --cacert /tmp/pki/ca.crt "https:/
 test "$code" = 404 || fail "a used nonce was served again ($code)"
 grep -q "$serial" /tmp/dispatcher.log && fail "the dispatcher logged a nonce"
 pass "a nonce is served once and never logged"
+
+# Before the clone's own pickup, fake_pve.py tried its nonce as others
+# would: as root from outside the clone range, and from inside it as an
+# unprivileged user (the agent on a clone). Both refused, the job still ran.
+test "$(cat "$state/tried-6000")" = "outside 404
+unprivileged 404" || { cat "$state/tried-6000"; fail "a handoff went to someone other than root on its clone"; }
+grep -q 'refused a handoff for clone 6000 from 127.0.0.5:' /tmp/dispatcher.log || fail "a refused handoff not logged"
+pass "a nonce gets its registration only for root on a clone in the pool's range"
 
 # apply seals the golden image last, so each clone boots as a new machine.
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cloud-init >/dev/null 2>&1

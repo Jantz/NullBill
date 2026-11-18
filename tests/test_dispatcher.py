@@ -24,6 +24,7 @@ POOL = {
     "name": "linux-runner",
     "template": 2030,
     "vmids": [6000, 6001],
+    "clone_range": "10.42.3.128/26",
     "labels": ["linux"],
     "runner_labels": ["linux:host"],
     "max_job_seconds": 600,
@@ -97,13 +98,39 @@ def test_one_clone_per_job_and_none_past_the_range(clock):
     assert len(pve.calls) == 2 and len(forgejo.registered) == 2
 
 
+# Root on a clone: an address in the pool's range, a port only root binds.
+CLONE = ("10.42.3.140", 812)
+
+
 def test_handoff_is_served_once(clock):
     pve, forgejo = Pve({}), Forgejo([job(1)])
     d = dispatcher(pve, forgejo)
     d.step()
     (nonce,) = d.handoffs
-    assert d.take(nonce)["handle"] == "h1"
-    assert d.take(nonce) is None
+    assert d.take(nonce, CLONE)["handle"] == "h1"
+    assert d.take(nonce, CLONE) is None
+
+
+@pytest.mark.parametrize(
+    "client",
+    [
+        # The workspace, where the agent is, which may have read the serial
+        # with its PVE token: outside the clone range.
+        ("10.42.3.20", 812),
+        # The agent on a clone as its unprivileged user: no port below 1024.
+        ("10.42.3.140", 40000),
+        ("10.42.3.140", 1024),
+        ("not an address", 812),
+    ],
+)
+def test_handoff_goes_only_to_root_on_a_clone_and_a_refusal_leaves_the_nonce(clock, client):
+    pve, forgejo = Pve({}), Forgejo([job(1)])
+    d = dispatcher(pve, forgejo)
+    d.step()
+    (nonce,) = d.handoffs
+    assert d.take(nonce, client) is None
+    assert not d.clones[6000]["fetched"]
+    assert d.take(nonce, CLONE)["handle"] == "h1"
 
 
 def test_stopped_clone_is_destroyed_once_its_job_was_fetched(clock):
@@ -114,7 +141,7 @@ def test_stopped_clone_is_destroyed_once_its_job_was_fetched(clock):
     forgejo.jobs = []
     d.step()  # stopped before fetching, still young: maybe still starting
     assert ("destroy", 6000) not in pve.calls
-    d.take(next(iter(d.handoffs)))
+    d.take(next(iter(d.handoffs)), CLONE)
     d.step()
     assert ("destroy", 6000) in pve.calls and 100 in forgejo.deleted and not d.clones
 

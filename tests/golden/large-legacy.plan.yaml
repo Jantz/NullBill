@@ -356,7 +356,7 @@ flows:
   - role:default -> forgejo tcp/22
   - shared -> forgejo tcp/22
   - service:monitoring -> forgejo tcp/9100
-  - zone:build -> runner-dispatcher tcp/8443
+  - service:linux-runner -> runner-dispatcher tcp/8443
   - service:monitoring -> runner-dispatcher tcp/8443
   - service:monitoring -> runner-dispatcher tcp/9100
   - role:owner -> files tcp/445

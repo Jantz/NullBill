@@ -25,6 +25,7 @@ runner_dispatcher_ci_pool: nb-ci
 #  - name: linux-runner
 #    template: 2030              # template_vmid
 #    vmids: [6000, 6005]         # clone_vmids
+#    clone_range: 10.42.3.128/26 # clone_range: handoffs only from here
 #    labels: [linux]             # jobs whose runs-on is within these
 #    runner_labels: ["linux:host"]
 #    max_job_seconds: 21600

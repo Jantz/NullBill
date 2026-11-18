@@ -2671,6 +2671,7 @@ def dispatcher_inputs(ctx: Context) -> dict:
                 "name": name,
                 "template": guest["template_vmid"],
                 "vmids": [first, last],
+                "clone_range": guest["clone_range"],
                 "labels": labels,
                 "runner_labels": [f"{label}:host" for label in labels],
                 "max_job_seconds": ci.MAX_JOB_S,

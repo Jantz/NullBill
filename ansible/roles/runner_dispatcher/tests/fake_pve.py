@@ -6,7 +6,10 @@ Serves HTTPS on 127.0.0.1:8006 and answers only a request carrying TOKEN.
 It holds a template (2030, in no pool) and an unrelated guest (2017). A
 clone of the template is a record; starting it runs the boot-time job
 pickup (nb-runner-job) with the clone's SMBIOS serial in STATE_DIR/serial,
-and the clone "powers off" when that exits. Every call is appended to
+and the clone "powers off" when that exits. With NB_HANDOFF_CA set, it first
+tries the nonce as others who read the serial would (root from outside
+the clone range, an unprivileged user from inside it) and writes the
+answers to STATE_DIR/tried-<vmid>. Every call is appended to
 STATE_DIR/calls.log as "METHOD PATH [form]", and the refusals the real PVE
 would make for this token (anything outside the CI pool except cloning the
 template) are answered 403.
@@ -14,6 +17,7 @@ template) are answered 403.
 
 import http.server
 import json
+import os
 import ssl
 import subprocess
 import sys
@@ -39,9 +43,30 @@ def task(what: str) -> str:
     return upid
 
 
+HANDOFF = "https://runner-dispatcher.nullbill.internal:8443/handoff/"
+OTHERS = {
+    "outside": ["--interface", "127.0.0.5", "--local-port", "600-1023"],
+    "unprivileged": [],
+}
+
+
+def try_as_others(vmid: int, serial: str) -> None:
+    tried = []
+    for who, args in OTHERS.items():
+        argv = ["curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}", "--cacert", os.environ["NB_HANDOFF_CA"], *args, HANDOFF + serial]
+        if who == "unprivileged":
+            argv = ["setpriv", "--reuid=nobody", "--regid=nogroup", "--clear-groups", *argv]
+        done = subprocess.run(argv, capture_output=True, text=True, check=False)
+        tried.append(f"{who} {done.stdout.strip() or done.stderr.strip()}")
+    with open(f"{STATE}/tried-{vmid}", "w") as f:
+        f.write("\n".join(tried) + "\n")
+
+
 def run_clone(vmid: int, serial: str) -> None:
     with open(f"{STATE}/serial", "w") as f:
         f.write(serial)
+    if os.environ.get("NB_HANDOFF_CA"):
+        try_as_others(vmid, serial)
     with open(f"{STATE}/vm-{vmid}.log", "w") as out:
         subprocess.run(["/usr/local/sbin/nb-runner-job"], stdout=out, stderr=subprocess.STDOUT, check=False)
     with lock:

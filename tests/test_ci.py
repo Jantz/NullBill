@@ -90,7 +90,7 @@ def test_clones_cannot_outnumber_the_dhcp_range(facts):
         planned(facts, "large", {"overrides": {"linux-runner": {"count": 62}}})
 
 
-def test_dispatcher_reaches_the_api_forgejo_and_build_reaches_it(facts):
+def test_dispatcher_reaches_the_api_forgejo_and_only_clones_reach_it(facts):
     plan, model = planned(facts)
     files = render_all(plan, model)
     host = files["firewall/host.fw"]
@@ -102,7 +102,7 @@ def test_dispatcher_reaches_the_api_forgejo_and_build_reaches_it(facts):
         "runner-dispatcher (services) reaches forgejo tcp/443",
         "runner-dispatcher (services) is refused the PVE host tcp/22",
         "runner-dispatcher (services) is refused postgres tcp/5432",
-        "workspace (build) reaches runner-dispatcher tcp/8443",
+        "workspace (build) is refused runner-dispatcher tcp/8443",
     ):
         assert expected in names, expected
 
