@@ -498,13 +498,13 @@ def lan_state(ctx: Context, open_variant: str) -> str:
 
 
 def confirm_lan(ctx: Context) -> None:
-    """Keep the LAN closed: stop the revert timer while it still runs."""
+    """Keep the LAN closed: stop the revert timer, then ask the host whether
+    the closed file is still in place (lan.KEEP_CLOSED)."""
     if lan.state(ctx.home) != lan.CLOSING:
         raise NullBillError("the home network is not being closed; close it first")
-    if host_out(ctx, "confirm", lan.ARMED).strip() == "gone":
+    if host_out(ctx, "confirm", lan.KEEP_CLOSED).strip() != "closed":
         lan.write(ctx.home, lan.OPEN, lapsed=lan.read(ctx.home).get("deadline"))
         raise NullBillError("too late: the host already opened the home network again; close it once more")
-    host_out(ctx, "confirm", lan.DISARM)
     lan.write(ctx.home, lan.CLOSED)
     ctx.say("Proxmox stays closed to the home network; reach it over Tailscale")
 

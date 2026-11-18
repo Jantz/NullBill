@@ -97,6 +97,18 @@ def boot_unit() -> str:
 ARMED = f"systemctl is-active --quiet {REVERT_UNIT}.timer && echo armed || echo gone"
 # The marker goes first: a timer that fires meanwhile still reopens.
 DISARM = f"rm -f {MARKER} && systemctl stop {REVERT_UNIT}.timer"
+# "Keep it closed": the timer stops first, a reopen it already started is
+# waited out, and only then does the host say whether the closed cluster.fw
+# is still there (the marker kept, the file not the open one), removing the
+# marker only then. Asked the other way round, the timer could fire between
+# the question and the stop, and the controller would record closed while
+# the host had opened the LAN again.
+KEEP_CLOSED = (
+    f"systemctl stop {REVERT_UNIT}.timer 2>/dev/null; "
+    f"if systemctl is-active --quiet {REVERT_UNIT}.timer; then echo 'the revert timer did not stop' >&2; exit 1; fi; "
+    f"for _ in $(seq 30); do systemctl is-active --quiet {REVERT_UNIT}.service || break; sleep 1; done; "
+    f"if [ -e {MARKER} ] && ! cmp -s {SAVED_OPEN} {CLUSTER_FW}; then rm -f {MARKER} && echo closed; else echo reopened; fi"
+)
 
 
 def deadline(now: float | None = None) -> float:

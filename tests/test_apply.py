@@ -231,6 +231,9 @@ class FakeReach:
         if command.startswith(lan.DISARM):
             self.revert = None
             return 0, "", ""
+        if command == lan.KEEP_CLOSED:
+            kept, self.revert = self.revert == "armed", None
+            return 0, "closed\n" if kept else "reopened\n", ""
         if command == "cat /etc/ssh/ssh_host_ed25519_key.pub":
             return 0, "ssh-ed25519 AAAAhostkey root@pve\n", ""
         if command.startswith(f"set -e; f={hostroot.KEYS}; "):
@@ -1836,6 +1839,83 @@ def test_a_close_nobody_keeps_is_undone_and_the_controller_follows(ctx, tmp_path
     c = ctx(reach=reach)
     apply.stage_host(c)
     assert reach.files["/etc/pve/firewall/cluster.fw"] == c.files["firewall/cluster-lan-open.fw"]
+
+
+LAN_FAKE_SYSTEMCTL = """#!/bin/sh
+# systemctl for lan.KEEP_CLOSED: stop, and is-active for the timer and the
+# reopen it may have started; a reopen in progress finishes after $NB/runs
+# questions, doing what the timer's service does.
+case "$1 $3" in
+  "stop "*) touch "$NB/stopped"; [ -e "$NB/stuck" ] && exit 1; exit 0 ;;
+esac
+case "$3" in
+  *.timer) [ -e "$NB/armed" ] && { [ ! -e "$NB/stopped" ] || [ -e "$NB/stuck" ]; } ;;
+  *.service)
+    [ -e "$NB/runs" ] || exit 3
+    n=$(cat "$NB/runs"); [ "$n" -gt 0 ] || exit 3
+    echo $((n - 1)) >"$NB/runs"
+    [ "$n" -gt 1 ] || { cp "$NB/open.fw" "$NB/cluster.fw"; rm -f "$NB/marker"; }
+    exit 0 ;;
+esac
+"""
+
+
+@pytest.mark.parametrize(
+    ("before", "said"),
+    [
+        # Armed and never fired: closed, and the marker goes.
+        ({"armed": "", "marker": ""}, "closed"),
+        # Fired before anyone asked: the open file is back and the marker gone.
+        ({"fired": ""}, "reopened"),
+        # Fired just before the stop: its reopen is still running, and is waited out.
+        ({"armed": "", "marker": "", "runs": "3"}, "reopened"),
+        # A marker but the open file in place (copied, not yet unmarked).
+        ({"marker": "", "fired": ""}, "reopened"),
+    ],
+)
+def test_keep_closed_asks_the_host_only_after_the_timer_stopped(tmp_path, before, said):
+    nb = tmp_path
+    (nb / "bin").mkdir()
+    (nb / "bin/systemctl").write_text(LAN_FAKE_SYSTEMCTL)
+    (nb / "bin/systemctl").chmod(0o755)
+    (nb / "open.fw").write_text("open\n")
+    (nb / "cluster.fw").write_text("open\n" if "fired" in before else "closed\n")
+    for name, text in before.items():
+        if name != "fired":
+            (nb / name).write_text(text)
+    command = lan.KEEP_CLOSED.replace(lan.MARKER, str(nb / "marker"))
+    command = command.replace(lan.SAVED_OPEN, str(nb / "open.fw")).replace(lan.CLUSTER_FW, str(nb / "cluster.fw"))
+    env = {"PATH": f"{nb / 'bin'}:/usr/bin:/bin", "NB": str(nb)}
+    done = subprocess.run(["sh", "-c", command.replace("sleep 1", "true")], capture_output=True, text=True, env=env, check=False)
+    assert (done.returncode, done.stdout.strip()) == (0, said), done.stderr
+    assert (nb / "stopped").exists()
+    assert not (nb / "marker").exists() or said == "reopened"
+    if said == "closed":
+        assert (nb / "cluster.fw").read_text() == "closed\n"
+
+
+def test_keep_closed_fails_when_the_timer_does_not_stop(tmp_path):
+    nb = tmp_path
+    (nb / "bin").mkdir()
+    (nb / "bin/systemctl").write_text(LAN_FAKE_SYSTEMCTL)
+    (nb / "bin/systemctl").chmod(0o755)
+    for name in ("armed", "marker", "stuck"):
+        (nb / name).write_text("")
+    command = lan.KEEP_CLOSED.replace(lan.MARKER, str(nb / "marker"))
+    done = subprocess.run(["sh", "-c", command], capture_output=True, text=True, env={"PATH": f"{nb / 'bin'}:/usr/bin:/bin", "NB": str(nb)})
+    assert done.returncode == 1 and "did not stop" in done.stderr and (nb / "marker").exists()
+
+
+def test_a_reopen_during_keep_it_closed_is_recorded_open(ctx, tmp_path):
+    """The timer fires between the page's press and the stop: the host says
+    reopened, and the controller records open with when the close lapsed."""
+    reach = FakeReach()
+    apply.stage_host(ctx(reach=reach, close_lan=True, known_hosts=tmp_path / "known_hosts"))
+    deadline = lan.read(tmp_path)["deadline"]
+    reach.revert = "fired-meanwhile"
+    with pytest.raises(NullBillError, match="too late"):
+        apply.confirm_lan(ctx(reach=reach))
+    assert lan.read(tmp_path) == {"state": lan.OPEN, "lapsed": deadline}
 
 
 def test_confirm_needs_a_close_first(ctx):
