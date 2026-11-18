@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
-# Install what `nullbill apply` needs on the controller: requirements-apply.txt
-# into the active Python environment, and community.proxmox, checked against
-# its pinned SHA-256, into COLLECTIONS_DIR (default .ansible/collections, which
-# apply reads). sops and age come from docs/runbooks/controller.md.
+# Install what `nullbill apply` needs on the controller: the controller's
+# Python packages from requirements-controller.txt (the lock of
+# requirements-apply.txt, NullBill's own dependencies and its build backend),
+# every file checked by its SHA-256 and wheels only, into the active Python
+# environment; and community.proxmox, checked against its pinned SHA-256,
+# into COLLECTIONS_DIR (default .ansible/collections, which apply reads).
+# The collection depends on no other (its MANIFEST.json), so Galaxy is asked
+# for nothing more. sops and age come from docs/runbooks/controller.md.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel 2>/dev/null || dirname "$(dirname "$0")")"
 
@@ -11,10 +15,10 @@ sha256=8a8f03e08ee4353564f4ec2c89007837664697c32e76a530b985a5851c71b23b
 url=https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/$collection
 dest=${COLLECTIONS_DIR:-.ansible/collections}
 
-python3 -m pip install -q -r requirements-apply.txt
+python3 -m pip install -q --require-hashes --only-binary=:all: -r requirements-controller.txt
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 curl -fsSLo "$tmp/$collection" "$url"
 echo "$sha256  $tmp/$collection" | sha256sum -c --quiet
-ansible-galaxy collection install --force -p "$dest" "$tmp/$collection" >/dev/null
+ansible-galaxy collection install --force --no-deps -p "$dest" "$tmp/$collection" >/dev/null
 echo "installed $collection into $dest"

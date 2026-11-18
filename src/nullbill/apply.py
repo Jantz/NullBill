@@ -61,6 +61,7 @@ from nullbill.render import strip_notes
 from nullbill.secretfile import Secrets
 from nullbill.tailnet import TAG, nameserver, routes
 from nullbill.tailscale import MissingScope, Tailnet, TailscaleError
+from nullbill.tofu import LOCK_FILE
 from nullbill.verify import run_verify
 
 ANSIBLE = REPO_ROOT / "ansible"
@@ -683,7 +684,8 @@ def run_tofu(ctx: Context, stage: str, init: bool, replace: tuple[str, ...] = ()
     # init fetches the provider from the registry, so it keeps the system CAs.
     init_env = {k: v for k, v in env.items() if k != "SSL_CERT_FILE"}
     apply_argv = ["tofu", "apply", "-auto-approve", "-input=false", "-no-color"]
-    steps = [(["tofu", "init", "-input=false", "-no-color"], init_env, True)] if init else []
+    # readonly: the provider must be the one whose hashes the lock file holds.
+    steps = [(["tofu", "init", "-input=false", "-no-color", "-lockfile=readonly"], init_env, True)] if init else []
     if downloads:
         targets = sorted(json.loads(ctx.files["tofu/main.tf.json"])["resource"].get(DOWNLOAD_RESOURCE, {}))
         steps.append(([*apply_argv, *(f"-target={DOWNLOAD_RESOURCE}.{t}" for t in targets)], env, True))
@@ -1516,6 +1518,7 @@ def stage_tofu(ctx: Context) -> None:
     work = ctx.home / "tofu"
     work.mkdir(mode=0o700, exist_ok=True)
     (work / "main.tf.json").write_text(ctx.files["tofu/main.tf.json"])
+    (work / LOCK_FILE).write_text(ctx.files[f"tofu/{LOCK_FILE}"])
     windows_iso(ctx, "tofu", say=True)
     ctx.legacy_mounted = ctx.files_stopped = ctx.torrents_stopped = False
     ctx.kept_before = kept_disks(ctx)

@@ -1,4 +1,6 @@
 # What `nullbill apply` needs on the controller beyond the package itself.
-# tools/install-apply-deps installs these and the pinned Ansible collection.
+# The controller installs them from the hash-locked requirements-controller.txt
+# (requirements-controller.in says how to make it again after a change here);
+# the role and host check images install these pins directly.
 ansible-core==2.19.15
 paramiko==5.0.0

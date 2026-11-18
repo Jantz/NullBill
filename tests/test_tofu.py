@@ -142,3 +142,13 @@ def test_state_and_plans_are_encrypted(facts):
     assert encryption["state"] == encryption["plan"] == {"method": "method.aes_gcm.nullbill", "enforced": True}
     passphrase = config["variable"]["state_passphrase"]
     assert passphrase["sensitive"] and "default" not in passphrase
+
+
+def test_the_provider_lock_holds_the_pinned_provider_with_its_hashes(facts):
+    from nullbill.tofu import LOCK_FILE, PROVIDER
+
+    model = build_model(fixture_config("small"))
+    lock = render_tofu(build_plan(model, facts("small")), model)[LOCK_FILE]
+    found = re.search(r'provider "registry\.opentofu\.org/(\S+)" \{\s+version\s+= "([^"]+)"\s+constraints = "([^"]+)"', lock)
+    assert found and found.groups() == (PROVIDER["source"], PROVIDER["version"], PROVIDER["version"])
+    assert re.search(r'"h1:[A-Za-z0-9+/]{43}="', lock) and re.search(r'"zh:[0-9a-f]{64}"', lock)

@@ -1908,6 +1908,9 @@ def test_tofu_stage_runs_init_and_apply_with_everything_in_the_environment(ctx):
     assert local[4][1] == ["tofu", "apply", "-input=false", "-no-color", "nullbill.tfplan"]
     assert all(call[2] == c.home / "tofu" for call in local)
     assert (c.home / "tofu" / "main.tf.json").read_text() == c.files["tofu/main.tf.json"]
+    # The provider is held to the hashes the repository pins for it.
+    assert local[0][1] == ["tofu", "init", "-input=false", "-no-color", "-lockfile=readonly"]
+    assert (c.home / "tofu" / ".terraform.lock.hcl").read_text() == c.files["tofu/.terraform.lock.hcl"]
     init_env, _, env, _, _ = c.reach.envs
     assert "SSL_CERT_FILE" not in init_env
     assert env["SSL_CERT_FILE"] == str(c.home / "pve-root-ca.pem")

@@ -1,0 +1,11 @@
+# The controller's Python packages, compiled with pyproject.toml's own
+# dependencies into requirements-controller.txt, which tools/install-apply-deps
+# installs with --require-hashes (wheels only):
+#
+#   uv pip compile pyproject.toml requirements-controller.in --generate-hashes \
+#     --no-build --python-version 3.13 --python-platform x86_64-manylinux_2_40 \
+#     --no-header -o requirements-controller.txt
+-r requirements-apply.txt
+# The build backend: setup-controller installs NullBill itself with
+# --no-deps --no-build-isolation, so nothing unhashed is fetched for it.
+setuptools>=69

@@ -17,7 +17,7 @@ nullbill = "nullbill.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-nullbill = ["data/*.yaml", "data/nb-release-upgrade", "web/static/*"]
+nullbill = ["data/*.yaml", "data/nb-release-upgrade", "data/tofu.lock.hcl", "web/static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

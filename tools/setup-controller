@@ -44,8 +44,10 @@ if ! "$root/venv/bin/python3" -c 'import pip' 2>/dev/null; then
 fi
 # shellcheck disable=SC1091
 . "$root/venv/bin/activate"
-pip install -q -e "$root"
 COLLECTIONS_DIR="$root/.ansible/collections" tools/install-apply-deps
+# NullBill itself from this checkout: its dependencies and build backend came
+# hash-checked from the lock above.
+pip install -q --no-deps --no-build-isolation -e "$root"
 
 if ! /usr/local/bin/tofu version 2>/dev/null | grep -q "v$tofu_version"; then
   fetch "https://github.com/opentofu/opentofu/releases/download/v$tofu_version/tofu_${tofu_version}_linux_amd64.tar.gz" "$tofu_sha256" /tmp/tofu.tar.gz

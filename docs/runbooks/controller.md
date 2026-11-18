@@ -11,13 +11,15 @@ never the PVE host. `probe`, `plan` and `verify` need only Python and SSH;
    ```sh
    python3 -m venv ~/.venvs/nullbill
    . ~/.venvs/nullbill/bin/activate
-   pip install -e .
-   tools/install-apply-deps        # ansible-core, paramiko, community.proxmox
+   tools/install-apply-deps        # ansible-core, paramiko, NullBill's own, community.proxmox
+   pip install --no-deps --no-build-isolation -e .
    ```
 
-   `tools/install-apply-deps` installs `requirements-apply.txt` and checks
-   the community.proxmox tarball against its SHA-256 before installing it
-   into `.ansible/collections`, where apply looks for it.
+   `tools/install-apply-deps` installs `requirements-controller.txt`, a
+   lock with every file's SHA-256, wheels only, and checks the
+   community.proxmox tarball against its SHA-256 before installing it
+   into `.ansible/collections`, where apply looks for it. NullBill itself
+   then needs nothing more from PyPI.
 
 2. sops and age, built from source. Go's checksum database verifies them:
 

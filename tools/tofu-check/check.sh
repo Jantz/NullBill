@@ -14,7 +14,8 @@ fail=0
 for cls in "$@"; do
   work=/tmp/$cls
   cp -r "/build/$cls/tofu" "$work"
-  if ! (cd "$work" && tofu init -backend=false -input=false -no-color >/tmp/init.log 2>&1); then
+  # The rendered lock file holds the provider to its hashes, as apply does.
+  if ! (cd "$work" && tofu init -backend=false -input=false -no-color -lockfile=readonly >/tmp/init.log 2>&1); then
     cat /tmp/init.log
     echo "FAIL $cls init"
     fail=1

@@ -8,12 +8,16 @@ variables and environment, never part of the rendered files.
 """
 
 import json
+from importlib import resources
 
 from nullbill import agent, backups, ci, legacy, media, power, torrents
 from nullbill.flows import mac
 from nullbill.render import strip_notes
 
 PROVIDER = {"source": "bpg/proxmox", "version": "0.118.1"}
+# The provider's hashes for that version, which tofu init holds the download
+# to (-lockfile=readonly): data/tofu.lock.hcl, written beside main.tf.json.
+LOCK_FILE = ".terraform.lock.hcl"
 TOFU_VERSION = "~> 1.13.0"
 NODE = "${var.node_name}"
 KEYS = "${var.ssh_authorized_keys}"
@@ -501,7 +505,8 @@ def _variables(plan: dict) -> dict:
 
 
 def render_tofu(plan_with_notes: dict, model: dict) -> dict[str, str]:
-    """Return {"main.tf.json": the OpenTofu configuration}."""
+    """Return {"main.tf.json": the OpenTofu configuration, LOCK_FILE: the
+    provider's hashes}."""
     plan = strip_notes(plan_with_notes)
     storage = plan["disk"]["storage"]
     # install.sh made the nullbill container, which runs OpenTofu; OpenTofu
@@ -545,4 +550,5 @@ def render_tofu(plan_with_notes: dict, model: dict) -> dict[str, str]:
         for kind, items in _ci_resources(plan).items():
             resource[kind] = resource.get(kind, {}) | items
         config["output"]["dispatcher_token"] = {"value": "${proxmox_user_token.dispatcher.value}", "sensitive": True}
-    return {"main.tf.json": json.dumps(config, indent=2) + "\n"}
+    lock = resources.files("nullbill").joinpath("data/tofu.lock.hcl").read_text()
+    return {"main.tf.json": json.dumps(config, indent=2) + "\n", LOCK_FILE: lock}
