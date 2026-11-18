@@ -59,5 +59,6 @@ def test_only_the_owner_github_and_dependabot_may_write_a_commit(tmp_path):
 def test_ci_checks_pull_requests_against_the_owners_noreply_identity():
     steps = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "check.yml").read_text())["jobs"]["check"]["steps"]
     step = next(s for s in steps if s.get("run", "").startswith("tools/check-authors"))
-    assert "pull_request" in step["if"] and "users.noreply.github.com" in step["env"]["NB_OWNER"]
-    assert "github.repository_owner_id" in step["env"]["NB_OWNER"]
+    owner = "${{ github.repository_owner }}"
+    assert "pull_request" in step["if"]
+    assert step["env"]["NB_OWNER"] == f"{owner} <${{{{ github.repository_owner_id }}}}+{owner}@users.noreply.github.com>"
