@@ -81,16 +81,22 @@ def unseen(why: str) -> Verdict:
 # secret in them, named in STATE_FILES, which a diagnosis needs to read.
 STATE_FILES = (
     r"release-upgrade\.(?:result|held)|kept-copies|discarded-journals|worlds\.json|torrents-log\.json"
-    r"|power\.json|restore-test\.json|backups-seen\.json|updates-since|game-last-active|jellyfin-scan-owed"
+    r"|power\.json|backups-seen\.json|updates-since|game-last-active|jellyfin-scan-owed"
     r"|jellyfin-libraries"
 )
 SECRET_PATHS = re.compile(
     r"/etc/pve/priv|(^|/)priv(/|$)|\.ssh/id_|ssh_host_[a-z0-9]+_key(?!\.pub)|(^|/)g?shadow-?$|/etc/g?shadow"
     rf"|/var/lib/nullbill(?!-agent)(?!/(?:{STATE_FILES})(?![\w./-]))|/etc/nullbill|\.sops\.|keys\.txt|/\.config/sops|age-key|private[-_]key"
     r"|\.key\b|-key\.pem|/etc/ssl/private|/etc/step-ca|/var/lib/step|credentials\.json|\.netrc|authkey|token\.cfg"
-    r"|/proc/[^/\s]+/(environ|mem)|/proc/kcore|/var/lib/tailscale|app\.ini|/etc/litellm"
+    r"|/proc/\S*/(environ|mem)(?![\w.-])|/proc/kcore|/var/lib/tailscale|app\.ini|/etc/litellm"
     r"|/etc/proxmox-backup/(shadow\.json|token\.shadow|.*\.key)|/root/\.ssh/(?!known_hosts|config\b)"
+    r"|/var/lib/samba/private|/etc/wireguard|(^|/)(passdb|secrets)\.tdb\b"
 )
+# A file or folder whose name says it holds a secret, anywhere in a path:
+# Forgejo's /etc/forgejo/secrets, Factorio's rcon-password, nb-page's
+# page-token, the model gateway's api-key. Only in a word with a slash, so
+# `grep password` stays a search.
+SECRET_NAMES = re.compile(r"(^|/)[^/\s]*(secret|(?<!common-)password|passphrase|api[-_]key|[-_.]token\b)[^/\s]*(/|$)", re.IGNORECASE)
 # Example files in each secret place, for telling whether a wildcard could
 # reach one. "*" in a component stands for any name there.
 SECRET_EXAMPLES = [
@@ -116,6 +122,12 @@ SECRET_EXAMPLES = [
     "/etc/proxmox-backup/token.shadow",
     "/proc/1/environ",
     "/proc/kcore",
+    "/etc/forgejo/secrets/secret_key",
+    "/etc/factorio/rcon-password",
+    "/etc/grafana/admin-password",
+    "/etc/llama/api-key",
+    "/var/lib/samba/private/passdb.tdb",
+    "/etc/wireguard/wg0.conf",
 ]
 SECRET_PLACES = sorted({posixpath.dirname(p) for p in SECRET_EXAMPLES} | {"/etc/shadow", "/etc/gshadow"})
 # Files that say who may sign in or that keep the record of what ran.
@@ -123,6 +135,7 @@ PROTECTED_FILES = re.compile(
     r"authorized_keys|authorized_principals|trusted-user-ca|TrustedUserCAKeys|sudoers|sshd_config|/etc/pam\.d"
     r"|/etc/passwd|nb-agent-command|nb-log-tool-use|journald\.conf|/etc/systemd/journal|/etc/audit|/var/log/audit"
     r"|/var/log/journal|/run/log/journal|/nb-log-shipper|/etc/nullbill/shipper|/etc/rsyslog"
+    r"|/(systemd-journald|auditd|rsyslog)[\w@.-]*\.(service|socket)"
 )
 # Devices that are not disks.
 SAFE_DEVICES = re.compile(r"^/dev/(null|zero|u?random|stdin|stdout|stderr|tty|fd/[0-2])$")
@@ -323,7 +336,6 @@ READERS = {
 }
 # Programs that only read unless a flag says otherwise.
 WRITE_FLAGS = {
-    "sort": ("-o", "--output", "--compress-program"),
     "tree": ("-o",),
     "date": ("-s", "--set"),
     "iptables-save": ("-f", "--file"),
@@ -371,6 +383,7 @@ WRITE_FLAGS = {
     "arp": ("-d", "-s", "-f", "--delete", "--set", "--file"),
     "systemd-analyze": ("--image", "--root"),
     "busctl": ("call", "set-property", "emit"),
+    "sensors": ("-s", "--set"),
 }
 READ_VERBS = {
     "timedatectl": {"", "status", "show", "list-timezones", "timesync-status", "show-timesync"},
@@ -379,7 +392,6 @@ READ_VERBS = {
     "loginctl": {"", "list-sessions", "list-users", "show-session", "show-user", "session-status", "user-status"},
     "networkctl": {"", "list", "status", "lldp", "label"},
     "crontab": {"-l"},
-    "git": {"status", "log", "diff", "show", "branch", "remote", "rev-parse", "describe", "ls-files", "blame", "shortlog"},
 }
 # Programs that only read with these flags alone (or none).
 BARE_READERS = {
@@ -500,6 +512,19 @@ def classify(command: str, protected: set[str] | None = None, depth: int = 0) ->
     verdict = raw_checks(text)
     if verdict.tier == BLOCKED:
         return verdict
+    # Brace expansion makes words the text does not spell: read the words
+    # bash makes, and never less than risky.
+    try:
+        expanded = braces(text)
+    except ValueError:
+        return blocked("its brace expansion makes more words than the page reads ahead; name them instead")
+    if expanded is not None:
+        inner = classify(expanded, protected, depth + 1)
+        if inner.tier == BLOCKED:
+            return inner
+        return verdict.worse(inner).worse(
+            risky("uses brace expansion ({a,b} or {1..3}), which makes words the command does not spell", "run")
+        )
     for inner in substitutions(text):
         verdict = verdict.worse(change("runs a command inside a command"))
         verdict = verdict.worse(classify(inner, protected, depth + 1) if inner.strip() else read())
@@ -542,15 +567,289 @@ def classify(command: str, protected: set[str] | None = None, depth: int = 0) ->
             segment.append(token)
         i += 1
     segments.append(segment)
+    # Where relative names point: after cd or pushd, the folder it named;
+    # before, root's home on Proxmox or / in a guest.
+    cwd: str | None = None
     for argv in segments:
-        if argv:
-            verdict = verdict.worse(program(argv, protected, depth))
-    if verdict.tier != READ:
-        for token in tokens:
-            if PROTECTED_FILES.search(token) and not token.startswith("-"):
-                return blocked(f"touches {token}, which says who may sign in or keeps the record of what ran")
-        verdict = verdict.worse(protected_ids(tokens, protected))
+        if not argv:
+            continue
+        verdict = verdict.worse(program(argv, protected, depth))
+        if verdict.tier == BLOCKED:
+            return verdict
+        verdict = verdict.worse(relative_names(argv, cwd, protected, depth))
+        if verdict.tier == BLOCKED:
+            return verdict
+        cwd = moved_to(argv, cwd)
+    for token in tokens:
+        # Reading these is fine; an option's value names what a program
+        # writes (--output=FILE) as often as what it reads.
+        value = token.split("=", 1)[-1] if token.startswith("-") else token
+        if PROTECTED_FILES.search(value) and (verdict.tier != READ or (token.startswith("-") and "/" in value)):
+            return blocked(f"touches {token}, which says who may sign in or keeps the record of what ran")
+    return verdict.worse(protected_ids(tokens, protected))
+
+
+# What `cd` with no folder and relative names start from: root's home on
+# Proxmox, / in a guest.
+START = ("/root", "/")
+UNKNOWN = "?"
+# Programs whose -C or --directory names the folder they work in.
+CHDIR = {"tar", "gtar", "bsdtar", "git", "make", "gmake", "env"}
+# Programs that read whole trees, for which relative names are read even
+# without a cd before them.
+TREE_READERS = {"tar", "gtar", "bsdtar", "zip", "grep", "egrep", "fgrep", "zgrep", "rgrep", "cp", "rsync", "find"}
+
+
+def bare(argv: list[str]) -> list[str]:
+    while argv and argv[0] in KEYWORDS:
+        argv = argv[1:]
+    while argv and ASSIGNMENT.match(argv[0]):
+        argv = argv[1:]
+    return argv
+
+
+def moved_to(argv: list[str], cwd: str | None) -> str | None:
+    argv = bare(argv)
+    if not argv:
+        return cwd
+    name = argv[0].rsplit("/", 1)[-1]
+    if name == "popd":
+        return UNKNOWN
+    if name not in {"cd", "pushd"}:
+        return cwd
+    where = next((a for a in argv[1:] if not a.startswith("-") or a == "-"), "~")
+    return joined(cwd, where)
+
+
+def joined(cwd: str | None, where: str) -> str:
+    if where == "-" or re.search(r"[$`*?[]", where):
+        return UNKNOWN
+    where = normalise(where)
+    if where.startswith("/"):
+        return where
+    if cwd is None or cwd == UNKNOWN:
+        return UNKNOWN if cwd == UNKNOWN else posixpath.join(START[0], where)
+    return normalise(posixpath.join(cwd, where))
+
+
+def chdirs(argv: list[str]) -> list[str]:
+    name = argv[0].rsplit("/", 1)[-1]
+    if name not in CHDIR:
+        return []
+    out = []
+    args = argv[1:]
+    for n, a in enumerate(args):
+        following = args[n + 1] if n + 1 < len(args) else ""
+        if a == "-C" or a in {"--git-dir", "--work-tree"}:
+            out.append(following)
+        elif a.startswith(("--git-dir=", "--work-tree=")):
+            out.append(a.split("=", 1)[1])
+        elif long_name(a, "--directory") and len(a.split("=", 1)[0]) >= 5 or long_name(a, "--chdir"):
+            out.append(a.split("=", 1)[1] if "=" in a else following)
+        elif a.startswith("-C") and len(a) > 2 and name != "git":
+            out.append(a[2:])
+    return [d for d in out if d]
+
+
+def relative_names(argv: list[str], cwd: str | None, protected: set[str], depth: int) -> Verdict:
+    """The command again with its relative names read from the folder they
+    point into: `cd /root/.ssh && base64 id_ed25519` reads a key, and so
+    does `tar c -C /root .ssh`."""
+    argv = bare(argv)
+    if len(argv) < 2:
+        return read()
+    name = argv[0].rsplit("/", 1)[-1]
+    relative = [a for a in argv[1:] if a and not a.startswith(("/", "-", "~", "$")) and "://" not in a and not ASSIGNMENT.match(a)]
+    if not relative:
+        return read()
+    extra = [joined(cwd, d) for d in chdirs(argv)]
+    # Without a cd, only a tree a program reads whole is looked into: a
+    # relative name may be a pattern (grep password) as often as a file.
+    named = [cwd] if cwd else []
+    implied = [*START] if not cwd and name in TREE_READERS else []
+    verdict = read()
+    for folder, said in [(f, True) for f in named + extra] + [(f, False) for f in implied]:
+        if folder == UNKNOWN:
+            verdict = verdict.worse(change("works on names in a folder the page cannot name"))
+            continue
+        moved = [argv[0]] + [posixpath.join(folder, a) if a in relative else a for a in argv[1:]]
+        checks = [program(moved, protected, depth)]
+        if said:
+            checks += [secret_tokens(moved), protected_ids(moved, protected)]
+        for found in checks:
+            if found.tier == BLOCKED:
+                return found
     return verdict
+
+
+def braces(text: str) -> str | None:
+    """text with bash's brace expansion done, or None when it has none.
+    Raises ValueError when it makes more than BRACE_MAX words."""
+    chars = shell_chars(text)
+    out: list[str] = []
+    word: list[tuple[str, bool]] = []
+    found = False
+    tick = False
+
+    def flush() -> None:
+        nonlocal found
+        if word:
+            words, made = expand(list(word))
+            found = found or made
+            out.append(" ".join("".join(c for c, _ in w) for w in words))
+            word.clear()
+
+    for c, active in chars:
+        if active and c == "`":
+            tick = not tick
+        if active and not tick and (c.isspace() or c in "|&;<>()"):
+            flush()
+            out.append(c)
+        else:
+            word.append((c, active))
+    flush()
+    return "".join(out) if found else None
+
+
+BRACE_MAX = 256
+
+
+def shell_chars(text: str) -> list[tuple[str, bool]]:
+    """Each character of text, and whether bash reads it as syntax: outside
+    quotes, not escaped, not in a here-document's body."""
+    out: list[tuple[str, bool]] = []
+    quote = ""
+    pending: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if quote == "'":
+            out.append((c, False))
+            quote = "" if c == "'" else quote
+        elif c == "\\":
+            out.append((c, False))
+            if i + 1 < n:
+                out.append((text[i + 1], False))
+                i += 1
+        elif quote == "$'":
+            out.append((c, False))
+            quote = "" if c == "'" else quote
+        elif quote == '"':
+            out.append((c, False))
+            quote = "" if c == '"' else quote
+        elif c in "'\"":
+            out.append((c, False))
+            quote = c
+        elif c == "$" and text[i + 1 : i + 2] == "'":
+            out += [(c, False), ("'", False)]
+            quote = "$'"
+            i += 1
+        elif text.startswith("<<", i) and not text.startswith("<<<", i):
+            m = re.match(r"<<-?\s*(['\"]?)([^\s'\"|&;<>()]+)\1", text[i:])
+            if m:
+                pending.append(m.group(2))
+            out.append((c, True))
+        elif c == "\n" and pending:
+            out.append((c, True))
+            j = i + 1
+            for delimiter in pending:
+                while j < n:
+                    end = text.find("\n", j)
+                    end = n if end < 0 else end + 1
+                    out += [(ch, False) for ch in text[j:end]]
+                    line = text[j:end].rstrip("\n").lstrip("\t")
+                    j = end
+                    if line == delimiter:
+                        break
+            pending = []
+            i = j
+            continue
+        else:
+            out.append((c, True))
+        i += 1
+    return out
+
+
+def closing(word: list[tuple[str, bool]], i: int) -> tuple[int | None, list[int]]:
+    """Where the brace at i closes, and the commas at its own level."""
+    depth = 0
+    commas = []
+    j = i
+    while j < len(word):
+        c, active = word[j]
+        if active and c == "$" and j + 1 < len(word) and word[j + 1] == ("{", True):
+            end, _ = closing(word, j + 1)
+            if end is None:
+                return None, []
+            j = end + 1
+            continue
+        if active and c == "{":
+            depth += 1
+        elif active and c == "}":
+            depth -= 1
+            if depth == 0:
+                return j, commas
+        elif active and c == "," and depth == 1:
+            commas.append(j)
+        j += 1
+    return None, []
+
+
+def sequence(inner: list[tuple[str, bool]]) -> list[str] | None:
+    if not all(active for _, active in inner):
+        return None
+    text = "".join(c for c, _ in inner)
+    m = re.fullmatch(r"([-+]?\d+)\.\.([-+]?\d+)(?:\.\.([-+]?\d+))?", text)
+    if m:
+        a, b = int(m.group(1)), int(m.group(2))
+        step = abs(int(m.group(3) or 1)) or 1
+        if abs(b - a) // step + 1 > BRACE_MAX:
+            raise ValueError("too many words")
+        width = max(len(m.group(1)), len(m.group(2))) if re.match(r"[-+]?0\d", m.group(1) + " ") or re.match(r"[-+]?0\d", m.group(2)) else 0
+        numbers = range(a, b + (1 if b >= a else -1), step if b >= a else -step)
+        return [str(x).zfill(width) for x in numbers]
+    m = re.fullmatch(r"([A-Za-z])\.\.([A-Za-z])(?:\.\.([-+]?\d+))?", text)
+    if m:
+        a, b = ord(m.group(1)), ord(m.group(2))
+        step = abs(int(m.group(3) or 1)) or 1
+        return [chr(x) for x in range(a, b + (1 if b >= a else -1), step if b >= a else -step)]
+    return None
+
+
+def expand(word: list[tuple[str, bool]]) -> tuple[list[list[tuple[str, bool]]], bool]:
+    """bash's brace expansion of one word: the words it makes, and whether
+    it made any."""
+    i = 0
+    while i < len(word):
+        c, active = word[i]
+        if active and c == "$" and i + 1 < len(word) and word[i + 1] == ("{", True):
+            end, _ = closing(word, i + 1)
+            if end is None:
+                return [word], False
+            i = end + 1
+            continue
+        if active and c == "{":
+            end, commas = closing(word, i)
+            if end is not None:
+                if commas:
+                    parts = []
+                    start = i + 1
+                    for k in [*commas, end]:
+                        parts.append(word[start:k])
+                        start = k + 1
+                else:
+                    made = sequence(word[i + 1 : end])
+                    parts = [[(ch, False) for ch in x] for x in made] if made is not None else None
+                if parts is not None:
+                    out = []
+                    for part in parts:
+                        out += expand(word[:i] + part + word[end + 1 :])[0]
+                        if len(out) > BRACE_MAX:
+                            raise ValueError("too many words")
+                    return out, True
+        i += 1
+    return [word], False
 
 
 def raw_checks(text: str) -> Verdict:
@@ -558,8 +857,7 @@ def raw_checks(text: str) -> Verdict:
     writes, wipers named anywhere (inside a string another program runs),
     and quoting the page cannot read ahead."""
     for word in re.split(r"[\s'\"=;|&()`<>]+", text):
-        path = normalise(word)
-        if path and SECRET_PATHS.search(path) and not path.endswith(".pub"):
+        if is_secret(word):
             return blocked(f"touches {word}, which holds secrets; secrets never go to the model")
         name = word.rsplit("/", 1)[-1]
         if name in DISK_WIPERS or name.startswith("mkfs"):
@@ -643,11 +941,18 @@ def normalise(token: str) -> str:
     return token
 
 
+def is_secret(word: str) -> bool:
+    """Whether a word names a place that holds secrets."""
+    path = normalise(word)
+    if not path or path.endswith(".pub"):
+        return False
+    return bool(SECRET_PATHS.search(path) or ("/" in path and SECRET_NAMES.search(path)))
+
+
 def secret_tokens(tokens: list[str]) -> Verdict:
     for token in tokens:
         for part in [token, *token.split("=", 1)[1:]]:
-            path = normalise(part)
-            if SECRET_PATHS.search(path) and not path.endswith(".pub"):
+            if is_secret(part):
                 return blocked(f"touches {part}, which holds secrets; secrets never go to the model")
     return read()
 
@@ -699,7 +1004,9 @@ def writes_file(target: str, protected: set[str]) -> Verdict:
         return blocked(f"writes {target}, which says who may sign in or keeps the record of what ran")
     if path.startswith("/dev/") and not SAFE_DEVICES.match(path):
         return blocked(f"writes straight to {target}")
-    if SECRET_PATHS.search(path) and not path.endswith(".pub"):
+    if path == "/proc/sysrq-trigger":
+        return risky("writes the kernel's emergency keys, which can reboot or stop the machine at once", "reboot")
+    if is_secret(path):
         return blocked(f"writes {target}, which holds secrets")
     if any(re.search(rf"/lxc/{re.escape(p)}\.conf$", path) for p in protected):
         return blocked(f"writes {target}, the NullBill container's settings")
@@ -766,6 +1073,10 @@ def command(argv: list[str], protected: set[str], depth: int) -> Verdict:
         return unseen(f"runs {name}")
     if name in EVALUATORS:
         return unseen(f"{name} runs code from a string or a file")
+    if name in CODE_RUNNERS:
+        if args in (["--version"], ["-V"], ["-v"], ["--help"]):
+            return read()
+        return unseen(f"{name} runs the code of what it builds or installs")
     if name == "awk" or name in {"gawk", "mawk", "nawk", "busybox-awk"}:
         return r_awk(args)
     if name in SIGN_IN or name == "pveum" and not pveum_lists(args):
@@ -795,7 +1106,6 @@ def command(argv: list[str], protected: set[str], depth: int) -> Verdict:
         plain = [a for a in args if not a.startswith("-")]
         v = args[0] if name == "crontab" and args else verb(args)
         extra = (name == "resolvectl" and len(plain) > 2) or (name == "hostnamectl" and len(plain) > 1)
-        extra = extra or (name == "git" and has(args, "-c", "--output", "-o", "--ext-diff", "--exec-path"))
         return read() if v in READ_VERBS[name] and not extra else change(f"{name} {v}".strip())
     if name in BARE_READERS:
         if name == "getent":
@@ -805,8 +1115,6 @@ def command(argv: list[str], protected: set[str], depth: int) -> Verdict:
         plain = [a for n, a in enumerate(args) if not a.startswith("-") and not (name == "mount" and n and args[n - 1] == "-t")]
         flags = [a for a in args if a.startswith("-")]
         return read() if not plain and set(flags) <= allowed else change(f"{name} with these arguments changes the system")
-    if name == "uniq":
-        return change("uniq writes its second operand") if len([a for a in args if not a.startswith("-")]) > 1 else read()
     if name in {"reboot", "shutdown", "poweroff", "halt", "init", "telinit"}:
         return risky(f"{name} stops the machine", "reboot")
     return change(f"runs {name}, which the page does not know to be read-only")
@@ -820,7 +1128,8 @@ def content_reader(name: str, args: list[str]) -> Verdict:
         if p.startswith("/dev/") and not SAFE_DEVICES.match(p):
             return blocked(f"{name} reads {p} directly")
     recursive = name == "rgrep" or (
-        name in {"grep", "egrep", "fgrep", "zgrep"} and has(args, "-r", "-R", "--recursive", "--dereference-recursive", "-d")
+        name in {"grep", "egrep", "fgrep", "zgrep"}
+        and has(args, "-r", "-R", "--recursive", "--dereference-recursive", "-d", "--directories")
     )
     if recursive:
         plain = [a for a in args if not a.startswith("-")]
@@ -858,6 +1167,8 @@ def wrapper(name: str, args: list[str], protected: set[str], depth: int) -> Verd
         return change("sudo -e edits a file")
     if name == "time" and has(flags, "-o", "--output"):
         verdict = verdict.worse(change("time -o writes a file"))
+    if name == "nsenter" and has(flags, "-t", "--target", "-a", "--all"):
+        return blocked("nsenter enters another process's namespaces, which may be the NullBill container's; use pct exec for a guest")
     if name in {"taskset", "chrt"} and has(flags, "-p", "--pid"):
         return change(f"{name} changes a running process")
     if name == "command" and has(flags, "-v", "-V"):
@@ -987,14 +1298,60 @@ def r_sed(args, _p):
     return change("sed can write files or run commands (its w and e commands)")
 
 
+def long_name(arg: str, flag: str) -> bool:
+    """Whether arg names the long option flag: in full, or by a prefix, as
+    GNU getopt_long, curl and git's parse-options take one (`--out=` for
+    `--output=`). An ambiguous prefix counts too: the program refuses it,
+    and the page reads it as the worse of its meanings."""
+    if not (flag.startswith("--") and arg.startswith("--")):
+        return False
+    name = arg.split("=", 1)[0]
+    return len(name) >= 3 and flag.startswith(name)
+
+
 def has(args: list[str], *flags: str) -> bool:
     return any(
         a == f
-        or (f.startswith("--") and a.startswith(f + "="))
+        or long_name(a, f)
         or (len(f) == 2 and f[0] == "-" and f[1] != "-" and a.startswith("-") and not a.startswith("--") and f[1] in a[1:])
         for a in args
         for f in flags
     )
+
+
+def values(args: list[str], short: str = "", *longs: str) -> list[str]:
+    """The values given to an option: `-o X`, `-oX`, `-abo X`, `--output X`,
+    `--output=X` and a long option's prefixes."""
+    out = []
+    for n, a in enumerate(args):
+        following = args[n + 1] if n + 1 < len(args) else ""
+        if a == "--":
+            break
+        if longs and a.startswith("--"):
+            if any(long_name(a, f) for f in longs):
+                out.append(a.split("=", 1)[1] if "=" in a else following)
+        elif short and a.startswith("-") and len(a) > 1 and short[1] in a[1:]:
+            rest = a[a.index(short[1], 1) + 1 :]
+            out.append(rest or following)
+    return out
+
+
+def operands(args: list[str], takes_value: set[str] = frozenset()) -> list[str]:
+    """The plain arguments: `-` (standard input or output) is one, an
+    option's value is not."""
+    out = []
+    skip = False
+    ended = False
+    for a in args:
+        if skip:
+            skip = False
+        elif ended or a == "-" or not a.startswith("-"):
+            out.append(a)
+        elif a == "--":
+            ended = True
+        elif a in takes_value or (a.startswith("--") and "=" not in a and any(long_name(a, f) for f in takes_value if f.startswith("--"))):
+            skip = True
+    return out
 
 
 def verb(args: list[str]) -> str:
@@ -1010,7 +1367,17 @@ def r_dmesg(args, _p):
 
 
 def r_journalctl(args, _p):
-    if any(a.startswith(("--vacuum", "--rotate", "--flush", "--relinquish-var", "--smart-relinquish-var", "--setup-keys")) for a in args):
+    if has(
+        args,
+        "--vacuum-size",
+        "--vacuum-time",
+        "--vacuum-files",
+        "--rotate",
+        "--flush",
+        "--relinquish-var",
+        "--smart-relinquish-var",
+        "--setup-keys",
+    ) or any(a.startswith("--vacuum") for a in args):
         return blocked("deletes or moves the journal, the record of what ran")
     if has(args, "--update-catalog", "--new-id128"):
         return change("journalctl changes its catalog")
@@ -1039,16 +1406,31 @@ READ_VERBS_SYSTEMCTL = {
 }
 
 
+LOG_UNIT_NAMES = ("systemd-journald", "systemd-journald.socket", "systemd-journald-dev-log.socket", "auditd", "nb-log-shipper", "rsyslog")
+
+
 def is_log_unit(unit: str) -> bool:
-    return unit.startswith(LOG_UNITS)
+    if unit.startswith(LOG_UNITS) or LOG_PROCESSES.search(unit):
+        return True
+    # A pattern systemctl matches against unit names.
+    return bool(re.search(r"[*?[]", unit)) and any(
+        fnmatch.fnmatchcase(n, unit) or fnmatch.fnmatchcase(n + ".service", unit) for n in LOG_UNIT_NAMES
+    )
+
+
+SYSTEMCTL_VALUES = {"-H", "-M", "-p", "-P", "-t", "-s", "-n", "-o", "--host", "--machine", "--property", "--type", "--state"}
+SYSTEMCTL_VALUES |= {"--signal", "--lines", "--output", "--root", "--what", "--kill-whom", "--job-mode", "--timestamp"}
 
 
 def r_systemctl(args, _p):
-    v = verb(args)
-    units = {a.removesuffix(".service") for a in args[args.index(v) + 1 :] if not a.startswith("-")} if v else set()
+    if has(args, "-H", "--host", "-M", "--machine"):
+        return risky("systemctl -H or -M reaches another machine or container", "connect")
+    words = operands(args, SYSTEMCTL_VALUES)
+    v = words[0] if words else ""
+    units = {a.removesuffix(".service") for a in words[1:]}
     if v in READ_VERBS_SYSTEMCTL:
         return read()
-    if v in {"stop", "disable", "mask", "kill", "freeze", "edit", "set-property", "revert", "link", "unlink"} and any(
+    if v in {"stop", "disable", "mask", "kill", "freeze", "edit", "set-property", "revert", "link", "unlink", "clean"} and any(
         is_log_unit(u) for u in units
     ):
         return blocked("stops or changes the record of what ran")
@@ -1067,22 +1449,95 @@ def r_systemctl(args, _p):
     return change(f"systemctl {v}")
 
 
+# iproute2 takes any prefix of an object or a command, the first in its own
+# order that fits: `ip l s` is `ip link set`, `ip a s` is `ip address show`.
+IP_OBJECTS = [
+    "address", "addrlabel", "maddress", "route", "rule", "neighbor", "neighbour", "ntable", "ntbl", "link", "l2tp", "fou",
+    "ila", "macsec", "tunnel", "tunl", "tuntap", "tap", "token", "tcpmetrics", "tcp_metrics", "monitor", "xfrm", "mroute",
+    "mrule", "netns", "netconf", "vrf", "sr", "nexthop", "mptcp", "ioam", "help", "stats",
+]  # fmt: skip
+IP_SAME = {"neighbour": "neighbor", "ntbl": "ntable", "tunl": "tunnel", "tap": "tuntap", "tcp_metrics": "tcpmetrics"}
+IP_VERBS = {
+    "address": ["add", "change", "chg", "replace", "delete", "list", "show", "lst", "flush", "save", "showdump", "restore", "help"],
+    "link": ["add", "change", "chg", "replace", "delete", "set", "show", "lst", "list", "xstats", "afstats", "property", "help"],
+    "route": [
+        "add", "change", "chg", "replace", "prepend", "append", "test", "delete", "list", "show", "lst", "get", "flush",
+        "restore", "showdump", "save", "help",
+    ],
+    "neighbor": ["add", "change", "chg", "replace", "delete", "list", "show", "lst", "flush", "get", "help"],
+    "rule": ["add", "delete", "list", "show", "lst", "flush", "save", "restore", "help"],
+    "netns": ["list", "show", "lst", "list-id", "help", "add", "set", "delete", "identify", "pids", "exec", "monitor", "attach"],
+    "xfrm": ["add", "update", "allocspi", "delete", "deleteall", "delall", "list", "show", "lst", "get", "flush", "count", "help"],
+}  # fmt: skip
+# Any other object: the commands its tools take, in a careful order.
+IP_GENERIC = ["add", "change", "chg", "replace", "delete", "del", "set", "list", "show", "lst", "get", "flush", "save", "restore", "help"]
+IP_READ = {"list", "show", "lst", "get", "help", "showdump", "count", "list-id", "identify", "pids", "xstats", "afstats"}
+# Global options that take a value, with the shortest prefix ip reads as each.
+IP_VALUE_OPTIONS = {"-netns": 2, "-family": 2, "-loops": 2, "-rcvbuf": 3}
+
+
+def ip_word(word: str, names: list[str]) -> str | None:
+    return next((n for n in names if n.startswith(word)), None) if word else None
+
+
 def r_ip(args, protected, depth):
     # ip takes any prefix of a long option with one dash: -br is -brief.
     opts = [a[1:] if a.startswith("--") else a for a in args if a.startswith("-")]
     if any("-batch".startswith(a) and len(a) >= 2 for a in opts) or any("-force".startswith(a) and len(a) >= 3 for a in opts):
         return unseen("ip -batch runs commands from a file")
-    plain = [a for a in args if not a.startswith("-")]
-    if plain[:2] == ["netns", "exec"] and len(plain) > 3:
-        start = args.index(plain[2]) + 1
-        return program(args[start:], protected, depth + 1)
-    if {"add", "del", "delete", "set", "flush", "change", "replace", "append", "prepend", "restore", "save", "exec", "attach"} & set(args):
-        return change("changes the network")
-    return read()
+    i = 0
+    every_netns = False
+    while i < len(args) and args[i].startswith("-"):
+        o = args[i][1:] if args[i].startswith("--") else args[i]
+        every_netns = every_netns or (len(o) >= 2 and "-all".startswith(o))
+        takes = any(len(o) >= n and f.startswith(o) for f, n in IP_VALUE_OPTIONS.items())
+        i += 2 if takes else 1
+    rest = args[i:]
+    if not rest:
+        return read()
+    first = rest[0]
+    # exec runs a command in a namespace or VRF; read conservatively, as if
+    # the words could mean netns or vrf whatever ip makes of them.
+    if len(rest) > 1 and ("netns".startswith(first) or "vrf".startswith(first)) and "exec".startswith(rest[1]):
+        inner = rest[2:] if every_netns and "netns".startswith(first) else rest[3:]
+        return program(inner, protected, depth + 1) if inner else change("ip exec without a command")
+    found = ip_word(first, IP_OBJECTS)
+    if found is None:
+        return change(f"ip {first}")
+    obj = IP_SAME.get(found, found)
+    if obj == "monitor":
+        return read()
+    words = rest[1:]
+    if obj == "xfrm":
+        sub = ip_word(words[0], ["state", "policy", "monitor"]) if words else None
+        if not words or sub == "monitor":
+            return read()
+        words = words[1:]
+    if not words:
+        return read()
+    v = ip_word(words[0], IP_VERBS.get(obj, IP_GENERIC))
+    if v is None:
+        return change(f"ip {obj} {words[0]}")
+    if v in IP_READ:
+        return read()
+    if v == "flush":
+        return risky(f"ip {obj} flush removes the server's {obj} entries, which may cut it off", "flush")
+    if v in {"delete", "deleteall", "delall", "del"}:
+        return risky(f"ip {obj} delete removes what it names, which may cut the server off", "delete")
+    if obj == "link" and v in {"set", "change", "chg"} and "down" in words:
+        return risky("takes a network interface down, which may cut the server off", "down")
+    return change(f"ip {obj} {v} changes the network")
 
 
 PCT_READ = {"list", "config", "status", "pending", "df", "listsnapshot", "cpusets", "help", "fstrim-help", "showcmd"}
 QM_AGENT_READ = re.compile(r"^(ping|info|get-.*|network-get-interfaces|exec-status)$")
+
+
+def is_protected(word: str, protected: set[str]) -> bool:
+    """Whether a word names the NullBill container: its id or name, also as
+    `--name=ID` or with leading zeros."""
+    word = word.split("=")[-1]
+    return word in protected or (word.isdigit() and str(int(word)) in protected)
 
 
 def guest_verbs(tool: str, args: list[str], protected: set[str], depth: int = 0) -> Verdict:
@@ -1090,20 +1545,23 @@ def guest_verbs(tool: str, args: list[str], protected: set[str], depth: int = 0)
     before = args[: args.index("--")] if "--" in args else args
     plain = [a for a in before if not a.startswith("-")]
     target = plain[1] if len(plain) > 1 else ""
+    running = v == "exec" or (tool == "qm" and v == "guest" and len(plain) > 2 and plain[1] == "exec")
     if v in {"enter", "terminal", "monitor", "console", "vncproxy", "termproxy", "spiceproxy"}:
         return blocked(f"{tool} {v} is interactive; ask for one command at a time")
-    if v in PCT_READ and (target in protected or v == "list"):
+    if v in PCT_READ and (is_protected(target, protected) or v == "list"):
         return read()
-    if any(a in protected for a in plain[1:]):
-        return blocked(
-            f"touches {', '.join(a for a in plain[1:] if a in protected)}, the NullBill container this page and the agent run in"
-        )
-    if v == "exec" or (tool == "qm" and v == "guest" and len(plain) > 2 and plain[1] == "exec"):
-        inner = args[args.index("--") + 1 :] if "--" in args else []
-        if tool == "qm" and v == "guest" and len(plain) > 2 and plain[1] == "exec":
-            target = plain[2]
-            if target in protected:
-                return blocked(f"touches {target}, the NullBill container this page and the agent run in")
+    # The guest's id may also come after `--`, unless what follows is a command.
+    words = plain[1:3] if running else [a for a in args if not a.startswith("-")][1:]
+    named = [a for a in words if is_protected(a, protected)]
+    if named:
+        return blocked(f"touches {', '.join(named)}, the NullBill container this page and the agent run in")
+    if running:
+        if "--" in args:
+            inner = args[args.index("--") + 1 :]
+        else:
+            # Without `--` the words after the guest's id are the command.
+            at = 2 if v == "guest" else 1
+            inner = args[args.index(plain[at]) + 1 :] if len(plain) > at else []
         return program(inner, protected, depth + 1) if inner else change(f"{tool} {v} without a command")
     if tool == "qm" and v == "guest":
         sub = plain[1] if len(plain) > 1 else ""
@@ -1120,7 +1578,37 @@ def guest_verbs(tool: str, args: list[str], protected: set[str], depth: int = 0)
         return read()
     if v in {"destroy", "rollback", "delsnapshot", "unlink", "disk"} or (v == "restore" and has(args, "--force")):
         return risky(f"{tool} {v} {target} loses the guest's data or state", target or v)
+    if v in {"set", "create", "restore"}:
+        found = guest_settings(tool, args, protected)
+        if found.tier != READ:
+            return found
     return change(f"{tool} {v} {target}".strip())
+
+
+def guest_settings(tool: str, args: list[str], protected: set[str]) -> Verdict:
+    """What a guest's settings let it reach: a folder of the host mounted
+    into it, a script the host runs at its start, raw arguments to its
+    emulator, or no user namespace."""
+    for n, a in enumerate(args):
+        if not a.startswith("-"):
+            continue
+        key = a.lstrip("-").split("=", 1)[0]
+        value = a.split("=", 1)[1] if "=" in a else (args[n + 1] if n + 1 < len(args) else "")
+        if re.fullmatch(r"mp\d+|rootfs", key):
+            source = value.split(",", 1)[0]
+            if source.startswith("/") and (
+                holds_secrets(source) or is_secret(source) or protected_ids([source], protected).tier == BLOCKED
+            ):
+                return blocked(f"mounts {source} of the host into a guest, and it holds secrets")
+            if source.startswith("/"):
+                return risky(f"mounts {source} of the host into a guest, which then reaches it", "mount")
+        if key == "hookscript":
+            return risky(f"{tool} --hookscript has Proxmox run a script as root at each start of the guest", "hook")
+        if key == "args" or key.startswith("lxc."):
+            return risky(f"{tool} --{key} hands raw settings to the guest's emulator or container", "raw")
+        if key == "unprivileged" and value.strip() in {"0", "false", "no"}:
+            return risky("a privileged container's root is the host's root", "privileged")
+    return read()
 
 
 def r_pct(args, p, depth):
@@ -1133,7 +1621,9 @@ def r_qm(args, p, depth):
 
 def r_lxc(name: str, args: list[str], protected: set[str], depth: int) -> Verdict:
     before = args[: args.index("--")] if "--" in args else args
-    if any(a in protected or a.split("=")[-1] in protected for a in before):
+    if any(
+        is_protected(a, protected) or (a.startswith("-n") and not a.startswith("--") and is_protected(a[2:], protected)) for a in before
+    ):
         if name in {"lxc-info", "lxc-ls", "lxc-config", "lxc-checkconfig"}:
             return read()
         return blocked("touches the NullBill container this page and the agent run in")
@@ -1163,16 +1653,21 @@ def r_pvesm(args, _p):
 def r_pvesh(args, protected):
     v = verb(args)
     paths = [a for a in args[args.index(v) + 1 :] if not a.startswith("-")] if v else []
-    path = paths[0] if paths else ""
+    # pvesh takes the path with or without its slash, and with // or ..
+    path = normalise("/" + paths[0]) if paths else ""
     if v in {"get", "ls", "usage", "help"}:
+        if re.search(r"/agent/file-read|/file-restore/", path):
+            return risky("reads a file inside a guest or a backup, which the page cannot check for secrets", "file")
         return read()
-    if path.startswith("/access") or "/access/" in path:
+    if path.startswith("/access"):
         return blocked("changes who may sign in to Proxmox; do that yourself")
     if v in {"delete", "create", "set"} and re.search(r"prune|/gc\b|garbage|snapshots|/content/.*(backup|vzdump)|pbs", " ".join(args)):
         return blocked("deletes or changes backups")
     for p in protected:
-        if re.search(rf"/lxc/{re.escape(p)}(/|$)", path):
+        if re.search(rf"/lxc/0*{re.escape(p)}(/|$)", path):
             return blocked(f"touches {p}, the NullBill container this page and the agent run in")
+    if re.search(r"/agent/(exec|file-write)\b|/execute$", path):
+        return risky("pvesh runs a command or writes a file through the API, which the page cannot read ahead", "run")
     if v == "delete":
         return risky("pvesh delete removes what it names", "delete")
     return change(f"pvesh {v}")
@@ -1221,6 +1716,15 @@ def r_apt(args, _p):
         return risky(f"apt {v} uninstalls packages", "remove")
     if has(args, "-o", "--option", "-c", "--config-file"):
         return unseen("apt with -o can run commands of its choosing")
+    names = [a for a in args[args.index(v) + 1 :] if not a.startswith("-")] if v else []
+    if v in {"install", "reinstall"} and any(a.endswith("-") and LOG_PACKAGES.match(a[:-1]) for a in names):
+        return blocked("removes the programs that keep the record of what ran")
+    if v in {"install", "reinstall"} and any(a.endswith("-") for a in names):
+        return risky(f"apt {v} pkg- uninstalls packages", "remove")
+    if v in {"install", "reinstall"} and any("/" in a or a.endswith(".deb") for a in names):
+        return unseen("apt installs a package file, whose scripts run as root")
+    if has(args, "--allow-remove-essential"):
+        return risky("apt may remove essential packages", "remove")
     return change(f"apt {v}")
 
 
@@ -1229,6 +1733,10 @@ def r_dpkg(args, _p):
         if any(LOG_PACKAGES.match(a) for a in args if not a.startswith("-")):
             return blocked("removes the programs that keep the record of what ran")
         return risky("dpkg removes packages", "remove")
+    if has(args, "-i", "--install", "--unpack", "--configure", "--triggers-only", "-R", "--recursive", "--set-selections"):
+        return unseen("dpkg installs a package file, whose scripts run as root")
+    if has(args, "-x", "-X", "--extract", "--vextract", "--force", "--root", "--admindir", "--instdir", "-b", "--build"):
+        return change("dpkg writes files")
     if has(
         args,
         "-l",
@@ -1426,10 +1934,10 @@ def r_curl(args, _p):
             return unseen(f"curl {scheme.group(1)}:// reaches beyond the web")
     if has(args, *CURL_WRITES):
         return change("curl sends data or writes a file")
-    if "-X" in args and args.index("-X") + 1 < len(args) and args[args.index("-X") + 1].upper() not in {"GET", "HEAD"}:
+    if any(m.upper() not in {"GET", "HEAD"} for m in values(args, "-X", "--request")):
         return change("curl sends a request that may change something")
-    if "--request" in args and args.index("--request") + 1 < len(args) and args[args.index("--request") + 1].upper() not in {"GET", "HEAD"}:
-        return change("curl sends a request that may change something")
+    if has(args, "--unix-socket", "--abstract-unix-socket"):
+        return change("curl talks to a local socket")
     if any(
         a.startswith("-X")
         and not a.startswith("--")
@@ -1481,15 +1989,27 @@ def r_wget(args, _p):
     return change("wget writes a file or sends data")
 
 
-def r_openssl(args, _p):
+OPENSSL_OUTPUTS = ("-out", "-writerand", "-keyout", "-sess_out", "-keylogfile", "-msgfile", "-CAserial", "-certout", "-reqout")
+
+
+def r_openssl(args, protected):
     v = verb(args)
-    if has(args, "-engine", "-provider", "-provider-path"):
-        return change("openssl loads a module")
-    if v in {"x509", "s_client", "verify", "version", "crl", "asn1parse", "ciphers", "req", "dgst"} and not has(
-        args, "-out", "-signkey", "-new", "-newkey", "-x509", "-keylogfile", "-sess_out", "-msgfile", "-trace"
+    # openssl's options take one dash and no prefixes.
+    if any(a in {"-engine", "-provider", "-provider-path", "-config", "-conf"} for a in args):
+        return unseen("openssl loads a module or a config that may load one")
+    verdict = read()
+    for n, a in enumerate(args):
+        if a in OPENSSL_OUTPUTS and n + 1 < len(args):
+            verdict = verdict.worse(writes_file(args[n + 1], protected))
+    if verdict.tier == BLOCKED:
+        return verdict
+    if (
+        v in {"x509", "s_client", "verify", "version", "crl", "asn1parse", "ciphers", "req", "dgst"}
+        and verdict.tier == READ
+        and not any(a in {"-signkey", "-new", "-newkey", "-x509", "-trace", "-CAcreateserial"} for a in args)
     ):
         return read()
-    return change(f"openssl {v}")
+    return verdict.worse(change(f"openssl {v}"))
 
 
 def r_rm(args, _p):
@@ -1540,6 +2060,7 @@ def r_zfs(args, _p):
 
 
 def r_nft(args, _p):
+    args = [w for a in args for w in (a.split() if not a.startswith("-") else [a])]
     v = verb(args)
     if has(args, "-f", "--file", "-i", "--interactive"):
         return change("nft reads rules from a file") if not has(args, "-c", "--check") else read()
@@ -1553,6 +2074,24 @@ def r_nft(args, _p):
 def r_iptables(args, _p):
     if has(args, "-F", "--flush", "-X", "-P", "--policy"):
         return risky("iptables removes firewall rules", "flush")
+    if has(
+        args,
+        "-A",
+        "-D",
+        "-I",
+        "-R",
+        "-N",
+        "-E",
+        "-Z",
+        "--append",
+        "--delete",
+        "--insert",
+        "--replace",
+        "--new-chain",
+        "--rename-chain",
+        "--zero",
+    ):
+        return change("iptables changes firewall rules")
     if has(args, "-L", "-S", "--list", "--list-rules", "-C", "--check"):
         return read()
     return change("iptables changes firewall rules")
@@ -1585,10 +2124,23 @@ def r_auditctl(args, _p):
     return blocked("changes what auditd records")
 
 
+LOG_PROGRAMS = ("/usr/lib/systemd/systemd-journald", "/sbin/auditd", "/usr/sbin/rsyslogd", "/usr/local/sbin/nb-log-shipper")
+
+
 def r_kill(args, _p):
     targets = args[args.index("--") + 1 :] if "--" in args else [a for a in args if not a.startswith("-")]
     if any(a in {"1", "-1", "init", "systemd"} for a in targets) or any(LOG_PROCESSES.search(a) for a in args):
         return blocked("ends init or the programs that keep the record of what ran")
+    for pattern in targets:
+        if pattern.isdigit():
+            continue
+        for name in LOG_PROGRAMS:
+            try:
+                hit = re.search(pattern, name) or fnmatch.fnmatchcase(name.rsplit("/", 1)[1], pattern)
+            except re.error:
+                return change("ends processes by a pattern the page cannot read")
+            if hit:
+                return blocked("ends the programs that keep the record of what ran")
     return change("ends processes")
 
 
@@ -1604,7 +2156,7 @@ def r_dd(args, protected):
         verdict = writes_file(out, protected)
         if verdict.tier == BLOCKED or out in {"/dev/null", "/dev/stdout"}:
             return verdict if verdict.tier == BLOCKED else read()
-        return change(f"dd writes {out}")
+        return verdict.worse(change(f"dd writes {out}"))
     return read()
 
 
@@ -1630,6 +2182,8 @@ def r_tee(args, protected):
 
 def r_copy(args, protected):
     """cp, mv, install, ln, rsync: the destination is written."""
+    if has(args, "-e", "--rsh", "--rsync-path"):
+        return unseen("rsync -e or --rsync-path runs a command of its own")
     plain = [a for a in args if not a.startswith("-")]
     target = next((a.split("=", 1)[1] for a in args if a.startswith("--target-directory=")), "")
     if not target and "-t" in args and args.index("-t") + 1 < len(args):
@@ -1675,6 +2229,180 @@ def r_vzdump(args, _p):
     return change("makes a backup")
 
 
+def r_sort(args, protected):
+    if has(args, "--compress-program"):
+        return unseen("sort --compress-program runs a program of its choosing")
+    verdict = read()
+    for out in values(args, "-o", "--output"):
+        verdict = verdict.worse(writes_file(out, protected))
+    return verdict
+
+
+def r_uniq(args, protected):
+    """uniq [INPUT [OUTPUT]]: `-` is the standard input, so the output is
+    the second operand either way."""
+    found = operands(args, {"-f", "-s", "-w", "--skip-fields", "--skip-chars", "--check-chars"})
+    return writes_file(found[1], protected) if len(found) > 1 and found[1] != "-" else read()
+
+
+XXD_VALUES = {"-c", "-cols", "-g", "-groupsize", "-l", "-len", "-s", "-seek", "-o", "-offset", "-n", "-name"}
+
+
+def r_xxd(args, protected):
+    """xxd [INFILE [OUTFILE]]: with -r it writes bytes, without it a dump;
+    either way OUTFILE is written."""
+    found = operands(args, XXD_VALUES)
+    return writes_file(found[1], protected) if len(found) > 1 and found[1] != "-" else read()
+
+
+# git settings that only change how git prints. Any other -c may name a
+# command git runs (core.pager, core.sshCommand, core.editor, diff.external,
+# core.fsmonitor, alias.*, a filter or a credential helper).
+GIT_SAFE_CONFIG = re.compile(
+    r"^(color\..*|core\.quotepath|safe\.directory|log\..*|advice\..*|column\.ui|status\.[a-z]+|i18n\..*"
+    r"|diff\.(renames|noprefix|mnemonicprefix|relative|context|interhunkcontext|algorithm))$",
+    re.IGNORECASE,
+)
+GIT_READ = {"status", "log", "diff", "show", "branch", "remote", "rev-parse", "describe", "ls-files", "blame", "shortlog"}
+GIT_VALUE_OPTIONS = {"-C", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--attr-source", "--list-cmds"}
+GIT_BRANCH_VALUES = {"--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--format", "--sort", "--abbrev"}
+
+
+def r_git(args, _p):
+    i = 0
+    while i < len(args) and args[i].startswith("-"):
+        a = args[i]
+        if a == "-c" or (a.startswith("-c") and not a.startswith("--")):
+            setting = a[2:] or (args[i + 1] if i + 1 < len(args) else "")
+            key = setting.split("=", 1)[0]
+            if not GIT_SAFE_CONFIG.match(key):
+                return unseen(f"git -c {key} may name a command git runs")
+            i += 1 if a[2:] else 2
+            continue
+        if long_name(a, "--config-env"):
+            return unseen("git --config-env takes a setting from the environment, which may name a command")
+        if long_name(a, "--exec-path") and "=" in a:
+            return unseen("git --exec-path= runs git's commands from another folder")
+        i += 2 if a in GIT_VALUE_OPTIONS else 1
+    rest = args[i:]
+    v = rest[0] if rest else ""
+    sub = rest[1:]
+    if v not in GIT_READ:
+        return change(f"git {v}".strip())
+    if has(sub, "--output", "--ext-diff", "--exec-path"):
+        return change(f"git {v} writes a file or runs a program with these options")
+    if v == "branch":
+        if has(
+            sub, "-d", "-D", "-m", "-M", "-c", "-C", "-f", "-u", "-t", "--delete", "--move", "--copy", "--force",
+            "--set-upstream-to", "--unset-upstream", "--edit-description", "--track", "--no-track", "--create-reflog",
+        ):  # fmt: skip
+            return change("git branch makes, moves or deletes a branch")
+        if operands(sub, GIT_BRANCH_VALUES) and not has(sub, "-l", "--list"):
+            return change("git branch makes a branch")
+    if v == "remote" and next((a for a in sub if not a.startswith("-")), "") not in {"", "show", "get-url"}:
+        return change("git remote changes the remotes")
+    return read()
+
+
+# tar options that run a program, and those that take a value.
+TAR_RUNS = (
+    "--to-command",
+    "--use-compress-program",
+    "--checkpoint-action",
+    "--info-script",
+    "--new-volume-script",
+    "--rsh-command",
+    "--rmt-command",
+    "-I",
+    "-F",
+)
+TAR_VALUES = {
+    "-f", "-C", "-T", "-X", "-b", "-H", "-K", "-L", "-N", "-V", "-g", "--file", "--directory", "--files-from", "--exclude-from",
+    "--blocking-factor", "--format", "--starting-file", "--tape-length", "--newer", "--label", "--listed-incremental",
+    "--exclude", "--transform", "--owner", "--group", "--mode", "--mtime",
+}  # fmt: skip
+
+
+def packs_secrets(paths: list[str], protected: set[str]) -> str:
+    """The first of paths that holds secrets or the NullBill container."""
+    return next((a for a in paths if holds_secrets(a) or is_secret(a) or protected_ids([a], protected).tier == BLOCKED), "")
+
+
+def r_tar(args, protected):
+    old = args[0] if args and re.fullmatch(r"[A-Za-z]+", args[0]) else ""
+    if has(args, *TAR_RUNS) or any(c in old for c in "IF"):
+        return unseen("tar runs a program it is given (--to-command, -I, --use-compress-program, --checkpoint-action, -F)")
+    reading = any(c in old for c in "tx") or has(args, "-t", "-x", "--list", "--extract", "--get", "-d", "--diff", "--compare")
+    found = "" if reading else packs_secrets(operands(args[1:] if old else args, TAR_VALUES), protected)
+    if found:
+        return blocked(f"tar would pack {found}, which holds secrets; pack a narrower place")
+    return change("runs tar")
+
+
+def r_zip(args, protected):
+    if has(args, "-TT", "--unzip-command"):
+        return unseen("zip -TT runs a command of its choosing")
+    found = packs_secrets(operands(args, {"-b", "-n", "-t", "-tt", "-x", "-i", "-P", "-O", "--password"}), protected)
+    if found:
+        return blocked(f"zip would pack {found}, which holds secrets; pack a narrower place")
+    return change("runs zip")
+
+
+PS_VALUES = {"-C", "-G", "-g", "-p", "-q", "-s", "-t", "-U", "-u", "-o", "-O", "-k", "--format", "--pid", "--ppid", "--sort"}
+PS_VALUES |= {"--user", "--group", "--sid", "--tty", "--cols", "--columns", "--rows", "--width", "--quick-pid"}
+
+
+def r_ps(args, _p):
+    """ps e and the environ field show each process's environment, where
+    the agent CLI's own credential lives."""
+    value = False
+    for a in args:
+        if "environ" in a.lower():
+            return blocked("ps would show each process's environment, which holds secrets")
+        if value:
+            value = False
+            continue
+        if a in PS_VALUES:
+            value = True
+        elif re.fullmatch(r"[A-Za-z]+", a):
+            if "e" in a:
+                return blocked("ps e shows each process's environment, which holds secrets")
+            value = a[-1] in "oOkpqstUuGgC"
+        elif re.fullmatch(r"-[A-Za-z]+", a):
+            value = a[-1] in "oOkpqstUuGgC"
+    return read()
+
+
+def r_wg(args, _p):
+    v = verb(args)
+    if v == "showconf":
+        return blocked("wg showconf prints the tunnel's private key")
+    if v in {"", "show"}:
+        if {"dump", "private-key", "preshared-keys"} & set(args):
+            return blocked("prints the tunnel's keys")
+        return read()
+    if v in {"genkey", "genpsk", "pubkey", "--version", "--help", "help"}:
+        return read()
+    return change(f"wg {v} changes a tunnel")
+
+
+def r_pdbedit(args, _p):
+    flags = {a for a in args if a.startswith("-")}
+    if flags and flags <= {"-L", "--list", "-v", "--verbose", "-u", "--user", "-d", "--debuglevel"}:
+        return read()
+    return blocked("pdbedit shows or changes Samba's passwords; do that yourself")
+
+
+def r_man(args, _p):
+    if has(args, "-P", "--pager", "-H", "--html", "-X", "--gxditview", "-p", "--preprocessor"):
+        return unseen("man runs the program it is given")
+    return change("runs man")
+
+
+# Programs that run the code of the folder or package they are given.
+CODE_RUNNERS = {"make", "gmake", "ninja", "npm", "npx", "yarn", "pnpm", "pip", "pip3", "pipx", "cargo", "gem", "bundle", "bundler"}
+
+
 def pveum_lists(args: list[str]) -> bool:
     plain = [a for a in args if not a.startswith("-")]
     return (
@@ -1686,10 +2414,24 @@ def pveum_lists(args: list[str]) -> bool:
     )
 
 
+# Another process's view of the file system: it may be the NullBill
+# container's, whose id the path does not say.
+PROCESS_ROOT = re.compile(r"/proc/[^/\s]+/(task/[^/\s]+/)?(root|cwd|map_files)(/|$)")
+
+
 def protected_ids(tokens: list[str], protected: set[str]) -> Verdict:
+    """The NullBill container by every spelling of its files: its config,
+    its root file system while it runs, its volumes and its backups."""
     for token in tokens:
+        if token.startswith(("/nodes/", "nodes/")):
+            continue  # pvesh's API paths, which r_pvesh reads
+        path = normalise(token.split("=", 1)[-1])
+        if PROCESS_ROOT.search(path):
+            return blocked(f"touches {token}, another process's files, which may be the NullBill container's")
         for p in protected:
-            if re.search(rf"/lxc/{re.escape(p)}(\.conf|/|$)", token):
+            if not p.isdigit():
+                continue
+            if re.search(rf"/lxc/0*{p}(\.conf|/|$)|(subvol|vm|base)-{p}-disk|vzdump-(lxc|qemu)-{p}-|/(images|private)/{p}(/|$)", path):
                 return blocked(f"touches {token}, the NullBill container this page and the agent run in")
     return read()
 
@@ -1761,6 +2503,18 @@ RULES = {
     "pkill": r_kill,
     "killall": r_kill,
     "logger": lambda a, p: change("writes to the journal"),
+    "sort": r_sort,
+    "uniq": r_uniq,
+    "xxd": r_xxd,
+    "git": r_git,
+    "tar": r_tar,
+    "gtar": r_tar,
+    "bsdtar": r_tar,
+    "zip": r_zip,
+    "ps": r_ps,
+    "wg": r_wg,
+    "pdbedit": r_pdbedit,
+    "man": r_man,
 }
 
 
