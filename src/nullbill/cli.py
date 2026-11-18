@@ -1,12 +1,15 @@
 """nullbill command line. Only implemented subcommands are listed."""
 
 import argparse
+import contextlib
 import hashlib
 import json
+import signal
 import sys
+import threading
 
 from nullbill import browserca, lan, tailscale
-from nullbill.apply import STAGES, Context, SshReach, confirm_lan, run_apply, split_target
+from nullbill.apply import STAGES, Context, SshReach, clear_work, confirm_lan, run_apply, split_target
 from nullbill.artifacts import render_all, write_build
 from nullbill.errors import NullBillError
 from nullbill.home import REPO_ROOT, nullbill_home, refuse_on_pve_host
@@ -83,6 +86,8 @@ def cmd_apply(args: argparse.Namespace) -> int:
     if args.close_lan and args.open_lan:
         raise NullBillError("--close-lan and --open-lan contradict each other")
     target = reach_target(home, configured, plan)
+    for left in clear_work():
+        print(f"removed {left}, which a stopped run left behind")
     reach = SshReach(target, REPO_ROOT / ".ansible" / "collections")
     ctx = Context(
         plan,
@@ -163,6 +168,26 @@ def cmd_agent_tools(_args: argparse.Namespace) -> int:
     return serve()
 
 
+def _terminated(signum: int, _frame: object) -> None:
+    # Python's own SIGTERM ends the process at once, skipping every finally:
+    # a run stopped from the page left a playbook's vars file, with every
+    # secret it passes, in /tmp. As SystemExit, the run cleans up and ends.
+    raise SystemExit(128 + signum)
+
+
+@contextlib.contextmanager
+def exit_on_sigterm():
+    """SIGTERM as SystemExit(143) while the command runs."""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    before = signal.signal(signal.SIGTERM, _terminated)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, before)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="nullbill")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -194,9 +219,13 @@ def main(argv: list[str] | None = None) -> int:
     tools = sub.add_parser("agent-tools", help="the page agent's tools as an MCP server on stdio (the page starts it)")
     tools.set_defaults(func=cmd_agent_tools)
     args = parser.parse_args(argv)
+    # The page and the agent's tools are long-lived servers that end on
+    # SIGTERM as before; the commands a job runs clean up first.
+    terminating = contextlib.nullcontext() if args.command in ("web", "agent-tools") else exit_on_sigterm()
     try:
         refuse_on_pve_host()
-        return args.func(args)
+        with terminating:
+            return args.func(args)
     except NullBillError as exc:
         for message in exc.messages:
             print(f"nullbill: {message}", file=sys.stderr)

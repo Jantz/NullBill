@@ -20,6 +20,7 @@ import re
 import secrets
 import shlex
 import shutil
+import stat
 import subprocess
 import tempfile
 import time
@@ -3562,6 +3563,47 @@ def run_apply(ctx: Context, stages: list[Stage] = STAGES, only: str | None = Non
 SSH_RETRIES = 12
 
 
+# Each playbook's inventory and variables (with every secret it needs) sit
+# in a private folder named for the apply's process, removed as the playbook
+# ends (SshReach.playbook). A run stopped harder than SIGTERM, which the CLI
+# turns into SystemExit so that this happens, leaves its folder: the next
+# apply removes every one whose process has ended (clear_work).
+WORK_PREFIX = "nullbill-apply-"
+_STARTED = time.time()
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def clear_work(folder: Path | None = None) -> list[Path]:
+    """Removes the folders playbooks of earlier applies left behind: this
+    user's, whose process is gone (or, named before folders carried one,
+    older than this process)."""
+    gone = []
+    for path in Path(folder or tempfile.gettempdir()).glob(f"{WORK_PREFIX}*"):
+        try:
+            found = path.lstat()
+        except OSError:
+            continue
+        if not stat.S_ISDIR(found.st_mode) or found.st_uid != os.getuid():
+            continue
+        named = re.match(rf"{re.escape(WORK_PREFIX)}([0-9]+)-", path.name)
+        if named and (int(named[1]) == os.getpid() or _alive(int(named[1]))):
+            continue
+        if not named and found.st_mtime >= _STARTED:
+            continue
+        shutil.rmtree(path, ignore_errors=True)
+        gone.append(path)
+    return gone
+
+
 class SshReach:
     """The real Reach: ssh and ansible-playbook on the controller."""
 
@@ -3591,7 +3633,7 @@ class SshReach:
     def playbook(self, playbook: str, hosts: dict[str, dict], variables: dict) -> int:
         # Secrets reach Ansible through a 0600 file in a private directory that
         # is removed when the run ends; never through argv or build/.
-        work = Path(tempfile.mkdtemp(prefix="nullbill-apply-"))
+        work = Path(tempfile.mkdtemp(prefix=f"{WORK_PREFIX}{os.getpid()}-"))
         try:
             inventory = work / "inventory.json"
             values = work / "vars.json"

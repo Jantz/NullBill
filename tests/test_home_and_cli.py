@@ -1,10 +1,16 @@
 import json
+import os
+import signal
+import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
 import yaml
 from conftest import fixture_config, write_raw
 
+from nullbill import apply, cli
 from nullbill.cli import main
 from nullbill.errors import NullBillError
 from nullbill.home import REPO_ROOT, nullbill_home
@@ -111,3 +117,70 @@ def test_verify_without_target_skips_and_exits_zero(tmp_path, monkeypatch, capsy
     out = capsys.readouterr().out.splitlines()
     assert out[-1].startswith("0 PASS, 0 FAIL, ") and out[-1].endswith(" SKIP, 1 DEGRADED")
     assert out[0].startswith("DEGRADED backups: the backups are on the disk the server runs from")
+
+
+STOPPED_RUN = """
+import pathlib, sys
+from nullbill import apply, cli
+with cli.exit_on_sigterm():
+    apply.SshReach("root@192.0.2.10", pathlib.Path(sys.argv[1])).playbook("router.yml", {}, {"files_share_password": "s3cret"})
+"""
+
+
+def test_a_run_stopped_from_the_page_removes_its_playbooks_secrets(tmp_path):
+    # Stop this run sends SIGTERM to every process of the job. Python's own
+    # SIGTERM skipped the finally that removes the playbook's vars file.
+    bin_dir, tmp = tmp_path / "bin", tmp_path / "tmp"
+    bin_dir.mkdir()
+    tmp.mkdir()
+    fake = bin_dir / "ansible-playbook"
+    fake.write_text("#!/bin/sh\nexec sleep 60\n")
+    fake.chmod(0o755)
+    script = tmp_path / "run.py"
+    script.write_text(STOPPED_RUN)
+    src = str(Path(__file__).parent.parent / "src")
+    env = os.environ | {"TMPDIR": str(tmp), "PATH": f"{bin_dir}:{os.environ['PATH']}", "PYTHONPATH": src}
+    run = subprocess.Popen([sys.executable, str(script), str(tmp_path)], env=env)
+    deadline = time.monotonic() + 30
+    while not list(tmp.glob("nullbill-apply-*/vars.json")) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    [work] = list(tmp.glob("nullbill-apply-*"))
+    assert work.name.startswith(f"nullbill-apply-{run.pid}-") and "s3cret" in (work / "vars.json").read_text()
+    time.sleep(0.2)
+    run.send_signal(signal.SIGTERM)
+    assert run.wait(timeout=30) == 128 + signal.SIGTERM
+    assert not work.exists()
+
+
+def test_apply_removes_what_ended_runs_left_and_nothing_in_use(tmp_path, monkeypatch):
+    ended = subprocess.Popen(["true"])
+    ended.wait()
+    names = {
+        "ended": f"nullbill-apply-{ended.pid}-abc",
+        "mine": f"nullbill-apply-{os.getpid()}-abc",
+        "running": f"nullbill-apply-{os.getppid()}-abc",
+        "older": "nullbill-apply-k2j3h4",
+        "newer": "nullbill-apply-x9y8z7",
+    }
+    for name in names.values():
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "vars.json").write_text("{}")
+    past = time.time() - 3600
+    os.utime(tmp_path / names["older"], (past, past))
+    monkeypatch.setattr(apply, "_STARTED", time.time() - 60)
+    (tmp_path / "nullbill-apply-file").write_text("not a folder")
+    gone = apply.clear_work(tmp_path)
+    assert sorted(p.name for p in gone) == sorted([names["ended"], names["older"]])
+    kept = [names["mine"], names["running"], names["newer"], "nullbill-apply-file"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == sorted(kept)
+
+
+def test_the_commands_a_job_runs_clean_up_on_sigterm_and_the_page_does_not(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(cli, "refuse_on_pve_host", lambda: None)
+    monkeypatch.setattr(cli, "cmd_verify", lambda _args: seen.setdefault("verify", signal.getsignal(signal.SIGTERM)) and 0)
+    monkeypatch.setattr(cli, "cmd_web", lambda _args: seen.setdefault("web", signal.getsignal(signal.SIGTERM)) and 0)
+    before = signal.getsignal(signal.SIGTERM)
+    assert main(["verify"]) == 0 and main(["web"]) == 0
+    assert seen["verify"] is cli._terminated and seen["web"] is before
+    assert signal.getsignal(signal.SIGTERM) is before
