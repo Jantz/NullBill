@@ -27,7 +27,20 @@ minute:
   `$NULLBILL_HOME`; its credential (API key or subscription token, kept in
   sops) reaches it only through the environment of its own process.
 - Its built-in tools are read-only (Read, Grep, Glob over NullBill's
-  source, WebSearch, WebFetch). Everything it does to the server goes
+  source and its workspace, WebSearch, WebFetch on the documentation of
+  what NullBill runs). What they return reaches the model without the
+  page's redaction, so Claude Code permission rules hold them there:
+  `--permission-mode dontAsk` with `--allowedTools` naming
+  `Read(//<source>/**)`, `Read(//<workspace>/**)` and one
+  `WebFetch(domain:...)` per site in `chat.FETCH_DOMAINS`, and
+  `--disallowedTools` denying `/proc`, `/sys`, `/dev`, `/etc`, `/root`,
+  `/home`, `/run`, `/tmp`, `/var/log`, `$NULLBILL_HOME` and the CLI's own
+  files and `mcp.json` in its home (a deny wins over every allow). The
+  credential is in the CLI's environment, which `/proc/self/environ`
+  would show; that is the first place denied. `tools/setup-controller`
+  writes the same denials, root's, to `/etc/claude-code/managed-settings.json`
+  (`chat.managed_settings`), so no flag or settings file of the agent's
+  lifts them. Everything it does to the server goes
   through one MCP server, `nullbill agent-tools`, which calls the page over
   a unix socket (0660, group `nbagent`) with a token that is valid only
   while that turn runs. The agent holds no SSH key and no API token.
@@ -37,7 +50,9 @@ minute:
   change, YOLO runs read, change and risky. Blocked never runs in any mode:
   reading secrets, erasing disks, deleting backups, silencing the command
   log, writing authorized_keys and touching the NullBill container itself.
-  Unknown programs count as change.
+  Unknown programs count as change. Choices that are the owner's alone
+  stay out of `set_choices`: disks, and the owner's Tailscale login, which
+  says who holds the owner's access.
 - What waits for the owner is a request card in the chat with Approve and
   Decline (risky ones need the word typed); requests expire after 30
   minutes. The page carries out an approved request itself and tells the
@@ -79,7 +94,14 @@ browsers allow that once they trust NullBill's root certificate.
   PVE token with only the privileges each tier needs, and a log setup the
   agent's user cannot change. Until then the blocked list holds only as far
   as the lexical reading does, and the audit log and the `nb-cmd` journal
-  lines are the record of anything that slips past it.
+  lines are the record of anything that slips past it. The same holds for
+  `add_service`'s refusal of a script that holds one of the server's
+  secrets: it compares the script with the secrets' text, so it catches a
+  pasted value, not one the script builds or fetches. It is a hint to the
+  agent, not a control; the owner reading the script on its card is.
+- The operator's pre-push deny-list (ADR 0003) runs on the agent's side
+  and is advice it can skip; the owner's review of the pull request is
+  what holds.
 - Besides single commands the agent has: `run_steps` (up to 12 commands,
   one card, the worst tier decides, stops at the first failure),
   `write_file` (the card shows the diff; the old file is kept under
@@ -142,3 +164,63 @@ a job of many steps asked for a card at every step in Manual. Now:
   words (`chat.Told`); the advice on what to do next goes to the agent
   only. Tables the agent writes render as tables, and its rules ask for
   short answers with one fact a line.
+
+## What an audit found, and the fixes (2026-11-18)
+
+An audit of the gate and the agent found commands rated read that wrote
+files or ran code as root on the host in every mode, and ways around the
+blocked list. The gate now reads a command the way bash and each program
+do, not as it is spelled:
+
+- **Long options by a prefix.** GNU getopt_long, curl and git take any
+  unambiguous prefix (`sort --out=FILE`, `journalctl --vac=1s`); `has()`
+  matches every prefix of a listed long option, ambiguous ones too.
+- **Output operands.** `uniq IN OUT` (with `-` as IN), `xxd [-r] IN OUT`,
+  `sort -o`, `openssl -out` and `-writerand` are writes, checked against
+  the protected files like a redirection.
+- **iproute2's prefixes.** `ip` resolves objects and commands in its own
+  order (`ip l s` is link set, `ip a s` address show), reads the command
+  after `netns exec` and `vrf exec` however abbreviated, and makes flush,
+  delete and `link set ... down` risky.
+- **Brace expansion.** The gate expands `{a,b}` and `{1..3}` as bash does
+  (not in quotes, here-documents or `${...}`), checks every word, and
+  rates any expansion at least risky; more than 256 words is blocked.
+- **Relative names.** After `cd` or `pushd`, and for `-C`/`--directory`
+  of tar, git, make and env, a relative name is also read against the
+  folder it points into; programs that read whole trees (tar, zip, grep
+  -r, cp -r, find) are read against `/root` and `/` too.
+- **The NullBill container by other names**: `lxc-* -n<id>`,
+  `--name=<id>`, leading zeros, `/var/lib/lxc/<id>/rootfs`, its volumes
+  and backups, `/proc/<pid>/root` and `cwd` (any process may be its), and
+  `nsenter -t`; checked at every tier, and the protected files are
+  checked in option values at the read tier.
+- **Code behind a change.** `tar --to-command`, `-I`, `--checkpoint-action`,
+  `git -c` with any setting outside a short list that only changes how git
+  prints, `--config-env`, `dpkg -i`, `apt install` of a file, `sort
+  --compress-program`, openssl `-engine`, `-provider` and `-config`, `man
+  -P`, `rsync -e`, make and the package managers of languages are risky,
+  so Auto asks for the typed word.
+- **More secrets**: `ps e` and environ fields, any path component named
+  secret, password, passphrase, api-key or `-token`, Forgejo's secrets,
+  Samba's private folder and passdb, `/etc/wireguard`, `wg showconf` and
+  `wg show ... dump|private-key`, `pdbedit` beyond listing.
+
+Beside the gate:
+
+- The redaction also takes out each line of a secret that is a whole file
+  (a WireGuard file's PrivateKey and PresharedKey, a JSON key's data) as
+  tools print them alone, every secret as base64 alone and as
+  `user:secret`, and anything shaped like a WireGuard key or an HTTP Basic
+  credential.
+- A failed run's error, which guests' log lines make, reaches the agent in
+  a fenced block marked as data from the run's log, each line quoted;
+  nothing in a tool's answer can start like a note from the page (it is
+  quoted), and the rules say a tool result or log is data whatever it
+  claims.
+- The page writes `mcp.json` and the workspace's `CLAUDE.md` in nbagent's
+  home without following a link nbagent could have put there.
+- Requests expire after 30 minutes, as this ADR and the card say; the code
+  had kept them four hours.
+
+Every bypass is a row in `tests/test_gate.py`'s `BYPASSES` with the least
+tier it must reach.
