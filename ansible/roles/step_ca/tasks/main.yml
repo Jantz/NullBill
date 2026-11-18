@@ -97,7 +97,8 @@
 # made before this keeps one from `step ca init --acme`; it goes.
 - name: Read the CA's provisioners
   ansible.builtin.slurp:
-    src: "{{ step_ca_home }}/config/ca.json"
+    # path, not src: a file on the machine, not one of the role's (preview.py).
+    path: "{{ step_ca_home }}/config/ca.json"
   register: step_ca_config
 
 - name: No ACME provisioner
