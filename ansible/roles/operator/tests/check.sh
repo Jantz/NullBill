@@ -212,7 +212,7 @@ test "$(su - agent -c "ssh -o ControlPath=/tmp/agent-cm pve 'echo through-master
 su - agent -c "ssh -o BatchMode=yes pve 'sleep 307'" </dev/null >/dev/null 2>&1 &
 owner_ssh 'sleep 311' >/dev/null 2>&1 &
 for _ in $(seq 20); do pgrep -fx 'sleep 307' >/dev/null && pgrep -fx 'sleep 311' >/dev/null && break; sleep 0.5; done
-pgrep -fx 'sleep 307' >/dev/null && pgrep -fx 'sleep 311' >/dev/null || fail "the long commands did not start"
+{ pgrep -fx 'sleep 307' && pgrep -fx 'sleep 311'; } >/dev/null || fail "the long commands did not start"
 switch off || fail "the switch's off command"
 test ! -e /etc/nullbill/agent-root-on || fail "the switch's flag stayed"
 ! grep -q ' nullbill-agent-root$' /root/.ssh/authorized_keys || fail "the switch's line stayed"
