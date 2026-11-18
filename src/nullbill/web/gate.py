@@ -573,10 +573,7 @@ def classify(command: str, protected: set[str] | None = None, depth: int = 0) ->
     for argv in segments:
         if not argv:
             continue
-        verdict = verdict.worse(program(argv, protected, depth))
-        if verdict.tier == BLOCKED:
-            return verdict
-        verdict = verdict.worse(relative_names(argv, cwd, protected, depth))
+        verdict = verdict.worse(program(argv, protected, depth, cwd))
         if verdict.tier == BLOCKED:
             return verdict
         cwd = moved_to(argv, cwd)
@@ -1013,8 +1010,9 @@ def writes_file(target: str, protected: set[str]) -> Verdict:
     return change(f"writes {target}")
 
 
-def program(argv: list[str], protected: set[str], depth: int = 0) -> Verdict:
-    """The tier of one simple command."""
+def program(argv: list[str], protected: set[str], depth: int = 0, cwd: str | None = None) -> Verdict:
+    """The tier of one simple command, its relative names read from cwd
+    (None: where a command starts)."""
     while argv and argv[0] in KEYWORDS:
         argv = argv[1:]
     if not argv:
@@ -1029,7 +1027,11 @@ def program(argv: list[str], protected: set[str], depth: int = 0) -> Verdict:
         argv = argv[1:]
     if not argv:
         return verdict.worse(change("sets shell variables"))
-    return verdict.worse(command(argv, protected, depth))
+    verdict = verdict.worse(command(argv, protected, depth))
+    if verdict.tier == BLOCKED:
+        return verdict
+    # Also for a command a wrapper, pct exec or find -exec runs.
+    return verdict.worse(relative_names(argv, cwd, protected, depth))
 
 
 def assignment(token: str) -> Verdict:

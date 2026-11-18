@@ -536,6 +536,11 @@ BYPASSES = [
     ("pdbedit -w -L", B),
     # Its restore test printed a file of a backup (another fix stops that).
     ("cat /var/lib/nullbill/restore-test.json", C),
+    # Relative names in a command a wrapper, pct exec or find -exec runs.
+    ("pct exec 105 -- tar c -C /etc nullbill", B),
+    ("timeout 5 tar c -C /root .ssh", B),
+    ("cd /root/.ssh && timeout 5 cat id_ed25519", B),
+    ("find /root -exec cat {} +", B),
 ]
 
 
