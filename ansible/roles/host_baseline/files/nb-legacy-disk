@@ -129,9 +129,9 @@ list() {
 
 metrics() {
   out=$textfiles/nullbill-legacy.prom
-  lines=$(list | while read -r name _ mode _ state; do
+  lines=$(list | while read -r disk _ mode _ state; do
     case $state in mounted | unflagged) up=1 ;; *) up=0 ;; esac
-    echo "nb_legacy_disk_mounted{name=\"$name\",mode=\"$mode\"} $up"
+    echo "nb_legacy_disk_mounted{name=\"$disk\",mode=\"$mode\"} $up"
   done)
   if [ -z "$lines" ]; then
     rm -f "$out"

@@ -45,7 +45,7 @@ chmod 600 /root/secret
 mv /var/lib/minecraft/server.properties /tmp/server.properties
 runuser -u game -- ln -s /root/secret /var/lib/minecraft/server.properties
 if echo '{"motd": "x"}' | nb-properties /var/lib/minecraft/server.properties 2>/tmp/link.err; then fail "nb-properties wrote through a link"; fi
-[ "$(cat /root/secret)" = "root's own" ] && [ "$(stat -c '%U %a' /root/secret)" = "root 600" ] || fail "root's file a link named is as it was"
+if ! { [ "$(cat /root/secret)" = "root's own" ] && [ "$(stat -c '%U %a' /root/secret)" = "root 600" ]; }; then fail "root's file a link named is as it was"; fi
 rm /var/lib/minecraft/server.properties
 mv /tmp/server.properties /var/lib/minecraft/server.properties
 pass "nb-properties follows no link the game user left, and sets its keys as that user"

@@ -166,7 +166,7 @@ code=$(curl -sS --cacert /tmp/pki/ca.crt -o /dev/null -w '%{http_code}' -H "X-Ap
 # A browser's CORS preflight carries no key and is not nginx's to refuse.
 code=$(curl -sS --cacert /tmp/pki/ca.crt -o /dev/null -w '%{http_code}' -X OPTIONS "$url/v1/chat/completions" \
   -H 'Origin: https://example.internal' -H 'Access-Control-Request-Method: POST' -H 'Access-Control-Request-Headers: authorization')
-[ "$code" != 401 ] && [ "$code" != 404 ] || fail "a CORS preflight reaches LiteLLM (got $code)"
+if ! { [ "$code" != 401 ] && [ "$code" != 404 ]; }; then fail "a CORS preflight reaches LiteLLM (got $code)"; fi
 pass "the clients' key reaches the OpenAI paths alone; LiteLLM's admin routes take only its own key, which stays in the guest"
 
 # After the requests above the gateway is in use for two minutes, and for

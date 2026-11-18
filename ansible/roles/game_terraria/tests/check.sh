@@ -199,7 +199,7 @@ runuser -u game -- ln -s /etc /var/lib/terraria/worlds/etc
 world use w2 || { cat /tmp/world.json; fail "to the second world"; }
 world use w1 || { cat /tmp/world.json; fail "back to the first"; }
 [ -z "$(find /var/lib/terraria/worlds -type l)" ] || fail "a world that came back keeps the links left in it"
-[ "$(stat -c '%U %a' /root/secret)" = "root 600" ] && [ "$(stat -c '%U %a' /etc)" = "root 755" ] || fail "what the links named is as it was"
+if ! { [ "$(stat -c '%U %a' /root/secret)" = "root 600" ] && [ "$(stat -c '%U %a' /etc)" = "root 755" ]; }; then fail "what the links named is as it was"; fi
 [ "$(cat /root/secret)" = "root's own" ] || fail "root's file is unchanged"
 pass "a world comes back without the links the game user left in it, and nothing they named changed owner"
 
