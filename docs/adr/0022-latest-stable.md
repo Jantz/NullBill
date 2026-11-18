@@ -74,9 +74,27 @@ waits for it and only then fast-forwards main. If a check fails, main keeps yest
 issue says so. A vendor that cannot be read keeps its pin; the others
 move. Nothing ever moves back.
 
-**2. On the server: main is followed nightly.** Between 03:00 and 06:00
-the page looks for an update, installs it (`nullbill upgrade`) and, when
-the update changes what setup builds, runs setup. The owner gets one ntfy
+Amended 2026-11-18, after a review: vendors' answers, PyPI's packages and
+the tests run in a job whose token can write nothing, and what they leave
+is only a patch. A job that runs nothing but git applies it, refuses it
+unless every file it changes is pin data (`PIN_PATHS`, equal to
+`pins.paths()`), pushes it to `pins`, and the job that fast-forwards main
+checks the same again. A vendor's answer is never written as it came:
+`pins.WRITES` says what each value may look like (a version, a hash of
+its length, an address on the vendor's own host), since Ansible templates
+these files, and apt versions are read only from an index the
+repository's signed InRelease names.
+
+**2. On the server: main's pins are followed nightly.** Between 03:00 and
+06:00 the page looks for an update, installs it (`nullbill upgrade`) and,
+when the update changes what setup builds, runs setup. It installs by
+itself only a range that changes nothing but pin data: the keys
+`tools/pins bump` writes, each to a value a pin may hold, and the files
+the tests regenerate (`version.not_pins`, amended 2026-11-18). main takes
+pushes from more than the daily job, the agents' GitHub token among them,
+and an update runs as root on the controller; anything else waits for
+the owner's **Update NullBill**, and ntfy says so once per waiting
+commit. The owner gets one ntfy
 message when something was installed or something waits. A switch on the
 Updates page turns it off. It does not run setup over choices the owner
 saved and has not started, or over guests waiting to be deleted, and it
@@ -170,7 +188,9 @@ a version.
   commit. The issue names the run. Splitting them is future work.
 - The daily job pushes to main with the repository's own token. It
   changes pins, the files tests regenerate, and LiteLLM's lock; nothing
-  else.
+  else, and both its git job and the server refuse anything else.
+- A change to NullBill itself reaches a server only when its owner
+  presses Update NullBill.
 - Services restart at night when their version moved. A game server with
   players on it is restarted too; the nightly window is the mitigation.
 - First use on a server built before this: the Updates page shows Debian

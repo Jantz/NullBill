@@ -24,6 +24,10 @@ You need: nothing. It is on unless you turn it off on **Updates**.
 3. You get one message on your alert topic when something was installed
    and set up, and one when something waits for you.
 
+The night installs only new versions of programs. An update that changes
+NullBill itself waits for you: **Updates** says so, you get one message,
+and **Update NullBill** installs it.
+
 The night sets up only what the night installed. After an update you
 installed yourself, or a nightly setup run that failed, setup waits for
 you under **Setup**, **Review and run**.

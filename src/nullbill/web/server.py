@@ -2357,8 +2357,10 @@ class App:
         by: str = "owner",
         guests: list[str] | None = None,
         review: str | None = None,
+        upgrade_to: str | None = None,
     ) -> Job:
-        """review: the id of the review the owner started a setup run from."""
+        """review: the id of the review the owner started a setup run from.
+        upgrade_to: the nightly's update, to that commit and pin data only."""
         if action == "keep-lan-closed" and not self.via_vpn(client):
             raise NullBillError("press Keep it closed on the page opened over Tailscale; that press is what shows Tailscale works")
         fixed = LAN_ACTIONS | SCHEDULED | REMOVE_ACTIONS
@@ -2383,6 +2385,8 @@ class App:
             now = time.time()
             job_id = time.strftime("%Y%m%dT%H%M%S", time.localtime(now)) + f"{int(now * 1000) % 1000:03d}-{action}"
             args = fixed[action] if action in fixed else [action] + (["--stage", stage] if stage else [])
+            if action == "upgrade" and upgrade_to:
+                args = [*args, "--only-pins", "--to", upgrade_to]
             job = Job(job_id, action, args, jobs / f"{job_id}.log", time.time(), by=by)
             # The page's own agent announces setup runs and updates; the
             # owner approved or allowed the rest on the page.
@@ -2556,10 +2560,11 @@ class App:
             head = version.head(self.repo)
             if upgrade.unfinished(self.home, head):
                 # The checkout is there, the programs around it are not:
-                # upgrade does that half again. Setup follows as for any
-                # update, so only after one the night installed (`to`).
+                # upgrade does that half again, of this commit and no
+                # other. Setup follows as for any update, so only after
+                # one the night installed (`to`).
                 try:
-                    job = self.start("upgrade", by=NIGHTLY_BY)
+                    job = self.start("upgrade", by=NIGHTLY_BY, upgrade_to=head)
                 except NullBillError:
                     return None
                 keep(step="updating", job=job.id)
@@ -2573,8 +2578,13 @@ class App:
                 names = ", ".join(f"{s['title']} {s['from']} to {s['to']}" for s in asks)
                 end("waits", f"An update waits for your yes: {names}. Open Updates on the page.", tell=True)
                 return None
+            if version.not_pins(self.repo, head, newest):
+                # Anyone who can push to main could otherwise run code as
+                # root here overnight: only the daily pins install unasked.
+                end("waits", f"An update of NullBill's own code waits for you: {newest[:12]}. Open Updates on the page.", tell=True)
+                return None
             try:
-                job = self.start("upgrade", by=NIGHTLY_BY)
+                job = self.start("upgrade", by=NIGHTLY_BY, upgrade_to=newest)
             except NullBillError:
                 # Something else began this minute; the next one looks again.
                 return None
@@ -2841,6 +2851,8 @@ class App:
                 "available": version.changes(self.repo, head, newest) if ahead else [],
                 # The versions the waiting update moves; `asks` waits for the owner.
                 "steps": self.update_steps(head, newest) if ahead else [],
+                # Pin data alone installs at night; anything else waits for Update NullBill.
+                "pins_only": not version.not_pins(self.repo, head, newest) if ahead else None,
                 "server": server,
                 "last": last,
                 "docs": version.docs(self.repo, head),

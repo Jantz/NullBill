@@ -66,9 +66,18 @@ def unfinished(home: Path, head: str | None) -> bool:
     return bool(head) and last.get("to") == head and last.get("finished") is False
 
 
-def upgrade(root: Path, home: Path, say: Callable[[str], None] = print, finish: Callable[[Sequence[str]], None] = _finish) -> str | None:
+def upgrade(
+    root: Path,
+    home: Path,
+    say: Callable[[str], None] = print,
+    finish: Callable[[Sequence[str]], None] = _finish,
+    only_pins: bool = False,
+    to: str | None = None,
+) -> str | None:
     """The commit NullBill moved to (or finished moving to), or None when
-    it already was there."""
+    it already was there. to: move to this commit of main's, not further.
+    only_pins: refuse a move that changes more than pin data (the nightly's:
+    anything else waits for the owner's Update NullBill)."""
     if not (root / ".git").exists():
         raise NullBillError(f"{root} is not a git checkout; install NullBill with install.sh to update it this way")
     if _git(root, "status", "--porcelain", "--untracked-files=no"):
@@ -76,6 +85,10 @@ def upgrade(root: Path, home: Path, say: Callable[[str], None] = print, finish: 
     old = _git(root, "rev-parse", "HEAD")
     _git(root, "fetch", "--quiet", "origin", BRANCH)
     new = _git(root, "rev-parse", "FETCH_HEAD")
+    if to is not None:
+        if subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", to, new], check=False).returncode != 0:
+            raise NullBillError(f"{to[:12]} is not a commit of {BRANCH}'s")
+        new = _git(root, "rev-parse", f"{to}^{{commit}}")
     argv = [*FINISH, "-p", f"Environment=NULLBILL_HOME={home}", "-p", "Environment=HOME=/root", str(root / "tools" / "finish-upgrade")]
     path = home / LAST
     if new == old:
@@ -90,6 +103,12 @@ def upgrade(root: Path, home: Path, say: Callable[[str], None] = print, finish: 
     ahead = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", new, old], check=False).returncode == 0
     if ahead:
         raise NullBillError(f"{root} is at {old[:12]}, newer than {BRANCH} ({new[:12]}); NullBill does not go back by itself")
+    if only_pins:
+        from nullbill import version
+
+        why = version.not_pins(root, old, new)
+        if why:
+            raise NullBillError(f"{new[:12]} changes more than pinned versions ({why[0]}); it waits for Update NullBill on Updates")
     say(f"Updating NullBill from {old[:12]} to {new[:12]}:")
     say(_git(root, "log", "--format=  %h %s", f"{old}..{new}") or f"  (from {old[:12]}, which {BRANCH} no longer holds)")
     _git(root, "checkout", "--quiet", "--detach", new)

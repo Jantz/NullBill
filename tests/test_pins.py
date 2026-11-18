@@ -4,6 +4,7 @@ import hashlib
 import importlib.machinery
 import importlib.util
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -173,6 +174,32 @@ def test_every_job_of_a_workflow_has_steps_or_calls_one():
             assert not {"run", "shell"} & set(job), f"{path.name}: {name}"
             for step in job.get("steps", []):
                 assert ("uses" in step) != ("run" in step), f"{path.name}: {name}"
+
+
+def test_the_daily_job_gives_main_pin_data_alone_and_its_token_to_no_vendor_code():
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "pins.yml").read_text())
+    # The server's nightly and the workflow take the same files as pin data.
+    assert [line for line in workflow["env"]["PIN_PATHS"].splitlines() if line] == pins.paths()
+    jobs = workflow["jobs"]
+    # Vendors' answers, PyPI's packages and the tests run where nothing can be written.
+    bump = jobs["bump"]
+    assert bump["permissions"] == {"contents": "read"}
+    assert all(step.get("with", {}).get("persist-credentials") is False for step in bump["steps"] if "checkout" in step.get("uses", ""))
+    for name, job in jobs.items():
+        if job.get("permissions", {}).get("contents") == "write":
+            runs = "\n".join(step.get("run", "") for step in job["steps"])
+            assert not [word for word in ("pip ", "pytest", "tools/pins bump", "uv ") if word in runs], name
+            assert all(
+                step.get("with", {}).get("persist-credentials") is False for step in job["steps"] if "checkout" in step.get("uses", "")
+            )
+            # Refused unless every changed file is pin data, before each push.
+            assert runs.count("PIN_PATHS") == 1 and runs.index("PIN_PATHS") < runs.index("push"), name
+    # Every action pinned by its commit.
+    for job in jobs.values():
+        for step in job.get("steps", []):
+            if "uses" in step:
+                assert re.fullmatch(r"[\w-]+/[\w-]+@[0-9a-f]{40}", step["uses"]), step["uses"]
+    assert "--no-build" in (ROOT / "tools" / "pins").read_text()
 
 
 def test_every_role_that_installs_step_cli_pins_the_same_one():

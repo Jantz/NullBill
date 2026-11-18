@@ -1,8 +1,9 @@
 name: pins
 # Latest stable, daily (docs/adr/0022-latest-stable.md): move every pin in
 # src/nullbill/data/pins.yaml to its vendor's newest stable release, run
-# every check on the result, and only then give it to main. Servers follow
-# main each night.
+# every check on the result, and only then give it to main. Servers install
+# such a commit by themselves at night only when it changes nothing but pin
+# data (nullbill/version.py's not_pins).
 on:
   schedule:
     - cron: "17 1 * * *"
@@ -15,17 +16,44 @@ concurrency:
   group: pins
   cancel-in-progress: false
 
+env:
+  # The files pin data may change, one regex each: pins.paths() (a test keeps
+  # the two equal). A commit that changes any other file, or one of these
+  # other than in place as a plain file, never reaches the branch or main.
+  PIN_PATHS: |
+    ^ansible/roles/forgejo/defaults/main\.yml$
+    ^ansible/roles/ci_runner/defaults/main\.yml$
+    ^ansible/roles/monitoring/defaults/main\.yml$
+    ^ansible/roles/step_ca/defaults/main\.yml$
+    ^ansible/roles/operator/defaults/main\.yml$
+    ^ansible/roles/tls_cert/defaults/main\.yml$
+    ^ansible/roles/vpn/defaults/main\.yml$
+    ^ansible/roles/jellyfin/defaults/main\.yml$
+    ^ansible/roles/qbittorrent/defaults/main\.yml$
+    ^ansible/roles/inference/defaults/main\.yml$
+    ^ansible/roles/model_gateway/defaults/main\.yml$
+    ^src/nullbill/data/catalog\.yaml$
+    ^ansible/roles/model_gateway/files/requirements\.in$
+    ^ansible/roles/model_gateway/files/requirements\.txt$
+    ^tests/golden/[A-Za-z0-9._-]+\.(yaml|txt)$
+    ^ansible/roles/game_[a-z]+/tests/vars\.json$
+    ^ansible/roles/game_minecraft/tests/(paper|fabric)\.json$
+
 jobs:
+  # Vendors' answers, PyPI's packages and the tests run here, with a token
+  # that can write nothing: what they leave is only a patch.
   bump:
     name: move the pins
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
+      contents: read
     outputs:
-      sha: ${{ steps.commit.outputs.sha }}
+      moved: ${{ steps.patch.outputs.moved }}
       unread: ${{ steps.bump.outputs.unread }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - name: Install Python packages and uv
         run: |
           python3 -m venv /tmp/venv
@@ -39,21 +67,61 @@ jobs:
           cat "$RUNNER_TEMP/moved.txt" "$RUNNER_TEMP/unread.txt"
           # 3: some vendor could not be read; the other pins moved.
           [ "$rc" = 0 ] || [ "$rc" = 3 ] || exit "$rc"
+          # A delimiter no vendor's answer can hold.
+          end="END-$(openssl rand -hex 16)"
           {
-            echo "unread<<END-OF-UNREAD"
+            echo "unread<<$end"
             cat "$RUNNER_TEMP/unread.txt"
-            echo "END-OF-UNREAD"
+            echo "$end"
           } >> "$GITHUB_OUTPUT"
       # Rendered files and each role check's variables carry the versions.
       - name: Regenerate what the tests keep equal to the pins
         run: UPDATE_GOLDEN=1 python3 -m pytest -q
-      - name: Commit to the pins branch
-        id: commit
+      - name: Make the patch
+        id: patch
         run: |
-          if git diff --quiet; then
+          mkdir "$RUNNER_TEMP/pins"
+          cp "$RUNNER_TEMP/moved.txt" "$RUNNER_TEMP/pins/moved.txt"
+          git add -A
+          git diff --cached --binary > "$RUNNER_TEMP/pins/pins.patch"
+          if [ -s "$RUNNER_TEMP/pins/pins.patch" ]; then
+            echo "moved=true" >> "$GITHUB_OUTPUT"
+          else
             echo "Nothing moved."
-            exit 0
           fi
+      - if: steps.patch.outputs.moved == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pins
+          path: ${{ runner.temp }}/pins
+          retention-days: 3
+
+  # A fresh runner that runs nothing but git: applies the patch to the same
+  # commit, refuses it unless it is pin data, and pushes it to `pins`.
+  commit:
+    name: commit to the pins branch
+    needs: bump
+    if: needs.bump.outputs.moved == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: pins
+          path: ${{ runner.temp }}/pins
+      - name: Commit the patch if it is pin data
+        id: commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git apply --index "$RUNNER_TEMP/pins/pins.patch"
           # As main's last commit: the owner's noreply identity.
           git config user.name "$(git log -1 --format=%an)"
           git config user.email "$(git log -1 --format=%ae)"
@@ -62,11 +130,19 @@ jobs:
             echo
             echo "The daily run of tools/pins (docs/adr/0022-latest-stable.md):"
             echo
-            cat "$RUNNER_TEMP/moved.txt"
+            cat "$RUNNER_TEMP/pins/moved.txt"
           } > "$RUNNER_TEMP/message.txt"
-          git add -A
           git commit -q -F "$RUNNER_TEMP/message.txt"
-          git push -f origin HEAD:refs/heads/pins
+          # Plain files changed in place, each at a path pin data may change.
+          changed=$(git diff --raw --no-renames --no-abbrev HEAD^ HEAD | awk '$1 != ":100644" || $2 != "100644" || $5 != "M"')
+          others=$(git diff --name-only --no-renames HEAD^ HEAD | grep -vxEf <(printf '%s\n' "$PIN_PATHS" | sed '/^$/d') || true)
+          if [ -n "$changed$others" ]; then
+            printf 'Not pin data:\n%s\n%s\n' "$changed" "$others"
+            exit 1
+          fi
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          echo "::add-mask::$auth"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push -q -f origin HEAD:refs/heads/pins
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
   # check.yml runs on the branch, as a run of its own (a workflow started by
@@ -74,15 +150,15 @@ jobs:
   # versions do there stays with that branch.
   check:
     name: run every check on it
-    needs: bump
-    if: needs.bump.outputs.sha != ''
+    needs: commit
+    if: needs.commit.outputs.sha != ''
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     permissions:
       actions: write
     env:
       GH_TOKEN: ${{ github.token }}
-      SHA: ${{ needs.bump.outputs.sha }}
+      SHA: ${{ needs.commit.outputs.sha }}
     steps:
       - name: Start check.yml on the pins branch
         run: gh workflow run check.yml -R "$GITHUB_REPOSITORY" --ref pins
@@ -102,22 +178,39 @@ jobs:
 
   land:
     name: give it to main
-    needs: [bump, check]
+    needs: [commit, check]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SHA: ${{ needs.commit.outputs.sha }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ needs.bump.outputs.sha }}
+          ref: ${{ needs.commit.outputs.sha }}
           fetch-depth: 0
-      # Fast-forward only: when main moved meanwhile, tomorrow's run starts
-      # from the new main.
-      - run: git push origin HEAD:refs/heads/main
+          persist-credentials: false
+      # Once more against main as it is now, the commit checked: one commit
+      # of pin data on top of main. Fast-forward only: when main moved
+      # meanwhile, tomorrow's run starts from the new main.
+      - name: Fast-forward main if it is pin data
+        run: |
+          git merge-base --is-ancestor origin/main "$SHA"
+          [ "$(git rev-list --count "origin/main..$SHA")" = 1 ]
+          changed=$(git diff --raw --no-renames --no-abbrev origin/main "$SHA" | awk '$1 != ":100644" || $2 != "100644" || $5 != "M"')
+          others=$(git diff --name-only --no-renames origin/main "$SHA" | grep -vxEf <(printf '%s\n' "$PIN_PATHS" | sed '/^$/d') || true)
+          if [ -n "$changed$others" ]; then
+            printf 'Not pin data:\n%s\n%s\n' "$changed" "$others"
+            exit 1
+          fi
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          echo "::add-mask::$auth"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push -q origin "$SHA:refs/heads/main"
 
   tell:
     name: say what did not move
-    needs: [bump, check, land]
+    needs: [bump, commit, check, land]
     if: always() && (failure() || needs.bump.outputs.unread != '')
     runs-on: ubuntu-24.04
     permissions:

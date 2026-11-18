@@ -128,3 +128,55 @@ def test_links_runbooks_to_the_commit_that_runs_only_on_github(tmp_path, repos):
     git(checkout, "remote", "set-url", "origin", "https://example.internal/Example/NullBill")
     assert version.docs(checkout, head) is None
     assert version.docs(tmp_path, head) is None
+
+
+FORGEJO = "ansible/roles/forgejo/defaults/main.yml"
+CATALOG = "src/nullbill/data/catalog.yaml"
+LOCK = "ansible/roles/model_gateway/files/requirements.txt"
+SHA = "a" * 64
+
+
+def test_pin_data_is_only_what_tools_pins_writes_and_only_as_a_pin_may_hold_it(repos):
+    work, checkout = repos
+    commit(work, f"# Forgejo\nforgejo_version: 15.0.11\nforgejo_sha256: {SHA}\nforgejo_port: 3000\n", "Forgejo", FORGEJO)
+    commit(work, 'games:\n  minecraft:\n    version: "26.3"\n    eula: false\n', "Catalog", CATALOG)
+    commit(work, f"x==1.0 \\\n    --hash=sha256:{SHA}\n", "Lock", LOCK)
+    base = commit(work, "plan: 1\n", "Golden", "tests/golden/small.plan.yaml")
+
+    def moved(text, path, *more):
+        """One change on top of base, with more (path, text) beside it."""
+        git(work, "reset", "-q", "--hard", base)
+        for name, content in ((path, text), *more):
+            (work / name).parent.mkdir(parents=True, exist_ok=True)
+            (work / name).write_text(content)
+            git(work, "add", name)
+        git(work, "commit", "-q", "-m", "move")
+        git(work, "push", "-q", "-f", "origin", "HEAD:main")
+        version.fetch(checkout)
+        return version.not_pins(checkout, base, git(work, "rev-parse", "HEAD"))
+
+    # A version, its checksum, the tests' regenerated files and LiteLLM's lock move by themselves.
+    lock = (LOCK, f"x==1.1 \\\n    --hash=sha256:{'c' * 64}\n")
+    golden = ("tests/golden/small.plan.yaml", "plan: 2\n")
+    assert moved(f"# Forgejo 15\nforgejo_version: 15.0.12\nforgejo_sha256: {'b' * 64}\nforgejo_port: 3000\n", FORGEJO, lock, golden) == []
+    # Any other key, a value no pin holds, a line no lock has, or any other file is code.
+    assert "more than its pins" in moved(f"forgejo_version: 15.0.12\nforgejo_sha256: {SHA}\nforgejo_port: 22\n", FORGEJO)[-1]
+    injected = "\"15.0.13{{ lookup('pipe', 'id') }}\""
+    assert "forgejo_version cannot be" in moved(f"forgejo_version: {injected}\nforgejo_sha256: {SHA}\nforgejo_port: 3000\n", FORGEJO)[0]
+    assert moved(f"--index-url https://example.internal/\nx==1.1 \\\n    --hash=sha256:{SHA}\n", LOCK)
+    assert moved('games:\n  minecraft:\n    version: "26.4"\n    eula: true\n', CATALOG)
+    assert moved("- name: x\n", "ansible/roles/forgejo/tasks/main.yml")
+    assert moved(f"forgejo_version: 15.0.12\nforgejo_sha256: {SHA}\nforgejo_port: 3000\n", "src/nullbill/data/pins.yaml")
+
+
+def test_a_pin_file_turned_into_a_link_is_no_pin_data(repos, tmp_path):
+    work, checkout = repos
+    base = commit(work, f"x==1.0 \\\n    --hash=sha256:{SHA}\n", "Lock", LOCK)
+    (work / LOCK).unlink()
+    (work / LOCK).symlink_to("/etc/shadow")
+    git(work, "add", LOCK)
+    git(work, "commit", "-q", "-m", "link")
+    git(work, "push", "-q", "origin", "HEAD:main")
+    version.fetch(checkout)
+    assert "not a plain file" in version.not_pins(checkout, base, git(work, "rev-parse", "HEAD"))[0]
+    assert version.not_pins(checkout, base, "0" * 40)

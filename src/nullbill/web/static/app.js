@@ -2901,6 +2901,8 @@ function renderUpdates() {
   now.querySelector("span").textContent = half && n === 0 ? "Finish the update" : "Update NullBill";
   $("update-check").classList.toggle("primary", false);
   show("update-available", n > 0);
+  // Only pin data installs at night (nullbill/version.py's not_pins).
+  show("update-code", n > 0 && v.pins_only === false);
   $("update-available-title").textContent = n ? `What the update brings (${needSetup(v.available)})` : "";
   $("update-available-list").replaceChildren(...v.available.map((c) => changeItem(c, true)));
   // The versions it moves; a big jump waits for the owner's Update.

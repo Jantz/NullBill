@@ -19,6 +19,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from nullbill import pins
 from nullbill.errors import NullBillError
 from nullbill.upgrade import BRANCH
 
@@ -114,6 +115,30 @@ def changes(root: Path, old: str, new: str) -> list[dict]:
         full, when, subject = line.split("\0", 2)
         out.append({"id": full[:12], "time": int(when), "subject": subject, "setup": full in setup})
     return out
+
+
+def not_pins(root: Path, old: str, new: str) -> list[str]:
+    """Why going from `old` to `new` changes more than pin data, one reason
+    per file; empty when it changes only what tools/pins and the
+    regeneration after it write, each value as a pin may hold it
+    (pins.WRITES). The nightly installs only such a range by itself: main
+    takes pushes from more than the daily pins job, and an update runs as
+    root on this controller. Taken over the range as a whole, since its
+    last commit is what would run."""
+    out = _git(root, "diff", "--raw", "-z", "--no-renames", "--no-abbrev", old, new)
+    if out is None:
+        return [f"git cannot compare {old[:12]} with {new[:12]}"]
+    fields = out.split("\0")
+    why = []
+    for meta, path in zip(fields[0::2], fields[1::2], strict=False):
+        old_mode, new_mode, _, _, status = meta.lstrip(":").split(" ")
+        if status != "M" or old_mode != "100644" or new_mode != "100644":
+            why.append(f"{path}: added, removed or not a plain file")
+            continue
+        found = pins.only_pins(path, reader(root, old)(path), reader(root, new)(path))
+        if found:
+            why.append(found)
+    return why
 
 
 def behind(root: Path, old: str, new: str) -> bool:

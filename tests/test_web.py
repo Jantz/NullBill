@@ -45,7 +45,9 @@ elif sys.argv[1] == "upgrade" and "NB_TEST_CHECKOUT" in os.environ:
         # tools/finish-upgrade, which fails while the test says so.
         if (home / "finish-fails").exists():
             sys.exit("tools/finish-upgrade failed")
-    upgrade.upgrade(pathlib.Path(os.environ["NB_TEST_CHECKOUT"]), home, finish=finish)
+    more = sys.argv[2:]
+    to = more[more.index("--to") + 1] if "--to" in more else None
+    upgrade.upgrade(pathlib.Path(os.environ["NB_TEST_CHECKOUT"]), home, finish=finish, only_pins="--only-pins" in more, to=to)
 else:
     print("ran", " ".join(sys.argv[1:]))
     sys.exit(3 if "--stage" in sys.argv else 0)
@@ -2710,6 +2712,27 @@ NIGHT_PINS = (
 )
 
 
+FORGEJO = "ansible/roles/forgejo/defaults/main.yml"
+
+
+def owners_update(app, client, set_up=True):
+    """The owner presses Update NullBill, then runs setup."""
+    assert wait(client, client.call("/api/jobs", {"action": "upgrade"})[1]["id"])["state"] == "done"
+    restarted(app)
+    if set_up:
+        wait(client, setup(client)[1]["id"])
+
+
+def owners_pins(app, client, work, install=True, set_up=True):
+    """main gets the pins table and a Forgejo pin: NullBill's own code,
+    which only the owner's Update installs. Its commit."""
+    commit(work, NIGHT_PINS, "Pins", "src/nullbill/data/pins.yaml")
+    newest = commit(work, "forgejo_version: 15.0.11\n", "Forgejo 15.0.11", FORGEJO)
+    if install:
+        owners_update(app, client, set_up)
+    return newest
+
+
 def night(n):
     """A quarter past three in the morning, n days from now."""
     today = time.localtime()
@@ -2742,45 +2765,75 @@ def test_each_night_the_page_installs_what_is_new_and_a_big_step_waits_for_the_o
     # By day nothing happens; at night with nothing new, nothing is set up.
     assert app.scheduled(night(1) + 9 * 3600) is None and "day" not in app.nightly()
     assert a_night(app, client, night(1))["how"] == "same"
-    # main gets its pins, then a small step: installed and set up by the night.
-    commit(work, NIGHT_PINS, "Pins", "src/nullbill/data/pins.yaml")
-    commit(work, "forgejo_version: 15.0.11\n", "Forgejo 15.0.11", "ansible/roles/forgejo/defaults/main.yml")
-    assert a_night(app, client, night(2))["how"] == "done"
-    small = commit(work, "forgejo_version: 15.0.12\n", "Forgejo 15.0.12", "ansible/roles/forgejo/defaults/main.yml")
-    assert a_night(app, client, night(3))["how"] == "done"
+    # main gets NullBill's own code: it waits for the owner's press, and is told once.
+    first = git(app.repo, "rev-parse", "HEAD")
+    code = owners_pins(app, client, work, install=False)
+    ended = a_night(app, client, night(2))
+    assert ended["how"] == "waits" and "own code" in ended["text"] and code[:12] in ended["text"] and told == [ended["text"]]
+    assert git(app.repo, "rev-parse", "HEAD") == first and app.version_view()["pins_only"] is False
+    assert a_night(app, client, night(3))["how"] == "waits" and len(told) == 1
+    owners_update(app, client)
+    told.clear()
+    # Then a small step of a pin: installed and set up by the night, to that commit and no further.
+    small = commit(work, "forgejo_version: 15.0.12\n", "Forgejo 15.0.12", FORGEJO)
+    assert a_night(app, client, night(4))["how"] == "done"
     about = app.version_view()
     assert about["current"]["id"] == small[:12] and about["server"]["follows"] is True and about["available"] == []
     assert [(j.action, j.by) for j in app.setup_runs()][-1] == ("apply", "nightly")
+    night_update = [j for j in app.jobs.values() if j.action == "upgrade" and j.by == "nightly"][-1]
+    assert night_update.args == ["upgrade", "--only-pins", "--to", small]
     # Each such night says so, with what moved.
-    done = "NullBill installed an update tonight and ran setup with it"
-    assert told == [f"{done}.", f"{done}: Forgejo 15.0.12."]
+    assert told == ["NullBill installed an update tonight and ran setup with it: Forgejo 15.0.12."]
     told.clear()
     # A big step: nothing is installed, the owner is told once, and the page says what waits.
-    commit(work, "forgejo_version: 17.0.1\n", "Forgejo 17.0.1", "ansible/roles/forgejo/defaults/main.yml")
-    ended = a_night(app, client, night(4))
+    commit(work, "forgejo_version: 17.0.1\n", "Forgejo 17.0.1", FORGEJO)
+    ended = a_night(app, client, night(5))
     assert ended["how"] == "waits" and "Forgejo 15.0.12 to 17.0.1" in ended["text"] and told == [ended["text"]]
     assert git(app.repo, "rev-parse", "HEAD") == small
-    assert a_night(app, client, night(5))["how"] == "waits" and len(told) == 1
+    assert a_night(app, client, night(6))["how"] == "waits" and len(told) == 1
     about = client.call("/api/state")[1]["version"]
     assert about["steps"] == [{"name": "forgejo", "title": "Forgejo", "from": "15.0.12", "to": "17.0.1", "asks": True}]
     assert about["nightly"]["enabled"] is True and about["nightly"]["ended"]["how"] == "waits"
     # Switched off, the night does nothing.
     assert client.call("/api/updates/nightly", {"enabled": False})[1]["version"]["nightly"]["enabled"] is False
-    assert app.scheduled(night(6)) is None and app.nightly()["day"] != time.strftime("%Y-%m-%d", time.localtime(night(6)))
+    assert app.scheduled(night(7)) is None and app.nightly()["day"] != time.strftime("%Y-%m-%d", time.localtime(night(7)))
     # The owner's own Update is the yes; choices they saved and did not review keep setup theirs.
     client.call("/api/updates/nightly", {"enabled": True})
     wait(client, client.call("/api/jobs", {"action": "upgrade"})[1]["id"])
     restarted(app)
     # Setup for an update the owner installed is the owner's to start.
     runs = len(app.setup_runs())
-    ended = a_night(app, client, night(7))
+    ended = a_night(app, client, night(8))
     assert ended["how"] == "waits" and "no night's update installed this version" in ended["text"] and len(app.setup_runs()) == runs
-    commit(work, "forgejo_version: 17.0.2\n", "Forgejo 17.0.2", "ansible/roles/forgejo/defaults/main.yml")
+    commit(work, "forgejo_version: 17.0.2\n", "Forgejo 17.0.2", FORGEJO)
     config = app.home / "config.yaml"
     os.utime(config, (time.time() + 5, time.time() + 5))
-    ended = a_night(app, client, night(8))
+    ended = a_night(app, client, night(9))
     assert ended["how"] == "waits" and "saved choices" in ended["text"] and len(app.setup_runs()) == runs
     assert app.version_view()["server"]["follows"] is False
+
+
+def test_a_night_installs_nothing_but_pin_data_by_itself(installed, monkeypatch):
+    app, client, work = installed
+    sign_in(app, client)
+    told = []
+    monkeypatch.setattr(app, "tell", lambda text, tag, title="": told.append(text))
+    wait(client, client.call("/api/jobs", {"action": "probe"})[1]["id"])
+    client.call("/api/choices", {"workloads": ["agents"], "backups": False, "owner_login": "owner-a@example.internal"})
+    wait(client, setup(client)[1]["id"])
+    built = owners_pins(app, client, work)
+    # A pin moves and, in the same range, code: all of it waits for the owner.
+    commit(work, "forgejo_version: 15.0.12\n", "Forgejo 15.0.12", FORGEJO)
+    code = commit(work, "- name: install\n", "Forgejo: a newer release", "ansible/roles/forgejo/tasks/main.yml")
+    ended = a_night(app, client, night(1))
+    assert ended["how"] == "waits" and code[:12] in ended["text"] and told == [ended["text"]]
+    assert git(app.repo, "rev-parse", "HEAD") == built and not [j for j in app.jobs.values() if j.by == "nightly"]
+    assert client.call("/api/state")[1]["version"]["pins_only"] is False
+    # So does a pin whose value is not one.
+    owners_update(app, client)
+    commit(work, "forgejo_version: \"15.0.13{{ lookup('pipe', 'id') }}\"\n", "Forgejo", FORGEJO)
+    assert a_night(app, client, night(2))["how"] == "waits" and len(told) == 2
+    assert git(app.repo, "rev-parse", "HEAD") == code
 
 
 def test_a_night_whose_setup_run_fails_tells_the_owner(installed, monkeypatch):
@@ -2791,7 +2844,8 @@ def test_a_night_whose_setup_run_fails_tells_the_owner(installed, monkeypatch):
     wait(client, client.call("/api/jobs", {"action": "probe"})[1]["id"])
     client.call("/api/choices", {"workloads": ["agents"], "backups": False, "owner_login": "owner-a@example.internal"})
     wait(client, setup(client)[1]["id"])
-    commit(work, "- name: install\n", "Forgejo: a newer release", "ansible/roles/forgejo/tasks/main.yml")
+    owners_pins(app, client, work)
+    commit(work, "forgejo_version: 15.0.12\n", "Forgejo 15.0.12", FORGEJO)
     job = app.scheduled(night(1))
     assert job.action == "upgrade" and wait(client, job.id)["state"] == "done"
     restarted(app)
@@ -2819,15 +2873,13 @@ def test_the_night_sets_up_only_what_the_night_installed(installed, monkeypatch)
     client.call("/api/choices", {"workloads": ["agents"], "backups": False, "owner_login": "owner-a@example.internal"})
     wait(client, setup(client)[1]["id"])
     # The owner installed an update and has not run setup: the night leaves it.
-    commit(work, "- name: install\n", "Forgejo: a newer release", "ansible/roles/forgejo/tasks/main.yml")
-    wait(client, client.call("/api/jobs", {"action": "upgrade"})[1]["id"])
-    restarted(app)
+    owners_pins(app, client, work, set_up=False)
     assert app.version_view()["server"]["follows"] is False
     runs = len(app.setup_runs())
     ended = a_night(app, client, night(1))
     assert ended["how"] == "waits" and "no night's update installed this version" in ended["text"] and len(app.setup_runs()) == runs
     # A job that began in the same minute is no error: the next minute looks again.
-    commit(work, "- name: install again\n", "Forgejo: newer still", "ansible/roles/forgejo/tasks/main.yml")
+    commit(work, "forgejo_version: 15.0.12\n", "Forgejo 15.0.12", FORGEJO)
 
     def taken(action, **more):
         raise web.NullBillError("another job is running")
@@ -2846,7 +2898,8 @@ def test_an_update_that_did_not_finish_is_said_and_finished_by_the_next_try(inst
     wait(client, setup(client)[1]["id"])
     # The night installs an update whose second half fails: the checkout
     # has moved, the programs around it have not.
-    newest = commit(work, "- name: install\n", "Forgejo: a newer release", "ansible/roles/forgejo/tasks/main.yml")
+    owners_pins(app, client, work)
+    newest = commit(work, "forgejo_version: 15.0.12\n", "Forgejo 15.0.12", FORGEJO)
     (app.home / "finish-fails").write_text("")
     job = app.scheduled(night(1))
     assert job.action == "upgrade" and wait(client, job.id)["state"] == "failed"

@@ -95,6 +95,25 @@ def test_refuses_local_changes_and_going_back(repos, tmp_path):
         upgrade.upgrade(checkout, tmp_path, finish=pytest.fail)
 
 
+def test_the_nightlys_update_moves_only_pins_and_no_further_than_it_looked(repos, tmp_path):
+    work, checkout = repos
+    path = "ansible/roles/forgejo/defaults/main.yml"
+    base = commit(work, "forgejo_version: 15.0.11\n", "Forgejo", path)
+    upgrade.upgrade(checkout, tmp_path, say=lambda _: None, finish=lambda _: None)
+    pin = commit(work, "forgejo_version: 15.0.12\n", "Forgejo 15.0.12", path)
+    # main moved on with code after the night looked: the night stops at what it looked at.
+    code = commit(work, "- name: x\n", "Forgejo: tasks", "ansible/roles/forgejo/tasks/main.yml")
+    assert upgrade.upgrade(checkout, tmp_path, say=lambda _: None, finish=lambda _: None, only_pins=True, to=pin) == pin
+    assert git(checkout, "rev-parse", "HEAD") == pin != base
+    with pytest.raises(NullBillError, match="waits for Update NullBill"):
+        upgrade.upgrade(checkout, tmp_path, finish=pytest.fail, only_pins=True)
+    assert git(checkout, "rev-parse", "HEAD") == pin
+    with pytest.raises(NullBillError, match="not a commit of main"):
+        upgrade.upgrade(checkout, tmp_path, finish=pytest.fail, to="0" * 40)
+    # The owner's own press installs it.
+    assert upgrade.upgrade(checkout, tmp_path, say=lambda _: None, finish=lambda _: None) == code
+
+
 def test_refuses_what_is_not_a_checkout(tmp_path):
     with pytest.raises(NullBillError, match="not a git checkout"):
         upgrade.upgrade(tmp_path, tmp_path, finish=pytest.fail)
