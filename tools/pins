@@ -10,11 +10,17 @@ Every new pin comes with the vendor's own checksum, checked here against
 the download where the vendor publishes one (Mojang's SHA-1, Wube's,
 PaperMC's and Fabric's SHA-256, npm's integrity), or against the
 vendor's signature (Forgejo and its runner); source builds are pinned by
-tag and commit, apt packages by version, signed by the repository key the
-role pins. bump prints one line per moved pin, `name: old -> new`, which
-.github/workflows/pins.yml puts in the commit message.
+tag and commit, apt packages by version from the index the InRelease
+names that the role's pinned key signs, Debian's container template from
+the index Proxmox's release key signs. Debian signs no sums of its cloud
+builds; those are read over HTTPS. Every value a vendor gave is checked
+against what its pin may hold (pins.WRITES: versions, hashes, file names,
+addresses on the vendor's own host) before anything is written, since
+Ansible templates the files that hold them. bump prints one line per
+moved pin, `name: old -> new`, which .github/workflows/pins.yml puts in
+the commit message.
 
-Needs network access, git, gpg, and uv for LiteLLM's lock.
+Needs network access, git, gpg and gpgv, and uv for LiteLLM's lock.
 """
 
 import base64
@@ -26,7 +32,6 @@ import re
 import subprocess
 import sys
 import tempfile
-import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -39,10 +44,33 @@ FORGEJO_SIGNED_BY = "EB114F5E6C0DC2BCDD183550A4B61A2DC5923710"
 KEYSERVER = "https://keys.openpgp.org/vks/v1/by-fingerprint/{}"
 FORGEJO = "https://codeberg.org/api/v1/repos/forgejo/forgejo/releases?limit=50&draft=false&pre-release=false"
 RUNNER = "https://code.forgejo.org/api/v1/repos/forgejo/runner/releases?limit=50&draft=false&pre-release=false"
-GRAFANA = "https://apt.grafana.com/dists/stable/main/binary-amd64/Packages"
-SMALLSTEP = "https://packages.smallstep.com/stable/debian/dists/debs/main/binary-amd64/Packages"
-TAILSCALE = "https://pkgs.tailscale.com/stable/debian/dists/trixie/main/binary-amd64/Packages"
-JELLYFIN = "https://repo.jellyfin.org/debian/dists/trixie/main/binary-amd64/Packages"
+# Each apt repository's dists folder, its key, and where the role that adds
+# the repository pins the key's SHA-256: the index is read only through the
+# InRelease file that key signs.
+GRAFANA = (
+    "https://apt.grafana.com/dists/stable/",
+    "https://apt.grafana.com/gpg.key",
+    "monitoring",
+    "monitoring_grafana_repo_signer_sha256",
+)
+SMALLSTEP = (
+    "https://packages.smallstep.com/stable/debian/dists/debs/",
+    "https://packages.smallstep.com/keys/apt/repo-signing-key.gpg",
+    "step_ca",
+    "step_ca_repo_signer_sha256",
+)
+TAILSCALE = (
+    "https://pkgs.tailscale.com/stable/debian/dists/trixie/",
+    "https://pkgs.tailscale.com/stable/debian/trixie.noarmor.gpg",
+    "vpn",
+    "vpn_repo_signer_sha256",
+)
+JELLYFIN = (
+    "https://repo.jellyfin.org/debian/dists/trixie/",
+    "https://repo.jellyfin.org/jellyfin_team.gpg.key",
+    "jellyfin",
+    "jellyfin_repo_signer_sha256",
+)
 QBITTORRENT = "https://github.com/qbittorrent/qBittorrent.git"
 LLAMA = "https://github.com/ggml-org/llama.cpp.git"
 PYPI = "https://pypi.org/pypi/litellm/json"
@@ -56,7 +84,13 @@ FABRIC_SERVER = "https://meta.fabricmc.net/v2/versions/loader/{}/{}/server/json"
 FACTORIO = "https://factorio.com/api/latest-releases"
 FACTORIO_SUMS = "https://factorio.com/download/sha256sums/"
 FACTORIO_FILE = "https://factorio.com/get-download/{}/headless/linux64"
+# Proxmox serves its templates over plain HTTP only (its HTTPS answers with
+# another name's certificate); the index is signed by Proxmox's release key,
+# in the keyring the pbs role pins by the SHA-256 Proxmox publishes.
 PROXMOX = "http://download.proxmox.com/images/"
+PROXMOX_KEYRING = ("https://enterprise.proxmox.com/debian/proxmox-archive-keyring-trixie.gpg", "pbs", "pbs_signer_sha256")
+# Debian signs no SHA512SUMS of these builds (there is no SHA512SUMS.sign
+# beside them): the sums are read over HTTPS from cloud.debian.org alone.
 DEBIAN = "https://cloud.debian.org/images/cloud/trixie/"
 
 CATALOG = "src/nullbill/data/catalog.yaml"
@@ -82,20 +116,61 @@ def defaults(role: str) -> str:
     return f"ansible/roles/{role}/defaults/main.yml"
 
 
+def plain(what: str, value: object, pattern: str = pins.VERSION) -> str:
+    """A vendor's answer that goes into an address or a file, refused unless
+    it looks like what it should be."""
+    if not isinstance(value, str) or not re.fullmatch(pattern, value) or ".." in value:
+        raise SystemExit(f"{what}: the vendor answered {str(value)[:80]!r}")
+    return value
+
+
+def verified(keys: bytes, data: bytes, signature: bytes | None = None) -> tuple[bytes, list[str]]:
+    """What a valid signature by one of these keys covers, and the primary
+    keys that made one: data with its detached signature, or clear-signed
+    data alone (an apt InRelease)."""
+    with tempfile.TemporaryDirectory() as home:
+        ring = f"{home}/trusted.kbx"
+        subprocess.run(
+            ["gpg", "--homedir", home, "--batch", "--quiet", "--no-default-keyring", "--keyring", ring, "--import"],
+            input=keys,
+            check=True,
+            capture_output=True,
+        )
+        (Path(home) / "data").write_bytes(data)
+        files = [f"{home}/data"]
+        if signature is not None:
+            (Path(home) / "data.sig").write_bytes(signature)
+            files = [f"{home}/data.sig", f"{home}/data"]
+        done = subprocess.run(
+            ["gpgv", "--homedir", home, "--keyring", ring, "--status-fd", "1", "--output", f"{home}/out", *files],
+            capture_output=True,
+            check=False,
+        )
+        out = (Path(home) / "out").read_bytes() if (Path(home) / "out").exists() else b""
+    # VALIDSIG ends with the primary key's fingerprint; a subkey signs.
+    found = re.findall(rb"^\[GNUPG:\] VALIDSIG .* ([0-9A-F]{40})$", done.stdout, re.M)
+    if done.returncode != 0 or not found:
+        raise SystemExit("no valid signature by the pinned key")
+    return (data if signature is not None else out), [f.decode() for f in found]
+
+
+def pinned_key(url: str, role: str, key: str) -> bytes:
+    """A key file, refused unless it is the one the role pins by SHA-256."""
+    data, want = get(url), pins.value((ROOT / defaults(role)).read_text(), defaults(role), key)
+    if hashlib.sha256(data).hexdigest() != want:
+        raise SystemExit(f"{url} is not the key {defaults(role)} pins as {key}")
+    return data
+
+
 def signed(url: str, fingerprint: str) -> str:
     """The SHA-256 of a download whose detached signature (url + .asc) is
     by this key."""
-    data, signature = get(url), get(url + ".asc")
-    with tempfile.TemporaryDirectory() as home:
-        gpg = ["gpg", "--homedir", home, "--batch", "--quiet"]
-        subprocess.run([*gpg, "--import"], input=get(KEYSERVER.format(fingerprint)), check=True, capture_output=True)
-        (Path(home) / "file").write_bytes(data)
-        (Path(home) / "file.asc").write_bytes(signature)
-        done = subprocess.run(
-            [*gpg, "--status-fd", "1", "--verify", f"{home}/file.asc", f"{home}/file"], capture_output=True, text=True, check=False
-        )
-    # VALIDSIG ends with the primary key's fingerprint; a subkey signs.
-    if done.returncode != 0 or not re.search(rf"^\[GNUPG:\] VALIDSIG .* {fingerprint}$", done.stdout, re.M):
+    data = get(url)
+    try:
+        _, by = verified(get(KEYSERVER.format(fingerprint)), data, get(url + ".asc"))
+    except SystemExit:
+        by = []
+    if fingerprint not in by:
         raise SystemExit(f"{url}: no valid signature by {fingerprint}")
     return hashlib.sha256(data).hexdigest()
 
@@ -115,23 +190,37 @@ def forgejo_runner() -> list[Edit]:
     return forgejo_release(RUNNER, "ci_runner", "forgejo/runner", "ci_runner", "forgejo-runner")
 
 
-def packages(index: str) -> list[dict[str, str]]:
-    """An apt repository's Packages index, one dict per package."""
-    try:
-        text = get(index).decode()
-    except urllib.error.HTTPError:
-        text = gzip.decompress(get(index + ".gz")).decode()
+def stanzas(text: str) -> list[dict[str, str]]:
     return [
         dict(line.split(": ", 1) for line in stanza.splitlines() if ": " in line and not line.startswith(" "))
         for stanza in text.split("\n\n")
     ]
 
 
-def apt_newest(index: list[dict[str, str]], package: str, like: str = r".*") -> str:
-    found = [p["Version"] for p in index if p.get("Package") == package and re.fullmatch(like, p["Version"])]
+def packages(repository: tuple[str, str, str, str]) -> list[dict[str, str]]:
+    """An apt repository's amd64 Packages index of main, one dict per
+    package, as the InRelease that the role's pinned key signs names it."""
+    dists, key_url, role, key = repository
+    release, _ = verified(pinned_key(key_url, role, key), get(dists + "InRelease"))
+    sums = re.search(r"^SHA256:\n((?:[ \t].*\n?)+)", release.decode(), re.M)
+    listed = {}
+    for line in (sums[1] if sums else "").splitlines():
+        digest, size, name = line.split()
+        listed[name] = (digest, int(size))
+    for name, unpack in (("main/binary-amd64/Packages", bytes), ("main/binary-amd64/Packages.gz", gzip.decompress)):
+        if name in listed:
+            data = get(dists + name)
+            if (hashlib.sha256(data).hexdigest(), len(data)) != listed[name]:
+                raise SystemExit(f"{dists}{name} is not the index the signed InRelease names")
+            return stanzas(unpack(data).decode())
+    raise SystemExit(f"{dists}InRelease names no main/binary-amd64/Packages")
+
+
+def apt_newest(index: list[dict[str, str]], package: str, like: str = pins.VERSION) -> str:
+    found = [p["Version"] for p in index if p.get("Package") == package and re.fullmatch(like, p.get("Version", ""))]
     if not found:
         raise SystemExit(f"no {package} in the repository's index")
-    return newest(found)
+    return plain(package, newest(found))
 
 
 def grafana() -> list[Edit]:
@@ -207,7 +296,7 @@ def llama() -> list[Edit]:
 
 def litellm() -> list[Edit]:
     version = json.loads(get(PYPI))["info"]["version"]
-    if not re.fullmatch(r"[\d.]+", version):
+    if not isinstance(version, str) or not re.fullmatch(r"[\d.]+", version):
         raise SystemExit(f"litellm: PyPI's newest is {version}, not a stable release")
     return [(defaults("model_gateway"), "model_gateway_version", version)]
 
@@ -217,7 +306,8 @@ def litellm_lock(version: str) -> None:
     files = ROOT / "ansible/roles/model_gateway/files"
     (files / "requirements.in").write_text(f"litellm[proxy]=={version}\n")
     subprocess.run(
-        ["uv", "pip", "compile", "requirements.in", "--generate-hashes", "--python-version", "3.13"]
+        # --no-build: building a source distribution runs its code here.
+        ["uv", "pip", "compile", "requirements.in", "--generate-hashes", "--no-build", "--python-version", "3.13"]
         + ["--python-platform", "x86_64-manylinux_2_40", "--no-header", "--quiet", "-o", "requirements.txt"],
         cwd=files,
         check=True,
@@ -226,7 +316,7 @@ def litellm_lock(version: str) -> None:
 
 def agent_cli() -> list[Edit]:
     package = json.loads(get(NPM))
-    version = package["dist-tags"]["stable"]
+    version = plain("agent-cli", package["dist-tags"]["stable"])
     algorithm, digest = package["versions"][version]["dist"]["integrity"].split("-", 1)
     if algorithm != "sha512":
         raise SystemExit(f"agent-cli: npm gives {algorithm}, not sha512")
@@ -239,10 +329,10 @@ def agent_cli() -> list[Edit]:
 
 def minecraft() -> list[Edit]:
     listing = json.loads(get(MOJANG))
-    release = listing["latest"]["release"]
+    release = plain("minecraft", listing["latest"]["release"])
     version = json.loads(get(next(v["url"] for v in listing["versions"] if v["id"] == release)))
     server = version["downloads"]["server"]
-    data = get(server["url"])
+    data = get(plain("minecraft", server["url"], pins.WRITES[CATALOG]["games.minecraft.url"]))
     if hashlib.sha1(data).hexdigest() != server["sha1"]:
         raise SystemExit(f"minecraft: {server['url']} is not the file Mojang's SHA-1 names")
     return [
@@ -261,11 +351,13 @@ def minecraft_version(edits: list[Edit]) -> str:
 
 
 def paper(version: str) -> list[Edit]:
+    plain("paper", version)
     stable = [b for b in json.loads(get(PAPER.format(version))) if b.get("channel") == "STABLE"]
     if not stable:
         raise SystemExit(f"paper: no stable build for Minecraft {version} yet")
     build = max(stable, key=lambda b: b["id"])
     file = build["downloads"]["server:default"]
+    plain("paper", file["url"], pins.WRITES[CATALOG]["games.minecraft.servers.paper.url"])
     if sha256(file["url"]) != file["checksums"]["sha256"]:
         raise SystemExit(f"paper: {file['url']} is not the file PaperMC's SHA-256 names")
     at = "games.minecraft.servers.paper"
@@ -275,14 +367,23 @@ def paper(version: str) -> list[Edit]:
 
 
 def fabric(version: str) -> list[Edit]:
-    stable = [entry["loader"]["version"] for entry in json.loads(get(FABRIC_LOADERS.format(version))) if entry["loader"].get("stable")]
+    plain("fabric", version)
+    stable = [
+        plain("fabric", entry["loader"]["version"])
+        for entry in json.loads(get(FABRIC_LOADERS.format(version)))
+        if entry["loader"].get("stable")
+    ]
     if not stable:
         raise SystemExit(f"fabric: no stable loader for Minecraft {version} yet")
     libraries = []
     for library in json.loads(get(FABRIC_SERVER.format(version, stable[0])))["libraries"]:
-        group, name, release = library["name"].split(":")
+        group, name, release = (plain("fabric", part, r"[A-Za-z0-9._+-]+") for part in library["name"].split(":"))
         file = f"{name}-{release}.jar"
-        url = f"{library['url'].rstrip('/')}/{group.replace('.', '/')}/{name}/{release}/{file}"
+        # Fabric's meta names the Maven; only Fabric's own and Maven Central are taken.
+        maven = str(library["url"]).rstrip("/") + "/"
+        if maven not in pins.FABRIC_MAVEN:
+            raise SystemExit(f"fabric: {name} is from {maven[:80]}, not Fabric's Maven or Maven Central")
+        url = f"{maven}{group.replace('.', '/')}/{name}/{release}/{file}"
         listed = get(url + ".sha256").decode().split()[0]
         if sha256(url) != listed:
             raise SystemExit(f"fabric: {url} is not the file Fabric's Maven names")
@@ -306,7 +407,7 @@ def terraria() -> list[Edit]:
 
 
 def factorio() -> list[Edit]:
-    version = json.loads(get(FACTORIO))["stable"]["headless"]
+    version = plain("factorio", json.loads(get(FACTORIO))["stable"]["headless"])
     url = FACTORIO_FILE.format(version)
     listed = re.search(rf"^([0-9a-f]{{64}})\s+factorio-headless_linux_{re.escape(version)}\.tar\.xz$", get(FACTORIO_SUMS).decode(), re.M)
     if not listed or listed[1] != sha256(url):
@@ -319,14 +420,18 @@ def factorio() -> list[Edit]:
 
 
 def debian_template() -> list[Edit]:
-    listing = get(PROXMOX + "aplinfo-pve-9.dat").decode()
+    index = PROXMOX + "aplinfo-pve-9.dat"
+    # pveam checks the same signature before it trusts the index.
+    listing, _ = verified(pinned_key(*PROXMOX_KEYRING), get(index), get(index + ".asc"))
     found = {}
-    for stanza in listing.split("\n\n"):
-        fields = dict(line.split(": ", 1) for line in stanza.splitlines() if ": " in line and not line.startswith(" "))
+    for fields in stanzas(listing.decode()):
         if fields.get("Package") == "debian-13-standard" and fields.get("Architecture") == "amd64":
-            found[fields["Version"]] = fields
+            found[plain("debian-template", fields.get("Version"))] = fields
+    if not found:
+        raise SystemExit("debian-template: the signed index lists no debian-13-standard")
     fields = found[newest(list(found))]
-    return [(CATALOG, "images.debian-lxc.url", PROXMOX + fields["Location"]), (CATALOG, "images.debian-lxc.sha512", fields["sha512sum"])]
+    location = plain("debian-template", fields.get("Location"), r"system/[A-Za-z0-9._+-]+\.tar\.(zst|xz|gz)")
+    return [(CATALOG, "images.debian-lxc.url", PROXMOX + location), (CATALOG, "images.debian-lxc.sha512", fields.get("sha512sum"))]
 
 
 def debian_cloud() -> list[Edit]:
@@ -377,6 +482,9 @@ def offered(names: list[str], weekly: bool, unread: dict[str, str]) -> dict[str,
                 edits = FOLLOW_MINECRAFT[name](minecraft_version(out.get("minecraft", [])))
             else:
                 edits = SOURCES[name]()
+            # Every value as tools/pins may write it there (pins.WRITES), or none of the pin's.
+            for file, key, value in edits:
+                pins.check(file, key, value)
         except (Exception, SystemExit) as error:  # one vendor's bad day leaves the other pins moving
             unread[name] = f"{type(error).__name__}: {error}"
             continue
@@ -400,6 +508,7 @@ def offered(names: list[str], weekly: bool, unread: dict[str, str]) -> dict[str,
 
 def write(edits: list[Edit]) -> None:
     for file, key, new in edits:
+        pins.check(file, key, new)
         path = ROOT / file
         path.write_text(pins.put(path.read_text(), file, key, new))
 

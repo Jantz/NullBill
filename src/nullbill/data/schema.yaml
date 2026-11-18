@@ -467,7 +467,8 @@ $defs:
                   required: [file, url, sha256]
                   properties:
                     file: {$ref: "#/$defs/game_mod_file"}
-                    url: {$ref: "#/$defs/game_pin/url"}
+                    # Fabric's Maven or Maven Central (pins.FABRIC_MAVEN), nowhere else.
+                    url: {type: string, pattern: "^https://(maven[.]fabricmc[.]net|repo1[.]maven[.]org/maven2)/[A-Za-z0-9._/+-]+[.]jar$"}
                     sha256: {$ref: "#/$defs/game_pin/sha256"}
       # Plugins or mods from Modrinth (nullbill/mods.py writes them).
       mods:

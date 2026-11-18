@@ -20,6 +20,177 @@ ALL = "all"
 
 Read = Callable[[str], str | None]
 
+# A vendor's version, file name, hash or address as it may stand in a pin:
+# Ansible templates every role default and catalog value, so a vendor
+# answer like `1.0{{ lookup('pipe', ...) }}` must never reach a file.
+SAFE = re.compile(r"[A-Za-z0-9._+~:/@=-]+")
+VERSION = r"[0-9A-Za-z][0-9A-Za-z.+~:_-]{0,79}"
+FILE = r"[A-Za-z0-9._+-]{1,200}"
+INT = "int"
+LIBRARIES = "libraries"
+
+
+def _hex(n: int) -> str:
+    return rf"[0-9a-f]{{{n}}}"
+
+
+def _url(*prefixes: str) -> str:
+    return "(?:" + "|".join(re.escape(p) for p in prefixes) + r")[A-Za-z0-9._/+~-]{1,300}"
+
+
+CATALOG = "src/nullbill/data/catalog.yaml"
+# Where Fabric's libraries may come from: Fabric's Maven and Maven Central.
+FABRIC_MAVEN = ("https://maven.fabricmc.net/", "https://repo1.maven.org/maven2/")
+
+
+def _defaults(role: str) -> str:
+    return f"ansible/roles/{role}/defaults/main.yml"
+
+
+# Everything tools/pins bump writes, by file and key, with what a value
+# there may look like. A range of main's commits that changes nothing but
+# these values and the files in WHOLE is pin data: the nightly installs it
+# by itself (nullbill/version.py), and pins.yml gives main nothing else.
+WRITES: dict[str, dict[str, str]] = {
+    _defaults("forgejo"): {"forgejo_version": VERSION, "forgejo_sha256": _hex(64)},
+    _defaults("ci_runner"): {"ci_runner_version": VERSION, "ci_runner_sha256": _hex(64)},
+    _defaults("monitoring"): {"monitoring_grafana_version": VERSION, "monitoring_loki_version": VERSION},
+    _defaults("step_ca"): {"step_ca_version": VERSION, "step_cli_version": VERSION},
+    _defaults("operator"): {"step_cli_version": VERSION, "operator_claude_code_version": VERSION, "operator_claude_code_sha512": _hex(128)},
+    _defaults("tls_cert"): {"tls_cert_step_cli_version": VERSION},
+    _defaults("vpn"): {"vpn_tailscale_version": VERSION},
+    _defaults("jellyfin"): {
+        "jellyfin_version": VERSION,
+        "jellyfin_ffmpeg_package": r"jellyfin-ffmpeg\d{1,3}",
+        "jellyfin_ffmpeg_version": VERSION,
+    },
+    _defaults("qbittorrent"): {"qbittorrent_version": VERSION, "qbittorrent_commit": _hex(40)},
+    _defaults("inference"): {"inference_llama_tag": r"b\d{1,8}", "inference_llama_commit": _hex(40)},
+    _defaults("model_gateway"): {"model_gateway_version": VERSION},
+    CATALOG: {
+        "games.minecraft.version": VERSION,
+        "games.minecraft.url": _url("https://piston-data.mojang.com/"),
+        "games.minecraft.sha256": _hex(64),
+        "games.minecraft.java": INT,
+        "games.minecraft.servers.paper.version": VERSION,
+        "games.minecraft.servers.paper.build": INT,
+        "games.minecraft.servers.paper.url": _url("https://fill-data.papermc.io/"),
+        "games.minecraft.servers.paper.sha256": _hex(64),
+        "games.minecraft.servers.fabric.version": VERSION,
+        "games.minecraft.servers.fabric.loader": VERSION,
+        "games.minecraft.servers.fabric.libraries": LIBRARIES,
+        "games.terraria.version": VERSION,
+        "games.terraria.url": _url("https://terraria.org/api/download/pc-dedicated-server/"),
+        "games.terraria.sha256": _hex(64),
+        "games.factorio.version": VERSION,
+        "games.factorio.url": _url("https://factorio.com/get-download/"),
+        "games.factorio.sha256": _hex(64),
+        # Plain HTTP, the one way Proxmox serves it: tools/pins takes the
+        # checksum from the index Proxmox signs, and apply checks the file by it.
+        "images.debian-lxc.url": _url("http://download.proxmox.com/images/system/"),
+        "images.debian-lxc.sha512": _hex(128),
+        "images.debian-cloud.url": _url("https://cloud.debian.org/images/cloud/"),
+        "images.debian-cloud.sha512": _hex(128),
+    },
+}
+LIBRARY = {"file": FILE, "url": _url(*FABRIC_MAVEN), "sha256": _hex(64)}
+# Files that change whole with the pins: LiteLLM's lock, which tools/pins
+# makes, and what pins.yml's UPDATE_GOLDEN=1 run writes (the tests' plans
+# and renders, the game roles' check variables). Each is a regex on the
+# path, with the regex each of its lines must match, or None for a file
+# only the tests read.
+REQUIREMENT = (
+    r"[A-Za-z0-9._-]+(\[[a-z0-9,_-]+\])?==[A-Za-z0-9.+!-]+( ; [A-Za-z0-9_.<>=!'\" ]+)? \\"
+    r"|    --hash=sha256:[0-9a-f]{64}( \\)?|    #( .*)?|"
+)
+WHOLE: dict[str, str | None] = {
+    r"ansible/roles/model_gateway/files/requirements\.in": rf"litellm\[proxy\]=={VERSION}|",
+    r"ansible/roles/model_gateway/files/requirements\.txt": REQUIREMENT,
+    r"tests/golden/[A-Za-z0-9._-]+\.(yaml|txt)": None,
+    r"ansible/roles/game_[a-z]+/tests/vars\.json": None,
+    r"ansible/roles/game_minecraft/tests/(paper|fabric)\.json": None,
+}
+
+
+def paths() -> list[str]:
+    """Every path pin data may change, as anchored regexes: what pins.yml's
+    PIN_PATHS holds (a test keeps the two equal)."""
+    return [f"^{re.escape(path)}$" for path in WRITES] + [f"^{path}$" for path in WHOLE]
+
+
+def check(path: str, key: str, new: object) -> None:
+    """Refuse a value tools/pins was not made to write there."""
+    rule = WRITES.get(path, {}).get(key)
+    if rule is None:
+        raise NullBillError(f"{path}: {key} is no pin tools/pins writes")
+    if rule == INT:
+        if not (isinstance(new, int) and not isinstance(new, bool) and 0 < new < 10**9):
+            raise NullBillError(f"{path}: {key} must be a whole number, not {str(new)[:80]!r}")
+        return
+    if rule == LIBRARIES:
+        if not (isinstance(new, list) and new and all(isinstance(lib, dict) and set(lib) == set(LIBRARY) for lib in new)):
+            raise NullBillError(f"{path}: {key} must be a list of file, url and sha256")
+        for lib in new:
+            for name, pattern in LIBRARY.items():
+                _match(path, f"{key}.{name}", pattern, lib[name])
+        return
+    _match(path, key, rule, new)
+
+
+def _match(path: str, key: str, pattern: str, new: object) -> None:
+    if not isinstance(new, str) or not re.fullmatch(pattern, new) or ".." in new:
+        raise NullBillError(f"{path}: {key} cannot be {str(new)[:80]!r}")
+
+
+def _at(doc: object, key: str) -> object:
+    for part in key.split("."):
+        if not isinstance(doc, dict) or part not in doc:
+            return None
+        doc = doc[part]
+    return doc
+
+
+def _set(doc: dict, key: str, new: object) -> None:
+    *parents, last = key.split(".")
+    for part in parents:
+        doc = doc[part]
+    doc[last] = new
+
+
+def only_pins(path: str, old: str | None, new: str | None) -> str | None:
+    """Why changing one file from old to new text is more than pin data,
+    or None when it is pin data alone."""
+    if old is None or new is None:
+        return f"{path}: added or removed"
+    for pattern, lines in WHOLE.items():
+        if re.fullmatch(pattern, path):
+            if lines is not None and not all(re.fullmatch(lines, line) for line in new.split("\n")):
+                return f"{path}: holds a line tools/pins does not write"
+            return None
+    keys = WRITES.get(path)
+    if keys is None:
+        return f"{path}: not pin data"
+    try:
+        before, after = yaml.safe_load(old), yaml.safe_load(new)
+    except yaml.YAMLError:
+        return f"{path}: not YAML"
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return f"{path}: not a YAML mapping"
+    for key in keys:
+        found, was = _at(after, key), _at(before, key)
+        if found == was:
+            continue
+        if was is None or found is None:
+            return f"{path}: {key} added or removed"
+        try:
+            check(path, key, found)
+        except NullBillError as exc:
+            return str(exc)
+        _set(before, key, found)
+    if before != after:
+        return f"{path}: changes more than its pins"
+    return None
+
 
 def table(text: str | None = None) -> dict[str, dict]:
     """The pins table, this checkout's or another commit's text of it."""
@@ -64,8 +235,18 @@ def value(text: str, path: str, key: str) -> str | None:
     return node.value if isinstance(node, yaml.ScalarNode) else None
 
 
-def _scalar(new: object, old: yaml.ScalarNode) -> str:
+def _safe(new: object) -> str:
+    """A value as text, refused when it holds what no version, hash, file
+    name or address does: braces or percent signs (Jinja), quotes, `#`,
+    spaces or line breaks (YAML)."""
     text = str(new)
+    if isinstance(new, bool) or not SAFE.fullmatch(text):
+        raise NullBillError(f"refusing to write {text[:80]!r} as a pin")
+    return text
+
+
+def _scalar(new: object, old: yaml.ScalarNode) -> str:
+    text = _safe(new)
     # Quoted as it was, and quoted when YAML would read text as a number
     # (26.3); a number that was one stays one (a build's).
     was_text = old.style in ('"', "'") or isinstance(yaml.safe_load(old.value), str)
@@ -79,9 +260,11 @@ def block(new: object, indent: int) -> str:
     pad, out = " " * indent, ""
     if isinstance(new, dict):
         for name, inner in new.items():
+            _safe(name)
             if isinstance(inner, (dict, list)):
                 out += f"{pad}{name}:\n{block(inner, indent + 2)}"
             else:
+                _safe(inner)
                 # Text that YAML would read as a number (26.3) stays text.
                 if isinstance(inner, str) and not isinstance(yaml.safe_load(inner), str):
                     inner = f'"{inner}"'
@@ -99,7 +282,7 @@ def put(text: str, path: str, key: str, new: object) -> str:
     if not _is_yaml(path):
         if not _shell(key).search(text):
             raise NullBillError(f"{path} sets no {key}")
-        return _shell(key).sub(f"{key}={new}", text, count=1)
+        return _shell(key).sub(f"{key}={_safe(new)}", text, count=1)
     node = _node(text, key)
     if node is None:
         raise NullBillError(f"{path} has no {key}")
