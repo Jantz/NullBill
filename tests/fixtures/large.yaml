@@ -84,3 +84,7 @@ smart:
 pvs:
   out: |
     {"report": [{"pv": [{"pv_name": "/dev/nvme0n1p3", "vg_name": "pve"}]}]}
+routes:
+  out: |
+    [{"dst":"default","gateway":"192.0.2.1","dev":"vmbr0","protocol":"static","flags":[]},
+     {"dst":"192.0.2.0/24","dev":"vmbr0","protocol":"kernel","scope":"link","prefsrc":"192.0.2.10","flags":[]}]

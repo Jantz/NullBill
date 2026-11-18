@@ -466,3 +466,20 @@ def test_local_models_need_an_nvidia_card(facts):
     f = facts("mid")
     f["gpus"][0]["vendor"] = "amd"
     assert any("local models run on NVIDIA cards only so far" in m for m in errors_of(f, fixture_config("mid")))
+
+
+@pytest.mark.parametrize("lan", ["10.42.3.0/24", "10.0.0.0/8"])
+def test_plan_refuses_a_base_that_overlaps_the_home_network(facts, lan):
+    host = {**facts("small"), "lan": ["192.0.2.0/24", lan]}
+    with pytest.raises(NullBillError) as exc:
+        build_plan(build_model(fixture_config("small")), host)
+    suggested = "10.43.0.0/16" if lan.startswith("10.42") else "a 10.x.0.0/16 the home network does not use"
+    assert exc.value.messages == [
+        f"network.base: 10.42.0.0/16 overlaps the home network {lan} the host is on; pick a private range clear of it, such as {suggested}"
+    ]
+
+
+@pytest.mark.parametrize("lan", [["192.0.2.0/24"], [], None])
+def test_plan_takes_a_base_clear_of_the_home_network_or_an_unknown_one(facts, lan):
+    host = {**facts("small"), "lan": lan}
+    build_plan(build_model(fixture_config("small")), host)

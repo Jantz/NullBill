@@ -6,6 +6,7 @@ the same parser the real host uses.
 """
 
 import hashlib
+import ipaddress
 import json
 import re
 import subprocess
@@ -62,6 +63,9 @@ COMMANDS: dict[str, tuple[str, bool]] = {
         f"{NTFS_CHECK}; done; true",
         False,
     ),
+    # The host's IPv4 routes: the home network is what the default route's
+    # device is on, which network.base must stay clear of (plan.py).
+    "routes": ("ip -4 -j route show", False),
 }
 
 Runner = Callable[[str, str], tuple[int, str, str]]
@@ -105,6 +109,9 @@ def collect(target: str, probe_root: Path, run: Runner = ssh_run) -> Path:
 
 
 def _read(raw: Path, name: str) -> str | None:
+    # A probe from before a command was added has no output for it.
+    if not (raw / f"{name}.rc").exists():
+        return None
     rc = int((raw / f"{name}.rc").read_text().strip())
     return (raw / f"{name}.out").read_text() if rc == 0 else None
 
@@ -398,7 +405,28 @@ def parse(raw: Path) -> dict:
         "storage": _storage(texts["storage"]),
         "gpus": _gpus(texts["lspci"], texts["iommu"], texts["nvidia-smi"]),
         "copies": _copies(texts["copies"]),
+        "lan": _lan(texts["routes"]),
     }
+
+
+def _lan(routes: str | None) -> list[str] | None:
+    """The subnets the host is on at the device its default route leaves
+    by: the home network. None when the probe could not read the routes."""
+    try:
+        entries = json.loads(routes) if routes is not None else None
+    except ValueError:
+        return None
+    if not isinstance(entries, list):
+        return None
+    out = set()
+    for dev in {r.get("dev") for r in entries if isinstance(r, dict) and r.get("dst") == "default"}:
+        for r in entries:
+            if isinstance(r, dict) and r.get("dev") == dev and r.get("protocol") == "kernel" and "/" in str(r.get("dst")):
+                try:
+                    out.add(str(ipaddress.ip_network(r["dst"], strict=False)))
+                except ValueError:
+                    continue
+    return sorted(out)
 
 
 def run_probe(target: str, home: Path, run: Runner = ssh_run) -> Path:

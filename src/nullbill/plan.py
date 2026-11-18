@@ -689,9 +689,34 @@ def _updates(model: dict, guests: dict) -> dict:
     return section
 
 
+def _clear_of_lan(model: dict, facts: dict, errors: _Errors) -> None:
+    """network.base must not overlap the home network the host is on: the
+    router would answer for LAN addresses inside the base, and a device at
+    home holding one could reach zones as a guest of them."""
+    base = ipaddress.ip_network(model["network"]["base"], strict=False)
+    for lan in facts.get("lan") or []:
+        net = ipaddress.ip_network(lan, strict=False)
+        if net.version == base.version and net.overlaps(base):
+            errors.append(
+                f"network.base: {base} overlaps the home network {net} the host is on; "
+                f"pick a private range clear of it, such as {_free_base(facts['lan'])}"
+            )
+
+
+def _free_base(lans: list[str]) -> str:
+    # network.base is always a 10.x.0.0/16 (schema.yaml).
+    taken = [ipaddress.ip_network(n, strict=False) for n in lans]
+    for second in range(42, 256):
+        candidate = ipaddress.ip_network(f"10.{second}.0.0/16")
+        if not any(candidate.overlaps(n) for n in taken):
+            return str(candidate)
+    return "a 10.x.0.0/16 the home network does not use"
+
+
 def build_plan(model: dict, facts: dict) -> dict:
     errors = _Errors()
     _check_refs(model, errors)
+    _clear_of_lan(model, facts, errors)
     errors.raise_if_any()
 
     planned = _planned_services(model, errors, facts)

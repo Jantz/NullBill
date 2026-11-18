@@ -59,6 +59,39 @@ def test_required_command_failure_is_reported(tmp_path):
         parse(raw)
 
 
+def test_the_home_network_is_what_the_default_route_leaves_by(tmp_path):
+    raw = write_raw(tmp_path / "raw", "small")
+    assert parse(raw)["lan"] == ["192.0.2.0/24"]
+    # NullBill's own bridges and a second uplink without the default route are not the LAN.
+    routes = [
+        {"dst": "default", "gateway": "192.0.2.1", "dev": "vmbr0", "protocol": "static"},
+        {"dst": "192.0.2.0/24", "dev": "vmbr0", "protocol": "kernel", "scope": "link", "prefsrc": "192.0.2.10"},
+        {"dst": "198.51.100.0/24", "dev": "eno2", "protocol": "kernel", "scope": "link"},
+        {"dst": "10.42.0.0/24", "dev": "nb-uplink", "protocol": "kernel", "scope": "link"},
+        {"dst": "203.0.113.0/24", "gateway": "192.0.2.1", "dev": "vmbr0", "protocol": "static"},
+    ]
+    (raw / "routes.out").write_text(json.dumps(routes))
+    assert parse(raw)["lan"] == ["192.0.2.0/24"]
+
+
+@pytest.mark.parametrize("state", ["failed", "garbage", "absent"])
+def test_routes_that_cannot_be_read_leave_the_lan_unknown(tmp_path, state):
+    raw = write_raw(tmp_path / "raw", "small")
+    if state == "failed":
+        (raw / "routes.rc").write_text("1\n")
+    elif state == "garbage":
+        (raw / "routes.out").write_text("not json")
+    else:
+        # A probe kept from before the command was added.
+        for suffix in ("out", "err", "rc"):
+            (raw / f"routes.{suffix}").unlink()
+    assert parse(raw)["lan"] is None
+
+
+def test_the_routes_command_only_reads():
+    assert COMMANDS["routes"] == ("ip -4 -j route show", False)
+
+
 def fake_runner(fixture):
     import yaml
 
