@@ -23,6 +23,13 @@ scrape_configs:
       - source_labels: [__address__]
         regex: "([^.:]+)[.:].*"
         target_label: instance
+    # What only the host writes: a guest exporting these names (its textfile
+    # directory is its own) would say it is off on purpose or its backups
+    # fresh. The rules and the page read them from job="host" alone too.
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: "nb_(power|backup|legacy|ci|pve)_.*"
+        action: drop
 {% if monitoring_host_target %}
   - job_name: host
     static_configs:

@@ -656,8 +656,10 @@ class App:
             up = [(r["metric"].get("instance", "?"), r["value"][1]) for r in query("up")]
             # Off on purpose is not down (nb-power's metrics, from the host).
             on_demand = bool((plan or {}).get("power"))
-            off = {r["metric"].get("guest", "?") for r in query("nb_power_guest_off == 1")} if on_demand else set()
-            asks = query("nb_power_group_idle_seconds and on (group) (nb_power_group_asks == 1)") if on_demand else []
+            off = {r["metric"].get("guest", "?") for r in query('nb_power_guest_off{job="host"} == 1')} if on_demand else set()
+            asks = (
+                query('nb_power_group_idle_seconds{job="host"} and on (group) (nb_power_group_asks{job="host"} == 1)') if on_demand else []
+            )
             return {
                 "monitoring": "ok",
                 "at": time.time(),

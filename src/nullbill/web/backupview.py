@@ -186,15 +186,18 @@ def save(config: dict, shown: dict, body: dict, erase: Callable[[dict, dict], di
     return config
 
 
+# job="host" alone: a guest's node_exporter exports whatever its textfile
+# directory holds, and the host's names from a guest would say its backups
+# are fresh.
 QUERIES = {
-    "listed": "nb_backup_status_ok",
-    "last": "nb_backup_last_success_timestamp_seconds",
-    "exists": "nb_backup_exists",
-    "restore_ok": "nb_backup_restore_ok",
-    "restore_at": "nb_backup_restore_timestamp_seconds",
-    "restore_backup": "nb_backup_restore_backup_timestamp_seconds",
-    "store": "nb_backup_store_bytes",
-    "read": 'node_textfile_mtime_seconds{file=~".*nullbill-backups\\\\.prom"}',
+    "listed": 'nb_backup_status_ok{job="host"}',
+    "last": 'nb_backup_last_success_timestamp_seconds{job="host"}',
+    "exists": 'nb_backup_exists{job="host"}',
+    "restore_ok": 'nb_backup_restore_ok{job="host"}',
+    "restore_at": 'nb_backup_restore_timestamp_seconds{job="host"}',
+    "restore_backup": 'nb_backup_restore_backup_timestamp_seconds{job="host"}',
+    "store": 'nb_backup_store_bytes{job="host"}',
+    "read": 'node_textfile_mtime_seconds{job="host",file=~".*nullbill-backups\\\\.prom"}',
 }
 
 

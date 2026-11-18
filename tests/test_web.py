@@ -2537,8 +2537,8 @@ def test_a_guest_that_is_off_on_demand_is_not_down_and_an_idle_one_asks(site):
         up = [{"metric": {"instance": n}, "value": [0, v]} for n, v in (("jellyfin", "0"), ("forgejo", "0"), ("workspace", "1"))]
         results = {
             "up": up,
-            "nb_power_guest_off == 1": [{"metric": {"guest": "jellyfin", "group": "media"}, "value": [0, "1"]}],
-            "nb_power_group_idle_seconds and on (group) (nb_power_group_asks == 1)": [
+            'nb_power_guest_off{job="host"} == 1': [{"metric": {"guest": "jellyfin", "group": "media"}, "value": [0, "1"]}],
+            'nb_power_group_idle_seconds{job="host"} and on (group) (nb_power_group_asks{job="host"} == 1)': [
                 {"metric": {"group": "agents", "title": "Workspace"}, "value": [0, "7260"]}
             ],
         }
