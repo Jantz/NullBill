@@ -2373,6 +2373,22 @@ def test_the_journal_the_owner_named_is_the_one_the_host_may_discard(ctx, monkey
     assert not [x for x in host_calls(c) if isinstance(x, str) and apply.NTFS_CHECK in x]
 
 
+def test_a_disk_mounted_without_the_safe_flags_is_mounted_again_with_its_guests_stopped(ctx, monkeypatch):
+    """An older nb-legacy-disk mounted it without nodev, nosuid and
+    nosymfollow (its list says unflagged): the next run stops the guests
+    that hold a copy of the mount, mounts it again and starts them."""
+    monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
+    c = ctx("large", config=legacy_config())
+    apply.stage_tofu(c)
+    uuid, mode, fstype, _ = c.reach.legacy["data"]
+    c.reach.legacy["data"] = (uuid, mode, fstype, "unflagged")
+    c.reach.calls.clear()
+    apply.stage_tofu(c)
+    calls = host_calls(c)
+    assert index_of(calls, "pct shutdown 2023") < index_of(calls, f"{apply.LEGACY} mount {OLD} 2 {uuid} ntfs ro data")
+    assert c.reach.legacy["data"][3] == "mounted" and c.reach.files_ct["status"] == "running"
+
+
 def test_a_mount_refused_after_the_share_stopped_starts_it_again(ctx, monkeypatch):
     """The early check could not tell (no ntfs-3g answer), the host script
     refuses at the mount: the files guest, stopped for it, runs again."""
@@ -2605,6 +2621,44 @@ def test_a_copy_that_fails_leaves_the_kept_disk_as_it_was(ctx, facts, monkeypatc
     calls = [call[1] for call in c.reach.calls if call[0] == "host"]
     assert not [x for x in calls if x.startswith((f"{apply.LEGACY} unmount", "/usr/local/sbin/nb-backup-disk"))]
     assert c.reach.legacy == {"data": ("0123456789ABCDEF", "ro", "ntfs", "mounted")} and c.reach.backup_disk is None
+
+
+def users_of_the_disk(c):
+    """Jellyfin shows the kept partition, the download client writes to a folder of it."""
+    c.reach.media_ct |= {"exists": True, "status": "running", "mps": {"mp0": "/mnt/nb-legacy/data,mp=/media/data,ro=1"}}
+    c.reach.torrents_ct |= {"exists": True, "status": "running", "mps": {"mp0": "/mnt/nb-legacy/data/Downloads,mp=/downloads"}}
+    seen = []
+    real = c.reach.copy
+
+    def copy(command):
+        if command.startswith("systemd-run") and " copy " in command:
+            seen.append((c.reach.files_ct["status"], c.reach.media_ct["status"], c.reach.torrents_ct["status"]))
+        return real(command)
+
+    c.reach.copy = copy
+    return seen
+
+
+def test_every_guest_that_mounts_the_disk_is_stopped_while_it_is_copied(ctx, facts, monkeypatch):
+    monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
+    monkeypatch.setattr(apply, "sleep", lambda s: None)
+    c = converting(facts, ctx)
+    seen = users_of_the_disk(c)
+    apply.copy_disks(c)
+    assert seen == [("stopped", "stopped", "stopped")]
+    assert c.media_stopped and c.torrents_stopped
+
+
+def test_a_copy_that_fails_starts_again_what_it_stopped(ctx, facts, monkeypatch):
+    monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
+    monkeypatch.setattr(apply, "sleep", lambda s: None)
+    c = converting(facts, ctx)
+    seen = users_of_the_disk(c)
+    c.reach.copy_fails = True
+    with pytest.raises(ApplyError, match="copying data failed"):
+        apply.copy_disks(c)
+    assert seen == [("stopped", "stopped", "stopped")]
+    assert (c.reach.files_ct["status"], c.reach.media_ct["status"], c.reach.torrents_ct["status"]) == ("running",) * 3
 
 
 def test_a_copy_still_running_is_waited_for_not_started_twice(ctx, facts, monkeypatch):

@@ -335,7 +335,10 @@ def test_failing_disk_gets_a_warning(facts):
 STATUS = "Name Type Status Total Used Available %\nnb-data lvmthin active 3500000000 10 3499999990 0.00%\n"
 
 
-def answers(host="fuseblk ro,noatime,user_id=0", guest="fuseblk ro,relatime", samba="SMB3\nrequired\nNever\n", storage=STATUS):
+KEPT_RO = "fuseblk ro,nosuid,nodev,noatime,nosymfollow,user_id=0"
+
+
+def answers(host=KEPT_RO, guest="fuseblk ro,relatime", samba="SMB3\nrequired\nNever\n", storage=STATUS):
     def run(target, command):
         if command == "pvesm status --storage nb-data":
             return (0, storage, "") if storage else (2, "", "storage 'nb-data' does not exist\n")
@@ -387,6 +390,9 @@ def test_verify_fails_a_missing_or_wrongly_mounted_kept_disk(facts):
     rw = plan(facts("large"), {OLD: {"use": "legacy", "mode": "rw"}})
     assert [v[:1] + v[2:] for v in verdicts(rw, answers())[:2]] == [("FAIL", "fuseblk ro"), ("FAIL", "/srv/share/data is ro")]
     assert verdicts(p, answers(samba="SMB2\nrequired\nBad User\n"))[2][2] == "server min protocol = SMB2; map to guest = Bad"
+    # Mounted by an older nb-legacy-disk, or ntfs-3g's own flags alone: a link on the disk would be followed.
+    old = verdicts(p, answers(host="fuseblk ro,nosuid,nodev,noatime,user_id=0"))[0]
+    assert old[0] == "FAIL" and old[2] == "mounted without nosymfollow; run setup again, which mounts it with them"
 
 
 def test_verify_without_a_share_checks_the_host_only(facts):

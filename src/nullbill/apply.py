@@ -1026,10 +1026,30 @@ def stop_files(ctx: Context) -> None:
     ctx.files_stopped = True
 
 
+def stop_users(ctx: Context, path: str) -> None:
+    """Every guest that bind-mounts the kept partition at path, or a folder
+    of it: the files guest, Jellyfin and the download client (which writes
+    there), so that nothing changes the files while they are copied."""
+    stop_files(ctx)
+    for found, stop in ((media_mount_points, stop_media), (torrents_mount_points, stop_torrents)):
+        mounts = found(ctx)
+        if mounts is not None and any(p == path or p.startswith(path + "/") for p in mounts[0]):
+            stop(ctx)
+
+
 def copy_disks(ctx: Context) -> None:
     """Before a kept disk the plan converts is unmounted or wiped: copy each
     of its kept partitions to a volume of the files guest (evacuate), and
-    wait until nb-legacy-copy has checked and recorded each copy."""
+    wait until nb-legacy-copy has checked and recorded each copy. A copy
+    that fails starts again what it stopped: the disk is as it was."""
+    try:
+        _copy_disks(ctx)
+    except ApplyError:
+        resume_guests(ctx)
+        raise
+
+
+def _copy_disks(ctx: Context) -> None:
     todo = [(disk_id, d["converts"]) for disk_id, d in sorted(ctx.bare["disks"].items()) if (d.get("converts") or {}).get("evacuate")]
     if not todo:
         return
@@ -1040,7 +1060,7 @@ def copy_disks(ctx: Context) -> None:
             if c["name"] in copied:
                 continue
             # Nothing may change the files while they are copied.
-            stop_files(ctx)
+            stop_users(ctx, f"{legacy.LEGACY_ROOT}/{c['name']}")
             unit = f"nb-legacy-copy-{c['name']}"
             argv = [COPY, "copy", c["name"], converts["evacuate"], vmid, str(c["size_gib"]), disk_id]
             run_unit(ctx, unit, argv)
@@ -1086,7 +1106,9 @@ def wait_unit(ctx: Context, unit: str, used_gib: int) -> None:
 def move_copies(ctx: Context) -> None:
     """Copies of a disk that is storage now move onto it (phase 3): each is
     copied again and checked, then the files guest takes the new volume and
-    the old one is freed. A copy the owner moved in PVE stays where it is."""
+    the old one is freed. A copy the owner moved in PVE stays where it is.
+    Only the files guest mounts a copy (Jellyfin and the download client
+    bind-mount kept partitions on the host alone), so only it stops."""
     targets = {disk_id: d["storage"] for disk_id, d in ctx.bare["disks"].items() if d.get("use") == "storage"}
     if not targets or FILES not in ctx.bare["guests"]:
         return
@@ -1157,8 +1179,8 @@ def check_writable(ctx: Context, m: dict) -> None:
 
 
 def resume_guests(ctx: Context) -> None:
-    """After a mount was refused: start the guests this run stopped for it,
-    so a refused change does not leave the share and Jellyfin down."""
+    """After a mount or a copy was refused: start the guests this run stopped
+    for it, so a refused change does not leave the share and Jellyfin down."""
     for name, stopped, exists, running, vmid in (
         (FILES, ctx.files_stopped, files_mount_points, files_running, files_vmid),
         (media.JELLYFIN, ctx.media_stopped, media_mount_points, media_running, media_vmid),

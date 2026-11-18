@@ -397,6 +397,11 @@ def skipped(plan_with_notes: dict, reason: str) -> list[Result]:
     return [Result("SKIP", label, reason) for label in _labels(strip_notes(plan_with_notes))]
 
 
+# nb-legacy-disk's flags on every kept mount: nothing on a disk from another
+# machine counts as a device, a set-uid program or a link (a bind keeps them).
+SAFE_FLAGS = ("nodev", "nosuid", "nosymfollow")
+
+
 def _mounted(out: str) -> tuple[str, str]:
     """findmnt -rno FSTYPE,OPTIONS: the filesystem and the first option."""
     fstype, _, options = out.strip().partition(" ")
@@ -429,6 +434,8 @@ def check(plan_with_notes: dict, target: str, run: Runner) -> list[Result]:
             results.append(Result("FAIL", label, why))
         elif (fstype, mode) != (MOUNTED_AS[m["fstype"]], m["mode"]):
             results.append(Result("FAIL", label, f"{fstype} {mode}"))
+        elif missing := [f for f in SAFE_FLAGS if f not in out.strip().partition(" ")[2].split(",")]:
+            results.append(Result("FAIL", label, f"mounted without {', '.join(missing)}; run setup again, which mounts it with them"))
         else:
             results.append(Result("PASS", label))
         if "share" not in m:

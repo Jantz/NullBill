@@ -67,17 +67,47 @@ print(*ntfs_state(subprocess.run(["sh", "-c", NTFS_CHECK], capture_output=True, 
 
   # Read-only: mounted by its by-id name, owned by the share user, and not one byte written.
   echo hello >/tmp/legacy/hello.txt
-  mkdir -p /tmp/legacy/seed && mount -t ntfs-3g "$ntfs" /tmp/legacy/seed && cp /tmp/legacy/hello.txt /tmp/legacy/seed/ && umount /tmp/legacy/seed
+  # What a disk's last owner may have left: a link out of the disk.
+  echo "host only" >/tmp/legacy/host-secret
+  mkdir -p /tmp/legacy/seed && mount -t ntfs-3g "$ntfs" /tmp/legacy/seed && cp /tmp/legacy/hello.txt /tmp/legacy/seed/ &&
+    ln -s /tmp/legacy/host-secret /tmp/legacy/seed/link && umount /tmp/legacy/seed
+  settled
   before=$(sum NTFS)
   [ "$(keep NTFS "$uuid" ntfs ro)" = mounted ] || fail "read-only NTFS not mounted"
   findmnt -rno OPTIONS --mountpoint "$dir" | grep -q '^ro,' || fail "NTFS not mounted read-only"
   [ "$(stat -c %u:%g "$dir/hello.txt")" = 101000:101000 ] || fail "files not owned by the share user (host 101000)"
   if touch "$dir/new" 2>/dev/null; then fail "wrote to a read-only kept disk"; fi
-  grep -qx 'Options=ro,noatime,uid=101000,gid=101000,dmask=0077,fmask=0177' "$unit" || fail "unit options: $(grep Options "$unit")"
+  grep -qx 'Options=ro,noatime,nodev,nosuid,nosymfollow,uid=101000,gid=101000,dmask=0077,fmask=0177' "$unit" || fail "unit options: $(grep Options "$unit")"
+  # ntfs-3g drops nosymfollow; nb-legacy-disk flags puts it on the mount, at boot by its own unit.
+  flags=$(findmnt -rno VFS-OPTIONS --mountpoint "$dir")
+  for flag in nodev nosuid nosymfollow; do
+    case ,$flags, in *,$flag,*) ;; *) fail "the kept disk is mounted without $flag: $flags" ;; esac
+  done
+  [ "$(readlink "$dir/link")" = /tmp/legacy/host-secret ] || fail "the disk's link is not there to test: $(ls -l "$dir")"
+  if cat "$dir/link" 2>/dev/null; then fail "a link on the kept disk was followed"; fi
+  flags_unit=$units/nb-legacy-flags-old-hdd.service
+  grep -qx 'ExecStart=/usr/local/sbin/nb-legacy-disk flags old-hdd ro' "$flags_unit" || fail "flags unit: $(cat "$flags_unit")"
+  grep -qx 'Before=pve-guests.service' "$flags_unit" || fail "the flags unit is not ordered before the guests"
+  grep -qx 'Wants=nb-legacy-flags-old-hdd.service' "$unit" || fail "the mount unit does not pull in its flags"
+  mkdir -p /tmp/legacy/bind && mount --bind "$dir" /tmp/legacy/bind
+  case ,$(findmnt -rno VFS-OPTIONS --mountpoint /tmp/legacy/bind), in *,nosymfollow,*) ;; *) fail "a guest's bind mount lost nosymfollow" ;; esac
+  if cat /tmp/legacy/bind/link 2>/dev/null; then fail "a link on the kept disk was followed through a bind mount"; fi
+  umount /tmp/legacy/bind
+  echo "ok   a kept disk is mounted nodev, nosuid and nosymfollow (ntfs-3g drops it; a bind remount puts it back), so no link on it is followed, here or through a guest's bind mount"
   grep -qx "What=$by_id/ata-SYNTHETIC_NTFS-part2" "$unit" || fail "unit mounts by the partition's by-id name"
   grep -qx 'Before=pve-guests.service' "$unit" || fail "unit is not ordered before the guests"
   [ "$(keep NTFS "$uuid" ntfs ro)" = kept ] || fail "second run did not keep the mount"
   [ "$(legacy list)" = "old-hdd $uuid ro ntfs mounted" ] || fail "list: $(legacy list)"
+  # As an older nb-legacy-disk left it: the flags off. list says so, the
+  # metric still counts it mounted, and the next mount puts them back.
+  mount -o remount,bind,ro,noatime,dev,suid,symfollow "$dir"
+  [ "$(legacy list)" = "old-hdd $uuid ro ntfs unflagged" ] || fail "list of a mount without the flags: $(legacy list) ($(findmnt -rno VFS-OPTIONS --mountpoint "$dir"))"
+  legacy metrics
+  grep -qx 'nb_legacy_disk_mounted{name="old-hdd",mode="ro"} 1' "$prom" || fail "metric of an unflagged disk: $(cat "$prom")"
+  [ "$(keep NTFS "$uuid" ntfs ro)" = mounted ] || fail "a mount without the flags was kept"
+  [ "$(legacy list)" = "old-hdd $uuid ro ntfs mounted" ] || fail "list after mounting again: $(legacy list)"
+  legacy flags old-hdd ro || fail "flags on a mount that has them"
+  echo "ok   a mount without the flags is listed unflagged and mounted again with them"
   grep -qx 'nb_legacy_disk_mounted{name="old-hdd",mode="ro"} 1' "$prom" || fail "metric of a mounted disk: $(cat "$prom")"
   echo "ok   a kept NTFS disk mounts read-only by its by-id name as the share user, and stays as it is on the next run"
 
@@ -445,7 +475,9 @@ SH
   [ "$(copy)" = "kept local-lvm:vm-2023-disk-0" ] || fail "second run did not keep the copy"
   mkdir -p /tmp/legacy/check
   mount -o ro "$(cat "$vols/local-lvm--vm-2023-disk-0.loop")" /tmp/legacy/check
-  diff -r "$dir" /tmp/legacy/check >/dev/null || fail "the copy differs from the kept disk"
+  # Links as links: the kept mount follows none (nosymfollow), and the copy keeps the disk's own.
+  diff -r --no-dereference "$dir" /tmp/legacy/check >/dev/null || fail "the copy differs from the kept disk"
+  [ "$(readlink /tmp/legacy/check/link)" = /tmp/legacy/host-secret ] || fail "the copy did not keep the disk's link as a link"
   [ "$(stat -c %u:%g "/tmp/legacy/check/Fotos 2019/video.mp4")" = 101000:101000 ] || fail "the copy is not owned by the share user"
   umount /tmp/legacy/check
   legacy unmount old-hdd >/dev/null
@@ -473,7 +505,7 @@ SH
   mkdir -p /tmp/legacy/check2
   mount -o ro "$(cat "$vols/local-lvm--vm-2023-disk-0.loop")" /tmp/legacy/check
   mount -o ro "$(cat "$vols/nb-data--vm-2023-disk-0.loop")" /tmp/legacy/check2
-  diff -r /tmp/legacy/check /tmp/legacy/check2 >/dev/null || fail "the moved copy differs"
+  diff -r --no-dereference /tmp/legacy/check /tmp/legacy/check2 >/dev/null || fail "the moved copy differs"
   [ "$(stat -c %u:%g "/tmp/legacy/check2/Fotos 2019/video.mp4")" = 101000:101000 ] || fail "the moved copy is not owned by the share user"
   umount /tmp/legacy/check /tmp/legacy/check2
   [ "$(move nb-data:vm-2023-disk-0)" = "kept nb-data:vm-2023-disk-0" ] || fail "a copy on the storage was moved again"
