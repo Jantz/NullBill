@@ -1,0 +1,23 @@
+# Directories inside a server's home (game_server_dirs), made as the
+# server's user. Its home is its own, so it may put links there to any
+# place in the guest; root making or changing a directory there by its
+# path could be sent along one, the user cannot go further than it may.
+- name: Directories in the server's home, as its user
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - game
+      - --
+      - sh
+      - -c
+      - |
+        for d; do
+          if [ -d "$d" ] && [ "$(stat -c %a "$d")" = 750 ]; then continue; fi
+          mkdir -p "$d" && chmod 0750 "$d" && echo "$d"
+        done
+      - sh
+      - "{{ item }}"
+  loop: "{{ game_server_dirs }}"
+  register: game_server_made
+  changed_when: game_server_made.stdout | length > 0

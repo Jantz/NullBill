@@ -37,6 +37,19 @@ pass "the units pass systemd-analyze"
 getent passwd game | grep -q ':/usr/sbin/nologin$' || fail "the game user has no login"
 pass "the server's files are root's, the world the game user's, who has no login"
 
+# The game user may swap any file in its home for a link: nb-properties
+# opens none, and writes there as that user.
+[ "$(stat -c %U /var/lib/minecraft/server.properties /var/lib/minecraft/eula.txt | sort -u)" = game ] || fail "the server's settings are its own"
+echo "root's own" >/root/secret
+chmod 600 /root/secret
+mv /var/lib/minecraft/server.properties /tmp/server.properties
+runuser -u game -- ln -s /root/secret /var/lib/minecraft/server.properties
+if echo '{"motd": "x"}' | nb-properties /var/lib/minecraft/server.properties 2>/tmp/link.err; then fail "nb-properties wrote through a link"; fi
+[ "$(cat /root/secret)" = "root's own" ] && [ "$(stat -c '%U %a' /root/secret)" = "root 600" ] || fail "root's file a link named is as it was"
+rm /var/lib/minecraft/server.properties
+mv /tmp/server.properties /var/lib/minecraft/server.properties
+pass "nb-properties follows no link the game user left, and sets its keys as that user"
+
 # Behind a TLS-intercepting proxy, Java needs its CA as the system does.
 # Debian's Java reads the store ca-certificates-java keeps from the system's.
 # One certificate per file: that store takes the first of each.
@@ -176,8 +189,8 @@ world_is "[(x['id'], x['title'], x['active'], x['origin']) for x in w['worlds']]
 world new "Flat hardcore" level-type=minecraft:flat hardcore=true level-seed=nullbill || { cat /tmp/world.json; tail -20 /tmp/minecraft.log; fail "a new world"; }
 world_is "w['id'] == 'w2' and [(x['title'], x['active']) for x in w['worlds']] == [('First world', False), ('Flat hardcore', True)]" || fail "the new world runs"
 [ "$(hardcore /var/lib/minecraft/world/level.dat)" = 1 ] || fail "the new world is hardcore"
-[ "$(hardcore /var/lib/minecraft/kept-worlds/w1/level.dat)" = 0 ] || fail "the first world is kept as it was"
-if runuser -u game -- ls /var/lib/minecraft/kept-worlds >/dev/null 2>&1; then fail "the server reads the worlds that do not run"; fi
+[ "$(hardcore /var/lib/nullbill/kept-worlds/w1/level.dat)" = 0 ] || fail "the first world is kept as it was"
+if runuser -u game -- ls /var/lib/nullbill/kept-worlds >/dev/null 2>&1; then fail "the server reads the worlds that do not run"; fi
 pass "nb-game world new: the real server makes a flat hardcore world; the first world is kept, out of the server's reach"
 
 # The next new world starts from the game's own options, not the last one's.

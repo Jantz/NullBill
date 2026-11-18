@@ -143,10 +143,10 @@ world_is "w['id'] == 'w2' and [(x['title'], x['active']) for x in w['worlds']] =
 [ "$(nb-game players)" = 0 ] || fail "the server answers with the new world"
 [ "$(wld /var/lib/terraria/worlds/world.wld)" = "Expert run|nullbill|4200|1" ] || { wld /var/lib/terraria/worlds/world.wld; fail "the new world has the name, seed, size and difficulty asked for"; }
 # The server saved it once more as it stopped; it is the same world.
-[ "$(wld /var/lib/terraria/kept-worlds/w1/world.wld)" = "$first_says" ] || fail "the first world is kept"
+[ "$(wld /var/lib/nullbill/kept-worlds/w1/world.wld)" = "$first_says" ] || fail "the first world is kept"
 test ! -e /etc/terraria/new-world.txt || fail "the new world's config is gone once it is made"
-[ "$(stat -c '%U:%G %a' /var/lib/terraria/kept-worlds)" = "root:root 700" ] || fail "kept worlds are root's"
-if runuser -u game -- ls /var/lib/terraria/kept-worlds >/dev/null 2>&1; then fail "the server reads the worlds that do not run"; fi
+[ "$(stat -c '%U:%G %a' /var/lib/nullbill/kept-worlds)" = "root:root 700" ] || fail "kept worlds are root's"
+if runuser -u game -- ls /var/lib/nullbill/kept-worlds >/dev/null 2>&1; then fail "the server reads the worlds that do not run"; fi
 pass "nb-game world new: the real server makes an Expert world with the seed asked for; the first world is kept, out of the server's reach"
 
 if world new "Sideways" worldpath=/etc; then fail "an option the game does not take"; fi
@@ -176,7 +176,7 @@ world_is "w['name'] == 'First-world.wld' and w['bytes'] > 1000000" || fail "the 
 size=$(stat -c %s "$out")
 world receive "$size" "Came back" <"$out" || { cat /tmp/world.json; fail "upload of a world"; }
 world_is "w['id'] == 'w3' and w['worlds'][2]['origin'] == 'upload' and not w['worlds'][2]['active']" || fail "an upload joins the kept worlds"
-cmp "$out" /var/lib/terraria/kept-worlds/w3/world.wld || fail "the upload is kept as it came"
+cmp "$out" /var/lib/nullbill/kept-worlds/w3/world.wld || fail "the upload is kept as it came"
 world sent "$out"
 test ! -e "$out" || fail "the sent file is removed"
 if head -c 4096 /dev/urandom | world receive 4096 "Not a world"; then fail "took noise for a world"; fi
@@ -187,8 +187,21 @@ world use w1 || fail "and back"
 world rename w3 "Renamed" || fail "rename"
 world delete w3 || fail "delete"
 world_is "w['deleted'] == 'Renamed' and [x['id'] for x in w['worlds']] == ['w1', 'w2']" || fail "deleted one world"
-test ! -e /var/lib/terraria/kept-worlds/w3 || fail "the deleted world's files are gone"
+test ! -e /var/lib/nullbill/kept-worlds/w3 || fail "the deleted world's files are gone"
 pass "a world goes out as a file and comes back as it went; noise is refused; an uploaded world runs"
+
+# Links the game user left in the world that runs: once the world was set
+# aside and comes back, they are gone, and what they named is as it was.
+echo "root's own" >/root/secret
+chmod 600 /root/secret
+runuser -u game -- ln -s /root/secret /var/lib/terraria/worlds/secret
+runuser -u game -- ln -s /etc /var/lib/terraria/worlds/etc
+world use w2 || { cat /tmp/world.json; fail "to the second world"; }
+world use w1 || { cat /tmp/world.json; fail "back to the first"; }
+[ -z "$(find /var/lib/terraria/worlds -type l)" ] || fail "a world that came back keeps the links left in it"
+[ "$(stat -c '%U %a' /root/secret)" = "root 600" ] && [ "$(stat -c '%U %a' /etc)" = "root 755" ] || fail "what the links named is as it was"
+[ "$(cat /root/secret)" = "root's own" ] || fail "root's file is unchanged"
+pass "a world comes back without the links the game user left in it, and nothing they named changed owner"
 
 nb-game report >/tmp/world.json
 world_is "w['running'] and w['active'] and w['players'] == 0 and len(w['worlds']) == 2 and any('Server started' in line for line in w['log'])" \

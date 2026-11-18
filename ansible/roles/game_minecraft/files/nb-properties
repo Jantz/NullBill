@@ -8,12 +8,19 @@ Prints changed or same. Minecraft rewrites server.properties at every
 start, in its own order and escaping and with every option it knows, so
 the file cannot be a template: this compares what the keys mean and
 rewrites a line only when its value differs.
+
+The file lies in the server's own directory, which its user may fill with
+links to anything. Run as root, this becomes that directory's owner before
+it opens anything there, so a link leads nowhere the server could not go
+itself; it opens no link either way. A file it makes is the owner's, 0640.
 """
 
 import json
 import os
 import re
+import stat
 import sys
+import tempfile
 from pathlib import Path
 
 ESCAPES = {"t": "\t", "n": "\n", "r": "\r", "f": "\f"}
@@ -58,13 +65,66 @@ def text_of(value: object) -> str:
     return str(value).lower() if isinstance(value, bool) else str(value)
 
 
+def become_owner_of(directory: Path) -> None:
+    """Root takes on the user and group that own the directory."""
+    if os.geteuid() != 0:
+        return
+    found = os.stat(directory)
+    if found.st_uid == 0:
+        return
+    os.setgroups([])
+    os.setgid(found.st_gid)
+    os.setuid(found.st_uid)
+
+
+def read(path: Path) -> str | None:
+    """The file's text, None when there is none; a link or anything but a
+    plain file is refused."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None
+    except OSError as err:
+        raise SystemExit(f"nb-properties: {path} cannot be read ({err.strerror}); a link is not followed") from err
+    with os.fdopen(fd) as file:
+        if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
+            raise SystemExit(f"nb-properties: {path} is not a plain file")
+        return file.read()
+
+
+def write(path: Path, text: str) -> None:
+    """A new file beside it (made, never opened through a link), then
+    renamed over it, which replaces a link rather than follows it."""
+    old = None
+    try:
+        old = os.lstat(path)
+    except FileNotFoundError:
+        pass
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w") as file:
+            file.write(text)
+            if old is not None and stat.S_ISREG(old.st_mode):
+                if os.geteuid() == 0:
+                    os.fchown(file.fileno(), old.st_uid, old.st_gid)
+                os.fchmod(file.fileno(), old.st_mode & 0o777)
+            else:
+                os.fchmod(file.fileno(), 0o640)
+        os.replace(tmp, path)
+    except BaseException:
+        os.unlink(tmp)
+        raise
+
+
 def main(argv: list[str]) -> int:
     if len(argv) != 2:
         print(__doc__.split("\n\n")[1], file=sys.stderr)
         return 2
     path = Path(argv[1])
     want = {key: text_of(value) for key, value in json.load(sys.stdin).items()}
-    lines = path.read_text().splitlines() if path.exists() else []
+    become_owner_of(path.parent)
+    text = read(path)
+    lines = text.splitlines() if text is not None else []
     seen, changed = set(), False
     for i, line in enumerate(lines):
         parsed = parse(line)
@@ -79,13 +139,7 @@ def main(argv: list[str]) -> int:
         lines.append(f"{escape(key)}={escape(want[key])}")
         changed = True
     if changed:
-        tmp = path.with_name(path.name + ".nullbill")
-        tmp.write_text("\n".join(lines) + "\n")
-        if path.exists():
-            stat = path.stat()
-            os.chown(tmp, stat.st_uid, stat.st_gid)
-            os.chmod(tmp, stat.st_mode & 0o777)
-        os.replace(tmp, path)
+        write(path, "\n".join(lines) + "\n")
     print("changed" if changed else "same")
     return 0
 

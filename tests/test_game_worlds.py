@@ -8,6 +8,7 @@ import gzip
 import io
 import json
 import os
+import pwd
 import re
 import shlex
 import shutil
@@ -98,8 +99,15 @@ def guest(monkeypatch, tmp_path):
     }
     server = Server(game)
     server.NotAnswering = nb.NotAnswering
-    for name, value in (("WORLDS", tmp_path / "state" / "worlds.json"), ("TRANSFER", tmp_path / "transfer"), ("LOCK", tmp_path / "lock")):
+    for name, value in (
+        ("WORLDS", tmp_path / "state" / "worlds.json"),
+        ("TRANSFER", tmp_path / "transfer"),
+        ("LOCK", tmp_path / "lock"),
+        ("KEPT", tmp_path / "state" / "kept-worlds"),
+    ):
         monkeypatch.setattr(nb, name, value)
+    # The game user's on a guest; here the test's own.
+    monkeypatch.setattr(nb, "server_user", lambda game: pwd.getpwuid(os.getuid()))
     monkeypatch.setattr(nb, "systemctl", server.systemctl)
     monkeypatch.setattr(nb, "players", server.players)
     monkeypatch.setattr(nb, "log", lambda game, lines=60: ["Error: the world did not load"])
@@ -138,11 +146,11 @@ def test_the_world_setup_made_is_the_first_and_a_new_one_sets_it_aside(guest):
     nb.world(game, ["use", "w2"])
     nb.world(game, ["delete", "w3"])
     # The first world is whole, where the server cannot read it.
-    assert (home / "kept-worlds" / "w1" / "First.wld").read_bytes() == WLD
+    assert (nb.KEPT / "w1" / "First.wld").read_bytes() == WLD
     assert [f.name for f in (home / "worlds").iterdir()] == ["Expert_run.wld"]
     # And runs again when asked; nothing was lost on the way.
     assert titles(nb.world(game, ["use", "w1"])) == [("w1", "First world", True), ("w2", "Expert run", False)]
-    assert (home / "worlds" / "First.wld").exists() and (home / "kept-worlds" / "w2" / "Expert_run.wld").exists()
+    assert (home / "worlds" / "First.wld").exists() and (nb.KEPT / "w2" / "Expert_run.wld").exists()
     assert server.started_with[-1]["worldname"] == "First"
 
 
@@ -192,7 +200,7 @@ def test_a_world_that_does_not_start_leaves_the_earlier_one_running(guest):
     server.broken = "First"
     with pytest.raises(nb.Refused, match="Second runs again"):
         nb.world(game, ["use", "w1"])
-    assert (home / "kept-worlds" / "w1" / "First.wld").exists() and (home / "worlds" / "Second.wld").exists()
+    assert (nb.KEPT / "w1" / "First.wld").exists() and (home / "worlds" / "Second.wld").exists()
     assert json.loads(nb.WORLDS.read_text())["active"] == "w2" and server.running
     # A server that does not come back either is said to be down, with the world in its place.
     server.broken = True
@@ -213,7 +221,7 @@ def test_rename_and_delete_touch_one_world(guest):
     nb.world(game, ["rename", "w1", "before the wall"])
     gone = nb.world(game, ["delete", "w1"])
     assert gone["deleted"] == "before the wall" and titles(gone) == [("w2", "Second", True)]
-    assert not (home / "kept-worlds" / "w1").exists() and (home / "worlds" / "Second.wld").exists()
+    assert not (nb.KEPT / "w1").exists() and (home / "worlds" / "Second.wld").exists()
 
 
 def test_a_server_keeps_only_so_many_worlds(guest, monkeypatch):
@@ -247,7 +255,7 @@ def test_an_uploaded_world_joins_the_kept_ones_and_goes_back_out_as_it_came(gues
     got = send(monkeypatch, nb, game, theirs)
     assert got["id"] == "w2" and titles(got) == [("w1", "First world", True), ("w2", "From my computer", False)]
     assert got["worlds"][1]["origin"] == "upload" and got["worlds"][1]["bytes"] == len(theirs)
-    assert (home / "kept-worlds" / "w2" / "world.wld").read_bytes() == theirs and list(nb.TRANSFER.iterdir()) == []
+    assert (nb.KEPT / "w2" / "world.wld").read_bytes() == theirs and list(nb.TRANSFER.iterdir()) == []
     # The server was not touched: an upload runs only once asked.
     assert server.started_with == [] and (home / "worlds" / "First.wld").exists()
     out = nb.world(game, ["export", "w2"])
@@ -265,7 +273,6 @@ def test_an_uploaded_world_joins_the_kept_ones_and_goes_back_out_as_it_came(gues
 
 def test_what_is_not_a_world_is_refused_and_leaves_nothing_behind(guest, monkeypatch):
     nb, game, _ = guest
-    home = Path(game["world"]["home"])
     for data, size, why in (
         (b"MZ" + b"\x00" * 60, None, "that is not a Terraria world: upload the .wld file from your Worlds folder"),
         (WLD[:11] + b"\x03" + WLD[12:], None, "that is not a Terraria world"),
@@ -276,7 +283,7 @@ def test_what_is_not_a_world_is_refused_and_leaves_nothing_behind(guest, monkeyp
         monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(data)))
         assert why in refused(nb, game, "receive", str(len(data) if size is None else size), "Theirs")
     assert titles(nb.world(game, ["list"])) == [("w1", "First world", True)]
-    assert list(nb.TRANSFER.iterdir()) == [] and not list((home / "kept-worlds").iterdir())
+    assert list(nb.TRANSFER.iterdir()) == [] and not list((nb.KEPT).iterdir())
 
 
 def level(data_version: int) -> bytes:
@@ -320,13 +327,13 @@ def test_a_minecraft_world_is_unpacked_from_its_folder_and_packed_into_one(minec
     region = os.urandom(3000)
     world = {"My World/level.dat": level(4000), "My World/region/r.0.0.mca": region, "My World/session.lock": b"x", "notes.txt": b"n"}
     got = send(monkeypatch, nb, game, zipped(world))
-    kept = home / "kept-worlds" / got["id"]
+    kept = nb.KEPT / got["id"]
     # The world's folder alone, without the lock of whatever ran it.
     assert sorted(str(f.relative_to(kept)) for f in kept.rglob("*") if f.is_file()) == ["level.dat", "region/r.0.0.mca"]
     assert (kept / "region" / "r.0.0.mca").read_bytes() == region
     # A zip of the folder's contents is a world as well.
     flat = send(monkeypatch, nb, game, zipped({"level.dat": level(5023), "data/x.dat": b"1"}), "Flat zip")
-    assert (home / "kept-worlds" / flat["id"] / "data" / "x.dat").exists()
+    assert (nb.KEPT / flat["id"] / "data" / "x.dat").exists()
     out = nb.world(game, ["export", got["id"]])
     with zipfile.ZipFile(out["file"]) as archive:
         assert sorted(archive.namelist()) == ["From-my-computer/level.dat", "From-my-computer/region/r.0.0.mca"]
@@ -350,7 +357,7 @@ def test_a_minecraft_upload_that_would_not_run_or_would_not_stay_in_its_place_is
         monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(data)))
         assert why in refused(nb, game, "receive", str(len(data)), "Theirs"), why
     assert titles(nb.world(game, ["list"])) == [("w1", "First world", True)]
-    assert not list((home / "kept-worlds").iterdir()) and list(nb.TRANSFER.iterdir()) == []
+    assert not list((nb.KEPT).iterdir()) and list(nb.TRANSFER.iterdir()) == []
 
 
 # Paper (docs/adr/0021-minecraft-mods.md; found with the real servers: a world Paper has opened
@@ -372,9 +379,9 @@ def test_a_world_paper_has_opened_runs_only_under_paper_and_is_set_aside_not_los
     assert nb.world({**game, "server": "paper"}, ["fit"]) == {"aside": None}
     # Any other sets it aside, kept, and makes a new one at its next start.
     assert nb.world({**game, "server": "fabric"}, ["fit"]) == {"aside": "w1", "title": "First world"}
-    assert not world.exists() and (home / nb.KEPT / "w1" / nb.PAPER_HOLDS).is_file()
+    assert not world.exists() and (nb.KEPT / "w1" / nb.PAPER_HOLDS).is_file()
     world.mkdir()
-    (world / "level.dat").write_bytes((home / nb.KEPT / "w1" / "level.dat").read_bytes())
+    (world / "level.dat").write_bytes((nb.KEPT / "w1" / "level.dat").read_bytes())
     listed = nb.world(game, ["list"])["worlds"]
     assert [(w["id"], w["title"], w["active"], w.get("paper")) for w in listed] == [
         ("w1", "First world", False, True),
@@ -383,7 +390,7 @@ def test_a_world_paper_has_opened_runs_only_under_paper_and_is_set_aside_not_los
     assert nb.world(game, ["fit"]) == {"aside": None}
     with pytest.raises(nb.Refused, match="First world was opened by Paper.*only a Paper server opens it now"):
         nb.world(game, ["use", "w1"])
-    assert (world / "level.dat").is_file() and (home / nb.KEPT / "w1").is_dir()
+    assert (world / "level.dat").is_file() and (nb.KEPT / "w1").is_dir()
 
 
 def test_a_factorio_save_is_kept_as_the_file_it_is(guest, monkeypatch, tmp_path):
@@ -395,7 +402,7 @@ def test_a_factorio_save_is_kept_as_the_file_it_is(guest, monkeypatch, tmp_path)
     server.running = False
     save = zipped({"Our factory/level.dat0": b"data", "Our factory/level-init.dat": b"init", "Our factory/info.json": b"{}"})
     got = send(monkeypatch, nb, game, save, "Our factory")
-    assert (home / "kept-worlds" / got["id"] / "Our-factory.zip").read_bytes() == save
+    assert (nb.KEPT / got["id"] / "Our-factory.zip").read_bytes() == save
     out = nb.world(game, ["export", got["id"]])
     assert Path(out["file"]).read_bytes() == save and out["name"] == "Our-factory.zip"
     for data in (b"PK nothing", zipped({"level.dat0": b"x"}), zipped({"mods/mod-list.json": b"{}"})):

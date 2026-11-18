@@ -48,10 +48,16 @@ the role checks' containers):
 
 **A server has a list of worlds; one runs.** The running world stays where
 ADR 0012 put it, so backups, the role and the checks see what they saw.
-The others are kept in `<home>/kept-worlds/<id>` in the same guest: the
-same filesystem, so changing worlds is a rename, and a directory of root's
-alone, so the server (user `game`) cannot read or write a world that does
-not run. `/var/lib/nullbill/worlds.json` names them (`w1`, `w2`, ...; a
+The others are kept in `/var/lib/nullbill/kept-worlds/<id>` in the same
+guest: the same filesystem, so changing worlds is a rename, and a
+directory of root's alone, so the server (user `game`) cannot read or
+write a world that does not run. (They were first kept in
+`<home>/kept-worlds`; the server's user owns its home and could swap that
+directory, or the running world's, for a link that sent root's renames and
+owner changes anywhere in the guest. `nb-game` moves them out once.)
+A world is made the server's user's while it is still there, where
+nothing changes under the walk, links in it are removed, and only then is
+it renamed into the server's home. `/var/lib/nullbill/worlds.json` names them (`w1`, `w2`, ...; a
 title, when and how it was made, the options it was made with). The world
 a server already has becomes "First world" the first time anything asks.
 

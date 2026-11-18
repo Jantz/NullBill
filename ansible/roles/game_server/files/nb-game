@@ -26,27 +26,35 @@ its own systemd units and the owner on its console.
 /etc/nullbill/game.json, written by the game's role, says which game this
 is, how to ask it who is connected, and where its world is.
 
-A server runs one world. The others are kept beside it, out of the server's
+A server runs one world. The others are kept in KEPT, out of the server's
 reach, and `world use` swaps them: stop, move, start, and back again if the
 server does not answer with the new one. Nothing but `world delete` removes
 a world. The world commands print one JSON line, {"ok": true, ...} or
 {"ok": false, "error": ...}.
+
+The server's home is its user's, who may swap anything in it for a link to
+any place in the guest. Root here changes nothing in that home by a path
+through it: a world is made ready in KEPT, where only root writes, and
+renamed into place; what is read there for the page is read as the server's
+user, and the console and the admins' list are opened through no link.
 """
 
 import fcntl
-import gzip
 import json
 import os
+import pwd
 import re
 import secrets
 import shutil
 import socket
+import stat
 import struct
 import subprocess
 import sys
 import tempfile
 import time
 import zipfile
+import zlib
 from pathlib import Path
 
 CONFIG = Path("/etc/nullbill/game.json")
@@ -62,9 +70,12 @@ WORLDS = Path("/var/lib/nullbill/worlds.json")
 TRANSFER = Path("/var/lib/nullbill/world-transfer")
 TRANSFER_KEPT_S = 3600
 LOCK = Path("/run/nb-game-world.lock")
-# Kept worlds, in the server's own directory (one filesystem, so a swap is
-# a rename) but root's, so the server reads only the one it runs.
-KEPT = "kept-worlds"
+# Kept worlds: root's alone, so the server reads only the one it runs, and
+# outside the server's home, whose user could swap the directory for a link.
+# On the home's filesystem, so a swap is a rename.
+KEPT = Path("/var/lib/nullbill/kept-worlds")
+# Where they were kept before: root's directory in the server's home.
+OLD_KEPT = "kept-worlds"
 MAX_WORLDS = 24
 MAX_TITLE = 40
 MAX_OPTION = 200
@@ -72,6 +83,8 @@ MAX_FILES = 200_000
 # Left free on the disk after a world comes in.
 SPARE_BYTES = 512 * 1024 * 1024
 CHUNK = 1024 * 1024
+# A Minecraft world's level.dat, packed and unpacked: a few KiB in a real one.
+MAX_LEVEL = 64 * CHUNK
 # A new world may take long to make (Terraria's largest); a kept one loads.
 NEW_WAIT_S = 600
 USE_WAIT_S = 300
@@ -209,11 +222,15 @@ def console(game: dict, text: str) -> None:
     """A line on the server's standard input, which its unit reads from
     this FIFO. Opened without blocking: with no server holding the other
     end there is nobody to type to."""
+    # The FIFO's directory is the server's user's: never through a link it
+    # put there, and nothing but a FIFO, which root's line cannot harm.
     try:
-        fd = os.open(game["console"], os.O_WRONLY | os.O_NONBLOCK)
+        fd = os.open(game["console"], os.O_WRONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
     except OSError as err:
         raise NotAnswering(f"the server's console is not open: {err.strerror}") from err
     with os.fdopen(fd, "w") as fifo:
+        if not stat.S_ISFIFO(os.fstat(fifo.fileno()).st_mode):
+            raise NotAnswering("the server's console is not a FIFO")
         fifo.write(text + "\n")
 
 
@@ -229,12 +246,35 @@ def admins(game: dict) -> list[str]:
     """The names in the server's own list of admins, in lower case: a JSON
     list of names, or of objects with a name. No file yet means no admins."""
     try:
-        listed = json.loads(Path(game["admins"]).read_text())
+        listed = json.loads(read_plain(Path(game["admins"])))
     except FileNotFoundError:
         return []
-    except (KeyError, ValueError) as err:
+    except (KeyError, ValueError, OSError) as err:
         raise NotAnswering(f"no list of admins: {err}") from err
     return sorted(str(a["name"] if isinstance(a, dict) else a).lower() for a in listed)
+
+
+def read_plain(path: Path, most: int = CHUNK) -> str:
+    """A plain file of the server's (at most `most` bytes), opened through
+    no link: its directory is the server's user's to fill."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as file:
+        if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
+            raise ValueError(f"{path} is not a plain file")
+        return file.read(most).decode()
+
+
+def open_plain(path: Path):
+    """A plain file opened for reading through no link, or None."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    file = os.fdopen(fd, "rb")
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        file.close()
+        return None
+    return file
 
 
 def busy(game: dict) -> list[str]:
@@ -353,7 +393,27 @@ def world_place(game: dict) -> Path:
 
 
 def kept_place(game: dict, ident: str) -> Path:
-    return Path(game["world"]["home"]) / KEPT / ident
+    return KEPT / ident
+
+
+def server_user(game: dict) -> pwd.struct_passwd:
+    return pwd.getpwnam(game["world"].get("user", "game"))
+
+
+def is_folder(place: Path) -> bool:
+    """A directory itself, not a link to one."""
+    try:
+        return stat.S_ISDIR(os.lstat(place).st_mode)
+    except FileNotFoundError:
+        return False
+
+
+def clear(place: Path) -> None:
+    """Whatever is at place goes: a link or a file as such, never what it names."""
+    if is_folder(place):
+        shutil.rmtree(place)
+    elif os.path.lexists(place):
+        os.unlink(place)
 
 
 def world_files(game: dict, place: Path) -> list[Path]:
@@ -368,6 +428,8 @@ def world_files(game: dict, place: Path) -> list[Path]:
 
 def size_of(place: Path) -> int:
     total = 0
+    if not is_folder(place):
+        return total
     for root, _, files in os.walk(place):
         for name in files:
             try:
@@ -409,6 +471,7 @@ def worlds(game: dict) -> dict:
         state = json.loads(WORLDS.read_text())
     except (OSError, ValueError):
         state = {"active": None, "next": 1, "worlds": {}}
+    move_old_kept(game, state)
     if state["active"] is None and world_files(game, world_place(game)):
         made = int(min(f.stat().st_mtime for f in world_files(game, world_place(game))))
         # More than one only after a swap that was cut short.
@@ -462,42 +525,122 @@ def known(state: dict, ident: str) -> dict:
 
 
 def own(game: dict, place: Path) -> None:
-    """Everything in a world is the server's user's, and nobody else's."""
-    user = game["world"].get("user", "game")
+    """Everything in a world is the server's user's, and nobody else's. Only
+    for a world in KEPT, where nothing but root writes, so nothing changes
+    under the walk. A link (a world has no use for one, and the server's
+    user may have left one while the world ran, to send root elsewhere),
+    a file linked from elsewhere and anything but files and folders go."""
+    user = server_user(game)
+    if KEPT not in place.parents:
+        raise Refused(f"{place} is not among the kept worlds")
+    if not is_folder(place):
+        raise Refused("a world is a folder, and this one is not")
     for root, dirs, files in os.walk(place):
-        for name in dirs:
-            shutil.chown(os.path.join(root, name), user, user)
-            os.chmod(os.path.join(root, name), 0o750)
-        for name in files:
-            shutil.chown(os.path.join(root, name), user, user)
-            os.chmod(os.path.join(root, name), 0o640)
-    shutil.chown(place, user, user)
+        for name in [*dirs, *files]:
+            path = os.path.join(root, name)
+            found = os.lstat(path)
+            if stat.S_ISDIR(found.st_mode):
+                mode = 0o750
+            elif stat.S_ISREG(found.st_mode) and (found.st_nlink == 1 or found.st_uid == user.pw_uid):
+                mode = 0o640
+            else:
+                os.unlink(path)
+                if name in dirs:
+                    dirs.remove(name)
+                continue
+            os.chown(path, user.pw_uid, user.pw_gid, follow_symlinks=False)
+            os.chmod(path, mode)
+    os.chown(place, user.pw_uid, user.pw_gid, follow_symlinks=False)
     os.chmod(place, 0o750)
 
 
 def kept_root(game: dict) -> Path:
-    root = Path(game["world"]["home"]) / KEPT
-    root.mkdir(mode=0o700, exist_ok=True)
-    os.chown(root, 0, 0)
-    os.chmod(root, 0o700)
-    return root
+    """KEPT, made once: root's alone, on the home's filesystem."""
+    KEPT.mkdir(mode=0o700, parents=True, exist_ok=True)
+    found = os.lstat(KEPT)
+    if not stat.S_ISDIR(found.st_mode) or found.st_uid != os.geteuid():
+        raise Refused(f"{KEPT} is not root's directory")
+    os.chmod(KEPT, 0o700)
+    if os.stat(game["world"]["home"]).st_dev != found.st_dev:
+        raise Refused(f"{KEPT} and {game['world']['home']} are on different filesystems, so a world cannot be swapped in one step")
+    return KEPT
+
+
+def move_old_kept(game: dict, state: dict) -> None:
+    """Worlds kept before KEPT moved out of the server's home: each world
+    the record names moves from root's directory there, once. A directory
+    of that name that is not root's alone was not made here and stays."""
+    home = Path(game["world"]["home"])
+    try:
+        fd = os.open(home / OLD_KEPT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        return
+    try:
+        found = os.fstat(fd)
+        if found.st_uid != os.geteuid() or found.st_mode & 0o077:
+            return
+        try:
+            kept_root(game)
+        except Refused:
+            return
+        for ident in state["worlds"]:
+            if ident == state["active"] or not re.fullmatch(r"w[0-9]+", ident) or os.path.lexists(KEPT / ident):
+                continue
+            try:
+                os.rename(ident, KEPT / ident, src_dir_fd=fd)
+            except FileNotFoundError:
+                continue
+            if not is_folder(KEPT / ident):
+                clear(KEPT / ident)
+        left = os.listdir(fd)
+    finally:
+        os.close(fd)
+    if not left:
+        try:
+            os.rmdir(home / OLD_KEPT)
+        except OSError:
+            pass
+
+
+def into_kept(place: Path, kept: Path) -> None:
+    """The world at place (in the server's home) moves to kept. The
+    server's user may have swapped it for a link a moment before: in KEPT
+    nothing changes any more, so what arrived is looked at there."""
+    os.rename(place, kept)
+    if not is_folder(kept):
+        clear(kept)
+        raise Refused(f"{place} was not a folder but a link or a file; it was not kept")
+
+
+def fresh(game: dict, place: Path) -> None:
+    """An empty folder of the server's user at place: made in KEPT, then
+    renamed there, which never follows a link the user put in its way."""
+    made = Path(tempfile.mkdtemp(dir=kept_root(game), prefix=".new-"))
+    try:
+        own(game, made)
+        os.rename(made, place)
+    except BaseException:
+        clear(made)
+        raise
 
 
 def set_aside(game: dict, state: dict) -> None:
     """The running world, if there is one, moves to the kept ones."""
     kept_root(game)
     place = world_place(game)
-    if state["active"] is not None and place.exists():
-        os.rename(place, kept_place(game, state["active"]))
-    elif place.exists():
+    if state["active"] is not None and os.path.lexists(place):
+        into_kept(place, kept_place(game, state["active"]))
+    else:
         # Not a world: an empty directory the role made.
-        shutil.rmtree(place)
+        clear(place)
     state["active"] = None
 
 
 def bring(game: dict, state: dict, ident: str) -> None:
+    """A kept world runs: made the server's user's while still in KEPT,
+    then renamed into place."""
+    own(game, kept_place(game, ident))
     os.rename(kept_place(game, ident), world_place(game))
-    own(game, world_place(game))
     state["active"] = ident
 
 
@@ -557,19 +700,21 @@ def swap(game: dict, state: dict, make, seconds: int) -> None:
         last = [line for line in log(game, 12) if line.strip()][-4:]
         systemctl("stop", game["unit"])
         made = state["active"]
-        if made is not None and made in before["worlds"] and world_place(game).exists():
+        if made is not None and made in before["worlds"] and os.path.lexists(world_place(game)):
             # A kept world that did not load goes back to where it was.
-            os.rename(world_place(game), kept_place(game, made))
-        elif world_place(game).exists():
-            shutil.rmtree(world_place(game))
+            try:
+                into_kept(world_place(game), kept_place(game, made))
+            except Refused:
+                pass
+        else:
+            clear(world_place(game))
         state.clear()
         state.update(before)
         state["active"] = None
         if was is not None:
             bring(game, state, was)
         else:
-            world_place(game).mkdir(mode=0o750)
-            own(game, world_place(game))
+            fresh(game, world_place(game))
         save_worlds(state)
         back = f"{before['worlds'][was]['title']} runs again" if was else "the server is as it was"
         try:
@@ -620,8 +765,7 @@ def world_new(game: dict, title: str, pairs: list[str], kick: bool) -> dict:
 
     def make() -> None:
         place = world_place(game)
-        place.mkdir(mode=0o750)
-        own(game, place)
+        fresh(game, place)
         if how == "minecraft":
             # The server reads these from its own file when it makes a world.
             done = subprocess.run(
@@ -701,9 +845,7 @@ def world_delete(game: dict, ident: str) -> dict:
     world = known(state, ident)
     if ident == state["active"]:
         raise Refused(f"{world['title']} is the world that runs; run another before you delete it")
-    place = kept_place(game, ident)
-    if place.exists():
-        shutil.rmtree(place)
+    clear(kept_place(game, ident))
     del state["worlds"][ident]
     save_worlds(state)
     return {"deleted": world["title"], **world_list(game, state)}
@@ -739,9 +881,10 @@ def flush(game: dict, place: Path) -> bool:
         console(game, "save-off")
         console(game, "save-all flush")
         while time.monotonic() < deadline:
-            if logfile.exists():
-                with logfile.open("rb") as text:
-                    text.seek(offset if logfile.stat().st_size >= offset else 0)
+            text = open_plain(logfile)
+            if text is not None:
+                with text:
+                    text.seek(offset if os.fstat(text.fileno()).st_size >= offset else 0)
                     if b"Saved the game" in text.read():
                         break
             time.sleep(0.5)
@@ -767,25 +910,31 @@ def world_export(game: dict, ident: str) -> dict:
     out = transfer_dir() / f"{secrets.token_hex(8)}{'.wld' if how == 'terraria' else '.zip'}"
     if shutil.disk_usage(TRANSFER).free < size_of(place) + SPARE_BYTES:
         raise Refused("the server's disk has no room for a copy of this world to send")
+    if active and not is_folder(place):
+        raise Refused(f"{place} is not a folder but a link or a file")
     paused = flush(game, place) if active else False
     try:
         fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "wb") as target:
-            if how == "minecraft":
-                top = slug(world["title"])
-                with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
-                    for root, _, files in os.walk(place):
-                        for name in sorted(files):
-                            full = Path(root) / name
-                            # The running server's lock is no part of the world.
-                            if name != "session.lock" and full.is_file() and not full.is_symlink():
-                                archive.write(full, f"{top}/{full.relative_to(place)}")
+            if active:
+                # In the server's home, so as its user: a link it put there
+                # reaches nothing it could not read itself.
+                user = server_user(game)
+                drop = {"user": user.pw_uid, "group": user.pw_gid, "extra_groups": []} if os.geteuid() == 0 else {}
+                done = subprocess.run(
+                    [sys.executable, "-I", os.path.abspath(__file__), "pack", str(place), world["title"]],
+                    input=json.dumps(game).encode(),
+                    stdout=target,
+                    stderr=subprocess.PIPE,
+                    text=False,
+                    cwd="/",
+                    **drop,
+                    check=False,
+                )
+                if done.returncode != 0:
+                    raise Refused(done.stderr.decode(errors="replace").strip()[-300:] or f"{world['title']} could not be read")
             else:
-                found = world_files(game, place)
-                if not found:
-                    raise Refused(f"{world['title']} has no {'world file' if how == 'terraria' else 'save'} yet")
-                with found[0].open("rb") as source:
-                    shutil.copyfileobj(source, target, CHUNK)
+                pack(game, place, world["title"], target)
     except BaseException:
         out.unlink(missing_ok=True)
         raise
@@ -793,6 +942,36 @@ def world_export(game: dict, ident: str) -> dict:
         if paused:
             console(game, "save-on")
     return {"file": str(out), "bytes": out.stat().st_size, "name": f"{slug(world['title'])}{out.suffix}"}
+
+
+def pack(game: dict, place: Path, title: str, target) -> None:
+    """A world as the owner downloads it, written to target: Minecraft's
+    folder as a zip, Terraria's world file or Factorio's save as it is.
+    Only plain files, each opened through no link."""
+    how = game["world"]["how"]
+
+    if how == "minecraft":
+        top = slug(title)
+        with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
+            for root, _, files in os.walk(place):
+                for name in sorted(files):
+                    full = Path(root) / name
+                    # The running server's lock is no part of the world.
+                    source = None if name == "session.lock" else open_plain(full)
+                    if source is None:
+                        continue
+                    found = os.fstat(source.fileno())
+                    info = zipfile.ZipInfo(f"{top}/{full.relative_to(place)}", time.localtime(max(found.st_mtime, 315532800))[:6])
+                    info.compress_type, info.file_size = zipfile.ZIP_DEFLATED, found.st_size
+                    info.external_attr = (found.st_mode & 0xFFFF) << 16
+                    with source, archive.open(info, "w") as entry:
+                        shutil.copyfileobj(source, entry, CHUNK)
+    else:
+        source = next((f for f in map(open_plain, world_files(game, place)) if f is not None), None)
+        if source is None:
+            raise Refused(f"{title} has no {'world file' if how == 'terraria' else 'save'} yet")
+        with source:
+            shutil.copyfileobj(source, target, CHUNK)
 
 
 def world_sent(name: str) -> dict:
@@ -826,6 +1005,16 @@ def nbt_number(data: bytes, name: bytes) -> int | None:
     return struct.unpack(">i", data[at + 3 + len(name) : at + 7 + len(name)])[0] if at >= 0 else None
 
 
+def gunzip(data: bytes, most: int) -> bytes:
+    """gzip's one member, unpacked to at most `most` bytes: a small file
+    that would unpack to more (a zip bomb) is refused, not unpacked."""
+    unpack = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    out = unpack.decompress(data, most)
+    if unpack.unconsumed_tail or not unpack.eof:
+        raise EOFError(f"more than {most} bytes unpacked, or cut short")
+    return out
+
+
 def take_minecraft(game: dict, upload: Path, place: Path) -> None:
     """A zip of a Java Edition world: level.dat at its top or one folder
     down, last played in this server's Minecraft or an older one."""
@@ -843,11 +1032,11 @@ def take_minecraft(game: dict, upload: Path, place: Path) -> None:
                 else "the zip holds more than one world; zip one world's folder"
             )
         prefix = levels[0].filename[: -len("level.dat")]
-        if levels[0].file_size > 64 * CHUNK:
+        if levels[0].file_size > MAX_LEVEL:
             raise Refused("its level.dat is not a world's")
         try:
-            level = gzip.decompress(archive.read(levels[0]))
-        except (OSError, EOFError, zipfile.BadZipFile) as err:
+            level = gunzip(archive.read(levels[0]), MAX_LEVEL)
+        except (OSError, EOFError, zlib.error, zipfile.BadZipFile) as err:
             raise Refused("its level.dat is not a Java Edition world's (a Bedrock world does not run on this server)") from err
         made_with = nbt_number(level, b"DataVersion")
         with zipfile.ZipFile(game["world"]["jar"]) as jar:
@@ -1000,12 +1189,21 @@ def report(game: dict) -> dict:
 
 
 def main(argv: list[str]) -> int:
-    commands = ("status", "players", "wait", "console", "stop", "admins", "busy", "metrics", "report", "mods", "service", "world")
+    commands = ("status", "players", "wait", "console", "stop", "admins", "busy", "metrics", "report", "mods", "service", "world", "pack")
     if len(argv) < 2 or argv[1] not in commands:
         print(__doc__.split("\n\n")[1], file=sys.stderr)
         return 2
-    game = json.loads(CONFIG.read_text())
     command, args = argv[1], argv[2:]
+    if command == "pack" and len(args) == 2:
+        # world export's own step, as the server's user: the config comes
+        # on standard input from root's nb-game.
+        try:
+            pack(json.loads(sys.stdin.read()), Path(args[0]), args[1], sys.stdout.buffer)
+        except (Refused, OSError, ValueError) as err:
+            print(f"{err}", file=sys.stderr)
+            return 1
+        return 0
+    game = json.loads(CONFIG.read_text())
     if command == "world":
         # One JSON line either way: the page reads it, not a person.
         try:

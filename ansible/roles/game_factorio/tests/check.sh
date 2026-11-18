@@ -27,6 +27,17 @@ pass "the units pass systemd-analyze"
 if runuser -u game -- find /opt/factorio /etc/factorio -writable | grep -q .; then fail "the game user can write the server's files"; fi
 test -s /var/lib/factorio/saves/nullbill.zip || fail "the role made a first map"
 pass "the server's files are root's and read-only to it, the saves its own; a first map is made"
+
+# The game user may swap a directory in its home for a link: setup goes
+# there as that user, so a root directory it names stays as it was.
+mv /var/lib/factorio/mods /tmp/mods-aside
+runuser -u game -- ln -s /etc/factorio /var/lib/factorio/mods
+ansible-playbook -i localhost, -c local -e "@$tests/vars.json" -e "$here" /ansible/game-factorio.yml >/tmp/link.log 2>&1 || true
+[ "$(stat -c '%U:%G %a' /etc/factorio)" = "root:game 750" ] || { cat /tmp/link.log; fail "setup changed the directory a link in the server's home named"; }
+[ -z "$(find /etc/factorio -user game)" ] || fail "setup wrote a file of the game user's through a link"
+rm /var/lib/factorio/mods
+mv /tmp/mods-aside /var/lib/factorio/mods
+pass "a link the game user put in the place of its mods directory leads setup nowhere it could not go"
 # The settings the page offers by name (games.py's OPTIONS; a test keeps
 # this list equal to it): Wube's own example file names each.
 options="name description max_players game_password auto_pause autosave_interval afk_autokick_interval"
@@ -131,8 +142,8 @@ world_is "w['id'] == 'w2' and [(x['title'], x['active']) for x in w['worlds']] =
 grep -q "Loading map /var/lib/factorio/saves/world.zip" /tmp/factorio.log || fail "the server loaded the new map"
 nb-game console "/seed"
 game_says factorio '^123456$' 15 || fail "the new map has the seed asked for"
-test -s /var/lib/factorio/kept-worlds/w1/nullbill.zip || fail "the first map is kept"
-if runuser -u game -- ls /var/lib/factorio/kept-worlds >/dev/null 2>&1; then fail "the server reads the maps that do not run"; fi
+test -s /var/lib/nullbill/kept-worlds/w1/nullbill.zip || fail "the first map is kept"
+if runuser -u game -- ls /var/lib/nullbill/kept-worlds >/dev/null 2>&1; then fail "the server reads the maps that do not run"; fi
 pass "nb-game world new: the real server makes a map with the seed and preset asked for; the first map is kept, out of the server's reach"
 
 # A map Factorio cannot make: the one that ran runs again.
@@ -151,7 +162,7 @@ python3 -c 'import sys, zipfile; assert "world/level.dat0" in zipfile.ZipFile(sy
 size=$(stat -c %s "$out")
 world receive "$size" "Came back" <"$out" || { cat /tmp/world.json; fail "upload of a save"; }
 world_is "w['id'] == 'w3' and w['worlds'][2]['origin'] == 'upload'" || fail "an upload joins the kept maps"
-cmp "$out" /var/lib/factorio/kept-worlds/w3/Came-back.zip || fail "the upload is kept as it came"
+cmp "$out" /var/lib/nullbill/kept-worlds/w3/Came-back.zip || fail "the upload is kept as it came"
 world sent "$out"
 if head -c 4096 /dev/urandom | world receive 4096 "Not a save"; then fail "took noise for a save"; fi
 world use w3 || { cat /tmp/world.json; tail -20 /tmp/factorio.log; fail "running an uploaded map"; }

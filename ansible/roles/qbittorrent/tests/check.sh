@@ -24,6 +24,18 @@ grep -q '^ConditionPathIsMountPoint=/downloads$' /etc/systemd/system/qbittorrent
 if grep -q 'nb-tunnel\|BindReadOnlyPaths' /etc/systemd/system/qbittorrent.service; then fail "no tunnel in the unit without a VPN"; fi
 pass "qBittorrent as uid 1000 without a login, its settings made before its first start"
 
+# The client's user may put a link in its profile: nb-torrents writes there
+# as that user, so a root directory it names (busy.d, whose programs nb-busy
+# runs as root) stays root's.
+mv /var/lib/qbittorrent/qBittorrent /tmp/profile-aside
+runuser -u qbt -- ln -s /etc/nullbill/busy.d /var/lib/qbittorrent/qBittorrent
+if nb-torrents first-config >/dev/null 2>/tmp/first.err; then fail "wrote the client's settings through a link"; fi
+[ "$(stat -c '%U %a' /etc/nullbill/busy.d)" = "root 755" ] || fail "busy.d is root's still"
+[ -z "$(find /etc/nullbill/busy.d -user qbt)" ] || fail "nothing of qbt's in busy.d"
+rm /var/lib/qbittorrent/qBittorrent
+mv /tmp/profile-aside /var/lib/qbittorrent/qBittorrent
+pass "a link in the client's profile leads nb-torrents nowhere the client could not go"
+
 # tools/check-roles mounts a tmpfs at /downloads, the kept disk's stand-in.
 findmnt -rno TARGET --mountpoint /downloads >/dev/null || fail "/downloads is a mount in this check"
 chown 1000:1000 /downloads
