@@ -1448,12 +1448,12 @@ def test_a_remote_agent_gets_the_same_verify_only_api_through_the_vpn_guest(site
 def test_a_job_outlives_a_restart_of_the_page_and_shows_again(tmp_path):
     home = tmp_path / "home"
     home.mkdir(mode=0o700)
-    slow = [sys.executable, "-c", "import sys, time; time.sleep(float(sys.argv[-1]) if sys.argv[-1][0].isdigit() else 0); print('ran')"]
+    slow = [sys.executable, "-c", "import sys, time; time.sleep(2 if '--stage' in sys.argv else 0); print('ran')"]
     first = web.App(home, command=slow)
     done = first.start("verify")
     while done.state() == "running":
         time.sleep(0.05)
-    running = first.start("apply", stage="2")
+    running = first.start("apply", stage="verify")
     # A new server, as after a restart: it finds both jobs from their files.
     again = web.App(home, command=slow)
     again.load_jobs()
@@ -2447,6 +2447,16 @@ def test_setup_starts_only_from_the_review_the_owner_read(site):
     stage = client.call("/api/jobs", {"action": "apply", "stage": "host"})
     assert stage[0] == 200 and not app.jobs[stage[1]["id"]].plan_file.exists()
     wait(client, stage[1]["id"])
+    # A stage is apply's alone: deleting guests with one skipped the review.
+    jobs = set(app.jobs)
+    for body, said in (
+        ({"action": "remove-guests", "stage": "tofu", "guests": []}, "remove-guests runs no stage alone"),
+        ({"action": "verify", "stage": "verify"}, "verify runs no stage alone"),
+        ({"action": "apply", "stage": "everything"}, "no stage 'everything'"),
+    ):
+        status, answer = client.call("/api/jobs", body)
+        assert status == 400 and said in answer["error"]
+    assert set(app.jobs) == jobs
     assert client.call("/api/jobs", {"action": "verify"})[0] == 200
 
 

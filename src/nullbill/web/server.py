@@ -2366,6 +2366,12 @@ class App:
         fixed = LAN_ACTIONS | SCHEDULED | REMOVE_ACTIONS
         if action not in ACTIONS and action not in fixed:
             raise NullBillError(f"unknown action {action!r}")
+        # Only apply runs one stage. Anything else given one would be taken
+        # for a stage run and skip the review a setup run is started from.
+        if stage is not None and action != "apply":
+            raise NullBillError(f"{action} runs no stage alone; only apply does")
+        if stage is not None and stage not in APPLY_STAGES:
+            raise NullBillError(f"no stage {stage!r}; stages: {', '.join(APPLY_STAGES)}")
         if action in REMOVE_ACTIONS:
             self.confirm_removals(guests)
         if action in SETUP_ACTIONS and not stage:
