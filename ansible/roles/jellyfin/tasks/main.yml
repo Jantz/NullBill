@@ -45,6 +45,22 @@
       Architectures: amd64
       Signed-By: /etc/apt/keyrings/jellyfin.asc
 
+- name: nb-jellyfin
+  ansible.builtin.copy:
+    src: nb-jellyfin
+    dest: /usr/local/sbin/nb-jellyfin
+    mode: "0755"
+
+# Until its first-run setup is done anyone who reaches Jellyfin could make
+# themselves its admin: it listens on 127.0.0.1 alone from its first start
+# (the package starts it) until nb-jellyfin setup, which apply runs next,
+# has made the admin. Nothing once the setup is done.
+- name: Jellyfin listens on this guest alone until its setup is done
+  ansible.builtin.command: /usr/local/sbin/nb-jellyfin hold
+  register: jellyfin_hold
+  changed_when: jellyfin_hold.stdout == "changed"
+  notify: Restart jellyfin
+
 # curl and python3: apply and nullbill verify talk to Jellyfin from inside
 # this guest (nb-jellyfin, media.py).
 - name: Jellyfin at the pinned versions
@@ -65,12 +81,6 @@
     dest: /etc/systemd/system/jellyfin.service.d/nullbill.conf
     mode: "0644"
   notify: Restart jellyfin
-
-- name: nb-jellyfin
-  ansible.builtin.copy:
-    src: nb-jellyfin
-    dest: /usr/local/sbin/nb-jellyfin
-    mode: "0755"
 
 # What use of Jellyfin is, for a Jellyfin that runs on demand: the updates
 # role's nb-busy runs it (docs/adr/0013-on-demand.md).

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Container check for the jellyfin role, run by tools/check-roles: converge
 # twice, run Jellyfin as its unit would, then drive nb-jellyfin as apply's
-# media stage does. The first-run setup leaves an admin with the password
-# apply keeps and nothing open to anyone else; the API key it makes works
+# media stage does. Until the first-run setup is done Jellyfin listens on
+# 127.0.0.1 alone; the setup leaves an admin with the password apply keeps
+# and nothing open to anyone else, then opens it; the API key it makes works
 # and is replaced, not added to, when lost; transcoding switches between
 # the CPU and Quick Sync and says when nothing changed; two kept disks
 # become two libraries and one scan finds the films on both.
@@ -30,21 +31,43 @@ chmod -R go= /media/old-hdd
 runuser -u jellyfin -- cat /media/old-hdd/Films/a.mkv >/dev/null || fail "jellyfin reads a kept disk's files"
 pass "jellyfin reads files only uid 1000 may read"
 
-# As the unit runs it.
-(
-  set -a
-  # shellcheck disable=SC1091
-  . /etc/default/jellyfin
-  set +a
-  cd /var/lib/jellyfin
-  # shellcheck disable=SC2086
-  setpriv --reuid=jellyfin --regid=jellyfin --init-groups /usr/bin/jellyfin $JELLYFIN_WEB_OPT $JELLYFIN_FFMPEG_OPT \
-    --datadir "$JELLYFIN_DATA_DIR" --configdir "$JELLYFIN_CONFIG_DIR" --logdir "$JELLYFIN_LOG_DIR" --cachedir "$JELLYFIN_CACHE_DIR" \
-    >/tmp/jellyfin.log 2>&1 &
-)
+# As the unit runs it; a systemctl that restarts it so, for nb-jellyfin
+# setup (no systemd in this container).
+cat >/usr/local/sbin/start-jellyfin <<'SH'
+#!/bin/bash
+set -a
+# shellcheck disable=SC1091
+. /etc/default/jellyfin
+set +a
+cd /var/lib/jellyfin || exit 1
+# shellcheck disable=SC2086
+setpriv --reuid=jellyfin --regid=jellyfin --init-groups /usr/bin/jellyfin $JELLYFIN_WEB_OPT $JELLYFIN_FFMPEG_OPT \
+  --datadir "$JELLYFIN_DATA_DIR" --configdir "$JELLYFIN_CONFIG_DIR" --logdir "$JELLYFIN_LOG_DIR" --cachedir "$JELLYFIN_CACHE_DIR" \
+  >>/tmp/jellyfin.log 2>&1 </dev/null &
+SH
+cat >/usr/local/sbin/systemctl <<'SH'
+#!/bin/bash
+[ "$*" = "restart jellyfin" ] || { echo "systemctl stand-in: only restart jellyfin, not $*" >&2; exit 1; }
+pid=$(pidof jellyfin) && kill "$pid"
+for _ in $(seq 60); do pidof jellyfin >/dev/null || break; sleep 1; done
+exec /usr/local/sbin/start-jellyfin
+SH
+chmod 0755 /usr/local/sbin/start-jellyfin /usr/local/sbin/systemctl
+grep -q '<string>127.0.0.1</string>' /etc/jellyfin/network.xml || { cat /etc/jellyfin/network.xml; fail "Jellyfin is held to 127.0.0.1 before it first starts"; }
+[ "$(stat -c '%U' /etc/jellyfin/network.xml)" = jellyfin ] || fail "network.xml is Jellyfin's, as the package leaves its settings"
+/usr/local/sbin/start-jellyfin
 nb-jellyfin wait || { tail -30 /tmp/jellyfin.log; fail "jellyfin answers"; }
 
+guest=$(hostname -i | cut -d' ' -f1)
+grep -q '"StartupWizardCompleted":false' <<<"$(curl -sS http://127.0.0.1:8096/System/Info/Public)" || fail "the first-run setup is open"
+if curl -sS -m 5 -o /dev/null "http://$guest:8096/System/Info/Public" 2>/dev/null; then fail "Jellyfin answers on the network before its first-run setup is done"; fi
+pass "until its first-run setup is done, Jellyfin answers on 127.0.0.1 alone"
+
 [ "$(nb-jellyfin setup nullbill-admin)" = changed ] || fail "first setup"
+curl -fsS -m 10 -o /dev/null "http://$guest:8096/System/Info/Public" || { tail -30 /tmp/jellyfin.log; fail "Jellyfin answers on the network once its setup is done"; }
+test ! -e /var/lib/nullbill/jellyfin-held || fail "nothing holds Jellyfin once its setup is done"
+[ "$(nb-jellyfin hold)" = same ] || fail "a Jellyfin that is set up is not held again"
+pass "once its setup is done, Jellyfin answers on the network, and stays so"
 [ "$(nb-jellyfin setup nullbill-admin)" = same ] || fail "setup again changes nothing"
 [ "$(stat -c '%U %a' /etc/nullbill/jellyfin-admin-password)" = "root 600" ] || fail "password file root only"
 [ "$(stat -c '%U %a' /etc/nullbill/jellyfin-api-key)" = "root 600" ] || fail "API key file root only"
