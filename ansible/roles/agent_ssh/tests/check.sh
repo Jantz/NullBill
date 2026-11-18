@@ -94,6 +94,24 @@ journalctl -t nb-cmd -o cat --no-pager >/tmp/nb-cmd.log
 grep -qx "ssh: echo after-startup-files" /tmp/nb-cmd.log || fail "a command after a planted .bashrc was not recorded"
 pass "startup files the agent writes in its home neither run nor skip the recorder"
 
+
+# logger cuts a message at its --size (1 KiB by default) and still exits 0;
+# a command padded past that would run with only its head recorded.
+long="echo long-start;$(printf '%*s' 6000 '')
+echo long-end"
+out=$(agent_run "$long") || fail "a long command"
+test "$out" = "long-start
+long-end" || fail "a long command ran as '$out'"
+journalctl --all -t nb-cmd -o json --no-pager | python3 -c '
+import json, sys
+want = "ssh: " + sys.argv[1]
+sys.exit(not [e for e in map(json.loads, sys.stdin) if e["MESSAGE"] == want])' "$long" ||
+  fail "a command over 6 KiB is not in the journal whole"
+too_long="touch /tmp/too-long-ran #$(head -c 40000 /dev/zero | tr '\0' x)"
+if agent_run "$too_long" 2>/dev/null; then fail "a command over 32 KiB ran"; fi
+test ! -e /tmp/too-long-ran || fail "a command too long to record ran"
+pass "a long command is recorded whole; one too long to record does not run"
+
 stop_journald
 if login agent >/dev/null 2>&1; then fail "a command ran without being recorded"; fi
 start_journald

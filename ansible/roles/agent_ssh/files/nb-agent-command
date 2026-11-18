@@ -4,12 +4,15 @@
 # startup file. It records the command in the journal under the agent's
 # uid, which the log shipper sends to Loki, then runs it in bash without
 # the agent's startup files, which are not recorded. A session without a
-# command is refused, and so is a command that cannot be recorded.
+# command is refused, and so is a command that cannot be recorded in full:
+# one over 32 KiB, or one logger fails to send. logger's own limit
+# (--size) is above that, since it cuts a longer message without a word.
 #
 # On the PVE host the agent's root key runs it (src/nullbill/hostroot.py):
 # as root it runs nothing unless the owner's switch is on, which the page
 # marks with /etc/nullbill/agent-root-on after the key and takes away before
 # the key, so a connection kept open from before runs nothing more.
+LIMIT=32768
 if [ "$(id -u)" = 0 ] && [ ! -e /etc/nullbill/agent-root-on ]; then
   echo "nb-agent-command: the owner's switch is off; nothing runs as root" >&2
   exit 1
@@ -18,7 +21,11 @@ if [ -z "${SSH_ORIGINAL_COMMAND:-}" ]; then
   echo "agent sessions run one command each: nb-ssh GUEST COMMAND" >&2
   exit 1
 fi
-if ! logger --socket-errors=on -t nb-cmd -- "ssh: $SSH_ORIGINAL_COMMAND"; then
+if [ "$(printf %s "$SSH_ORIGINAL_COMMAND" | wc -c)" -gt "$LIMIT" ]; then
+  echo "nb-agent-command: the command is over $LIMIT bytes, too long to record in full, so it does not run" >&2
+  exit 1
+fi
+if ! logger --socket-errors=on --size 65536 -t nb-cmd -- "ssh: $SSH_ORIGINAL_COMMAND"; then
   echo "nb-agent-command: cannot record the command, so it does not run" >&2
   exit 1
 fi

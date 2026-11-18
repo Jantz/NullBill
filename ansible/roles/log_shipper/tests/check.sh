@@ -78,6 +78,12 @@ ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/n
 wait_count '{job="auth", host="workspace"} |= "Invalid user nosuchuser"' 1 || fail "sshd auth line in Loki"
 pass "agent commands reach Loki under the agent's uid, and sshd's auth lines feed FailedLogins"
 
+# journalctl's JSON holds null for a field over 4 KiB unless asked for all.
+as_agent "echo long-marker #$(head -c 5000 /dev/zero | tr '\0' y)" >/dev/null
+wait_count "{job=\"commands\", uid=\"$uid\"} |= \"long-marker #$(head -c 5000 /dev/zero | tr '\0' y)\"" 1 ||
+  fail "a command over 4 KiB did not reach Loki whole"
+pass "a command over 4 KiB reaches Loki whole"
+
 su agent -s /bin/bash -c 'logger -t nb-cmd "principal=owner forged"'
 wait_count "{job=\"commands\", uid=\"$uid\"} |= \"principal=owner forged\"" 1 || fail "forged line"
 pass "a line the agent writes as someone else still carries the agent's uid"

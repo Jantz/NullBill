@@ -10,24 +10,45 @@ Only exit 2 blocks a call; any other failure lets it run unrecorded
 journal that is down or input it cannot read, ends in exit 2, and the
 managed settings also set onFailure: block for a hook that cannot start
 or times out.
+
+A record holds at most LIMIT bytes, which logger sends whole (its --size is
+above it; it cuts a longer message without a word). A longer Bash command
+is blocked, since it would run unrecorded past that; any other tool's
+longer input (a file it writes, which stays on disk) is recorded as its
+head with its length and SHA-256.
 """
 
+import hashlib
 import json
 import subprocess
 import sys
 
-LIMIT = 4000
+LIMIT = 32768
+LOGGER_SIZE = 65536
 
 
-def record() -> None:
-    event = json.load(sys.stdin)
+class TooLong(Exception):
+    pass
+
+
+def line_for(event: dict) -> str:
     tool = event.get("tool_name", "?")
     given = event.get("tool_input", {})
     detail = given.get("command") if tool == "Bash" else json.dumps(given, sort_keys=True)
     line = f"tool {tool}: {detail}"
-    if len(line) > LIMIT:
-        line = line[:LIMIT] + f" ... ({len(line) - LIMIT} more characters)"
-    done = subprocess.run(["logger", "--socket-errors=on", "-t", "nb-cmd", "--", line], capture_output=True, timeout=10)
+    raw = line.encode()
+    if len(raw) <= LIMIT:
+        return line
+    if tool == "Bash":
+        raise TooLong(f"the command is over {LIMIT} bytes, too long to record in full")
+    note = f" ... ({len(raw)} bytes in all, sha256 {hashlib.sha256(raw).hexdigest()})"
+    return raw[: LIMIT - len(note.encode())].decode(errors="ignore") + note
+
+
+def record() -> None:
+    line = line_for(json.load(sys.stdin))
+    argv = ["logger", "--socket-errors=on", "--size", str(LOGGER_SIZE), "-t", "nb-cmd", "--", line]
+    done = subprocess.run(argv, capture_output=True, timeout=10)
     if done.returncode != 0:
         raise OSError(done.stderr.decode(errors="replace").strip() or f"logger exit {done.returncode}")
 

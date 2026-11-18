@@ -25,3 +25,19 @@ def test_entries_older_than_loki_takes_are_left_out_not_retried_forever():
     body = json.loads(shipper.payload(CONF, [entry(8 * 86400, "old"), entry(60, "new")], now=NOW))
     assert [v[1] for s in body["streams"] for v in s["values"]] == ["new"]
     assert shipper.payload(CONF, [entry(8 * 86400, "old")], now=NOW) is None
+
+
+def test_long_commands_reach_loki_whole_in_pushes_the_gate_takes():
+    """journalctl's JSON has null for a field over 4 KiB unless --all; and a
+    batch of long commands must not exceed the gate's 4m body limit, which
+    would refuse it on every retry."""
+    assert "--all" in shipper.journal_args({"sources": [{"match": ["SYSLOG_IDENTIFIER=nb-cmd"]}]}, None)
+    long = "x" * 30_000
+    entries = [entry(60, f"ssh: {i} {long}") for i in range(200)]
+    runs = shipper.parts(entries)
+    assert [e for run in runs for e in run] == entries and len(runs) > 1
+    for run in runs:
+        body = shipper.payload(CONF, run, now=NOW)
+        assert len(body) < 2 << 20
+    sent = [v[1] for run in runs for s in json.loads(shipper.payload(CONF, run, now=NOW))["streams"] for v in s["values"]]
+    assert sent == [e["MESSAGE"] for e in entries]

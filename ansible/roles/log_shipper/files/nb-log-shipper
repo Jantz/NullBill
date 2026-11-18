@@ -25,6 +25,9 @@ import urllib.request
 
 BATCH = 500
 FLUSH_S = 1.0
+# Each push stays well under the gate's client_max_body_size (4m), which
+# would refuse a batch of long commands (up to 32 KiB each) for good.
+MAX_BODY = 1 << 20
 # Loki's reject_old_samples_max_age is 7 days; a day's margin for clocks.
 MAX_AGE_S = 6 * 86400
 
@@ -35,7 +38,9 @@ def load(path: str) -> dict:
 
 
 def journal_args(conf: dict, cursor: str | None) -> list[str]:
-    args = ["journalctl", "--follow", "--output=json", "--no-pager", "--no-tail"]
+    # --all: without it journalctl's JSON has null for any field over 4 KiB,
+    # and a long command would reach Loki as an empty line.
+    args = ["journalctl", "--follow", "--output=json", "--all", "--no-pager", "--no-tail"]
     args += [f"--after-cursor={cursor}"] if cursor else ["--lines=all"]
     for i, source in enumerate(conf["sources"]):
         if i:
@@ -76,7 +81,26 @@ def payload(conf: dict, entries: list[dict], now: float | None = None) -> bytes 
     return json.dumps({"streams": body}).encode()
 
 
+def parts(entries: list[dict], limit: int = MAX_BODY) -> list[list[dict]]:
+    """The batch in runs whose messages together stay under limit bytes."""
+    runs: list[list[dict]] = [[]]
+    size = 0
+    for e in entries:
+        n = len(json.dumps(e.get("MESSAGE"))) + 64
+        if runs[-1] and size + n > limit:
+            runs.append([])
+            size = 0
+        runs[-1].append(e)
+        size += n
+    return runs
+
+
 def push(conf: dict, context: ssl.SSLContext, entries: list[dict]) -> None:
+    for run in parts(entries):
+        push_one(conf, context, run)
+
+
+def push_one(conf: dict, context: ssl.SSLContext, entries: list[dict]) -> None:
     """Retry until Loki takes the batch; the journal keeps entries meanwhile."""
     data = payload(conf, entries)
     if data is None:

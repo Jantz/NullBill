@@ -125,6 +125,24 @@ echo 'not json' | su agent -c "$hook" 2>/dev/null || code=$?
 test "$code" = 2 || fail "hook exit $code on input it cannot read, expected 2 (block)"
 python3 -c 'import json, sys; h = json.load(open("/etc/claude-code/managed-settings.json"))["hooks"]["PreToolUse"][0]["hooks"][0]
 sys.exit(h.get("onFailure") != "block")' || fail "a hook that cannot start or times out does not block"
+python3 -c 'import json; print(json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo long-start;" + " " * 6000 + "echo long-end"}}))' |
+  su agent -c "$hook" || fail "hook refused a long call"
+journalctl --all -t nb-cmd -o json --no-pager | python3 -c '
+import json, sys
+want = "tool Bash: echo long-start;" + " " * 6000 + "echo long-end"
+sys.exit(not [e for e in map(json.loads, sys.stdin) if e["MESSAGE"] == want])' || fail "a tool call over 6 KiB is not in the journal whole"
+code=0
+python3 -c 'import json; print(json.dumps({"tool_name": "Bash", "tool_input": {"command": "true #" + "x" * 40000}}))' |
+  su agent -c "$hook" 2>/dev/null || code=$?
+test "$code" = 2 || fail "hook exit $code on a command too long to record, expected 2 (block)"
+python3 -c 'import json; print(json.dumps({"tool_name": "Write", "tool_input": {"file_path": "/tmp/big", "content": "y" * 40000}}))' |
+  su agent -c "$hook" || fail "hook refused a long file write"
+journalctl --all -t nb-cmd -o json --no-pager | python3 -c '
+import hashlib, json, sys
+line = "tool Write: " + json.dumps({"content": "y" * 40000, "file_path": "/tmp/big"}, sort_keys=True)
+note = f" ... ({len(line)} bytes in all, sha256 {hashlib.sha256(line.encode()).hexdigest()})"
+sys.exit(not [e for e in map(json.loads, sys.stdin) if isinstance(e["MESSAGE"], str) and e["MESSAGE"].startswith("tool Write: ") and e["MESSAGE"].endswith(note) and len(e["MESSAGE"]) <= 32768])' ||
+  fail "a long file write is not recorded with its length and digest"
 pass "the agent CLI records each tool call under the agent's uid first, and blocks it when it cannot"
 
 out=$(su - agent -c 'nb-ssh 127.0.0.1 id -un' 2>/tmp/nb-ssh.log) || { cat /tmp/nb-ssh.log /tmp/sshd.log; fail "nb-ssh"; }
