@@ -84,9 +84,9 @@ class Client:
         self.cookie = None
         self.bearer = None
 
-    def call(self, path, body=None, header=True):
+    def call(self, path, body=None, header=True, more=None):
         conn = http.client.HTTPSConnection("127.0.0.1", self.port, context=self.tls, timeout=30)
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json", **(more or {})}
         if header:
             headers["X-NullBill"] = "1"
         if self.cookie:
@@ -257,6 +257,22 @@ def test_lockout_after_repeated_failures(site):
     for _ in range(web.LOCKOUT_FAILURES):
         assert client.call("/api/login", {"secret": "nope"})[0] == 401
     assert client.call("/api/login", {"secret": code})[0] == 401
+
+
+def test_api_reads_refuse_requests_from_other_pages_of_the_same_site(site):
+    # *.nullbill.internal is one site, so a guest's page gets the cookie
+    # sent with a request it makes here (an <img>, a <script>, a fetch).
+    app, client = site
+    sign_in(app, client)
+    for where in ("same-site", "cross-site"):
+        for path in ("/api/state", "/api/path", "/api/people?fresh=1", "/api/game?name=minecraft&fresh=1", "/api/agent/jobs"):
+            status, said = client.call(path, more={"Sec-Fetch-Site": where})
+            assert status == 403 and said == {"error": "only the page itself reads this"}, path
+    # The page's own requests, an address opened by hand and programs that are no browser.
+    for more in ({"Sec-Fetch-Site": "same-origin"}, {"Sec-Fetch-Site": "none"}, {}):
+        assert client.call("/api/state", more=more)[1]["auth"] is True
+    # Its files and the root certificate are no API.
+    assert client.call("/", more={"Sec-Fetch-Site": "cross-site"})[0] == 200
 
 
 def test_choices_write_config_and_probe_gives_a_plan(site):

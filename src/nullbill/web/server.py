@@ -89,6 +89,8 @@ APPLY_STAGES = [name for name, _ in STAGES]
 MIN_PASSWORD = 12
 LOCKOUT_FAILURES = 10
 LOCKOUT_S = 300
+# Sec-Fetch-Site values a GET under /api/ is answered for (Handler.do_GET).
+FETCH_SITES = ("same-origin", "none")
 WORKLOADS = workloads.WORKLOADS
 # Ticked on the page before the owner has saved any choice.
 DEFAULT_WORKLOADS = ["agents", "linux-ci"]
@@ -3240,6 +3242,14 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                     return self.json(404, {"error": "no root certificate yet; run setup first"})
                 disposition = {"Content-Disposition": 'attachment; filename="nullbill-root.crt"'}
                 return self.send(200, browserca.der(crt), "application/x-x509-ca-cert", disposition)
+            # Other *.nullbill.internal names are the same site (.internal
+            # is no public suffix), so a page on a guest gets the session
+            # cookie sent along with a request it makes here. A browser names
+            # where a request came from; the page's own requests and links
+            # are same-origin, an address typed or opened is none, and a
+            # program that is no browser sends no such header.
+            if path.startswith("/api/") and self.headers.get("Sec-Fetch-Site", "none") not in FETCH_SITES:
+                return self.json(403, {"error": "only the page itself reads this"})
             if path.startswith("/api/agent/"):
                 return self.agent_get(path, query)
             authed = app.valid(self.token())

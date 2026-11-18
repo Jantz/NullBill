@@ -220,7 +220,14 @@ def test_backups_are_turned_on_from_the_page_and_the_key_is_the_owners_to_take(t
         key = json.dumps({"kdf": None, "data": "c3ludGhldGlj", "fingerprint": "aa:bb"})
         app.codec(app.home).save({**app.codec(app.home).load(), "pbs_encryption_key": key})
         assert client.call("/api/state")[1]["backups"]["key"] == {"have": True, "fingerprint": "aa:bb", "saved_at": None}
-        status, body = client.call("/api/backups/key")
+        # A page on another *.nullbill.internal name is the same site, so the
+        # browser sends the cookie along: refused, and nothing recorded.
+        for site in ("same-site", "cross-site"):
+            status, said = client.call("/api/backups/key", more={"Sec-Fetch-Site": site})
+            assert status == 403 and "only the page itself" in said["error"]
+        assert client.call("/api/state")[1]["backups"]["key"]["saved_at"] is None
+        # The page's own download link is same-origin.
+        status, body = client.call("/api/backups/key", more={"Sec-Fetch-Site": "same-origin"})
         assert status == 200 and body == json.loads(key)
         assert client.headers["Content-Disposition"] == 'attachment; filename="nullbill-backup-key.json"'
         assert client.call("/api/state")[1]["backups"]["key"]["saved_at"] > time.time() - 60
