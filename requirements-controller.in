@@ -3,8 +3,12 @@
 # installs with --require-hashes (wheels only):
 #
 #   uv pip compile pyproject.toml requirements-controller.in --generate-hashes \
-#     --no-build --python-version 3.13 --python-platform x86_64-manylinux_2_40 \
-#     --no-header -o requirements-controller.txt
+#     --no-build --universal --python-version 3.11 --no-header \
+#     -o requirements-controller.txt
+#
+# Universal from 3.11: a controller still on Debian 12 (Python 3.11) runs
+# setup-controller before tools/upgrade-controller moves it to Debian 13, and
+# some packages need more below 3.13 (typing-extensions for referencing).
 -r requirements-apply.txt
 # The build backend: setup-controller installs NullBill itself with
 # --no-deps --no-build-isolation, so nothing unhashed is fetched for it.
