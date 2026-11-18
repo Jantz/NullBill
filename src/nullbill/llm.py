@@ -99,6 +99,11 @@ BUSY = "busy"
 LOADING = "loading"
 
 
+ADMIN_LABEL = "the model gateway's key reaches none of LiteLLM's administration"
+# LiteLLM's routes that read its settings or make keys and models.
+ADMIN_PATHS = ("/key/list", "/model/info", "/config/yaml", "/user/list", "/v1/model/info")
+
+
 def _gateway_checks(plan: dict) -> list[tuple[str, str, str]]:
     """(label, command in the gateway guest, expected output)."""
     name = f"{GATEWAY}.{plan['domain']}"
@@ -132,6 +137,16 @@ def _gateway_checks(plan: dict) -> list[tuple[str, str, str]]:
             "the model gateway refuses a wrong key",
             f'wrong=not-the-key; code=$({curl(str(ANSWER_SECONDS))} -H "Authorization: Bearer $wrong"); '
             'case $code in 2*) echo "$code" ;; *) echo refused ;; esac',
+            "refused",
+        ),
+        # The clients' key is not LiteLLM's master key: nginx passes it to
+        # the OpenAI paths alone (the model_gateway role).
+        (
+            ADMIN_LABEL,
+            f". /etc/litellm/env; for path in {' '.join(ADMIN_PATHS)}; do "
+            f"code=$(curl -sS --max-time 30 --cacert {ROOT_CA} --resolve {name}:{GATEWAY_PORT}:127.0.0.1 -o /dev/null "
+            f"-w '%{{http_code}}' -H \"Authorization: Bearer $NB_GATEWAY_KEY\" https://{name}:{GATEWAY_PORT}$path); "
+            'case $code in 2*) echo "$path $code"; exit ;; esac; done; echo refused',
             "refused",
         ),
     ]

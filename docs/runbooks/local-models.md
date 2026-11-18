@@ -29,9 +29,11 @@ with one key. Why it is built this way: [ADR 0008](../adr/0008-local-models.md).
    Proxmox web UI select the node, press **Reboot**, wait until the page
    answers again, and press **Run setup** again. This happens once.
 
-When setup has finished, **Run the checks** shows four checks for it: the host
+When setup has finished, **Run the checks** shows five checks for it: the host
 runs NVIDIA's driver, the model sits in the card's memory, the model
-answers through the gateway, and a wrong key is refused.
+answers through the gateway, a wrong key is refused, and the key reaches
+none of LiteLLM's administration (its own admin key never leaves the
+gateway's guest).
 
 ## 2. Use it
 

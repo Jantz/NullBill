@@ -2,6 +2,37 @@
 # Clients that ask for {{ model_gateway_domain }} get step-ca's certificate,
 # which tls_cert renews and reloads nginx for; browsers that open the
 # address get the browser CA's.
+#
+# The key clients send is not LiteLLM's: nginx lets only that key through,
+# and only to an OpenAI client's paths, and sends LiteLLM its own admin key
+# (made in this guest, never sent anywhere). So the clients' key, which the
+# page shows and agents hold, cannot make keys, read the settings or change
+# models through LiteLLM's admin routes.
+# $nb_gateway_client: 1 for the clients' key (keys.conf, root's 0600).
+include /etc/nginx/nullbill/keys.conf;
+# $nb_gateway_upstream: LiteLLM's own key for a client that sent it (upstream.conf).
+include /etc/nginx/nullbill/upstream.conf;
+# A browser's CORS preflight carries no key; LiteLLM answers it unasked.
+map "$request_method:$nb_gateway_client" $nb_gateway_refused {
+    default 1;
+    "~^OPTIONS:" 0;
+    "~:1$" 0;
+}
+{% macro to_litellm(target, authorization) %}
+        proxy_pass http://127.0.0.1:4001{{ target }};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Authorization {{ authorization }};
+        # LiteLLM reads a key from these too; only nginx's counts.
+        proxy_set_header X-LiteLLM-Api-Key "";
+        proxy_set_header Api-Key "";
+        proxy_set_header X-Api-Key "";
+        proxy_set_header X-Goog-Api-Key "";
+        proxy_set_header Ocp-Apim-Subscription-Key "";
+{% endmacro %}
 {% for server in ([{'cert': '/etc/nullbill/tls/' ~ model_gateway_tls_name, 'default': ''}]
                   + ([{'cert': '/etc/nginx/nullbill/browser', 'default': ' default_server'}] if model_gateway_browser_cert | length > 0 else [])) %}
 server {
@@ -18,14 +49,28 @@ server {
     proxy_buffering off;
     proxy_request_buffering off;
     proxy_read_timeout 1h;
+    # nginx's own refusals below; LiteLLM's answers carry their own type.
+    default_type application/json;
+
+    # What an OpenAI-compatible client asks, with or without /v1. LiteLLM
+    # gets the path nginx matched, never the client's own spelling of it,
+    # whose dots and escapes it would read another way (/openai/x%2F..%2F
+    # ..%2Fv1/models is /v1/models to nginx and a passthrough to LiteLLM).
+    # A named capture, since a map's regular expression resets $1.
+    location ~ ^/(?<nb_api>(v1/)?(chat/completions|completions|embeddings|responses|models(/[A-Za-z0-9._:-]+)?))$ {
+        if ($nb_gateway_refused) {
+            return 401 '{"error": {"message": "the model gateway wants its key: Authorization: Bearer <key>", "type": "auth_error"}}\n';
+        }
+{{ to_litellm('/$nb_api$is_args$args', '$nb_gateway_upstream') }}
+    }
+
+    # Whether LiteLLM runs, for anyone: it says nothing more.
+    location = /health/liveliness {
+{{ to_litellm('/health/liveliness', '""') }}
+    }
 
     location / {
-        proxy_pass http://127.0.0.1:4001;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
+        return 404 '{"error": {"message": "the model gateway offers the OpenAI API under /v1 only", "type": "not_found"}}\n';
     }
 }
 {% endfor %}

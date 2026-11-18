@@ -21,7 +21,9 @@ model_gateway_browser_cert: ""
 model_gateway_browser_key: ""
 
 # The key clients send (Authorization: Bearer). apply keeps it in sops and
-# the page shows it. LiteLLM wants it to start with sk-.
+# the page shows it. nginx checks it and passes LiteLLM's own admin key on,
+# which the role makes in the guest and which never leaves it; so this key
+# reaches the OpenAI client paths only, never LiteLLM's admin routes.
 model_gateway_key: ""
 
 # The local model on the inference guest (llama.cpp), and the key it asks for.

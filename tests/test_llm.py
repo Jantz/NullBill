@@ -26,12 +26,23 @@ def test_a_working_model_and_gateway_pass(facts):
         "the local model sits in the graphics card's memory": ("PASS", ""),
         "the local model answers through the model gateway with its key": ("PASS", ""),
         "the model gateway refuses a wrong key": ("PASS", ""),
+        llm.ADMIN_LABEL: ("PASS", ""),
     }
 
 
 def test_a_gateway_that_lets_a_wrong_key_through_fails(facts):
     _, results = checked(facts, wrong="the model gateway refuses a wrong key")
     assert results["the model gateway refuses a wrong key"] == ("FAIL", "nope")
+
+
+def test_the_clients_key_is_tried_on_litellms_admin_routes(facts):
+    plan = strip_notes(build_plan(build_model(fixture_config("mid")), facts("mid")))
+    commands = {label: command for label, command, _ in llm.commands(plan)}
+    admin = commands[llm.ADMIN_LABEL]
+    assert '"Authorization: Bearer $NB_GATEWAY_KEY"' in admin and "/etc/litellm/env" in admin
+    assert all(path in admin for path in ("/key/list", "/model/info", "/config/yaml"))
+    _, results = checked(facts, wrong=llm.ADMIN_LABEL)
+    assert results[llm.ADMIN_LABEL] == ("FAIL", "nope")
 
 
 def test_the_gateway_is_asked_from_inside_its_guest_with_its_own_key(facts):

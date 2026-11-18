@@ -137,6 +137,35 @@
   when: model_gateway_browser_cert | length > 0
   notify: Reload nginx
 
+# LiteLLM's admin key: made here once, read by LiteLLM and by nginx alone,
+# never sent anywhere (not even to the controller). Both files are made
+# again together when either is missing.
+- name: LiteLLM's own key, made in this guest
+  ansible.builtin.shell: |
+    set -eu
+    umask 077
+    env=/etc/litellm/master.env up=/etc/nginx/nullbill/upstream.conf
+    if [ -s "$env" ] && [ -s "$up" ]; then exit 0; fi
+    key="sk-$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+    printf '# Made by nullbill in this guest: the LiteLLM master key.\nNB_MASTER_KEY=%s\n' "$key" >"$env.new"
+    chgrp litellm "$env.new" && chmod 0640 "$env.new"
+    printf '# Made by nullbill in this guest: what nginx sends LiteLLM for the client key.\nmap $nb_gateway_client $nb_gateway_upstream {\n    default "";\n    1 "Bearer %s";\n}\n' "$key" >"$up.new"
+    mv -f "$env.new" "$env" && mv -f "$up.new" "$up"
+    echo made
+  args:
+    executable: /bin/bash
+  register: model_gateway_master
+  changed_when: "'made' in model_gateway_master.stdout"
+  notify: [Restart litellm, Reload nginx]
+
+- name: The clients' key, for nginx alone
+  ansible.builtin.template:
+    src: keys.conf.j2
+    dest: /etc/nginx/nullbill/keys.conf
+    mode: "0600"
+  no_log: true
+  notify: Reload nginx
+
 - name: HTTPS in front of LiteLLM
   ansible.builtin.template:
     src: nullbill-model-gateway.conf.j2

@@ -3,7 +3,9 @@
 # converge twice, run LiteLLM and nginx as their units do in front of a
 # stand-in for llama-server, and prove over HTTPS that only the gateway's
 # key gets an answer, that the model is offered under its own name and as
-# "local", and that the gateway passes the inference key on.
+# "local", that the gateway passes the inference key on, and that the
+# clients' key is not LiteLLM's: it reaches the OpenAI paths only, and
+# LiteLLM's own admin key stays in the guest.
 set -euo pipefail
 # shellcheck source=tools/role-check/role-check.sh
 source /usr/local/lib/role-check.sh
@@ -34,7 +36,16 @@ converge model-gateway.yml -e @/tmp/vars.json
 
 systemd-analyze verify /etc/systemd/system/litellm.service >/tmp/unit.log 2>&1 || { cat /tmp/unit.log; fail "litellm unit"; }
 [ "$(stat -c '%U:%G %a' /etc/litellm/env)" = "root:litellm 640" ] || fail "keys root:litellm 0640"
-pass "the litellm unit passes systemd-analyze; its keys are root's, readable by litellm"
+[ "$(stat -c '%U:%G %a' /etc/litellm/master.env)" = "root:litellm 640" ] || fail "master key root:litellm 0640"
+for f in keys.conf upstream.conf; do
+  [ "$(stat -c '%U:%G %a' "/etc/nginx/nullbill/$f")" = "root:root 600" ] || fail "$f is root's alone"
+done
+master=$(sed -n 's/^NB_MASTER_KEY=//p' /etc/litellm/master.env)
+[[ $master =~ ^sk-[A-Za-z0-9_-]{40,}$ ]] || fail "a master key was made"
+[ "$master" != "$key" ] || fail "the master key is not the clients' key"
+! grep -rq -- "$master" /etc/litellm/env /etc/litellm/config.yaml /etc/nginx/conf.d || fail "the master key is only where it belongs"
+grep -q -- "Bearer $master" /etc/nginx/nullbill/upstream.conf || fail "nginx passes the master key"
+pass "the litellm unit passes systemd-analyze; its keys are root's, readable by litellm; its own admin key was made here"
 
 # llama-server's OpenAI API, as far as the gateway uses it: one answer, and
 # only for the inference key. It records the model asked for.
@@ -70,8 +81,10 @@ python3 /tmp/backend.py "$backend_key" >/tmp/backend.log 2>&1 &
 # LiteLLM as its unit runs it, then nginx.
 exec_start=$(sed -n 's/^ExecStart=//p' /etc/systemd/system/litellm.service)
 set -a
-# shellcheck disable=SC1091
-. /etc/litellm/env
+while read -r env_file; do
+  # shellcheck disable=SC1090
+  . "$env_file"
+done < <(sed -n 's/^EnvironmentFile=//p' /etc/systemd/system/litellm.service)
 set +a
 # shellcheck disable=SC2086 # the unit's command line, split as systemd does
 (cd /var/lib/litellm && runuser -u litellm -- env HOME=/var/lib/litellm $exec_start >/tmp/litellm.log 2>&1 &)
@@ -118,6 +131,43 @@ curl -fsS --cacert /tmp/pki/ca.crt -H "Authorization: Bearer $key" "$url/v1/mode
 python3 -c 'import json; ids={m["id"] for m in json.load(open("/tmp/models.json"))["data"]}; assert ids == {"qwen3.5-9b", "local"}, ids' \
   || fail "models listed as qwen3.5-9b and local"
 pass "with the key, qwen3.5-9b and local both reach the model with the inference key"
+
+# LiteLLM's admin routes, with the clients' key: nginx refuses them all.
+admin() { # key method path
+  curl -sS --path-as-is --cacert /tmp/pki/ca.crt -o /tmp/admin.json -w '%{http_code}' -X "$2" "$url$3" \
+    -H "Authorization: Bearer $1" -H 'Content-Type: application/json' -d '{}'
+}
+for route in "POST /key/generate" "GET /key/list" "GET /model/info" "GET /v1/model/info" "POST /model/new" \
+  "GET /config/yaml" "POST /config/update" "GET /global/spend" "POST /user/new" "GET /health" "GET /" \
+  "GET /v1/../key/list" "GET /v1/models/../../key/list" "GET /v1/models/..%2F..%2Fkey%2Flist"; do
+  code=$(admin "$key" "${route% *}" "${route#* }")
+  [ "$code" = 404 ] || [ "$code" = 400 ] || { cat /tmp/admin.json; fail "the clients' key is refused $route (got $code)"; }
+done
+# Spelled so that nginx reads an OpenAI path and LiteLLM, given the
+# client's spelling, a passthrough or admin route: LiteLLM gets nginx's.
+for path in "/openai/x%2F..%2F..%2Fv1/models" "/key/list/../../v1/models" "/model/info/%2E%2E/%2E%2E/v1/models"; do
+  code=$(admin "$key" GET "$path")
+  case $code in
+    404 | 400) ;;
+    200) grep -q '"qwen3.5-9b"' /tmp/admin.json || { cat /tmp/admin.json; fail "$path reaches the model list alone"; } ;;
+    *) cat /tmp/admin.json; fail "$path is refused or the model list (got $code)" ;;
+  esac
+done
+# The same route with LiteLLM's own key, on localhost: it is an admin route.
+code=$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $master" http://127.0.0.1:4001/model/info)
+[ "$code" = 200 ] || fail "LiteLLM answers /model/info for its own key (got $code)"
+code=$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $key" http://127.0.0.1:4001/model/info)
+[ "${code:0:1}" != 2 ] || fail "LiteLLM does not take the clients' key"
+# Only the clients' key passes nginx: not LiteLLM's, not another case, not in another header.
+[ "$(ask "$master" local)" = 401 ] || fail "nginx refuses LiteLLM's own key"
+[ "$(ask "${key^^}" local)" = 401 ] || fail "nginx compares the key with its case"
+code=$(curl -sS --cacert /tmp/pki/ca.crt -o /dev/null -w '%{http_code}' -H "X-Api-Key: $key" -H "X-LiteLLM-Api-Key: $master" "$url/v1/models")
+[ "$code" = 401 ] || fail "a key in another header is not the key (got $code)"
+# A browser's CORS preflight carries no key and is not nginx's to refuse.
+code=$(curl -sS --cacert /tmp/pki/ca.crt -o /dev/null -w '%{http_code}' -X OPTIONS "$url/v1/chat/completions" \
+  -H 'Origin: https://example.internal' -H 'Access-Control-Request-Method: POST' -H 'Access-Control-Request-Headers: authorization')
+[ "$code" != 401 ] && [ "$code" != 404 ] || fail "a CORS preflight reaches LiteLLM (got $code)"
+pass "the clients' key reaches the OpenAI paths alone; LiteLLM's admin routes take only its own key, which stays in the guest"
 
 # After the requests above the gateway is in use for two minutes, and for
 # as long as a client stays connected.
