@@ -157,7 +157,7 @@ real_sleep = time.sleep
 def sign_in(app, client, password="correct horse battery"):
     code = app.code_file.read_text().strip()
     assert client.call("/api/login", {"secret": code.lower()})[0] == 200
-    assert client.call("/api/password", {"password": password}) == (200, {"ok": True})
+    assert client.call("/api/password", {"password": password, "current": code}) == (200, {"ok": True})
 
 
 def setup(client, action="apply", **more):
@@ -234,8 +234,11 @@ def test_setup_code_then_password(site):
     assert status == 200
     assert "Secure" in client.headers["Set-Cookie"] and "HttpOnly" in client.headers["Set-Cookie"]
     assert "SameSite=Strict" in client.headers["Set-Cookie"]
-    assert client.call("/api/password", {"password": "short"})[0] == 400
-    assert client.call("/api/password", {"password": "correct horse battery"})[0] == 200
+    assert client.call("/api/password", {"password": "short", "current": code})[0] == 400
+    # The session alone does not choose the password: the code is asked again.
+    status, said = client.call("/api/password", {"password": "correct horse battery"})
+    assert status == 400 and said["error"] == "that is not the setup code" and not app.owner_file.exists()
+    assert client.call("/api/password", {"password": "correct horse battery", "current": code.lower()})[0] == 200
     assert not app.code_file.exists()
     stored = json.loads(app.owner_file.read_text())
     assert "correct horse" not in json.dumps(stored)
@@ -379,6 +382,22 @@ def test_connections_past_the_cap_are_closed(tmp_path, monkeypatch):
             raise AssertionError("the page did not take connections again")
     finally:
         server.shutdown()
+
+
+def test_changing_the_password_needs_the_current_one_and_signs_out_everyone_else(site):
+    app, client = site
+    sign_in(app, client)
+    other = Client(client.port, app.home / "web" / "cert.pem")
+    assert other.call("/api/login", {"secret": "correct horse battery"})[0] == 200
+    status, said = client.call("/api/password", {"password": "a stolen session's choice"})
+    assert status == 400 and said["error"] == "that is not your current password"
+    assert client.call("/api/password", {"password": "a stolen session's choice", "current": "guess"})[0] == 400
+    assert other.call("/api/state")[1]["auth"] is True
+    assert client.call("/api/password", {"password": "a much better password", "current": "correct horse battery"})[0] == 200
+    assert client.call("/api/state")[1]["auth"] is True and other.call("/api/state")[1]["auth"] is False
+    assert list(json.loads((app.home / web.SESSIONS).read_text())) == list(app.sessions) and len(app.sessions) == 1
+    assert other.call("/api/login", {"secret": "correct horse battery"})[0] == 401
+    assert other.call("/api/login", {"secret": "a much better password"})[0] == 200
 
 
 def test_api_reads_refuse_requests_from_other_pages_of_the_same_site(site):

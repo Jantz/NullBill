@@ -101,6 +101,9 @@
       <h1 id="password-title">Choose a password</h1>
       <p class="help">You sign in with it from now on, instead of the setup code. At least 12 characters.</p>
       <form id="password-form" class="form" novalidate>
+        <label class="field" id="current-secret-field"><span class="label">Setup code</span>
+          <input id="current-secret" type="password" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" aria-describedby="password-result">
+        </label>
         <label class="field"><span class="label">New password</span>
           <input id="new-password" type="password" autocomplete="new-password" aria-describedby="password-count password-result">
         </label>

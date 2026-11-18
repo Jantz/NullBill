@@ -608,11 +608,21 @@ class App:
         with self.lock:
             self.sessions.update(kept)
 
-    def set_password(self, password: str) -> None:
+    def set_password(self, password: str, current: str, client: str = "", keep: str | None = None) -> None:
+        """A new password, given the current one (the setup code while none
+        is set). Every session but keep's ends: a session alone does not
+        change the password, and whoever held one is signed out by it."""
         if len(password) < MIN_PASSWORD:
             raise NullBillError(f"the password needs at least {MIN_PASSWORD} characters")
+        had = self.owner_file.exists()
+        if not self.check_secret(current, client):
+            raise NullBillError("that is not your current password" if had else "that is not the setup code")
         _write_private(self.owner_file, json.dumps(hash_password(password)))
         self.code_file.unlink(missing_ok=True)
+        kept = hashlib.sha256((keep or "").encode()).hexdigest()
+        with self.lock:
+            self.sessions = {digest: expiry for digest, expiry in self.sessions.items() if digest == kept}
+            self._save_sessions()
         # No job runs before a password exists, so nothing else writes the
         # secrets file now.
         Secrets(self.codec(self.home)).ensure("ntfy_topic", ntfy_topic)
@@ -3536,7 +3546,7 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 return self.json(401, {"error": "sign in first"})
             try:
                 if self.path == "/api/password":
-                    app.set_password(str(body.get("password", "")))
+                    app.set_password(str(body.get("password", "")), str(body.get("current", "")), self.client(), self.token())
                     return self.json(200, {"ok": True})
                 if self.path == "/api/choices":
                     app.save_choices(body)
@@ -3653,6 +3663,8 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 if self.path == "/api/logout":
                     app.logout(self.token())
                     return self.json(200, {"ok": True}, {"Set-Cookie": "nb_session=; Path=/; Secure; HttpOnly; Max-Age=0"})
+            except SignInRefused as exc:
+                return self.json(429, refusal(exc))
             except NullBillError as exc:
                 return self.json(400, refusal(exc))
             return self.json(404, {"error": "not found"})

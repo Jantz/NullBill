@@ -195,7 +195,7 @@ def prepare(app: web.App, home: Path, state: str) -> None:
     demo(home)
     if state == "first":
         return
-    app.set_password(PASSWORD)
+    app.set_password(PASSWORD, app.code_file.read_text().strip())
     if state == "fresh":
         return
     run(app, "probe")

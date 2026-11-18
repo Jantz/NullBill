@@ -79,6 +79,8 @@ let previewTimer = null;
 let previewSeq = 0;
 let statusTimer = null;
 let lastStatus = null;     // the last /api/status
+let gateHasPassword = true; // whether the sign-in form asked for a password (else the setup code)
+let setupCode = "";         // the setup code just signed in with, until the password is chosen
 let pathView = null;       // the last /api/path: how devices reach the server, read on the host just now
 let demand = null;         // the last /api/on-demand: what runs on demand, live from the host
 let job = null;            // the followed run: {id, view, node, offset, timer, watched, feedback}
@@ -4393,11 +4395,15 @@ async function refresh() {
     show("gate", true);
     show("login", !st.auth);
     show("password", st.auth && !st.has_password);
+    gateHasPassword = st.has_password;
     if (!st.auth) {
       $("login-hint").textContent = st.has_password ? "Enter your password." : "Enter the setup code the installer printed in the Proxmox shell.";
       $("secret").focus();
     } else {
-      $("new-password").focus();
+      // The setup code signed in with a moment ago; asked again only after a reload.
+      $("current-secret").value = setupCode;
+      show("current-secret-field", !setupCode);
+      $(setupCode ? "new-password" : "current-secret").focus();
     }
     return;
   }
@@ -5983,6 +5989,9 @@ document.addEventListener("DOMContentLoaded", () => {
     press(submitter(event), "login-result", "Signing in…", async () => {
       if (!field.value.trim()) throw new ApiError("Enter the setup code or your password.", 400);
       await api("/api/login", {secret: field.value});
+      // Choosing the password asks for the code again (it shows that this
+      // is the owner, not just a session): kept until then, never a password.
+      setupCode = gateHasPassword ? "" : field.value;
       field.value = "";
       say("login-result", "", "");
       await refresh();
@@ -5998,9 +6007,20 @@ document.addEventListener("DOMContentLoaded", () => {
     event.preventDefault();
     const field = $("new-password");
     press(submitter(event), "password-result", "Saving the password…", async () => {
+      if (!$("current-secret").value.trim()) {
+        show("current-secret-field", true);
+        throw new ApiError("Enter the setup code the installer printed.", 400);
+      }
       if (field.value.length < 12) throw new ApiError(`Use at least 12 characters; this one has ${field.value.length}.`, 400);
-      await api("/api/password", {password: field.value});
+      try {
+        await api("/api/password", {password: field.value, current: $("current-secret").value});
+      } catch (error) {
+        show("current-secret-field", true);
+        throw error;
+      }
       field.value = "";
+      setupCode = "";
+      $("current-secret").value = "";
       await refresh();
       return "Password saved.";
     }, field);
