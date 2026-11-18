@@ -91,7 +91,13 @@ def test_behind_a_vpn_the_zone_goes_out_to_the_vpns_server_alone(facts):
     assert f"OUT ACCEPT -dest {SERVER} -p udp -dport {PORT} # WireGuard to the owner's VPN, the only way out" in guest_fw
     # Packages come through the proxy, and nothing else leaves.
     assert "-dport 3128" in guest_fw
-    assert sum(line.startswith("OUT ACCEPT") and "-dest +nb-svc-" not in line for line in guest_fw.splitlines()) == 1
+    gateway = plan["zones"]["torrents"]["gateway"]
+    others = [line for line in guest_fw.splitlines() if line.startswith("OUT ACCEPT") and "-dest +nb-svc-" not in line]
+    assert [line.split(" #")[0] for line in others if f"-dest {SERVER} " not in line] == [
+        f"OUT ACCEPT -dest {gateway} -p udp -dport 53",
+        f"OUT ACCEPT -dest {gateway} -p tcp -dport 53",
+    ]
+    assert len(others) == 3
     # Names are looked up through the tunnel: the router answers this zone for NullBill's own names only.
     assert "interface=nb-torrents" in files["router/etc/nullbill/dnsmasq-internal.conf"]
     assert "interface=nb-torrents" not in files["router/etc/nullbill/dnsmasq-external.conf"]

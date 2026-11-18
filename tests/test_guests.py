@@ -5,13 +5,15 @@ import re
 
 import pytest
 from conftest import fixture_config
+from fixturedata import torrents_config
 
 from nullbill.errors import NullBillError
+from nullbill.firewall import render_firewall
 from nullbill.model import build_model
 from nullbill.plan import build_plan
 from nullbill.proxy import render_proxy
 from nullbill.render import strip_notes
-from nullbill.router import render_router
+from nullbill.router import _iface, render_router
 
 
 def planned(facts, cls: str, **config) -> tuple[dict, dict]:
@@ -80,6 +82,31 @@ def test_proxy_zones_resolve_internal_names_only(facts):
     assert "dhcp-range=10.42.3.130,10.42.3.190" in internal
     # The golden image keeps one address while apply bakes it; clones get new MACs.
     assert "dhcp-host=02:4e:42:00:03:1e,10.42.3.129 # linux-runner golden image" in internal
+
+
+@pytest.mark.parametrize("cls", ["mid", "large-torrents"])
+def test_each_zone_asks_for_names_at_its_own_leg_only(facts, cls):
+    # dnsmasq's bind-interfaces does not check where an IPv4 query arrived: a
+    # guest with internal names only asking the forwarding instance at
+    # another zone's address got every name outside.
+    if cls == "large-torrents":
+        model = build_model(torrents_config())
+        plan = build_plan(model, facts("large"))
+    else:
+        plan, model = planned(facts, cls)
+    nft = render_router(plan, model)["etc/nftables.conf"]
+    dns = [line.strip().split(" #")[0] for line in nft.splitlines() if "dport 53 " in line]
+    zones = strip_notes(plan)["zones"]
+    expected = [
+        f'iifname "{_iface(zone)}" ip daddr {z["gateway"]} {proto} dport 53 accept' for proto in ("udp", "tcp") for zone, z in zones.items()
+    ]
+    assert dns == expected and all("saddr" not in line for line in dns)
+    # The guests' own firewall lets each send to its zone's leg alone.
+    files = render_firewall(plan, model)
+    for name, guest in strip_notes(plan)["guests"].items():
+        if guest["kind"] in ("lxc", "vm") and name != "router" and not guest.get("installed"):
+            rules = files[f"{guest['vmid']}.fw"]
+            assert re.findall(r"OUT ACCEPT -dest (\S+) -p udp -dport 53 ", rules) == [zones[guest["zone"]]["gateway"]], name
 
 
 def test_router_links_are_unique_and_short(facts):
