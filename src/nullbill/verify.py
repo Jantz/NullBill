@@ -246,14 +246,16 @@ def resolve_ipv4(name: str) -> str:
     return socket.getaddrinfo(name, 443, socket.AF_INET, socket.SOCK_STREAM)[0][4][0]
 
 
-def _agent_root(target: str, run: Runner) -> Result:
+def _agent_root(target: str, run: Runner, key: str | None = None) -> Result:
     """The owner may give the runtime agent root on the host (hostroot.py);
-    while that lasts, every check of what the agent cannot do is moot."""
+    while that lasts, every check of what the agent cannot do is moot. The
+    agent's key counts wherever it is in root's authorized_keys, with or
+    without NullBill's comment, and so does the host's flag."""
     name = "the agent has no root on the PVE host"
-    rc, out, err = run(target, f"cat {hostroot.KEYS}")
+    rc, out, err = run(target, hostroot.LOOK)
     if rc != 0:
         return Result("FAIL", name, f"cannot read {hostroot.KEYS}: {(err or out).strip()[:120]}")
-    if hostroot.granted(out):
+    if hostroot.granted(out, key):
         return Result("DEGRADED", name, "it has: the switch Root on Proxmox on the page's Agent page (Settings) is on")
     return Result("PASS", name)
 
@@ -385,7 +387,7 @@ def run_verify(
         add(*_lan(lan_host or target.rpartition("@")[2], connect))
     add(*backups.check(plan, target, run, now))
     if "operator" in bare["guests"]:
-        add(_agent_root(target, run))
+        add(_agent_root(target, run, hostroot.public_key(home) if home else None))
     add(*agent.check(plan, target, run, off=off))
     add(*unless_off(lambda r: forge.check(plan, target, r), forge.skipped))
     add(*unless_off(lambda r: ci.check(plan, target, r), ci.skipped))

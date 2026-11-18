@@ -64,13 +64,13 @@ While the owner's switch on the page is on:
 
 | What | How | Where |
 | --- | --- | --- |
-| Root on the PVE host | The page writes one `authorized_keys` line for the agent's key (made in the operator, never copied out), accepted from the operator's address only, through `command="nb-agent-command"`; the host firewall lets the operator reach port 22 | `hostroot.py`, `operator`, `host_baseline`, `catalog.yaml` |
+| Root on the PVE host | The page writes one `authorized_keys` line for the agent's key (made in the operator, never copied out), `restrict` (no port, agent or X11 forwarding, no pty), accepted from the operator's address only, through `command="nb-agent-command"`, which as root runs nothing unless the root-only `/etc/nullbill/agent-root-on` exists; the host firewall lets the operator reach port 22 | `hostroot.py`, `operator`, `host_baseline`, `catalog.yaml` |
 | Setup and updates through the page | `/api/agent/apply` (all or one stage) and `/api/agent/upgrade` for the operator's token; remote agents never get them | `web/server.py`, `nb-page` |
 | The owner hears of each | The page sends each job the agent starts, and how it ended, to the owner's ntfy topic; a job it cannot announce does not start | `web/server.py` |
 | NullBill moves only forward along `main` | `nullbill upgrade` fetches `main` and refuses local changes or going back | `upgrade.py` |
 | Fixes reach NullBill only by pull request | The agent's GitHub token is the owner's fine-grained token for this repository; its rules say never push to main; the pre-push hook runs gitleaks and a deny-list that apply makes from the probe and config | `operator`, `apply.agent_denylist` |
 | Still on record | Every host command goes to the journal before it runs (`{job="commands", host="pve"}` in Loki), failing closed; auditd records root's execs | `nb-agent-command`, `log_shipper`, `host_baseline` |
-| Cut off at once | Turning the switch off takes the line out first; the switch is off even if that fails, and the page says to stop the operator | `web/server.py` |
+| Cut off at once | Turning the switch off takes the flag out first, then the line, then ends every SSH session from the operator's address, so a connection the agent kept open (ControlMaster) and what it runs end too; the switch is off even if that fails or the page does not know where the host is, and the page says to stop the operator | `web/server.py`, `hostroot.py` |
 
 Consequences:
 
@@ -83,7 +83,16 @@ Consequences:
   record of host commands is complete only up to the moment an agent that
   set out to hide something stops it. Loki keeps what reached it.
 - verify shows `the agent has no root on the PVE host` as DEGRADED while the
-  switch is on, so it is never mistaken for the confined default.
+  switch is on, so it is never mistaken for the confined default: the
+  agent's key anywhere in root's authorized_keys, with or without
+  NullBill's comment, or the flag left behind, counts.
+- Off ends the sessions and tunnels; what root already did while on (a
+  unit, a key of its own, a changed script) stays done.
+- 2026-11-18: the line had no `restrict`, and the host's sshd forwards
+  TCP, so `ssh -N -L`/`-D`/`-W` through the key reached anything the host
+  reaches with no command run and nothing recorded; and off rewrote only
+  authorized_keys, so a ControlMaster connection opened while on kept
+  running root commands. Both are closed as above.
 - The PVE token, agent SSH certificates and the checks that prove their
   limits are unchanged; they still bind remote agents and the operator's
   token.

@@ -2369,15 +2369,21 @@ class App:
         return reach_target(self.home, configured, yaml.safe_load(path.read_text()) or {})
 
     def set_agent_powers(self, body: dict) -> None:
-        """On: the agent's key gets root on the host. Off: the key is taken
-        out first, and the switch is off even when that fails."""
+        """On: the agent's key gets root on the host. Off: the host's flag and
+        the key are taken out first, then every SSH session from the
+        operator's address ends; the switch is off even when that fails or
+        the page does not know where the host is, and the owner is told."""
         enabled = body.get("enabled")
         if not isinstance(enabled, bool):
             raise NullBillError("send enabled: true or false")
         key, operator, target = hostroot.public_key(self.home), self.guest_ip("operator"), self.host_target()
         if enabled and not (key and operator and target):
             raise NullBillError("the agent's key comes from the operator: run setup first")
-        rc, _, err = self.host_run(target, hostroot.command(hostroot.line(key, operator) if enabled else None)) if target else (0, "", "")
+        if target:
+            grant = hostroot.line(key, operator) if enabled else None
+            rc, _, err = self.host_run(target, hostroot.command(grant, operator))
+        else:
+            rc, err = 255, "the page does not know where the host is: no target in config.yaml or no plan"
         if rc != 0 and enabled:
             raise NullBillError(f"could not give the agent's key root on the host: {err.strip()[:200] or f'exit {rc}'}")
         _write_private(self.home / hostroot.SWITCH, json.dumps({"enabled": enabled, "changed": time.time()}) + "\n")

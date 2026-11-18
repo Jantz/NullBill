@@ -5,6 +5,7 @@ import time
 import pytest
 from fixturedata import CLASSES, FIXTURES, fixture_config, write_raw  # noqa: F401
 
+from nullbill import hostroot
 from nullbill.probe import parse
 from nullbill.tailscale import MissingScope, TailscaleError
 
@@ -242,7 +243,7 @@ def agent_api(
     def run(target, command):
         # The operator is set up, nb-ssh reaches the managed guest as agent
         # (uid 1001) and not the router, and Loki holds the command.
-        if command == "cat /root/.ssh/authorized_keys":
+        if command == hostroot.LOOK:
             # The owner's switch is off: no agent line (tests/test_hostroot.py has it on).
             return 0, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA nullbill@nullbill\n", ""
         if "test -s /etc/nullbill/agent/pve-token || echo unset" in command:

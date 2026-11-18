@@ -143,12 +143,29 @@ fi
 pass "nb-ssh logs in to an agent-managed guest as agent with a reused certificate, never as root"
 
 # Root on "the host" once the page's switch puts the agent's key there,
-# with the line hostroot.line makes: from the operator, every command
-# recorded first.
+# with the very commands the page runs on the host (tests/hostroot.json,
+# kept equal to hostroot.command by tests/test_hostroot.py): from the
+# operator, restricted, every command recorded first, nothing as root
+# without the switch's flag, and off ends the sessions it kept open.
+apt-get install -y --no-install-recommends iproute2 procps >/tmp/apt-hostroot.log 2>&1 || { cat /tmp/apt-hostroot.log; fail "iproute2 and procps"; }
+switch() {
+  python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); print(d[sys.argv[2]].replace(d["key"], sys.argv[3]))' \
+    /ansible/roles/operator/tests/hostroot.json "$1" "$(cut -d' ' -f1,2 /home/agent/.ssh/nb-host.pub)" >/tmp/switch.sh
+  bash /tmp/switch.sh
+}
 test "$(stat -c '%a %U' /home/agent/.ssh/nb-host)" = "600 agent" || fail "the agent's host key is not the agent's alone"
 if su - agent -c 'ssh -o BatchMode=yes pve true' 2>/dev/null; then fail "ssh pve worked before the switch"; fi
+# The owner's key, which the switch never leaves the host without, logs in
+# from another address than the operator's.
 install -d -m 0700 /root/.ssh
-echo "from=\"127.0.0.1\",command=\"/usr/local/sbin/nb-agent-command\",no-agent-forwarding,no-X11-forwarding $(cut -d' ' -f1,2 /home/agent/.ssh/nb-host.pub) nullbill-agent-root" >>/root/.ssh/authorized_keys
+ssh-keygen -q -t ed25519 -N '' -C owner -f /tmp/owner
+cat /tmp/owner.pub >>/root/.ssh/authorized_keys
+owner_ssh() {
+  ssh -n -b 127.0.0.2 -i /tmp/owner -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR root@127.0.0.1 "$@"
+}
+switch on || fail "the switch's on command"
+test "$(stat -c '%a %U' /etc/nullbill/agent-root-on)" = "600 root" || fail "the switch's flag is not root's alone"
 out=$(su - agent -c "ssh -o BatchMode=yes pve 'id -un; echo root-marker'" 2>/tmp/pve.log) || { cat /tmp/pve.log /tmp/sshd.log; fail "ssh pve"; }
 test "$out" = "root
 root-marker" || fail "ssh pve ran as '$out'"
@@ -157,14 +174,45 @@ import json, sys
 sys.exit(not [e for e in map(json.loads, sys.stdin) if e["MESSAGE"] == "ssh: id -un; echo root-marker" and e["_UID"] == "0"])' ||
   fail "the host command is not in the journal before it ran"
 if su - agent -c 'ssh -o BatchMode=yes pve' </dev/null >/dev/null 2>&1; then fail "ssh pve opened a shell without a command"; fi
-sed -i '/ nullbill-agent-root$/d' /root/.ssh/authorized_keys
+# No forwarding through the key: a tunnel would run no command, so nothing
+# would record it.
+out=$(su - agent -c 'timeout 20 ssh -o BatchMode=yes -W 127.0.0.1:22 pve' </dev/null 2>/dev/null || true)
+case "$out" in *SSH-2.0*) fail "the agent's root key forwards a connection" ;; esac
+# A refused forward ends ssh with 255; a granted one would wait for the timeout.
+rc=0
+su - agent -c 'timeout 20 ssh -o BatchMode=yes -o ExitOnForwardFailure=yes -N -R 127.0.0.1:18022:127.0.0.1:22 pve' </dev/null 2>/dev/null || rc=$?
+test "$rc" = 255 || fail "the agent's root key forwarded a remote port (exit $rc)"
+# Without the flag root runs nothing, even with the line in place.
+mv /etc/nullbill/agent-root-on /tmp/agent-root-on
+if su - agent -c 'ssh -o BatchMode=yes pve true' 2>/dev/null; then fail "ssh pve ran a command as root without the switch's flag"; fi
+mv /tmp/agent-root-on /etc/nullbill/agent-root-on
+# Off while the agent holds a connection open (ControlMaster) and runs a
+# long command, and the owner has a session of their own.
+su - agent -c 'ssh -o BatchMode=yes -o ControlMaster=yes -o ControlPath=/tmp/agent-cm -o ControlPersist=120 -N -f pve' ||
+  fail "a ControlMaster connection while the switch is on"
+test "$(su - agent -c "ssh -o ControlPath=/tmp/agent-cm pve 'echo through-master'")" = through-master || fail "a command through the master"
+su - agent -c "ssh -o BatchMode=yes pve 'sleep 307'" </dev/null >/dev/null 2>&1 &
+owner_ssh 'sleep 311' >/dev/null 2>&1 &
+for _ in $(seq 20); do pgrep -fx 'sleep 307' >/dev/null && pgrep -fx 'sleep 311' >/dev/null && break; sleep 0.5; done
+pgrep -fx 'sleep 307' >/dev/null && pgrep -fx 'sleep 311' >/dev/null || fail "the long commands did not start"
+switch off || fail "the switch's off command"
+test ! -e /etc/nullbill/agent-root-on || fail "the switch's flag stayed"
+! grep -q ' nullbill-agent-root$' /root/.ssh/authorized_keys || fail "the switch's line stayed"
+sleep 1
+if pgrep -fx 'sleep 307' >/dev/null; then fail "the agent's command kept running after the switch went off"; fi
+if su - agent -c "ssh -o BatchMode=yes -o ControlPath=/tmp/agent-cm -o ControlMaster=no pve 'echo after'" 2>/dev/null; then
+  fail "a connection kept open from before ran a command after the switch went off"
+fi
+pgrep -fx 'sleep 311' >/dev/null || fail "the switch's off ended the owner's own session"
+pkill -fx 'sleep 311' || true
 if su - agent -c 'ssh -o BatchMode=yes pve true' 2>/dev/null; then fail "ssh pve worked after the switch went off"; fi
+grep -q '^ssh-ed25519 .* owner$' /root/.ssh/authorized_keys || fail "the switch took the owner's key"
 sed -i 's/^127.0.0.1 ssh-ed25519 .*/127.0.0.1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOtherHostOtherHostOtherHostOtherHostOther/' /etc/ssh/ssh_known_hosts
-echo "from=\"127.0.0.1\",command=\"/usr/local/sbin/nb-agent-command\" $(cut -d' ' -f1,2 /home/agent/.ssh/nb-host.pub) nullbill-agent-root" >>/root/.ssh/authorized_keys
+switch on
 if su - agent -c 'ssh -o BatchMode=yes pve true' 2>/dev/null; then fail "ssh pve trusted a host key that is not the pinned one"; fi
-sed -i '/ nullbill-agent-root$/d' /root/.ssh/authorized_keys
+switch off
 converge operator.yml -e "@$vars"
-pass "with the switch's line the agent runs one recorded command at a time as root on the pinned host, and nothing without it"
+pass "with the switch on the agent runs one recorded command at a time as root on the pinned host, no tunnels; off ends what it kept open"
 
 test "$(su - agent -c 'git config user.email')" = "1000+owner-a@users.noreply.github.com" || fail "the agent's git identity"
 printf 'protocol=https\nhost=github.com\n\n' | su - agent -c 'git credential fill' | grep -qx 'password=github_pat_throwaway' ||

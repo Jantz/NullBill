@@ -1961,9 +1961,11 @@ def test_the_owners_switch_gives_the_agent_root_on_the_host_and_setup_through_th
     assert status == 200 and job["args"] == ["upgrade"]
     wait(client, job["id"])
 
-    # Off: the key comes out of the host first, and the API closes again.
+    # Off: the flag and the key come out of the host first, the operator's
+    # sessions end, and the API closes again.
     assert client.call("/api/agent-powers", {"enabled": False}) == (200, {"ok": True, "agent_powers": False})
-    assert host[-1] == ("root@192.0.2.10", web.hostroot.command(None))
+    assert host[-1] == ("root@192.0.2.10", web.hostroot.command(None, "127.0.0.1"))
+    assert "dst 127.0.0.1" in host[-1][1]
     assert agent.call("/api/agent/apply", {})[0] == 403
     assert agent.call(f"/api/agent/jobs/{owner['id']}")[0] == 404
     # Off even when the host cannot be reached, and the owner is told what to do.
@@ -1973,6 +1975,11 @@ def test_the_owners_switch_gives_the_agent_root_on_the_host_and_setup_through_th
     (app.home / web.hostroot.SWITCH).write_text('{"enabled": true}\n')
     status, data = client.call("/api/agent-powers", {"enabled": False})
     assert status == 400 and "stop the operator container" in data["error"] and not app.agent_powers()
+    # Without a host to reach, off says so rather than claim the key is gone.
+    (app.home / "config.yaml").write_text("{}\n")
+    (app.home / web.hostroot.SWITCH).write_text('{"enabled": true}\n')
+    status, data = client.call("/api/agent-powers", {"enabled": False})
+    assert status == 400 and "does not know where the host is" in data["error"] and not app.agent_powers()
 
 
 def test_a_remote_agent_never_gets_setup_even_with_the_switch_on(site):

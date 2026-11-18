@@ -5,6 +5,15 @@
 # uid, which the log shipper sends to Loki, then runs it in bash without
 # the agent's startup files, which are not recorded. A session without a
 # command is refused, and so is a command that cannot be recorded.
+#
+# On the PVE host the agent's root key runs it (src/nullbill/hostroot.py):
+# as root it runs nothing unless the owner's switch is on, which the page
+# marks with /etc/nullbill/agent-root-on after the key and takes away before
+# the key, so a connection kept open from before runs nothing more.
+if [ "$(id -u)" = 0 ] && [ ! -e /etc/nullbill/agent-root-on ]; then
+  echo "nb-agent-command: the owner's switch is off; nothing runs as root" >&2
+  exit 1
+fi
 if [ -z "${SSH_ORIGINAL_COMMAND:-}" ]; then
   echo "agent sessions run one command each: nb-ssh GUEST COMMAND" >&2
   exit 1

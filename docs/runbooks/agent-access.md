@@ -131,7 +131,8 @@ Each step works alone; do them in this order when you want it stopped now.
    agent holds works without it: its token, certificates, host key and API
    key are only there. Then turn the switch off on the page, or remove the
    line ending in `nullbill-agent-root` from `/root/.ssh/authorized_keys`
-   on the host yourself.
+   and `rm /etc/nullbill/agent-root-on` on the host yourself (without that
+   file nb-agent-command runs nothing as root).
 2. Revoke the PVE token: `pveum user token remove nb-agent@pve operator`.
    `nullbill apply` creates a new one later.
 3. Stop new SSH certificates: on step-ca, replace
