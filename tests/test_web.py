@@ -256,7 +256,129 @@ def test_lockout_after_repeated_failures(site):
     code = app.code_file.read_text().strip()
     for _ in range(web.LOCKOUT_FAILURES):
         assert client.call("/api/login", {"secret": "nope"})[0] == 401
-    assert client.call("/api/login", {"secret": code})[0] == 401
+    status, said = client.call("/api/login", {"secret": code})
+    assert status == 429 and said["error"] == "Sign-in is paused after too many wrong tries. Try again in 5 minutes."
+    assert not client.cookie
+
+
+def test_wrong_sign_ins_count_per_address_and_tailscale_has_its_own(site, monkeypatch):
+    # One device on the LAN used to pause sign-in for everyone, over
+    # Tailscale too: every tailnet login comes through the vpn guest.
+    app, _ = site
+    (app.home / "plan.yaml").write_text(yaml.safe_dump({"guests": {"vpn": {"ip": "10.42.1.2"}}}))
+    code = app.code_file.read_text().strip()
+    for _ in range(web.LOCKOUT_FAILURES):
+        assert app.login("nope", "192.168.1.30") is None
+    with pytest.raises(web.SignInRefused, match="paused"):
+        app.login(code, "192.168.1.30")
+    assert app.login(code, "192.168.1.31") is not None
+    assert app.login(code, "::ffff:10.42.1.2") is not None
+    # Many addresses buy no more guesses: an IPv6 /64 is one, and all
+    # addresses but the vpn guest's share a ceiling.
+    for n in range(web.LOCKOUT_FAILURES):
+        assert app.login("nope", f"2001:db8::{n + 1:x}") is None
+    with pytest.raises(web.SignInRefused):
+        app.login(code, "2001:db8::ffff")
+    for n in range(web.LOCKOUT_ELSEWHERE - 2 * web.LOCKOUT_FAILURES):
+        assert app.login("nope", f"192.168.2.{n + 1}") is None
+    with pytest.raises(web.SignInRefused):
+        app.login(code, "192.168.3.1")
+    assert app.login(code, "10.42.1.2") is not None
+    # The pause ends with its time.
+    later = time.time() + web.LOCKOUT_S + 1
+    monkeypatch.setattr(web.time, "time", lambda: later)
+    assert app.login(code, "192.168.1.30") is not None
+
+
+def test_parallel_sign_ins_get_no_more_guesses_and_two_password_checks_at_once(site, monkeypatch):
+    # Each password check is scrypt with 32 MiB. 60 at once used to run 59
+    # of them side by side, and every one was a guess past the lockout.
+    app, client = site
+    sign_in(app, client)
+    real = web.check_password
+    count = threading.Lock()
+    seen = {"calls": 0, "now": 0, "most": 0}
+
+    def slow(secret, stored):
+        with count:
+            seen["calls"] += 1
+            seen["now"] += 1
+            seen["most"] = max(seen["most"], seen["now"])
+        try:
+            real_sleep(0.05)
+            return real(secret, stored)
+        finally:
+            with count:
+                seen["now"] -= 1
+
+    monkeypatch.setattr(web, "check_password", slow)
+    outcomes = []
+
+    def guess(n):
+        try:
+            outcomes.append(app.login(f"wrong guess {n}", "192.168.1.40"))
+        except web.SignInRefused as exc:
+            outcomes.append(exc.messages[0])
+
+    threads = [threading.Thread(target=guess, args=(n,)) for n in range(60)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert seen["calls"] <= web.LOCKOUT_FAILURES and seen["most"] <= web.PASSWORD_CHECKS
+    assert outcomes.count(None) == seen["calls"] and len(app.failures["192.168.1.40"]) == seen["calls"]
+    assert all("paused" in o or "busy" in o for o in outcomes if o is not None)
+    with pytest.raises(web.SignInRefused):
+        app.login("correct horse battery", "192.168.1.40")
+    # Right ones are not counted against the address.
+    assert app.login("correct horse battery", "192.168.1.41") is not None
+    assert not app.failures.get("192.168.1.41")
+
+
+def test_a_sign_in_waiting_for_a_password_check_is_told_to_try_again(site, monkeypatch):
+    app, client = site
+    sign_in(app, client)
+    monkeypatch.setattr(web, "PASSWORD_WAIT_S", 0.01)
+    go = threading.Event()
+    monkeypatch.setattr(web, "check_password", lambda secret, stored: go.wait(10) and False)
+    held = [threading.Thread(target=app.login, args=("held", "192.168.1.50")) for _ in range(web.PASSWORD_CHECKS)]
+    for thread in held:
+        thread.start()
+    deadline = time.monotonic() + 10
+    while len(app.failures.get("192.168.1.50", [])) < web.PASSWORD_CHECKS and time.monotonic() < deadline:
+        real_sleep(0.01)
+    real_sleep(0.05)
+    status, said = client.call("/api/login", {"secret": "correct horse battery"})
+    assert status == 429 and "busy" in said["error"]
+    # Not a guess: it is not counted.
+    assert not app.failures.get("127.0.0.1")
+    go.set()
+    for thread in held:
+        thread.join()
+    assert len(app.failures["192.168.1.50"]) == web.PASSWORD_CHECKS
+
+
+def test_connections_past_the_cap_are_closed(tmp_path, monkeypatch):
+    monkeypatch.setattr(web, "MAX_CONNECTIONS", 2)
+    _, client, server = start_site(tmp_path, monkeypatch)
+    try:
+        held = [socket.create_connection(("127.0.0.1", client.port)) for _ in range(2)]
+        real_sleep(0.2)
+        with pytest.raises((ConnectionError, ssl.SSLError, http.client.RemoteDisconnected, OSError)):
+            client.call("/api/state")
+        for sock in held:
+            sock.close()
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            try:
+                assert client.call("/api/state")[0] == 200
+                break
+            except (ConnectionError, ssl.SSLError, http.client.RemoteDisconnected, OSError):
+                real_sleep(0.05)
+        else:
+            raise AssertionError("the page did not take connections again")
+    finally:
+        server.shutdown()
 
 
 def test_api_reads_refuse_requests_from_other_pages_of_the_same_site(site):

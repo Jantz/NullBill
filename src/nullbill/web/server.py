@@ -17,6 +17,7 @@ import functools
 import hashlib
 import hmac
 import http.server
+import ipaddress
 import json
 import math
 import os
@@ -87,8 +88,23 @@ from nullbill.web.services import PASSWORDS, services, shares
 SESSION_S = 12 * 3600
 APPLY_STAGES = [name for name, _ in STAGES]
 MIN_PASSWORD = 12
+# Wrong sign-ins are counted per address (an IPv6 one by its /64), and a
+# sign-in still being checked counts as wrong until it is not, so parallel
+# tries get no more guesses. Every tailnet device comes in through the vpn
+# guest, whose address has a count of its own: a device on the LAN cannot
+# pause sign-in over Tailscale. All other addresses together get at most
+# LOCKOUT_ELSEWHERE, so many addresses buy no more guesses.
 LOCKOUT_FAILURES = 10
+LOCKOUT_ELSEWHERE = 50
 LOCKOUT_S = 300
+TAILNET_TRIES = "tailnet"
+# scrypt as hash_password sets it takes 32 MiB, and the controller has 768:
+# at most this many run at once, and a sign-in that waits longer for one is
+# answered 429 instead of piling up.
+PASSWORD_CHECKS = 2
+PASSWORD_WAIT_S = 3
+# Connections served at once; one more is closed at once (PageServer).
+MAX_CONNECTIONS = 256
 # Sec-Fetch-Site values a GET under /api/ is answered for (Handler.do_GET).
 FETCH_SITES = ("same-origin", "none")
 WORKLOADS = workloads.WORKLOADS
@@ -302,6 +318,11 @@ def ntfy_topic() -> str:
     return "nullbill-" + secrets.token_urlsafe(18)
 
 
+class SignInRefused(NullBillError):
+    """A sign-in that was not tried: paused after wrong tries, or waiting
+    for others to be checked. Answered 429 with its message."""
+
+
 def hash_password(password: str, salt: bytes | None = None) -> dict:
     salt = salt or secrets.token_bytes(16)
     digest = hashlib.scrypt(password.encode(), salt=salt, n=2**15, r=8, p=1, maxmem=64 * 2**20)
@@ -430,7 +451,9 @@ class App:
     home: Path
     command: list[str] = field(default_factory=lambda: [sys.executable, "-m", "nullbill"])
     sessions: dict[str, float] = field(default_factory=dict)
-    failures: list[float] = field(default_factory=list)
+    # Wrong sign-ins (and those being checked) by where they came from (App.tries).
+    failures: dict[str, list[float]] = field(default_factory=dict)
+    password_checks: threading.BoundedSemaphore = field(default_factory=lambda: threading.BoundedSemaphore(PASSWORD_CHECKS))
     jobs: dict[str, Job] = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock)
     # The secrets file, opened afresh for each use so apply's writes show.
@@ -497,23 +520,66 @@ class App:
             _write_private(self.code_file, "-".join(words) + "\n")
 
     # Sessions.
-    def login(self, secret: str) -> str | None:
-        now = time.time()
-        with self.lock:
-            self.failures = [t for t in self.failures if now - t < LOCKOUT_S]
-            if len(self.failures) >= LOCKOUT_FAILURES:
-                return None
-        if self.owner_file.exists():
-            ok = check_password(secret, json.loads(self.owner_file.read_text()))
-        else:
+    def tries(self, client: str) -> str:
+        """Whose count of wrong sign-ins a request adds to (LOCKOUT_FAILURES)."""
+        address = client.removeprefix("::ffff:")
+        vpn = self.guest_ip("vpn")
+        if vpn is not None and address == vpn:
+            return TAILNET_TRIES
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError:
+            return address
+        return str(ipaddress.ip_network(f"{ip}/64", strict=False)) if ip.version == 6 else str(ip)
+
+    def _paused(self, counted: str, now: float) -> None:
+        """Raises SignInRefused while counted has too many wrong sign-ins. Under the lock."""
+        self.failures = {where: kept for where, times in self.failures.items() if (kept := [t for t in times if now - t < LOCKOUT_S])}
+        mine = sorted(self.failures.get(counted, []))
+        over = [mine[len(mine) - LOCKOUT_FAILURES]] if len(mine) >= LOCKOUT_FAILURES else []
+        if counted != TAILNET_TRIES:
+            elsewhere = sorted(t for where, times in self.failures.items() if where != TAILNET_TRIES for t in times)
+            if len(elsewhere) >= LOCKOUT_ELSEWHERE:
+                over.append(elsewhere[len(elsewhere) - LOCKOUT_ELSEWHERE])
+        if over:
+            minutes = max(1, math.ceil((max(over) + LOCKOUT_S - now) / 60))
+            raise SignInRefused(f"Sign-in is paused after too many wrong tries. Try again in {minutes} minute{'s' if minutes > 1 else ''}.")
+
+    def _secret_matches(self, secret: str) -> bool:
+        if not self.owner_file.exists():
             code = self.code_file.read_text().strip() if self.code_file.exists() else ""
-            ok = bool(code) and hmac.compare_digest(secret.strip().upper(), code)
+            return bool(code) and hmac.compare_digest(secret.strip().upper(), code)
+        if not self.password_checks.acquire(timeout=PASSWORD_WAIT_S):
+            raise SignInRefused("The server is busy checking other sign-ins. Try again in a moment.")
+        try:
+            return check_password(secret, json.loads(self.owner_file.read_text()))
+        finally:
+            self.password_checks.release()
+
+    def check_secret(self, secret: str, client: str) -> bool:
+        """Whether secret is the password, or the setup code while none is
+        set, counted against the client's wrong tries."""
+        counted, now = self.tries(client), time.time()
         with self.lock:
-            if not ok:
-                self.failures.append(now)
-                return None
+            self._paused(counted, now)
+            self.failures.setdefault(counted, []).append(now)
+        wrong = False
+        try:
+            wrong = not self._secret_matches(secret)
+        finally:
+            # Taken back unless it was a wrong guess: right, or not tried.
+            if not wrong:
+                with self.lock:
+                    if now in self.failures.get(counted, []):
+                        self.failures[counted].remove(now)
+        return not wrong
+
+    def login(self, secret: str, client: str = "") -> str | None:
+        if not self.check_secret(secret, client):
+            return None
+        with self.lock:
             token = secrets.token_urlsafe(32)
-            self.sessions[hashlib.sha256(token.encode()).hexdigest()] = now + SESSION_S
+            self.sessions[hashlib.sha256(token.encode()).hexdigest()] = time.time() + SESSION_S
             self._save_sessions()
             return token
 
@@ -3162,6 +3228,28 @@ class PageServer(http.server.ThreadingHTTPServer):
     request_queue_size = 128
     daemon_threads = True
 
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        # A thread per connection, so a cap on both: past it a connection
+        # is closed unread instead of taking the controller's memory.
+        self.connections = threading.BoundedSemaphore(MAX_CONNECTIONS)
+
+    def process_request(self, request, client_address) -> None:
+        if not self.connections.acquire(blocking=False):
+            self.close_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self.connections.release()
+            raise
+
+    def process_request_thread(self, request, client_address) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.connections.release()
+
     def shutdown_request(self, request) -> None:
         try:
             request.shutdown(socket.SHUT_WR)
@@ -3435,7 +3523,10 @@ def make_handler(app: App) -> type[http.server.BaseHTTPRequestHandler]:
                 except NullBillError as exc:
                     return self.json(409, refusal(exc))
             if self.path == "/api/login":
-                token = app.login(str(body.get("secret", "")))
+                try:
+                    token = app.login(str(body.get("secret", "")), self.client())
+                except SignInRefused as exc:
+                    return self.json(429, refusal(exc))
                 if token is None:
                     time.sleep(1)
                     return self.json(401, {"error": "wrong code or password"})
