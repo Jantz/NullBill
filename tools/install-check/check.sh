@@ -46,7 +46,7 @@ echo "ok   a second run keeps the container, key, setup code and the host keys N
 jar=$(mktemp)
 api() { curl -fsSk -b "$jar" -c "$jar" -H 'X-NullBill: 1' -H 'Content-Type: application/json' "$url$1" ${2:+-d "$2"}; }
 api /api/login "{\"secret\": \"$code\"}" >/dev/null || fail "sign in with the setup code"
-api /api/password '{"password": "correct horse battery"}' >/dev/null || { in_ct tail /var/log/nullbill-web.log; fail "choose a password"; }
+api /api/password '{"password": "correct horse battery", "current": "'"$code"'"}' >/dev/null || { in_ct tail /var/log/nullbill-web.log; fail "choose a password"; }
 topic=$(api /api/state | grep -o '"ntfy_url": "[^"]*"' | cut -d'"' -f4)
 [[ $topic =~ ^https://ntfy\.sh/nullbill-[A-Za-z0-9_-]{24}$ ]] || fail "the page shows an ntfy topic: $topic"
 in_ct grep -q '^ntfy_topic: ENC\[' /var/lib/nullbill/secrets.sops.yaml || fail "the topic is stored encrypted"
