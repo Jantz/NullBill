@@ -52,7 +52,6 @@
       - --provisioner=admin
       - "--password-file={{ step_ca_home }}/secrets/password"
       - "--provisioner-password-file={{ step_ca_home }}/secrets/password"
-      - --acme
       - --ssh
     creates: "{{ step_ca_home }}/config/ca.json"
   environment:
@@ -91,6 +90,24 @@
     STEPPATH: "{{ step_ca_home }}"
   register: step_ca_agent
   changed_when: (step_ca_agent.stdout | from_json).changed | length > 0
+  notify: Restart step-ca
+
+# No ACME: nothing in NullBill uses it, and every zone reaches the CA, so
+# any guest could have had a certificate for any name it answers for. A CA
+# made before this keeps one from `step ca init --acme`; it goes.
+- name: Read the CA's provisioners
+  ansible.builtin.slurp:
+    src: "{{ step_ca_home }}/config/ca.json"
+  register: step_ca_config
+
+- name: No ACME provisioner
+  ansible.builtin.command:
+    argv: [step, ca, provisioner, remove, "{{ item }}", "--ca-config={{ step_ca_home }}/config/ca.json"]
+  environment:
+    STEPPATH: "{{ step_ca_home }}"
+  loop: >-
+    {{ (step_ca_config.content | b64decode | from_json).authority.provisioners
+       | selectattr('type', 'equalto', 'ACME') | map(attribute='name') | list }}
   notify: Restart step-ca
 
 - name: Hand the CA files to the step user

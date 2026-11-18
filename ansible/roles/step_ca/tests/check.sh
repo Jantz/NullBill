@@ -12,6 +12,7 @@ echo "127.0.0.1 step-ca.nullbill.internal" >>/etc/hosts
 # No init in the container: start the CA the way the unit does.
 setpriv --reuid=step --regid=step --init-groups \
   step-ca /etc/step-ca/config/ca.json --password-file /etc/step-ca/secrets/password >/tmp/ca.log 2>&1 &
+ca_pid=$!
 for _ in $(seq 20); do step ca health --ca-url https://step-ca.nullbill.internal --root /etc/step-ca/certs/root_ca.crt >/dev/null 2>&1 && break; sleep 0.5; done
 step ca health --ca-url https://step-ca.nullbill.internal --root /etc/step-ca/certs/root_ca.crt | grep -qx ok || { cat /tmp/ca.log; fail "CA health"; }
 pass "CA answers on 443 as the step user"
@@ -24,8 +25,27 @@ openssl verify -CAfile /etc/step-ca/certs/root_ca.crt -untrusted /etc/step-ca/ce
 openssl x509 -in leaf.crt -noout -ext subjectAltName | grep -q "DNS:forgejo.nullbill.internal" || fail "SAN"
 pass "issues a certificate that chains to the root"
 
-curl -fsS --cacert /etc/step-ca/certs/root_ca.crt https://step-ca.nullbill.internal/acme/acme/directory | grep -q newOrder || fail "ACME directory"
-pass "ACME provisioner serves its directory"
+no_acme() {
+  python3 -c 'import json; p = json.load(open("/etc/step-ca/config/ca.json"))["authority"]["provisioners"]; assert not [x for x in p if x["type"] == "ACME"], p' ||
+    fail "the CA has an ACME provisioner"
+  code=$(curl -sS -o /dev/null -w '%{http_code}' --cacert /etc/step-ca/certs/root_ca.crt https://step-ca.nullbill.internal/acme/acme/directory)
+  case $code in 2*) fail "the CA serves an ACME directory ($code)" ;; esac
+}
+no_acme
+pass "no ACME provisioner, which any zone could have used for any name"
+
+# A CA made by an earlier role still has its ACME provisioner: the next run takes it out.
+step ca provisioner add acme --type ACME --ca-config /etc/step-ca/config/ca.json >/tmp/acme.log 2>&1 || { cat /tmp/acme.log; fail "add an ACME provisioner"; }
+ansible-playbook -i localhost, -c local -e step_ca_manage_services=false /ansible/step-ca.yml >/tmp/again.log 2>&1 || { cat /tmp/again.log; fail "run again"; }
+grep -A3 'No ACME provisioner' /tmp/again.log | grep -q 'changed: .*item=acme' || { cat /tmp/again.log; fail "the run did not remove the ACME provisioner"; }
+kill "$ca_pid"
+wait "$ca_pid" 2>/dev/null || true
+setpriv --reuid=step --regid=step --init-groups \
+  step-ca /etc/step-ca/config/ca.json --password-file /etc/step-ca/secrets/password >/tmp/ca.log 2>&1 &
+ca_pid=$!
+for _ in $(seq 20); do step ca health --ca-url https://step-ca.nullbill.internal --root /etc/step-ca/certs/root_ca.crt >/dev/null 2>&1 && break; sleep 0.5; done
+no_acme
+pass "an ACME provisioner left from an earlier CA is removed"
 
 test "$(stat -c '%a %U' /etc/step-ca/secrets/password)" = "600 step" || fail "password file mode"
 pass "key password is 0600 and owned by step"
