@@ -85,6 +85,14 @@ def test_the_plan_refuses_what_cannot_work():
         facts["gpus"][0]["iommu_peers"] = [*facts["gpus"][0]["iommu_peers"], "0000:02:00.0"]
 
     assert "shares its IOMMU group" in refused(desktop_config(), facts_change=shared_group)
+
+    def read_before_the_desktop(facts):
+        # The parser then counted the card's PCIe port as a peer, and knew no USB.
+        shared_group(facts)
+        del facts["usb"]
+
+    stale = refused(desktop_config(), facts_change=read_before_the_desktop)
+    assert "read the hardware again on Setup, Hardware" in stale and "0000:02:00.0" in stale
     assert "no discrete graphics card at 0000:09:00.0" in refused(desktop_config(card="0000:09:00.0"))
     always = {**desktop_config(), "power": {"desktop": {"run": "always"}}}
     assert "keep run: on-demand" in refused(always)
@@ -321,6 +329,8 @@ def test_setup_starts_the_desktop_and_stops_it_again_after(ctx, capsys):
     assert variables["desktop_cert"] and variables["desktop_key"]
     # Ansible's modules run under Fedora's python3.13, installed first over SSH.
     assert playbooks[0][2]["desktop"]["ansible_python_interpreter"] == desktop.PYTHON
+    # Without a terminal, so Fedora's session markers stay out of the modules' answers.
+    assert playbooks[0][2]["desktop"]["ansible_ssh_use_tty"] is False
     ssh = [call[1] for call in reach.calls if call[0] == "local" and call[1][0] == "ssh"]
     assert ssh and ssh[0][-2:] == ["nullbill@10.42.11.29", desktop.PREPARE]
     out = said(capsys)
@@ -373,3 +383,19 @@ def test_the_desktop_gets_its_usb_ports_and_loses_the_others(ctx, capsys):
 def test_the_host_loads_vfio_only_when_a_card_is_lent(ctx):
     assert apply.desktop_host_inputs(desktop_ctx(ctx)) == {"host_baseline_vfio": True, "host_baseline_nouveau_off": True}
     assert apply.desktop_host_inputs(desktop_ctx(ctx, gpu=False)) == {}
+
+
+def test_the_pcie_port_a_card_sits_behind_stays_with_the_host():
+    lspci = (
+        "0000:00:01.0 PCI bridge [0604]: Example Corp PCI Express Graphics Port [8086:0001] (rev 01)\n"
+        "0000:00:02.0 VGA compatible controller [0300]: Example Corp Integrated Graphics [8086:0002] (rev 04)\n"
+        "0000:01:00.0 VGA compatible controller [0300]: NVIDIA Corporation Synthetic GPU 24G [10de:0001] (rev a1)\n"
+        "0000:01:00.1 Audio device [0403]: NVIDIA Corporation Synthetic GPU Audio [10de:0002] (rev a1)\n"
+        "0000:02:00.0 Ethernet controller [0200]: Example Corp Ethernet [8086:0003]\n"
+    )
+    groups = "".join(f"/sys/kernel/iommu_groups/2/devices/{a}\n" for a in ("0000:00:01.0", "0000:01:00.0", "0000:01:00.1"))
+    found = {g["pci"]: g for g in probe._gpus(lspci, groups, None)}
+    assert found[CARD]["iommu_group"] == 2 and found[CARD]["iommu_peers"] == ["0000:01:00.1"]
+    # Anything else in the group is a peer, and would go to the desktop with the card.
+    shared = groups + "/sys/kernel/iommu_groups/2/devices/0000:02:00.0\n"
+    assert probe._gpus(lspci, shared, None)[1]["iommu_peers"] == ["0000:01:00.1", "0000:02:00.0"]

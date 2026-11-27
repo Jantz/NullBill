@@ -165,13 +165,23 @@ def connection(ctx: Context, name: str | None) -> dict:
     # VM host keys are new on first boot; pin each on first sight in a file
     # of NullBill's own, not the owner's known_hosts (pin_host_key).
     known = shlex.quote(str(ctx.home / "known_hosts"))
-    return {
-        "ansible_host": address,
-        "ansible_user": "nullbill",
-        "ansible_become": True,
-        "ansible_ssh_common_args": f"-o ProxyJump={ctx.target} -o UserKnownHostsFile={known} -o StrictHostKeyChecking=accept-new",
-        "ansible_python_interpreter": desktop.PYTHON if name == desktop.NAME else "/usr/bin/python3",
-    } | _download_proxy(ctx, name)
+    return (
+        {
+            "ansible_host": address,
+            "ansible_user": "nullbill",
+            "ansible_become": True,
+            "ansible_ssh_common_args": f"-o ProxyJump={ctx.target} -o UserKnownHostsFile={known} -o StrictHostKeyChecking=accept-new",
+            "ansible_python_interpreter": desktop.PYTHON if name == desktop.NAME else "/usr/bin/python3",
+        }
+        | (DESKTOP_SSH if name == desktop.NAME else {})
+        | _download_proxy(ctx, name)
+    )
+
+
+# Fedora's pam_systemd marks a session on a terminal with OSC 3008
+# sequences, which followed every module's answer ("junk after the JSON
+# data"). sudo there needs no terminal.
+DESKTOP_SSH = {"ansible_ssh_use_tty": False}
 
 
 def vm_address(guest: dict) -> str:
