@@ -72,6 +72,12 @@ def test_the_first_probe_needs_only_what_install_sh_wrote(tmp_path, monkeypatch,
     (tmp_path / "config.yaml").write_text(yaml.safe_dump(fixture_config("mid") | {"target": {"ssh": "root@192.0.2.10"}}))
     lan.write(tmp_path, lan.CLOSED)
     assert cli.probe_target(tmp_path) == "root@10.42.1.254"
+    # A reading too old for the choices fails the plan; reading the hardware
+    # again is the way out, so the probe's address does not need the plan.
+    (run1 / "facts.json").write_text("{}")
+    assert cli.probe_target(tmp_path) == "root@10.42.1.254"
+    (tmp_path / "probe" / "latest").unlink()
+    assert cli.probe_target(tmp_path) == "root@10.42.1.254"
 
 
 def test_plan_command_reports_errors(tmp_path, monkeypatch, capsys):
