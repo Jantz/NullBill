@@ -1070,11 +1070,11 @@ def test_agent_credential_is_kept_by_kind_and_never_shown(site):
     odd = client.call("/api/agent", {"credential": "sk-ant-oat-abc\u2026def"})
     assert odd[0] == 400 and odd[1]["error"].startswith("the pasted subscription token has HORIZONTAL ELLIPSIS at character 15 of 18")
     assert "abc" not in odd[1]["error"]
-    key = "sk-ant-api03-" + "a" * 40
+    key = "sk-ant-api-" + "a" * 40
     status, data = client.call("/api/agent", {"credential": f" {key}\n"})
     assert (status, data["agent_credential"]) == (200, "API key")
     assert app.codec(app.home).load()["anthropic_api_key"] == key
-    token = "sk-ant-oat01-" + "b" * 40
+    token = "sk-ant-oat-" + "b" * 40
     wrapped = f"{token[:30]}\n  {token[30:]} "
     status, data = client.call("/api/agent", {"credential": wrapped})
     assert (status, data["agent_credential"]) == (200, "subscription token")
