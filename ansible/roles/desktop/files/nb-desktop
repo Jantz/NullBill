@@ -14,6 +14,7 @@ nb-desktop report USER     what verify reads, as JSON
 """
 
 import ctypes
+import glob
 import json
 import os
 import re
@@ -145,16 +146,26 @@ def cmd_metrics() -> int:
     return 0
 
 
+DRM = "/sys/class/drm"
+
+
+def card_driver(card: str) -> str:
+    """The driver that draws on a card. A virtual card's PCI device is
+    virtio-pci's; virtio_gpu drives the virtio device under it."""
+    device = f"{DRM}/{card}/device"
+    names = [os.path.basename(os.readlink(f"{device}/driver"))] if os.path.islink(f"{device}/driver") else [""]
+    if names[0] == "virtio-pci":
+        under = sorted(glob.glob(f"{device}/virtio*/driver"))
+        names = [os.path.basename(os.readlink(link)) for link in under if os.path.islink(link)]
+    return names[0] if names else ""
+
+
 def cmd_report(user: str) -> int:
     """For verify: the session, Remote Desktop and the graphics."""
     found = sessions()
     listening = subprocess.run(["ss", "-Hltn", f"sport = :{port()}"], capture_output=True, text=True, timeout=10).stdout
     krdp = subprocess.run(["pgrep", "-u", user, "-x", "krdpserver"], capture_output=True).returncode == 0
-    drivers = {}
-    for card in sorted(os.listdir("/sys/class/drm")) if os.path.isdir("/sys/class/drm") else []:
-        if re.fullmatch(r"card\d+", card):
-            link = f"/sys/class/drm/{card}/device/driver"
-            drivers[card] = os.path.basename(os.readlink(link)) if os.path.islink(link) else ""
+    drivers = {card: card_driver(card) for card in sorted(os.listdir(DRM)) if re.fullmatch(r"card\d+", card)} if os.path.isdir(DRM) else {}
     print(
         json.dumps(
             {
