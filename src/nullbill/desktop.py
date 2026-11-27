@@ -113,6 +113,15 @@ def lend(model: dict, facts: dict, planned_services: dict, gpus: dict, errors: l
             "turn on VT-d (Intel) or AMD-Vi/IOMMU in the server's firmware settings, or set desktop.gpu: false"
         )
         return None
+    if foreign and "usb" not in facts:
+        # A reading from before the desktop counted the PCIe port the card
+        # sits behind as a device of its own; a new reading leaves bridges out.
+        errors.append(
+            f"desktop: the hardware was read before NullBill knew the desktop, and that reading counts {', '.join(foreign)} "
+            f"(most likely the PCIe port {found['name']} sits behind) as a device that would go along with the card; "
+            "read the hardware again on Setup, Hardware, then save What to run once more"
+        )
+        return None
     if foreign:
         errors.append(
             f"desktop: {found['name']} shares its IOMMU group {found['iommu_group']} with {', '.join(foreign)}, "

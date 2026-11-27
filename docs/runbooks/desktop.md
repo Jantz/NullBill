@@ -77,6 +77,11 @@ again by themselves. It does not stop by itself (it asks: the alert
 - **The page says the desktop cannot start because the card is in use:**
   the local AI models answered a request in the last minutes. Wait, or
   start anyway: the page asks.
+- **What to run says the card shares its IOMMU group:** if it also says
+  the hardware was read before NullBill knew the desktop, press **Read the
+  hardware** on Setup, Hardware and save again: the older reading counted
+  the PCIe port the card sits behind, which stays with the server. A
+  device named after a new reading really would go along with the card.
 - **The monitor stays black:** check the cable is in the card the Services
   page names, not in the motherboard's outputs. The card's own driver in
   Fedora is `nouveau` for NVIDIA (`lspci -k` in the desktop's terminal).
