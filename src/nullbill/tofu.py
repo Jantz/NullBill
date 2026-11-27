@@ -397,7 +397,13 @@ def _mappings(plan: dict) -> dict:
         if not user:
             continue
         name = _mapping_name(pci)
-        entry = {"id": gpu["pci_id"], "node": NODE, "path": pci.rsplit(".", 1)[0], "iommu_group": gpu["iommu_group"]}
+        entry = {
+            "id": gpu["pci_id"],
+            "subsystem_id": gpu["subsystem_id"],
+            "node": NODE,
+            "path": pci.rsplit(".", 1)[0],
+            "iommu_group": gpu["iommu_group"],
+        }
         mappings[name.replace("-", "_")] = {"name": name, "comment": f"nullbill: {gpu['name']} for {user}", "map": [entry]}
     return mappings
 

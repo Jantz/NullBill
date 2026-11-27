@@ -71,6 +71,10 @@ nvidia-smi:
   out: |
     00000000:17:00.0, Synthetic GPU 48G, 49140
     00000000:65:00.0, Synthetic GPU 48G, 49140
+pci-subsystem:
+  out: |
+    0000:17:00.0 0xf0f0 0x0102
+    0000:65:00.0 0xf0f0 0x0102
 smart:
   out: |
     == /dev/nvme0n1

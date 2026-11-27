@@ -28,6 +28,7 @@ def test_mid_gpu_and_blank_disk(facts):
         "id": "10de:0001",
         "name": "NVIDIA Corporation Synthetic GPU 24G",
         "integrated": False,
+        "subsystem_id": "f0f0:0101",
         "vram_mib": 24564,
         "iommu_group": 14,
         "iommu_peers": ["0000:01:00.1"],

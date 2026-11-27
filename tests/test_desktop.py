@@ -91,6 +91,13 @@ def test_the_plan_refuses_what_cannot_work():
         shared_group(facts)
         del facts["usb"]
 
+    def read_without_subsystems(facts):
+        for g in facts["gpus"]:
+            del g["subsystem_id"]
+
+    assert "has not read NVIDIA Corporation Synthetic GPU 24G's subsystem ID" in refused(
+        desktop_config(), facts_change=read_without_subsystems
+    )
     stale = refused(desktop_config(), facts_change=read_before_the_desktop)
     assert "read the hardware again on Setup, Hardware" in stale and "0000:02:00.0" in stale
     assert "no discrete graphics card at 0000:09:00.0" in refused(desktop_config(card="0000:09:00.0"))
@@ -394,8 +401,9 @@ def test_the_pcie_port_a_card_sits_behind_stays_with_the_host():
         "0000:02:00.0 Ethernet controller [0200]: Example Corp Ethernet [8086:0003]\n"
     )
     groups = "".join(f"/sys/kernel/iommu_groups/2/devices/{a}\n" for a in ("0000:00:01.0", "0000:01:00.0", "0000:01:00.1"))
-    found = {g["pci"]: g for g in probe._gpus(lspci, groups, None)}
+    found = {g["pci"]: g for g in probe._gpus(lspci, groups, None, "0000:00:02.0 0x8086 0x7777\n0000:01:00.0 0x1569 0xf302\n")}
     assert found[CARD]["iommu_group"] == 2 and found[CARD]["iommu_peers"] == ["0000:01:00.1"]
+    assert found[CARD]["subsystem_id"] == "1569:f302"
     # Anything else in the group is a peer, and would go to the desktop with the card.
     shared = groups + "/sys/kernel/iommu_groups/2/devices/0000:02:00.0\n"
     assert probe._gpus(lspci, shared, None)[1]["iommu_peers"] == ["0000:01:00.1", "0000:02:00.0"]

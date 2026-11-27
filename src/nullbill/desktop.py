@@ -84,6 +84,21 @@ def card(model: dict, facts: dict, errors: list[str]) -> dict | None:
     return discrete[0] if discrete else None
 
 
+def mapping_ids(gpu: dict, where: str, errors: list[str]) -> dict | None:
+    """What a PVE PCI mapping names a card by: vendor and device, IOMMU
+    group and subsystem. Proxmox checks each against the card when a VM
+    starts and refuses a mapping without the subsystem the card has
+    ("missing expected property 'subsystem-id'"), so a reading that has none
+    is read again rather than guessed."""
+    if not gpu.get("subsystem_id"):
+        errors.append(
+            f"{where}: NullBill has not read {gpu['name']}'s subsystem ID, which Proxmox needs to hand the card to a VM; "
+            "read the hardware again on Setup, Hardware, then save What to run once more"
+        )
+        return None
+    return {"pci_id": gpu["id"], "subsystem_id": gpu["subsystem_id"], "iommu_group": gpu["iommu_group"]}
+
+
 def lend(model: dict, facts: dict, planned_services: dict, gpus: dict, errors: list[str]) -> str | None:
     """Mark the card the desktop borrows in the plan's GPU section: it stays
     the host's (its consumers keep their budgets) and is the desktop's
@@ -128,8 +143,11 @@ def lend(model: dict, facts: dict, planned_services: dict, gpus: dict, errors: l
             "which would go to the desktop with it; move the card to another slot, or set desktop.gpu: false"
         )
         return None
+    ids = mapping_ids(found, "desktop", errors)
+    if ids is None:
+        return None
     value = dict(entry.value)
-    value |= {"pci_id": found["id"], "iommu_group": found["iommu_group"], "lent_to": NAME}
+    value |= ids | {"lent_to": NAME}
     gpus[pci] = Note(value, entry.why + " While the desktop runs it is the desktop's, and what uses it on the host stops.")
     return pci
 

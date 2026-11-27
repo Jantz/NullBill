@@ -128,7 +128,17 @@ def test_a_gpu_passed_to_a_vm_goes_through_a_pci_mapping(facts):
     gpu = strip_notes(plan)["gpus"]["0000:65:00.0"]
     (mapping,) = config["resource"]["proxmox_hardware_mapping_pci"].values()
     assert mapping["name"] == "nb-gpu-0000-65-00"
-    assert mapping["map"] == [{"id": gpu["pci_id"], "node": "${var.node_name}", "path": "0000:65:00", "iommu_group": gpu["iommu_group"]}]
+    # Proxmox refuses to start the VM unless the mapping names the card's subsystem too.
+    assert gpu["subsystem_id"] == "f0f0:0102"
+    assert mapping["map"] == [
+        {
+            "id": gpu["pci_id"],
+            "subsystem_id": "f0f0:0102",
+            "node": "${var.node_name}",
+            "path": "0000:65:00",
+            "iommu_group": gpu["iommu_group"],
+        }
+    ]
     vm = config["resource"]["proxmox_virtual_environment_vm"]["windows-dev"]
     assert vm["hostpci"] == [{"device": "hostpci0", "mapping": "nb-gpu-0000-65-00", "pcie": True}]
     assert "proxmox_hardware_mapping_pci.nb_gpu_0000_65_00" in vm["depends_on"]

@@ -57,6 +57,8 @@ iommu:
     /sys/kernel/iommu_groups/14/devices/0000:01:00.1
 nvidia-smi:
   out: "00000000:01:00.0, Synthetic GPU 24G, 24564\n"
+pci-subsystem:
+  out: "0000:01:00.0 0xf0f0 0x0101\n"
 smart:
   out: |
     == /dev/nvme0n1

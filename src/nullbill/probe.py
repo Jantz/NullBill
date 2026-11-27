@@ -38,6 +38,13 @@ COMMANDS: dict[str, tuple[str, bool]] = {
     "lspci": ("lspci -Dnn", True),
     "iommu": ("find /sys/kernel/iommu_groups -mindepth 3 -maxdepth 3 -type l", False),
     "nvidia-smi": ("nvidia-smi --query-gpu=pci.bus_id,name,memory.total --format=csv,noheader,nounits", False),
+    # Each graphics card's subsystem vendor and device: a PVE PCI mapping must
+    # name them as its subsystem-id, or PVE refuses to start a VM with it.
+    "pci-subsystem": (
+        'for d in /sys/bus/pci/devices/*; do case "$(cat "$d/class")" in 0x03*) '
+        'printf \'%s %s %s\\n\' "${d##*/}" "$(cat "$d/subsystem_vendor")" "$(cat "$d/subsystem_device")" ;; esac; done; true',
+        False,
+    ),
     # SMART health and attributes of every disk, read only; smartctl is part
     # of PVE. A disk that answers nothing is reported as unknown.
     "smart": (
@@ -377,8 +384,19 @@ def _nvidia_vram(text: str | None) -> dict[str, int]:
     return vram
 
 
-def _gpus(lspci_text: str, iommu_text: str | None, nvidia_text: str | None) -> list[dict]:
+def _subsystems(text: str | None) -> dict[str, str]:
+    """address -> "1569:f302", as a PVE PCI mapping's subsystem-id."""
+    found = {}
+    for line in (text or "").splitlines():
+        parts = line.split()
+        if len(parts) == 3 and all(re.fullmatch(r"0x[0-9a-f]{4}", p) for p in parts[1:]):
+            found[parts[0]] = f"{parts[1][2:]}:{parts[2][2:]}"
+    return found
+
+
+def _gpus(lspci_text: str, iommu_text: str | None, nvidia_text: str | None, subsystem_text: str | None = None) -> list[dict]:
     groups = _iommu(iommu_text)
+    subsystems = _subsystems(subsystem_text)
     vram = _nvidia_vram(nvidia_text)
     classes = {m["addr"]: m["cls"] for m in map(LSPCI_LINE.match, lspci_text.splitlines()) if m}
     gpus = []
@@ -399,6 +417,8 @@ def _gpus(lspci_text: str, iommu_text: str | None, nvidia_text: str | None) -> l
                 "vendor": VENDORS.get(m["ven"], m["ven"]),
                 # Vendor and device ID, as a PVE PCI mapping names the device.
                 "id": f"{m['ven']}:{m['dev']}",
+                # None when unread; the plan then asks for a new reading.
+                "subsystem_id": subsystems.get(addr),
                 "name": re.sub(r" \[[0-9a-f]{4}\]$", "", m["name"]),
                 # Bus 00 holds integrated graphics; those are left to the host.
                 "integrated": addr.split(":")[1] == "00",
@@ -422,7 +442,7 @@ def parse(raw: Path) -> dict:
         "memory_mib": _memory_mib(texts["meminfo"]),
         "disks": _disks(texts["lsblk"], texts["disk-by-id"], texts["smart"], texts["pvs"], texts["ntfs"]),
         "storage": _storage(texts["storage"]),
-        "gpus": _gpus(texts["lspci"], texts["iommu"], texts["nvidia-smi"]),
+        "gpus": _gpus(texts["lspci"], texts["iommu"], texts["nvidia-smi"], texts["pci-subsystem"]),
         "copies": _copies(texts["copies"]),
         "lan": _lan(texts["routes"]),
         "usb": _usb(texts["usb"]),

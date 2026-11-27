@@ -152,7 +152,7 @@ def _gpus(model: dict, facts: dict, planned: dict, errors: _Errors) -> tuple[dic
             elif foreign:
                 errors.append(f"gpus.{gpu['pci']}: IOMMU group {gpu['iommu_group']} also holds {', '.join(foreign)}")
             # What a PVE PCI mapping names the device by (tofu.py).
-            entry |= {"pci_id": gpu["id"], "iommu_group": gpu["iommu_group"]}
+            entry |= desktop.mapping_ids(gpu, f"gpus.{gpu['pci']}", errors) or {}
             section[gpu["pci"]] = Note(entry, f"Passed through whole to {vm} on request, all its functions together.")
             continue
         default = {"inference": vram} if "inference" in planned and vram else {}
