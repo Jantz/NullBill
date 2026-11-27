@@ -1067,8 +1067,8 @@ def test_agent_credential_is_kept_by_kind_and_never_shown(site):
     assert client.call("/api/state")[1]["agent_credential"] is None
     bad = client.call("/api/agent", {"credential": "hunter2"})
     assert bad[0] == 400 and "claude setup-token" in bad[1]["error"]
-    odd = client.call("/api/agent", {"credential": "sk-ant-oat01-abc\u2026def"})
-    assert odd[0] == 400 and odd[1]["error"].startswith("the pasted subscription token has HORIZONTAL ELLIPSIS at character 17 of 20")
+    odd = client.call("/api/agent", {"credential": "sk-ant-oat-abc\u2026def"})
+    assert odd[0] == 400 and odd[1]["error"].startswith("the pasted subscription token has HORIZONTAL ELLIPSIS at character 15 of 18")
     assert "abc" not in odd[1]["error"]
     key = "sk-ant-api03-" + "a" * 40
     status, data = client.call("/api/agent", {"credential": f" {key}\n"})
@@ -1090,7 +1090,7 @@ def test_tailscale_key_waits_for_setup_and_is_never_shown(site):
     assert client.call("/api/state")[1]["tailscale_key"] is False
     bad = client.call("/api/vpn", {"key": "tskey-api-" + "c" * 30})
     assert bad[0] == 400 and "tskey-auth-" in bad[1]["error"]
-    key = "tskey-auth-kExample1CNTRL-" + "d" * 30
+    key = "tskey-auth-notarealkey" + "d" * 30
     assert client.call("/api/vpn", {"key": f" {key}\n"}) == (200, {"ok": True, "tailscale_key": True})
     assert app.codec(app.home).load()["tailscale_auth_key"] == key
     assert key not in json.dumps(client.call("/api/state")[1])
@@ -1262,13 +1262,13 @@ def test_tailscale_oauth_client_is_kept_and_never_shown(site):
     app, client = site
     sign_in(app, client)
     assert client.call("/api/state")[1]["tailscale_client"] is False
-    bad = client.call("/api/tailscale-client", {"client_id": "kExampleCNTRL", "secret": "tskey-auth-" + "e" * 30})
+    bad = client.call("/api/tailscale-client", {"client_id": "democlientid", "secret": "tskey-auth-" + "e" * 30})
     assert bad[0] == 400 and "tskey-client-" in bad[1]["error"]
-    secret = "tskey-client-kExampleCNTRL-" + "f" * 30
-    answer = client.call("/api/tailscale-client", {"client_id": " kExampleCNTRL ", "secret": f"{secret}\n"})
+    secret = "tskey-client-notarealsecret" + "f" * 30
+    answer = client.call("/api/tailscale-client", {"client_id": " democlientid ", "secret": f"{secret}\n"})
     assert answer == (200, {"ok": True, "tailscale_client": True})
     stored = app.codec(app.home).load()
-    assert (stored["tailscale_client_id"], stored["tailscale_client_secret"]) == ("kExampleCNTRL", secret)
+    assert (stored["tailscale_client_id"], stored["tailscale_client_secret"]) == ("democlientid", secret)
     assert secret not in json.dumps(client.call("/api/state")[1])
 
 
@@ -2116,8 +2116,8 @@ def with_tailscale(app, client):
     assert client.call("/api/choices", {**OWNER, "workloads": ["agents", "linux-ci", "media"]})[0] == 200
     api = FakeTailnet()
     app.tailnet_client = lambda _id, _secret: api
-    secret = "tskey-client-kExampleCNTRL-" + "f" * 30
-    assert client.call("/api/tailscale-client", {"client_id": "kExampleCNTRL", "secret": secret})[0] == 200
+    secret = "tskey-client-notarealsecret" + "f" * 30
+    assert client.call("/api/tailscale-client", {"client_id": "democlientid", "secret": secret})[0] == 200
     return api
 
 

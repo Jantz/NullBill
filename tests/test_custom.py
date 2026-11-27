@@ -502,7 +502,7 @@ def test_the_agent_cannot_widen_a_service_past_its_own_guest_or_hide_a_secret_in
     assert "from" in refused(title="X", ports=[{"port": 80, "from": ["host"]}])
     own = kinds(say(client, "CALL add_service " + json.dumps({"name": "forgejo", "title": "X"})), "tool_done")
     assert "one of NullBill's own" in own[-1]["output"]
-    said = kinds(say(client, add_call(title="X", setup="#!/bin/bash\necho sk-ant-api03-SECRETVALUE123 > /etc/key\n")), "tool_done")
+    said = kinds(say(client, add_call(title="X", setup="#!/bin/bash\necho sk-ant-api-NOTAREALKEY123 > /etc/key\n")), "tool_done")
     assert "holds one of the server's secrets" in said[-1]["output"]
     assert "paperless" not in saved(app).get("services", {}) and not (app.home / "custom").exists()
 

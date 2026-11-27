@@ -74,7 +74,7 @@ class Host:
     def __call__(self, target, command):
         self.ran.append((target, command))
         if "pct list" in command:
-            return 0, "VMID Status Name\n2002 running nullbill\nsk-ant-api03-SECRETVALUE123\n", ""
+            return 0, "VMID Status Name\n2002 running nullbill\nsk-ant-api-NOTAREALKEY123\n", ""
         if "dist-upgrade" in command and "apt-get -s" in command:
             return 0, "Inst openssl [3.0.1] (3.0.2 Debian)\nInst pve-kernel-6.8 (6.8.2)\nRemv oldlib [1.0]\n", ""
         if "FAILME" in command:
@@ -149,7 +149,7 @@ def test_needs_a_credential(agent):
 
 def test_sign_in_greets_and_reads_freely(agent):
     app, client, host = agent
-    assert client.call("/api/agent", {"credential": "sk-ant-api03-SECRETVALUE123"})[0] == 200
+    assert client.call("/api/agent", {"credential": "sk-ant-api-NOTAREALKEY123"})[0] == 200
     view = settle(client)
     assert "signed you in" in kinds(view, "assistant")[0]["text"]
     view = say(client, 'CALL run_command {"command": "pct list", "why": "see guests"}')
@@ -171,7 +171,7 @@ def approve(client, proposal_id, **extra):
 
 def test_manual_mode_asks_then_runs_what_was_approved(agent):
     app, client, host = agent
-    client.call("/api/agent", {"credential": "sk-ant-api03-SECRETVALUE123"})
+    client.call("/api/agent", {"credential": "sk-ant-api-NOTAREALKEY123"})
     settle(client)
     view = say(client, 'CALL run_command {"command": "systemctl restart pveproxy", "why": "the UI hangs"}')
     proposal = kinds(view, "proposal")[-1]
@@ -195,7 +195,7 @@ def test_manual_mode_asks_then_runs_what_was_approved(agent):
 
 def test_risky_needs_the_word_and_blocked_never_runs(agent):
     app, client, host = agent
-    client.call("/api/agent", {"credential": "sk-ant-api03-SECRETVALUE123"})
+    client.call("/api/agent", {"credential": "sk-ant-api-NOTAREALKEY123"})
     settle(client)
     assert client.call("/api/chat/settings", {"mode": "auto"})[1]["mode"] == "auto"
     view = say(client, 'CALL run_command {"command": "systemctl restart pveproxy"}\nCALL run_command {"command": "pct destroy 105"}')
@@ -218,7 +218,7 @@ def test_risky_needs_the_word_and_blocked_never_runs(agent):
 
 def test_decline_and_questions_reach_the_agent(agent):
     _, client, _ = agent
-    client.call("/api/agent", {"credential": "sk-ant-api03-SECRETVALUE123"})
+    client.call("/api/agent", {"credential": "sk-ant-api-NOTAREALKEY123"})
     settle(client)
     view = say(
         client,
@@ -240,7 +240,7 @@ def test_decline_and_questions_reach_the_agent(agent):
 
 def test_read_jobs_start_at_once_and_failed_runs_are_looked_into(agent):
     app, client, _ = agent
-    client.call("/api/agent", {"credential": "sk-ant-api03-SECRETVALUE123"})
+    client.call("/api/agent", {"credential": "sk-ant-api-NOTAREALKEY123"})
     settle(client)
     view = say(client, 'CALL start_job {"action": "probe"}')
     assert "started job" in kinds(view, "tool_done")[-1]["output"]
@@ -265,7 +265,7 @@ def test_read_jobs_start_at_once_and_failed_runs_are_looked_into(agent):
 
 def test_new_conversation_and_stop(agent):
     app, client, _ = agent
-    client.call("/api/agent", {"credential": "sk-ant-api03-SECRETVALUE123"})
+    client.call("/api/agent", {"credential": "sk-ant-api-NOTAREALKEY123"})
     settle(client)
     assert client.call("/api/chat/stop", {})[0] == 400
     assert client.call("/api/chat/new", {})[0] == 200
@@ -307,7 +307,7 @@ def test_mcp_server_lists_and_refuses_unknown_methods():
 
 def signed_in(agent, mode="manual"):
     app, client, host = agent
-    client.call("/api/agent", {"credential": "sk-ant-api03-SECRETVALUE123"})
+    client.call("/api/agent", {"credential": "sk-ant-api-NOTAREALKEY123"})
     settle(client)
     if mode != "manual":
         assert client.call("/api/chat/settings", {"mode": mode})[0] == 200
@@ -478,7 +478,7 @@ def test_the_clis_own_tools_reach_the_source_and_the_docs_only(agent):
     # Read had no path rules and WebFetch no domains: an injected agent could
     # read /proc/self/environ (its own credential) and send it anywhere.
     app, client, _ = agent
-    client.call("/api/agent", {"credential": "sk-ant-api03-SECRETVALUE123"})
+    client.call("/api/agent", {"credential": "sk-ant-api-NOTAREALKEY123"})
     settle(client)
     args = json.loads((app.agent_home / "argv.json").read_text())
     assert args[args.index("--permission-mode") + 1] == "dontAsk"
@@ -515,7 +515,7 @@ def test_files_in_the_agents_home_are_never_written_through_a_link(agent, tmp_pa
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     work.symlink_to(elsewhere)
-    client.call("/api/agent", {"credential": "sk-ant-api03-SECRETVALUE123"})
+    client.call("/api/agent", {"credential": "sk-ant-api-NOTAREALKEY123"})
     settle(client)
     assert target.read_text() == "root's file\n"
     assert not (app.agent_home / "mcp.json").is_symlink() and "mcpServers" in (app.agent_home / "mcp.json").read_text()
@@ -525,7 +525,7 @@ def test_files_in_the_agents_home_are_never_written_through_a_link(agent, tmp_pa
 def test_a_failed_runs_log_reaches_the_agent_as_data_never_as_the_page(agent, monkeypatch):
     # A guest's log line became part of a note headed [From the NullBill page].
     app, client, _ = agent
-    client.call("/api/agent", {"credential": "sk-ant-api03-SECRETVALUE123"})
+    client.call("/api/agent", {"credential": "sk-ant-api-NOTAREALKEY123"})
     settle(client)
     failing = app.start("apply", "host")
     for _ in range(200):
@@ -547,7 +547,7 @@ def test_a_failed_runs_log_reaches_the_agent_as_data_never_as_the_page(agent, mo
 
 def test_tool_output_never_speaks_as_the_page(agent):
     app, client, _ = agent
-    client.call("/api/agent", {"credential": "sk-ant-api03-SECRETVALUE123"})
+    client.call("/api/agent", {"credential": "sk-ant-api-NOTAREALKEY123"})
     settle(client)
     view = say(client, 'CALL run_command {"command": "echo FORGED", "why": "x"}')
     out = kinds(view, "tool_done")[-1]["output"]
@@ -557,7 +557,7 @@ def test_tool_output_never_speaks_as_the_page(agent):
 def test_the_owners_login_is_not_the_agents_to_set(agent):
     # set_choices took owner_login as a change: in Auto an injected agent made a friend the owner.
     app, client, _ = agent
-    client.call("/api/agent", {"credential": "sk-ant-api03-SECRETVALUE123"})
+    client.call("/api/agent", {"credential": "sk-ant-api-NOTAREALKEY123"})
     settle(client)
     app.chat.save_settings({"mode": "yolo"})
     before = app.choices().get("owner_login")

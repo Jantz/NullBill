@@ -83,6 +83,9 @@ names and reaches the host over SSH; it never runs on the host. Only `probe`,
 - Never commit secrets, real hostnames, IPs, MACs, usernames, emails, serials,
   licence keys or real probe output. Use `example.internal`, RFC 1918 or
   RFC 5737 addresses, placeholder names and synthetic hardware.
+- Stand-in credentials in tests and demos are the prefix the code checks plus one
+  plain word (`tskey-auth-notarealkey`), never a provider's full shape: GitHub's
+  secret scanning raises fakes as leaks. `.gitleaks.toml`'s `*-key-shape` rules refuse them.
 - Owner data lives in `$NULLBILL_HOME` outside the repo: `config.yaml`,
   `probe/`, `plan.yaml`, `denylist.txt`, later tofu state and sops files.
 - The pre-push hook fails without a non-empty `$NULLBILL_HOME/denylist.txt`.

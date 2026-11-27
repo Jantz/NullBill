@@ -35,7 +35,7 @@ state=$(tailscale status --json | python3 -c 'import json, sys; print(json.load(
 test "$state" = NeedsLogin || fail "logged out without a key: $state"
 pass "without an auth key the guest stays logged out and the role still converges"
 
-if play -e vpn_auth_key=tskey-auth-kNOTAREALKEY-0000 >/tmp/login.log 2>&1; then fail "a refused key logged in"; fi
+if play -e vpn_auth_key=tskey-auth-NOTAREALKEY0000 >/tmp/login.log 2>&1; then fail "a refused key logged in"; fi
 grep -q "Log in as the tagged subnet router" /tmp/login.log || { cat /tmp/login.log; fail "login was not tried"; }
 grep -q -- "--advertise-routes=10.42.1.0/24,10.42.2.0/24" /tmp/login.log || fail "routes advertised at login"
 grep -q "NOTAREALKEY" /tmp/login.log && fail "the auth key reached the log"
