@@ -305,6 +305,11 @@ def test_verify_reads_the_desktop_through_its_guest_agent():
     )
     assert [r.status for r in bad] == ["FAIL"] * 4
     assert "expected nouveau" in bad[2].detail and "Local AI models is not stopped" in bad[3].detail
+    silent = desktop.check(plan, "root@pve", lambda t, c: (0, report(krdp=False, listening=False), ""), {}, status)
+    assert "nothing listens on 3389" in silent[1].detail
+    # A socket on the port that is not the user's is no KRDP of theirs.
+    other = desktop.check(plan, "root@pve", lambda t, c: (0, report(krdp=False), ""), {}, status)
+    assert other[1].status == "FAIL" and "another program than owner-a's" in other[1].detail
     off = desktop.check(plan, "root@pve", run, {"desktop": "KDE desktop"}, status)
     assert {r.status for r in off} == {"SKIP"} and "start it on the page" in off[0].detail
     assert len(calls) == 1

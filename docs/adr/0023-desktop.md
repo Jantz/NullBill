@@ -93,9 +93,12 @@ picture is checked only on the QEMU VM's virtual screen.
   port is the firewall's. Sunshine/Moonlight streams games better but needs
   its own pairing and clients; xrdp gives a separate X session without the
   card; VNC sends no encryption of its own.
-- **A session is always there.** Plasma Login Manager signs the desktop user
-  in at boot (and again after a sign-out) and Plasma locks at once, so the
-  monitor shows a lock screen and Remote Desktop has a session to show.
+- **A session from boot.** Plasma Login Manager signs the desktop user in
+  at boot and Plasma locks at once, so the monitor shows a lock screen and
+  Remote Desktop has a session to show. Not again after a sign-out
+  (`Relogin=false`, 2026-11-27): the first real desktop showed only black
+  over Remote Desktop, and the owner chose to try this first; after a
+  sign-out the greeter waits, and Remote Desktop is back after a restart.
 - **Fedora's own drivers.** Mesa from Fedora (NVK on NVIDIA, radeonsi and
   RADV on AMD, iris and ANV on Intel) on the kernel's modules, so a daily
   update never leaves the screen without a driver; NVIDIA's own driver

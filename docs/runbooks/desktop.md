@@ -85,6 +85,12 @@ again by themselves. It does not stop by itself (it asks: the alert
 - **The monitor stays black:** check the cable is in the card the Services
   page names, not in the motherboard's outputs. The card's own driver in
   Fedora is `nouveau` for NVIDIA (`lspci -k` in the desktop's terminal).
+- **Remote Desktop shows only black:** restart the desktop on the Services
+  page and connect again. If it stays black, the card may have no screen
+  to draw on: an HDMI dummy plug in the card gives it one. Tell the agent.
+- **After you sign out, Remote Desktop no longer answers:** the desktop
+  waits at its greeter, and Remote Desktop runs inside your session. Sign
+  in at the server, or restart the desktop on the Services page.
 - **Remote Desktop warns about the certificate:** the device does not
   trust the server's root yet (step 2.1), or you typed another name than
   the row shows.

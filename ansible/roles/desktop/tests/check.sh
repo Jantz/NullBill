@@ -38,6 +38,7 @@ pass "the desktop user is an administrator with the password apply gave; nb-desk
 
 grep -qx "User=owner" /etc/plasmalogin.conf.d/50-nullbill.conf || fail "autologin user"
 grep -qx "Session=plasma.desktop" /etc/plasmalogin.conf.d/50-nullbill.conf || fail "autologin session"
+grep -qx "Relogin=false" /etc/plasmalogin.conf.d/50-nullbill.conf || fail "no new session at once after one ends"
 [ -f /usr/share/wayland-sessions/plasma.desktop ] || fail "the Plasma session autologin names"
 grep -qx "LockOnStart=true" /etc/xdg/kscreenlockerrc || fail "lock at start"
 [ -f /etc/plasma-setup-done ] || fail "first-run wizard skipped"
@@ -68,6 +69,11 @@ runuser -u owner -- env XDG_RUNTIME_DIR=/tmp/xdg-owner dbus-daemon --session --a
   /usr/bin/krdpserver >/tmp/krdp.log 2>&1 &)
 for _ in $(seq 30); do ss -Hltn 'sport = :3389' | grep -q . && break; sleep 1; done
 ss -Hltn 'sport = :3389' | grep -q . || { cat /tmp/krdp.log; fail "KRDP listens on 3389"; }
+# verify's report finds KRDP by its socket's owner (no logind here for the rest of it).
+python3 -c 'import importlib.machinery as m, importlib.util as u; l = m.SourceFileLoader("d", "/usr/local/sbin/nb-desktop"); d = u.module_from_spec(u.spec_from_loader("d", l)); l.exec_module(d); assert d.remote_desktop("owner") == (True, True)' ||
+  fail "nb-desktop finds the user's KRDP by its socket"
+python3 -c 'import importlib.machinery as m, importlib.util as u; l = m.SourceFileLoader("d", "/usr/local/sbin/nb-desktop"); d = u.module_from_spec(u.spec_from_loader("d", l)); l.exec_module(d); assert d.remote_desktop("root") == (False, True)' ||
+  fail "and no other user's"
 pass "KRDP listens on 3389 with the browser CA's certificate settings"
 
 echo "127.0.0.1 $name" >>/etc/hosts

@@ -378,7 +378,11 @@ def check(plan_with_notes: dict, target: str, run: Runner, off: dict[str, str], 
         Result("PASS", names[1])
         if report.get("krdp") and report.get("listening")
         else Result(
-            "FAIL", names[1], "krdpserver " + ("runs but does not listen" if report.get("krdp") else "does not run in the session")
+            "FAIL",
+            names[1],
+            f"another program than {user}'s listens on {PORT}"
+            if report.get("listening")
+            else f"nothing listens on {PORT}; KRDP starts with the session",
         ),
     ]
     gpu = section(plan).get("gpu") or {}

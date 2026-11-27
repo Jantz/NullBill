@@ -17,6 +17,7 @@ import ctypes
 import glob
 import json
 import os
+import pwd
 import re
 import subprocess
 import sys
@@ -160,11 +161,19 @@ def card_driver(card: str) -> str:
     return names[0] if names else ""
 
 
+def remote_desktop(user: str) -> tuple[bool, bool]:
+    """(the user's own program listens on the port, anything does).
+    Through the guest agent, SELinux keeps the user's processes out of
+    sight (pgrep found no krdpserver while it ran); the socket's owner,
+    from the kernel's own answer to ss, is the user's KRDP."""
+    listening = subprocess.run(["ss", "-Hltne", f"sport = :{port()}"], capture_output=True, text=True, timeout=10).stdout
+    return f"uid:{pwd.getpwnam(user).pw_uid} " in listening, bool(listening.strip())
+
+
 def cmd_report(user: str) -> int:
     """For verify: the session, Remote Desktop and the graphics."""
     found = sessions()
-    listening = subprocess.run(["ss", "-Hltn", f"sport = :{port()}"], capture_output=True, text=True, timeout=10).stdout
-    krdp = subprocess.run(["pgrep", "-u", user, "-x", "krdpserver"], capture_output=True).returncode == 0
+    krdp, listening = remote_desktop(user)
     drivers = {card: card_driver(card) for card in sorted(os.listdir(DRM)) if re.fullmatch(r"card\d+", card)} if os.path.isdir(DRM) else {}
     print(
         json.dumps(
@@ -172,7 +181,7 @@ def cmd_report(user: str) -> int:
                 "session": any(s["user"] == user for s in found),
                 "locked": any(s["user"] == user and s["locked"] for s in found),
                 "krdp": krdp,
-                "listening": bool(listening.strip()),
+                "listening": listening,
                 "drivers": drivers,
             }
         )

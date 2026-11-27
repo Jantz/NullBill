@@ -64,9 +64,12 @@
   changed_when: desktop_password_set.stdout == "changed"
   no_log: true
 
-# A session is always there to connect to: Plasma Login Manager signs the
-# user in at boot (and again after a sign-out), and Plasma locks at once,
-# so the server's screen shows the lock screen.
+# A session is there to connect to: Plasma Login Manager signs the user in
+# at boot, and Plasma locks at once, so the server's screen shows the lock
+# screen. Not again after the session ends (Relogin=false): Remote Desktop
+# showed only black on the first real desktop, and the owner chose to try
+# it without a new session at once; after a sign-out the greeter waits, and
+# Remote Desktop, which runs in the session, is back after a restart.
 - name: Sign the desktop user in at boot
   ansible.builtin.copy:
     dest: /etc/plasmalogin.conf.d/50-nullbill.conf
@@ -76,7 +79,7 @@
       [Autologin]
       User={{ desktop_user }}
       Session=plasma.desktop
-      Relogin=true
+      Relogin=false
   notify: Restart the login manager
 
 - name: Lock the screen when the session starts
