@@ -91,6 +91,9 @@ WRITES: dict[str, dict[str, str]] = {
         "images.debian-lxc.sha512": _hex(128),
         "images.debian-cloud.url": _url("https://cloud.debian.org/images/cloud/"),
         "images.debian-cloud.sha512": _hex(128),
+        "images.fedora-cloud.url": _url("https://dl.fedoraproject.org/pub/fedora/linux/releases/"),
+        "images.fedora-cloud.sha256": _hex(64),
+        "images.fedora-cloud.release": VERSION,
     },
 }
 LIBRARY = {"file": FILE, "url": _url(*FABRIC_MAVEN), "sha256": _hex(64)}

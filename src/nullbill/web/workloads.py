@@ -24,7 +24,7 @@ always runs and shows what runs on demand as sharing what that leaves.
 
 from pathlib import Path
 
-from nullbill import backups, custom, games, power, sizes, torrents
+from nullbill import backups, custom, desktop, games, power, sizes, torrents
 from nullbill import model as modelling
 from nullbill import plan as planning
 from nullbill.errors import NullBillError
@@ -32,7 +32,19 @@ from nullbill.flows import TORRENTS_PORT
 from nullbill.render import strip_notes
 
 # NullBill's own, in the page's order; the owner's follow (custom.workloads).
-WORKLOADS = ["agents", "linux-ci", "inference", "media", "torrents", "windows-ci", "windows-dev", "minecraft", "terraria", "factorio"]
+WORKLOADS = [
+    "agents",
+    "linux-ci",
+    "inference",
+    "media",
+    "torrents",
+    "windows-ci",
+    "windows-dev",
+    "desktop",
+    "minecraft",
+    "terraria",
+    "factorio",
+]
 BACKUPS, CONSOLE = "backups", "console"
 PBS = "pbs"
 # apply makes these guests but nothing in them yet (README, Not done yet).
@@ -132,6 +144,20 @@ TEXT = {
             "docs/runbooks/windows-desktop.md has each step."
         ),
         "off": ("Deletes the VM and its disk: Windows, your programs and every file in it. Copy out what you want to keep first."),
+    },
+    "desktop": {
+        "title": "KDE desktop (Fedora)",
+        "what": "Fedora's KDE Plasma for you, on a monitor plugged into the server and by Remote Desktop over Tailscale.",
+        "needs": [
+            "For the server's own screen: a graphics card the desktop can borrow, a monitor on it, and a keyboard and mouse in the server.",
+            "Without such a card it has a virtual screen, reached by Remote Desktop alone.",
+        ],
+        "on": (
+            "Setup makes the VM and installs Plasma; it runs on demand, so start it on the Services page. "
+            "While it runs it has the graphics card to itself, and the local AI models stop until it is off again. "
+            "Its address, user and password are on the Services page, under KDE desktop."
+        ),
+        "off": "Deletes the VM and its disk: your programs, settings and every file in it. Copy out what you want to keep first.",
     },
     "minecraft": {
         "title": "Minecraft",
@@ -333,6 +359,10 @@ def _note(name: str, plan: dict | None) -> str | None:
                 else " The base game: nobody needs the Space Age expansion."
             )
         return note
+    if name == desktop.NAME and desktop.planned(plan):
+        ports = desktop.section(plan).get("usb") or []
+        usb = f" USB ports {', '.join(ports)} are its own while it runs." if ports and desktop.section(plan).get("gpu") else ""
+        return desktop.sentence(plan) + usb
     if name == BACKUPS and PBS in guests:
         found = plan["backups"]
         if found["status"] == backups.OK:

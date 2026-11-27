@@ -33,6 +33,7 @@ STAGES = [
     "media",
     "torrents",
     "games",
+    "desktop",
     "ci",
     "agents",
     "logs",

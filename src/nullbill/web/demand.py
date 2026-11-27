@@ -81,8 +81,10 @@ def view(planned: dict | None, live: dict | None, acting: dict[str, str], why: s
     return out
 
 
-def command(body: dict, known: set[str], by: str = "the page") -> tuple[str, str, str]:
-    """(action, workload, nb-power's command line) for what the page asks."""
+def command(body: dict, known: set[str], by: str = "the page", yields: set[str] = frozenset()) -> tuple[str, str, str]:
+    """(action, workload, nb-power's command line) for what the page asks.
+    yields: the host's guests that stop while the desktop has the graphics
+    card, which a start may name to stop too."""
     action, name = body.get("action"), str(body.get("name", ""))
     if action not in ACTIONS:
         raise NullBillError(f"send action: {', '.join(ACTIONS)}")
@@ -97,7 +99,7 @@ def command(body: dict, known: set[str], by: str = "the page") -> tuple[str, str
         argv += ["--by", by]
     if action == "start":
         agreed = body.get("stop") or []
-        if not isinstance(agreed, list) or any(not NAME.fullmatch(str(n)) or str(n) not in known for n in agreed):
+        if not isinstance(agreed, list) or any(not NAME.fullmatch(str(n)) or str(n) not in known | yields for n in agreed):
             raise NullBillError("stop: the workloads to stop first, as shown")
         if agreed:
             argv += ["--stop", ",".join(str(n) for n in agreed)]

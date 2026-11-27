@@ -88,6 +88,8 @@ def candidates(plan: dict, model: dict) -> list[str]:
         for name, guest in plan["guests"].items()
         if guest["kind"] in ("lxc", "vm")
         and guest["zone"] != "windows"
+        # The desktop runs Fedora, whose next release the owner moves to.
+        and "os" not in model["services"].get(name, {})
         and name not in own
         and name != PBS
         # install.sh's container, where apply itself runs: last, by itself.

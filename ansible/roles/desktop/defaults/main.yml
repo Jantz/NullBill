@@ -1,0 +1,19 @@
+# The Linux account that signs in at the server's screen and by Remote
+# Desktop, and its password (apply: desktop.py, secret desktop_password).
+desktop_user: owner
+desktop_password: ""
+# KDE's Remote Desktop server (KRDP) listens here; the firewall layers
+# open it from the owner's devices on the tailnet alone.
+desktop_port: 3389
+# The graphics card the desktop borrows: nvidia, amd, intel, or empty for
+# a virtual screen. Fedora's own Mesa drivers serve each, so a daily update
+# never leaves the screen without one.
+desktop_gpu_vendor: ""
+# PEM certificate and key from NullBill's browser CA, for the desktop's
+# name and address, which Remote Desktop clients see. Empty: KRDP makes
+# one of its own, which clients warn about.
+desktop_cert: ""
+desktop_key: ""
+# Start and enable services, and restart for a new kernel. Only the
+# container check turns this off: a container has no init system to start.
+desktop_manage_services: true

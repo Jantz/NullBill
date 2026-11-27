@@ -28,6 +28,13 @@ What runs on demand shares the memory the always-on guests leave
       off and nobody uses. While a setup run holds, nothing is stopped for
       being idle.
 
+The graphics card the desktop borrows (policy "gpu", docs/adr/0023-desktop.md):
+while the desktop runs, every function of the card is VFIO's and the VM's,
+and the host's guests that use the card (yields) are stopped. Starting the
+desktop stops them only when the caller names them (--stop), or for setup
+when nobody uses them; once the desktop is off, by whatever means, the
+card goes back to its host drivers and what was stopped for it starts again.
+
 Use: a container answers `nb-busy` (the updates role) with a line per
 reason it is in use; a pool is in use while a clone runs; cpu_pct, when
 the rules give one, counts a guest's CPU over the last minute. A probe that
@@ -52,6 +59,7 @@ STATE = STATE_DIR / "power.json"
 LOCK = STATE_DIR / "power.lock"
 TEXTFILE = Path(os.environ.get("NB_TEXTFILE_DIR", "/var/lib/prometheus/node-exporter"))
 CGROUP = Path(os.environ.get("NB_CGROUP_ROOT", "/sys/fs/cgroup"))
+PCI = Path(os.environ.get("NB_PCI_ROOT", "/sys/bus/pci"))
 MEMINFO = Path(os.environ.get("NB_MEMINFO", "/proc/meminfo"))
 OUT = "nullbill-power.prom"
 BUSY = "/usr/local/sbin/nb-busy"
@@ -63,10 +71,17 @@ HOLD_S = 6 * 3600
 SPARE_MIB = 512
 EVENTS = 40
 NO_ROOM = 3
+# ensure, for setup: the graphics card is in use by someone, so setup
+# leaves that workload as it is this time.
+GPU_BUSY = 4
 
 
 class Failed(Exception):
     pass
+
+
+class GpuBusy(Failed):
+    """For setup: the graphics card cannot change hands now."""
 
 
 def sh(argv: list[str], timeout: int = 60, stdin: str | None = None) -> tuple[int, str, str]:
@@ -239,6 +254,136 @@ def stop_guest(guest: dict) -> None:
         raise Failed(f"{guest['name']} did not shut down: {(err or out).strip()[:300] or f'exit {rc}'}{hint}")
 
 
+def card_functions(slot: str) -> list[str]:
+    """The card's PCI functions (0000:01:00.0, .1, ...) as sysfs lists them."""
+    try:
+        return sorted(d.name for d in (PCI / "devices").iterdir() if d.name.startswith(slot + "."))
+    except OSError:
+        return []
+
+
+def bound_driver(addr: str) -> str:
+    link = PCI / "devices" / addr / "driver"
+    return os.path.basename(os.readlink(link)) if link.is_symlink() else ""
+
+
+def write_sys(path: Path, text: str) -> str:
+    try:
+        path.write_text(text)
+    except OSError as e:
+        return f"{path}: {e.strerror or e}"
+    return ""
+
+
+def yields(policy: dict) -> list[dict]:
+    return (policy.get("gpu") or {}).get("yields", [])
+
+
+def holder_on(policy: dict, states: dict[int, str]) -> bool:
+    """Whether the desktop, which borrows the card, runs."""
+    rules = policy.get("gpu")
+    group = policy["groups"].get(rules["group"]) if rules else None
+    return bool(group) and group_state(group, states) in ("on", "partly")
+
+
+def card_lent(policy: dict) -> bool:
+    """Whether any function of the card is VFIO's, as PVE leaves it once the
+    desktop has run."""
+    rules = policy.get("gpu")
+    return bool(rules) and any(bound_driver(a) == "vfio-pci" for a in card_functions(rules["slot"]))
+
+
+def gpu_users(policy: dict, state: dict, states: dict[int, str], now: float) -> list[dict]:
+    """The host's guests that use the card and run now, each with whether it
+    is in use."""
+    out = []
+    for guest in yields(policy):
+        if guest_state(guest, states) != "running":
+            continue
+        record = state.setdefault("gpu_use", {}).setdefault(guest["name"], {"since": now})
+        busy = in_use({"guests": [guest]}, states, record, now)
+        out.append({"name": guest["name"], "title": guest["title"], "busy": busy, "guest": guest})
+    return out
+
+
+def gpu_refusal(policy: dict, group: dict, users: list[dict]) -> dict:
+    rules = policy["gpu"]
+    return {
+        "ok": False,
+        "error": "gpu",
+        "name": rules["group"],
+        "title": group["title"],
+        "card": rules["name"],
+        "stop": [{"name": u["name"], "title": u["title"], "busy": u["busy"]} for u in users],
+    }
+
+
+def take_card(policy: dict, state: dict, states: dict[int, str], users: list[dict], why: str, now: float) -> list[str]:
+    """Stop the host's guests that use the card, so that the desktop can
+    have it; PVE binds it to VFIO when the VM starts. Returns their titles."""
+    record = state.setdefault("gpu", {"since": now, "stopped": []})
+    stopped = []
+    for user in users:
+        stop_guest(user["guest"])
+        if user["name"] not in record["stopped"]:
+            record["stopped"].append(user["name"])
+        event(state, user["name"], "stopped", why)
+        stopped.append(user["title"])
+    return stopped
+
+
+def give_back(policy: dict, state: dict, states: dict[int, str]) -> list[str]:
+    """Once the desktop is off: the card's functions back to their host
+    drivers, then the guests stopped for it started again. Returns what
+    could not be done; safe to call every minute."""
+    rules = policy.get("gpu")
+    if not rules:
+        state.pop("gpu", None)
+        return []
+    if holder_on(policy, states):
+        return []
+    problems = []
+    # With nothing on the host to use it, the card stays VFIO's: no host
+    # driver has to take it up again, which some cards do badly.
+    for addr in card_functions(rules["slot"]) if yields(policy) else []:
+        if bound_driver(addr) != "vfio-pci":
+            continue
+        device = PCI / "devices" / addr
+        # PVE names vfio-pci in driver_override; cleared, the card's own
+        # driver (nvidia, nouveau, amdgpu, snd_hda_intel) probes it again.
+        for problem in (
+            write_sys(device / "driver_override", "\n"),
+            write_sys(device / "driver" / "unbind", addr),
+            write_sys(PCI / "drivers_probe", addr),
+        ):
+            if problem:
+                problems.append(f"the graphics card did not go back to the host: {problem}")
+                break
+        else:
+            syslog.syslog(f"{addr} is the host's again ({bound_driver(addr) or 'no driver'})")
+    record = state.get("gpu")
+    if problems or record is None:
+        return problems
+    if yields(policy) and any(bound_driver(a) == "vfio-pci" for a in card_functions(rules["slot"])):
+        return ["the graphics card is still VFIO's"]
+    # The NVIDIA driver makes no device nodes by itself (nvidia_host's unit).
+    sh(["systemctl", "restart", "nb-nvidia-devices.service"])
+    for guest in yields(policy):
+        if guest["name"] not in record.get("stopped", []) or guest_state(guest, states) == "running":
+            continue
+        try:
+            start_guest(guest)
+        except Failed as e:
+            problems.append(str(e))
+            continue
+        if guest["kind"] == "lxc":
+            problems += refresh_certs(policy, guest)
+        event(state, guest["name"], "started", "the desktop gave the graphics card back")
+    if not problems:
+        state.pop("gpu", None)
+    return problems
+
+
 def refresh_certs(policy: dict, guest: dict) -> list[str]:
     """A step-ca certificate lasts 24 h and is renewed with itself, so one
     that ran out while the guest was off needs a new one: a one-time token
@@ -345,7 +490,7 @@ def view(policy: dict, state: dict, states: dict[int, str], now: float) -> dict:
                 entry["stops_in_s"] = max(0, group["idle_minutes"] * 60 - idle)
         groups.append(entry)
     used = sum(takes(g, states) for g in policy["groups"].values())
-    return {
+    found = {
         "now": int(now),
         "ticked": state.get("ticked"),
         "headroom_mib": policy.get("headroom_mib", 0),
@@ -355,6 +500,21 @@ def view(policy: dict, state: dict, states: dict[int, str], now: float) -> dict:
         "groups": groups,
         "events": state["events"],
     }
+    rules = policy.get("gpu")
+    if rules:
+        stopped = (state.get("gpu") or {}).get("stopped", [])
+        found["gpu"] = {
+            "card": rules["name"],
+            "group": rules["group"],
+            "lent": holder_on(policy, states) or (bool(yields(policy)) and card_lent(policy)),
+            "yields": [{"name": y["name"], "title": y["title"]} for y in yields(policy)],
+            "yielded": [
+                {"name": y["name"], "title": y["title"]}
+                for y in yields(policy)
+                if y["name"] in stopped and guest_state(y, states) != "running"
+            ],
+        }
+    return found
 
 
 def render_metrics(policy: dict, state: dict, states: dict[int, str], now: float) -> str:
@@ -389,6 +549,11 @@ def render_metrics(policy: dict, state: dict, states: dict[int, str], now: float
             series["guest_off"].append(f"nb_power_guest_off{{{who}}} {int(not running)}")
             if running:
                 series["guest_started"].append(f"nb_power_guest_started_timestamp_seconds{{{who}}} {int(record.get('since', now))}")
+    # Off on purpose while the desktop has the card they use.
+    stopped = (state.get("gpu") or {}).get("stopped", [])
+    for guest in yields(policy):
+        off = guest["name"] in stopped and guest_state(guest, states) != "running"
+        series["guest_off"].append(f'nb_power_guest_off{{guest="{label(guest["name"])}",group="gpu"}} {int(off)}')
     helps = {
         "guest_off": ("nb_power_guest_off", "1 while a guest that runs on demand is off, so its alerts keep quiet."),
         "guest_started": ("nb_power_guest_started_timestamp_seconds", "When a guest that runs on demand was last found started."),
@@ -484,6 +649,9 @@ def tick() -> int:
                 del state["groups"][name]
                 event(state, name, "stopped", f"not used for {group['idle_minutes']} min")
             states = guest_states(policy)
+        for problem in give_back(policy, state, states):
+            syslog.syslog(problem)
+        states = guest_states(policy)
         state["ticked"] = int(now)
         save(STATE, json.dumps(state))
         write_metrics(policy, state, states, now)
@@ -565,6 +733,46 @@ def cmd_start(args: argparse.Namespace) -> int:
         agreed = [n for n in (args.stop or "").split(",") if n]
         stopped: list[str] = []
         problems: list[str] = []
+        rules = policy.get("gpu")
+        if current != "on" and rules:
+            # The card changes hands only with the caller's yes for each
+            # guest that uses it: the page asks the owner.
+            if args.name == rules["group"]:
+                users = gpu_users(policy, state, states, now)
+                stop = [u["name"] for u in users]
+            elif args.name in {y["name"] for y in yields(policy)} and holder_on(policy, states):
+                holder = policy["groups"][rules["group"]]
+                users = [
+                    {
+                        "name": rules["group"],
+                        "title": holder["title"],
+                        "busy": in_use(holder, states, state["groups"].setdefault(rules["group"], {"since": now}), now),
+                    }
+                ]
+                stop = [rules["group"]]
+            else:
+                users, stop = [], []
+            if any(n not in agreed for n in stop):
+                save(STATE, json.dumps(state))
+                refusal = gpu_refusal(policy, group, users)
+                answer(
+                    args,
+                    refusal,
+                    f"{group['title']} needs {rules['name']}, which {', '.join(u['title'] for u in users)} uses; "
+                    "stopping it frees the card",
+                )
+                return NO_ROOM
+            if args.name == rules["group"] and users:
+                stopped += take_card(policy, state, states, users, f"{group['title']} borrows the graphics card", now)
+            elif users:
+                stop_group(policy["groups"][rules["group"]], states)
+                state["groups"].pop(rules["group"], None)
+                event(state, rules["group"], "stopped", f"to give the graphics card to {group['title']}")
+                stopped.append(users[0]["title"])
+                states = guest_states(policy)
+                problems += give_back(policy, state, states)
+            agreed = [n for n in agreed if n not in stop]
+            states = guest_states(policy)
         if current != "on":
             victims, refusal = room_for(policy, state, states, args.name, agreed, now)
             if refusal:
@@ -580,7 +788,15 @@ def cmd_start(args: argparse.Namespace) -> int:
                 event(state, other, "stopped", f"to make room for {group['title']}")
                 stopped.append(policy["groups"][other]["title"])
             states = guest_states(policy) if victims else states
-            problems = start_group(policy, group, states)
+            if victims:
+                problems += give_back(policy, state, states)
+            try:
+                problems += start_group(policy, group, states)
+            except Failed:
+                # A desktop that did not start gives the card back at once.
+                give_back(policy, state, guest_states(policy))
+                save(STATE, json.dumps(state))
+                raise
             event(state, args.name, "started", f"by {args.by}")
         record = state["groups"].setdefault(args.name, {})
         record.setdefault("since", now)
@@ -610,10 +826,13 @@ def cmd_stop(args: argparse.Namespace) -> int:
             stop_group(group, states)
             event(state, args.name, "stopped", f"by {args.by}")
         state["groups"].pop(args.name, None)
+        problems = give_back(policy, state, guest_states(policy))
         save(STATE, json.dumps(state))
         write_metrics(policy, state, guest_states(policy), now)
     text = f"stopped {group['title']}" if current in ("on", "partly") else f"{group['title']} is off"
-    answer(args, {"ok": True, "name": args.name, "already": current not in ("on", "partly")}, text)
+    for problem in problems:
+        text += f"\nwarning: {problem}"
+    answer(args, {"ok": True, "name": args.name, "already": current not in ("on", "partly"), "warnings": problems}, text)
     return 0
 
 
@@ -701,6 +920,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
             said = []
         else:
             said = end_setup(policy, state, states, now)
+            said += give_back(policy, state, guest_states(policy))
             write_metrics(policy, state, guest_states(policy), now)
         save(STATE, json.dumps(state))
     for line in said:
@@ -726,6 +946,8 @@ def cmd_ensure(args: argparse.Namespace) -> int:
             return 0
         begin_setup(policy, state, states, now)
         todo = [(name, group, g) for name, group, g in wanted if guest_state(g, states) != "running"]
+        said += setup_card(policy, state, states, [name for name, _, _ in todo], now)
+        states = guest_states(policy)
         new = {name: group for name, group, _ in todo if not takes(group, states)}
         need = sum(group["memory_mib"] for group in new.values())
 
@@ -775,6 +997,26 @@ def cmd_ensure(args: argparse.Namespace) -> int:
     return 0
 
 
+def setup_card(policy: dict, state: dict, states: dict[int, str], starting: list[str], now: float) -> list[str]:
+    """For setup, before it starts the desktop: the card changes hands only
+    when nobody uses what has it now. Raises GpuBusy otherwise; setup then
+    leaves the desktop for its next run. (A guest that is off while the
+    desktop has its card setup leaves alone: apply reads that from status.)"""
+    rules = policy.get("gpu")
+    if not rules:
+        return []
+    said = []
+    if rules["group"] in starting:
+        users = gpu_users(policy, state, states, now)
+        busy = [f"{u['title']}: {'; '.join(u['busy'])}" for u in users if u["busy"]]
+        if busy:
+            save(STATE, json.dumps(state))
+            raise GpuBusy(f"{policy['groups'][rules['group']]['title']} needs the graphics card, and it is in use ({'; '.join(busy)})")
+        for title in take_card(policy, state, states, users, "setup needs the desktop on, and the desktop borrows the graphics card", now):
+            said.append(f"yielded {title}")
+    return said
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="nb-power")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -807,7 +1049,7 @@ def main() -> int:
             print(json.dumps({"ok": False, "error": str(e)}))
         else:
             print(f"nb-power: {e}", file=sys.stderr)
-        return 1
+        return GPU_BUSY if isinstance(e, GpuBusy) else 1
 
 
 if __name__ == "__main__":

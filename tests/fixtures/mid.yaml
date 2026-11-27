@@ -48,6 +48,8 @@ lspci:
     0000:00:00.0 Host bridge [0600]: Advanced Micro Devices, Inc. [AMD] Synthetic Root Complex [1022:0001]
     0000:01:00.0 VGA compatible controller [0300]: NVIDIA Corporation Synthetic GPU 24G [10de:0001] (rev a1)
     0000:01:00.1 Audio device [0403]: NVIDIA Corporation Synthetic GPU Audio [10de:0002] (rev a1)
+usb:
+  out: "1-2\tf0f0:0001\tkeyboard\tSynthetic Keyboard\n1-3.1\tf0f0:0002\tmouse\tSynthetic Mouse\n2-1\tf0f0:0003\t\tSynthetic Disk\n"
 iommu:
   out: |
     /sys/kernel/iommu_groups/0/devices/0000:00:00.0

@@ -8,7 +8,7 @@ fallback. Passwords are the secrets apply keeps, revealed on request only.
 so the page can say whether it answers.
 """
 
-from nullbill import games, legacy, media, torrents
+from nullbill import desktop, games, legacy, media, torrents
 
 
 def shares(plan: dict) -> list[str]:
@@ -26,6 +26,7 @@ PASSWORDS = {
     "model-gateway": "model_gateway_key",
     "jellyfin": "jellyfin_admin_password",
     torrents.QBITTORRENT: torrents.PASSWORD_SECRET,
+    desktop.NAME: desktop.PASSWORD,
 }
 
 # Guests that run on their own and have nothing for the owner to open.
@@ -310,6 +311,42 @@ def _entries(plan: dict, guests: dict, by_name: bool, forgejo_user: str | None, 
                     step("Install Windows from the VM's console in Proxmox (windows-desktop.md)."),
                     step("In Windows, turn on Settings, System, Remote Desktop, then connect to the address above."),
                 ],
+            }
+        )
+    if ip(desktop.NAME) and desktop.section(plan).get("user"):
+        section = desktop.section(plan)
+        where = at(desktop.NAME)
+        local = [
+            step(
+                "At the server: plug the monitor into the graphics card's outputs and a keyboard and mouse into the USB "
+                f"ports {', '.join(section.get('usb') or []) or 'the hardware page lists'}, start the desktop here and sign in "
+                "on its lock screen with the same password."
+            )
+        ]
+        out.append(
+            {
+                "name": desktop.NAME,
+                "title": "KDE desktop",
+                "what": "Fedora's KDE Plasma, on the server's own screen and by Remote Desktop. " + desktop.sentence(plan),
+                "addresses": [f"Remote Desktop: {where}", *fallback(desktop.NAME, f"Remote Desktop: {where}")],
+                "user": section["user"],
+                "password": desktop.NAME,
+                "password_note": "The same password unlocks the screen and signs in to Remote Desktop.",
+                "steps": [
+                    step("It runs on demand: press Start in its row first."),
+                    step(
+                        "On each device, install the server's root certificate, so Remote Desktop knows the desktop is yours.",
+                        href="#access/trust",
+                        link="Access, Trust this server",
+                    ),
+                    step(
+                        "On Windows open Remote Desktop Connection; on a Mac, iPhone, iPad or Android phone install Windows App "
+                        "and add a PC; on Linux use KRDC or Remmina. Connect to the address above as "
+                        f"{section['user']} with the password above."
+                    ),
+                    *(local if section.get("gpu") else []),
+                ],
+                "watch": desktop.NAME,
             }
         )
     if "linux-runner" in guests:

@@ -1,0 +1,9 @@
+# The KDE desktop: Fedora's Plasma in its own VM, on the graphics card it
+# borrows and by Remote Desktop over Tailscale (docs/adr/0023-desktop.md).
+# apply's desktop stage runs this with the desktop user's password and the
+# browser CA's certificate for KDE's Remote Desktop server.
+- name: KDE desktop
+  hosts: all
+  become: false
+  roles:
+    - desktop

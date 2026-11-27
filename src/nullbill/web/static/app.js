@@ -4330,6 +4330,23 @@ async function demandAct(button, feedback, body) {
     let answer;
     try {
       answer = await api("/api/on-demand", body);
+      if (!answer.ok && answer.gpu) {
+        // The desktop borrows the graphics card; what uses it stops first.
+        const g = answer.gpu;
+        acting(false);
+        const ok = await confirmDialog({
+          title: `Stop ${andList(g.stop.map((o) => o.title))} to start ${g.title}?`,
+          text: `While ${g.title} runs, the ${g.card} is its own. ${andList(g.stop.map((o) => o.title))} uses it now; it shuts down cleanly and starts again by itself when ${g.title} stops.`,
+          points: g.stop.map((o) => `${o.title}: ${o.busy.length ? `in use (${o.busy.join("; ")})` : "not in use"}`),
+          yes: `Stop ${g.stop.length > 1 ? "them" : "it"} and start ${g.title}`,
+          danger: g.stop.some((o) => o.busy.length),
+        });
+        if (!ok) { setDemand(answer.view); return ""; }
+        acting(true);
+        body = {...body, stop: [...(body.stop || []), ...g.stop.map((o) => o.name)]};
+        answer = await api("/api/on-demand", body);
+        if (!answer.ok && answer.gpu) { setDemand(answer.view); throw new ApiError("What uses the graphics card changed meanwhile. Press Start again.", 409); }
+      }
       if (!answer.ok && answer.no_room) {
         const r = answer.no_room;
         if (!r.enough) {
@@ -4346,7 +4363,7 @@ async function demandAct(button, feedback, body) {
         });
         if (!ok) { setDemand(answer.view); return ""; }
         acting(true);
-        answer = await api("/api/on-demand", {...body, stop: r.stop.map((o) => o.name)});
+        answer = await api("/api/on-demand", {...body, stop: [...(body.stop || []), ...r.stop.map((o) => o.name)]});
         if (!answer.ok) { setDemand(answer.view); throw new ApiError("What is running changed meanwhile. Press Start again.", 409); }
       }
       if (!answer.ok && answer.busy) {

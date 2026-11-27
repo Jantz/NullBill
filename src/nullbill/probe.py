@@ -66,6 +66,18 @@ COMMANDS: dict[str, tuple[str, bool]] = {
     # The host's IPv4 routes: the home network is what the default route's
     # device is on, which network.base must stay clear of (plan.py).
     "routes": ("ip -4 -j route show", False),
+    # USB devices by port (bus-port as PVE's usbN host= takes it), with
+    # whether one is a keyboard or a mouse: what the desktop borrows while
+    # it runs (desktop.py). Hubs and the root hubs are left out.
+    "usb": (
+        "for d in /sys/bus/usb/devices/*; do n=${d##*/}; case $n in usb*|*:*) continue ;; esac; "
+        '[ -r "$d/idVendor" ] || continue; [ "$(cat "$d/bDeviceClass" 2>/dev/null)" = 09 ] && continue; k=""; '
+        'for i in "$d/$n":*; do [ "$(cat "$i/bInterfaceClass" 2>/dev/null)" = 03 ] || continue; '
+        'case "$(cat "$i/bInterfaceProtocol" 2>/dev/null)" in 01) k="$k,keyboard" ;; 02) k="$k,mouse" ;; esac; done; '
+        'printf \'%s\\t%s:%s\\t%s\\t%s\\n\' "$n" "$(cat "$d/idVendor")" "$(cat "$d/idProduct")" "${k#,}" '
+        '"$(cat "$d/product" 2>/dev/null)"; done; true',
+        False,
+    ),
 }
 
 Runner = Callable[[str, str], tuple[int, str, str]]
@@ -340,6 +352,8 @@ def _storage(text: str) -> list[dict]:
 
 
 GPU_CLASSES = {"0300", "0302", "0380"}
+# Host and PCI(-to-PCI) bridges.
+BRIDGES = {"0600", "0604"}
 VENDORS = {"10de": "nvidia", "1002": "amd", "8086": "intel"}
 LSPCI_LINE = re.compile(r"^(?P<addr>\S+) .*?\[(?P<cls>[0-9a-f]{4})\]: (?P<name>.+) \[(?P<ven>[0-9a-f]{4}):(?P<dev>[0-9a-f]{4})\]")
 
@@ -366,6 +380,7 @@ def _nvidia_vram(text: str | None) -> dict[str, int]:
 def _gpus(lspci_text: str, iommu_text: str | None, nvidia_text: str | None) -> list[dict]:
     groups = _iommu(iommu_text)
     vram = _nvidia_vram(nvidia_text)
+    classes = {m["addr"]: m["cls"] for m in map(LSPCI_LINE.match, lspci_text.splitlines()) if m}
     gpus = []
     for line in lspci_text.splitlines():
         m = LSPCI_LINE.match(line)
@@ -373,7 +388,11 @@ def _gpus(lspci_text: str, iommu_text: str | None, nvidia_text: str | None) -> l
             continue
         addr = m["addr"]
         group = groups.get(addr)
-        peers = sorted(a for a, g in groups.items() if g == group and a != addr) if group is not None else []
+        # A PCI bridge in the group stays with the host when the card is
+        # passed to a VM (VFIO does not need it), so it is no peer.
+        peers = (
+            sorted(a for a, g in groups.items() if g == group and a != addr and classes.get(a) not in BRIDGES) if group is not None else []
+        )
         gpus.append(
             {
                 "pci": addr,
@@ -406,7 +425,26 @@ def parse(raw: Path) -> dict:
         "gpus": _gpus(texts["lspci"], texts["iommu"], texts["nvidia-smi"]),
         "copies": _copies(texts["copies"]),
         "lan": _lan(texts["routes"]),
+        "usb": _usb(texts["usb"]),
     }
+
+
+USB_PORT = re.compile(r"^[0-9]{1,3}-[0-9]{1,3}(\.[0-9]{1,3}){0,4}$")
+
+
+def _usb(text: str | None) -> list[dict] | None:
+    """USB devices by port; None when the probe could not read them."""
+    if text is None:
+        return None
+    out = []
+    for line in text.splitlines():
+        fields = line.split("\t")
+        if len(fields) < 3 or not USB_PORT.match(fields[0]) or not re.fullmatch(r"[0-9a-f]{4}:[0-9a-f]{4}", fields[1]):
+            continue
+        kinds = sorted({k for k in fields[2].split(",") if k in ("keyboard", "mouse")})
+        name = re.sub(r"[^ -~]", "", fields[3] if len(fields) > 3 else "").strip()[:60]
+        out.append({"port": fields[0], "id": fields[1], "kinds": kinds, "name": name})
+    return sorted(out, key=lambda d: [int(n) for n in re.split(r"[-.]", d["port"])])
 
 
 def _lan(routes: str | None) -> list[str] | None:

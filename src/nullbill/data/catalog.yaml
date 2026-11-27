@@ -93,6 +93,13 @@ zones:
     index: 10
     description: The download client, alone, with one folder of a kept disk.
     egress: direct
+  # A desktop browses the web, which a proxy that lists names cannot carry;
+  # like services it goes out directly. Nothing reaches it but the owner,
+  # on Remote Desktop's port (docs/adr/0023-desktop.md).
+  desktop:
+    index: 11
+    description: The owner's Fedora KDE Plasma desktop, alone.
+    egress: direct
 
 roles:
   owner:
@@ -456,6 +463,25 @@ services:
     floor: {cores: 2, memory_mib: 4096, disk_gib: 96}
     ports:
       - {port: 3389, proto: tcp, from: ["role:owner"]}
+  # Fedora KDE Plasma, a VM so that it can drive the graphics card's own
+  # outputs and the keyboard and mouse plugged into the server; it borrows
+  # the card while it runs (desktop.py, docs/adr/0023-desktop.md). Its
+  # home folder is the owner's, so it is backed up. Not agent-managed.
+  desktop:
+    id: 29
+    kind: vm
+    zone: desktop
+    workload: desktop
+    os: fedora
+    description: Fedora KDE Plasma desktop, on the server's own screen and by Remote Desktop.
+    # Plasma with a browser open holds about 2.5 GiB; the disk holds
+    # Fedora, KDE's programs and the owner's files.
+    floor: {cores: 2, memory_mib: 4096, disk_gib: 64}
+    ports:
+      # KDE's own RDP server (KRDP), which signs in with the desktop's password.
+      - {port: 3389, proto: tcp, from: ["role:owner"]}
+      # apply reaches VMs over SSH through the host (ProxyJump).
+      - {port: 22, proto: tcp, from: ["host"]}
 
 # Workloads that can be installed and yet off (docs/adr/0013-on-demand.md).
 # run: always starts with the server and is counted by the plan all the
@@ -501,6 +527,15 @@ power:
     title: Windows desktop
     run: always
     # Open programs and unsaved files: only the owner knows when it is done.
+    stop: ask
+    idle_minutes: 240
+  # The desktop borrows the graphics card while it runs, so it is off until
+  # started: starting it stops what else uses the card, and stopping it
+  # gives the card back (desktop.py). In use while someone is signed in
+  # on Remote Desktop or a keyboard at the server was used lately.
+  desktop:
+    title: KDE desktop
+    run: on-demand
     stop: ask
     idle_minutes: 240
   # In use while anything downloads or seeds, or its page is open.
@@ -755,6 +790,28 @@ images:
   debian-cloud:
     url: https://cloud.debian.org/images/cloud/trixie/20261111-2659/debian-13-genericcloud-amd64-20261111-2659.qcow2
     sha512: 3247873136ba09b060fab45e9c115239f81c1d401fce00b8fa9b872013f7135d6a40b12462ab5ac03b9fa4ed5955dd0e8d1c900109a939ad7a0a4dafe7dea47b
+
+  # The desktop's Fedora (docs/adr/0023-desktop.md): Fedora's Generic cloud
+  # image of its newest release, with the SHA-256 the release's CHECKSUM
+  # file beside it lists (tools/pins fedora_cloud). A desktop that exists
+  # keeps its own image.
+  fedora-cloud:
+    release: "45"
+    url: https://dl.fedoraproject.org/pub/fedora/linux/releases/45/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-45-1.4.x86_64.qcow2
+    sha256: 50bdc5e70f6a24f540932d15411c1c6ae9fcfa40fb990d876d83c5cc823b2ad0
+
+# The desktop (desktop.py, docs/adr/0023-desktop.md).
+desktop:
+  # Borrow a discrete graphics card while it runs: its outputs become the
+  # desktop's screen, and what else uses it on the host stops meanwhile.
+  # false keeps every card with the host; the desktop then has a virtual
+  # screen and is reached by Remote Desktop alone. card: which, by PCI
+  # address, when there are several (default: the first).
+  gpu: true
+  # USB ports, as the probe names them (bus-port, such as 1-2 or 1-2.3),
+  # whose devices go to the desktop while it runs. Default: each port where
+  # the probe saw a keyboard or mouse.
+  # usb: ["1-2"]
 
 # verify checks direct egress against this name's address, and the proxy
 # with both the name and the bare address. It must be on proxy.allow.

@@ -1,0 +1,21 @@
+# A Fedora container standing in for the desktop VM (ansible/roles/desktop,
+# docs/adr/0023-desktop.md), with the Ansible apply runs, for roles whose
+# tests/image says fedora. Fedora 45 is the release the desktop is made from
+# (catalog.yaml's images.fedora-cloud).
+FROM registry.fedoraproject.org/fedora:45@sha256:806e6bc4b2f302baca3b0f53382416888f6ad46476063a2b47e72fc29968ae25
+# extra-ca.crt is empty unless the build runs behind a TLS-intercepting proxy.
+COPY extra-ca.crt /etc/pki/ca-trust/source/anchors/extra-ca.crt
+RUN update-ca-trust \
+ && dnf -y -q install python3 python3.13 openssl procps-ng iproute systemd \
+ && dnf clean all
+COPY requirements-apply.txt /tmp/requirements-apply.txt
+# The controller's Ansible runs on Debian 13's Python 3.13, as apply's
+# does; the modules under the guest's own Python (Fedora's newer one).
+RUN python3.13 -m venv /opt/ansible \
+ && PIP_CERT=/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem /opt/ansible/bin/pip install -q --no-cache-dir --disable-pip-version-check \
+      -r /tmp/requirements-apply.txt \
+ && ln -s /opt/ansible/bin/ansible /opt/ansible/bin/ansible-playbook /usr/local/bin/
+# Modules run under python3.13, as apply's inventory has it for the desktop:
+# Ansible 2.19's own module code fails on Fedora 45's Python 3.15.
+ENV ANSIBLE_PYTHON_INTERPRETER=/usr/bin/python3.13
+COPY role-check.sh /usr/local/lib/role-check.sh

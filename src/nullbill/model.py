@@ -79,6 +79,13 @@ def node_exporter_guest(svc: dict) -> bool:
     return svc["kind"] != "vm-pool" and svc["zone"] != "windows"
 
 
+def debian_guest(svc: dict) -> bool:
+    """A Linux guest that lives on and runs Debian, which the updates,
+    release and log-shipping roles are written for. The desktop runs
+    Fedora (catalog `os`); its own role does what they do there."""
+    return node_exporter_guest(svc) and "os" not in svc
+
+
 def _node_exporter(model: dict) -> None:
     if "monitoring" not in model["services"]:
         return

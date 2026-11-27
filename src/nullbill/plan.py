@@ -7,7 +7,7 @@ of them, so the owner sees every problem in one run.
 import ipaddress
 from typing import Any
 
-from nullbill import backups, ci, custom, games, legacy, media, power, torrents
+from nullbill import backups, ci, custom, desktop, games, legacy, media, power, torrents
 from nullbill.errors import NullBillError
 from nullbill.flows import SHARED
 from nullbill.proxy import allows
@@ -721,6 +721,7 @@ def build_plan(model: dict, facts: dict) -> dict:
 
     planned = _planned_services(model, errors, facts)
     gpu_section, inference_gpus = _gpus(model, facts, planned, errors)
+    lent = desktop.lend(model, facts, planned, gpu_section, errors)
     if "inference" in planned and not inference_gpus:
         errors.append("intent asks for inference, but no host-shared GPU budgets VRAM to it")
     engine = _engine(model, inference_gpus) if "inference" in planned else None
@@ -738,6 +739,7 @@ def build_plan(model: dict, facts: dict) -> dict:
     torrents_section = torrents.plan_section(model, planned, kept, media.JELLYFIN in planned, errors)
     games_section = games.plan_section(model, planned, sizes, errors)
     custom_section = custom.plan_section(model, planned)
+    desktop_section = desktop.plan_section(model, facts, planned, gpu_section, lent, errors)
     errors.raise_if_any()
 
     zones = _zones(model, planned)
@@ -795,6 +797,7 @@ def build_plan(model: dict, facts: dict) -> dict:
         "media": media_section,
         "games": games_section,
         "torrents": torrents_section,
+        **({"desktop": desktop_section} if desktop.NAME in planned else {}),
         **({"custom": custom_section} if custom_section else {}),
         **({"power": demand} if demand else {}),
         "disks": disk_section,

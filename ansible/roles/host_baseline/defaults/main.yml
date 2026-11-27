@@ -22,3 +22,9 @@ host_baseline_ntfs: false
 # guests and how each stops (src/nullbill/power.py renders them from the
 # plan). The default is no rules: everything always runs.
 host_baseline_power: '{"groups": {}, "headroom_mib": 0}'
+
+# The desktop borrows a graphics card (docs/adr/0023-desktop.md): load
+# VFIO's modules, which PVE binds the card to when the desktop starts, and
+# for an NVIDIA card keep nouveau off it. apply sets them only then.
+host_baseline_vfio: false
+host_baseline_nouveau_off: false

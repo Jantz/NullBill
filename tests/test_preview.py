@@ -7,7 +7,7 @@ import copy
 import subprocess
 
 import pytest
-from fixturedata import custom_config, fixture_config, games_config, legacy_config, torrents_config
+from fixturedata import custom_config, desktop_config, fixture_config, games_config, legacy_config, torrents_config
 from test_apply import FakeReach, ctx, passing_verify, tailnet, with_client  # noqa: F401 (fixtures)
 
 from nullbill import applied, apply, ci, custom, preview
@@ -26,7 +26,10 @@ CONFIGS = {
     "games": games_config,
     "own services": custom_config,
     "downloads": lambda: torrents_config("home"),
+    "desktop": desktop_config,
 }
+# The fixture each is probed on: the desktop needs mid's card and USB ports.
+PROBED = {"small": "small", "mid": "mid", "desktop": "mid"}
 
 
 def quiet(c):
@@ -42,7 +45,7 @@ def built(ctx, monkeypatch, config="small", script=None):
     """A server a full setup run has built, with the stand-in host."""
     monkeypatch.setenv("TF_VAR_windows_iso", "local:iso/windows.iso")
     monkeypatch.setattr(apply, "run_verify", passing_verify)
-    c = with_client(ctx(config if config in ("small", "mid") else "large", config=CONFIGS[config]()))
+    c = with_client(ctx(PROBED.get(config, "large"), config=CONFIGS[config]()))
     c.secrets.set("ntfy_topic", "nullbill-topic")
     c.secrets.set("claude_oauth_token", "sk-ant-oat01-token")
     (c.home / "web").mkdir(exist_ok=True)
@@ -89,6 +92,9 @@ def test_after_a_setup_run_the_preview_finds_every_step_as_the_run_left_it(ctx, 
     assert found["known"] and not found["full"]
     assert found["counts"]["alone"] == len(found["machines"]) == len(c.bare["guests"]) + 1
     assert by_name[preview.HOST]["host"] and by_name[preview.HOST]["steps"]
+    if config == "desktop":
+        # The desktop's own playbook, run while setup had it on, is foreseen too.
+        assert "desktop.yml" in {s.playbook for s in steps if s.machine == "desktop"}
 
 
 def test_every_stage_says_which_playbooks_it_runs():

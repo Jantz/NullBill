@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Run each guest role's container check (ansible/roles/*/tests/check.sh) in
-# a fresh Debian 13 container, the release every Linux guest runs. Arguments name the roles to
-# check; none checks them all. Needs docker and network access.
+# a fresh Debian 13 container, the release every Linux guest runs, or a
+# Fedora one for a role whose tests/image says fedora (the desktop).
+# Arguments name the roles to check; none checks them all. Needs docker and
+# network access.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -20,9 +22,20 @@ done
 
 ctx=$(mktemp -d)
 trap 'rm -rf "$ctx"' EXIT
-cp tools/role-check/Dockerfile tools/role-check/role-check.sh requirements-apply.txt "$ctx/"
+cp tools/role-check/Dockerfile tools/role-check/Dockerfile.fedora tools/role-check/role-check.sh requirements-apply.txt "$ctx/"
 cat "${EXTRA_CA_FILE:-/dev/null}" > "$ctx/extra-ca.crt"
-docker build -q -t nullbill-role-check "$ctx" >/dev/null
+image() { # the image a role's check runs in
+  if [[ "$(cat "ansible/roles/$1/tests/image" 2>/dev/null)" == fedora ]]; then echo nullbill-role-check-fedora; else echo nullbill-role-check; fi
+}
+built=()
+for role in "${roles[@]}"; do
+  name=$(image "$role")
+  [[ " ${built[*]} " == *" $name "* ]] && continue
+  file=Dockerfile
+  [[ $name == nullbill-role-check-fedora ]] && file=Dockerfile.fedora
+  docker build -q -f "$ctx/$file" -t "$name" "$ctx" >/dev/null
+  built+=("$name")
+done
 # PBS refuses to run unless /run/proxmox-backup is a tmpfs. Its certificate
 # takes the host's FQDN as CN, limited to 64 bytes, so give the container a
 # short name and drop the runner's DNS search domain.
@@ -32,5 +45,5 @@ docker build -q -t nullbill-role-check "$ctx" >/dev/null
 # until something is written.
 for role in "${roles[@]}"; do
   echo "$role:"
-  docker run --rm --cap-add NET_ADMIN --hostname role-check --dns-search . --tmpfs /run/proxmox-backup --tmpfs /downloads:size=4g -v "$PWD/ansible:/ansible:ro" nullbill-role-check bash "/ansible/roles/$role/tests/check.sh"
+  docker run --rm --cap-add NET_ADMIN --hostname role-check --dns-search . --tmpfs /run/proxmox-backup --tmpfs /downloads:size=4g -v "$PWD/ansible:/ansible:ro" "$(image "$role")" bash "/ansible/roles/$role/tests/check.sh"
 done

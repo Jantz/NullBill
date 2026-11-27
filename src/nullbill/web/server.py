@@ -1254,7 +1254,8 @@ class App:
         if live is None:
             raise NullBillError("the server does not answer for what runs on demand; run setup")
         groups = {g["name"]: g for g in live["groups"]}
-        action, name, line = demand.command(body, set(groups), by)
+        yields = {y["name"] for y in (live.get("gpu") or {}).get("yields", [])}
+        action, name, line = demand.command(body, set(groups), by, yields)
         group = groups[name]
         if action == "stop" and group.get("setup"):
             raise NullBillError(f"a setup run is using {group['title']} and stops it again when it is done")
@@ -1278,6 +1279,10 @@ class App:
             answer = None
         if rc == power.NO_ROOM and isinstance(answer, dict) and answer.get("error") == "no-room":
             return {"ok": False, "no_room": answer, "title": group["title"], "view": self.on_demand(fresh=True)}
+        # The desktop borrows the graphics card: what uses it now stops
+        # first, only with the owner's yes.
+        if rc == power.NO_ROOM and isinstance(answer, dict) and answer.get("error") == "gpu":
+            return {"ok": False, "gpu": answer, "title": group["title"], "view": self.on_demand(fresh=True)}
         if rc != 0 or not isinstance(answer, dict) or not answer.get("ok"):
             said = answer.get("error") if isinstance(answer, dict) else None
             raise NullBillError(str(said or err.strip()[:300] or f"nb-power: exit {rc}"))

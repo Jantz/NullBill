@@ -10,7 +10,7 @@ variables and environment, never part of the rendered files.
 import json
 from importlib import resources
 
-from nullbill import agent, backups, ci, legacy, media, power, torrents
+from nullbill import agent, backups, ci, desktop, legacy, media, power, torrents
 from nullbill.flows import mac
 from nullbill.render import strip_notes
 
@@ -91,6 +91,17 @@ def _downloads(plan: dict, model: dict) -> dict:
         "checksum": cloud["sha512"],
         "checksum_algorithm": "sha512",
     }
+    if desktop.planned(plan):
+        fedora = images["fedora-cloud"]
+        downloads["fedora_cloud"] = {
+            "node_name": NODE,
+            "datastore_id": media,
+            "content_type": "iso",
+            "file_name": fedora["url"].rsplit("/", 1)[1].removesuffix(".qcow2") + ".img",
+            "url": fedora["url"],
+            "checksum": fedora["sha256"],
+            "checksum_algorithm": "sha256",
+        }
     return downloads
 
 
@@ -172,6 +183,10 @@ def _container(name: str, guest: dict, plan: dict, model: dict, storage: str) ->
     if name == torrents.QBITTORRENT:
         # apply sets its downloads folder, a bind mount, as root likewise.
         _ignore(container, "mount_point")
+    if name in desktop.takes_from(plan):
+        # Stopped while the desktop has the graphics card it uses: nb-power
+        # starts it again when the card comes back, not OpenTofu.
+        _ignore(container, "started")
     return _in_agent_pool(_on_demand(container, guest, "start_on_boot"), guest)
 
 
@@ -246,6 +261,42 @@ def _vm(name: str, guest: dict, plan: dict, model: dict, storage: str) -> dict:
             # beside the installer.
             "disk": [{"datastore_id": storage, "interface": "sata0", "size": guest["disk_gib"], "discard": "on", "ssd": True}],
         }
+    elif name == desktop.NAME:
+        lent = bool(_passed_gpus(plan, name))
+        vm |= {
+            # UEFI, which a graphics card passed through needs to show the
+            # boot on its own outputs; Fedora boots without Secure Boot keys.
+            "bios": "ovmf",
+            "efi_disk": {"datastore_id": storage, "type": "4m", "pre_enrolled_keys": False},
+            # A desktop on one host never moves: the CPU's own features.
+            "cpu": {"cores": guest["cores"], "type": "host"},
+            "operating_system": {"type": "l26"},
+            "serial_device": [{"device": "socket"}],
+            # With the card, its outputs are the only screens (a virtual one
+            # beside them would be a phantom monitor in Plasma); without it,
+            # a virtual screen that Remote Desktop and PVE's console show.
+            "vga": {"type": "none" if lent else "virtio"},
+            "disk": [
+                {
+                    "datastore_id": storage,
+                    "interface": "scsi0",
+                    "size": guest["disk_gib"],
+                    "file_id": "${proxmox_download_file.fedora_cloud.id}",
+                    "discard": "on",
+                    "iothread": True,
+                }
+            ],
+            "initialization": {
+                "datastore_id": storage,
+                "interface": "scsi1",
+                "ip_config": ip_config,
+                "dns": _dns(plan, zone),
+                "user_account": {"username": "nullbill", "keys": KEYS},
+            },
+        }
+        # apply sets the USB ports it borrows as root, by port (PVE gives
+        # raw USB devices to root@pam alone; a mapping names one device).
+        _ignore(vm, "usb")
     else:
         vm |= {
             # apply bakes a pool's golden image, then converts it (ci.py).
@@ -290,6 +341,9 @@ def _vm(name: str, guest: dict, plan: dict, model: dict, storage: str) -> dict:
         # A mapping, not a raw PCI address: the API token may attach mapped
         # devices, raw ones only root@pam's password can.
         vm["hostpci"] = [{"device": f"hostpci{n}", "mapping": _mapping_name(pci), "pcie": True} for n, pci in enumerate(gpus)]
+        if name == desktop.NAME:
+            # The card is the desktop's primary display: its outputs show the boot.
+            vm["hostpci"][0]["xvga"] = True
         vm["depends_on"] += [f"{MAPPING}.{_mapping_name(pci).replace('-', '_')}" for pci in gpus]
     if name == "pbs" and backups.enabled(plan):
         vm["disk"].append(
@@ -322,7 +376,10 @@ MAPPING = "proxmox_hardware_mapping_pci"
 
 
 def _passed_gpus(plan: dict, name: str) -> list[str]:
-    return sorted(pci for pci, gpu in plan["gpus"].items() if gpu["owner"] == f"vm:{name}")
+    """The cards a VM is given: wholly (owner vm:<name>), or lent to the
+    desktop while it runs (desktop.py), which the VM's config names all
+    the same; nb-power hands it over when the desktop starts and stops."""
+    return sorted(pci for pci, gpu in plan["gpus"].items() if gpu["owner"] == f"vm:{name}" or gpu.get("lent_to") == name)
 
 
 def _mapping_name(pci: str) -> str:
@@ -336,11 +393,12 @@ def _mappings(plan: dict) -> dict:
     goes with it (the plan refuses other devices in its IOMMU group)."""
     mappings = {}
     for pci, gpu in sorted(plan["gpus"].items()):
-        if not gpu["owner"].startswith("vm:"):
+        user = gpu["owner"][3:] if gpu["owner"].startswith("vm:") else gpu.get("lent_to")
+        if not user:
             continue
         name = _mapping_name(pci)
         entry = {"id": gpu["pci_id"], "node": NODE, "path": pci.rsplit(".", 1)[0], "iommu_group": gpu["iommu_group"]}
-        mappings[name.replace("-", "_")] = {"name": name, "comment": f"nullbill: {gpu['name']} for {gpu['owner'][3:]}", "map": [entry]}
+        mappings[name.replace("-", "_")] = {"name": name, "comment": f"nullbill: {gpu['name']} for {user}", "map": [entry]}
     return mappings
 
 

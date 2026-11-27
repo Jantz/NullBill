@@ -25,7 +25,25 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from nullbill import agent, backups, browserca, ci, custom, direct, forge, games, hostroot, lan, legacy, llm, media, names, power, torrents
+from nullbill import (
+    agent,
+    backups,
+    browserca,
+    ci,
+    custom,
+    desktop,
+    direct,
+    forge,
+    games,
+    hostroot,
+    lan,
+    legacy,
+    llm,
+    media,
+    names,
+    power,
+    torrents,
+)
 from nullbill.errors import NullBillError
 from nullbill.flows import HOST, HOST_PORTS, PROXIED, resolve_flows
 from nullbill.probe import Runner
@@ -326,6 +344,7 @@ def run_verify(
             *llm.skipped(plan, reason),
             *legacy.skipped(plan, reason),
             *media.skipped(plan, reason),
+            *desktop.skipped(plan, reason),
             *torrents.skipped(plan, reason),
             *games.skipped(plan, model, reason),
             *custom.skipped(plan, model, home, reason),
@@ -397,6 +416,7 @@ def run_verify(
     add(*unless_off(lambda r: media.check(plan, target, r), media.skipped))
     add(*torrents.check(plan, target, awake, public_ip))
     add(*games.check(plan, model, target, awake))
+    add(*desktop.check(plan, target, run, off, found))
     add(*custom.check(plan, model, target, run, home, off))
     add(*names.check(plan, target, run))
     add(*power.check(plan, target, run, found))

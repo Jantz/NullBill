@@ -6,8 +6,9 @@ OUT/large-legacy, with every game server and a friend given two of them
 into OUT/large-games, with two services of the owner's own (a container
 and a VM, custom.py) into OUT/large-custom, with the download client behind
 a VPN (torrents.py) into OUT/large-torrents and on the home connection into
-OUT/large-torrents-home, and the mid class with every workload that can run on
-demand doing so into OUT/mid-on-demand.
+OUT/large-torrents-home, the mid class with every workload that can run on
+demand doing so into OUT/mid-on-demand, and with the KDE desktop borrowing
+the local models' card into OUT/mid-desktop.
 
 Used by the container checks, which parse the rendered files with the real
 tools. Run from the repo root with the package installed.
@@ -17,7 +18,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests"))
-from fixturedata import CLASSES, custom_config, fixture_config, games_config, legacy_config, torrents_config, write_raw  # noqa: E402
+from fixturedata import CLASSES, custom_config, desktop_config, fixture_config, games_config, legacy_config, torrents_config, write_raw  # noqa: E402
 
 from nullbill.artifacts import render_all, write_build  # noqa: E402
 from nullbill.model import build_model  # noqa: E402
@@ -34,6 +35,7 @@ variants.append(("large-torrents", "large", torrents_config()))
 variants.append(("large-torrents-home", "large", torrents_config("home")))
 on_demand = dict.fromkeys(["agents", "linux-ci", "inference", "windows-dev"], {"run": "on-demand"})
 variants.append(("mid-on-demand", "mid", {**fixture_config("mid"), "power": on_demand}))
+variants.append(("mid-desktop", "mid", desktop_config()))
 for name, cls, config in variants:
     model = build_model(config)
     facts = parse(write_raw(out / "raw" / name, cls))

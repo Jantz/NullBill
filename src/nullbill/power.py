@@ -29,6 +29,8 @@ TIMER = "nb-power.timer"
 # nb-power start's exit when the workload does not fit beside what runs;
 # its answer names what would have to stop.
 NO_ROOM = 3
+# nb-power ensure: the graphics card cannot go to the desktop for setup now.
+GPU_BUSY = 4
 # verify: the timer runs nb-power every minute; this long without a run
 # means it has stopped.
 STALE_S = 300
@@ -155,7 +157,38 @@ def policy(plan_with_notes: dict) -> dict:
             **({"cpu_pct": group["cpu_pct"]} if "cpu_pct" in group else {}),
             "guests": guests,
         }
+    gpu = gpu_rules(plan)
+    if gpu:
+        out["gpu"] = gpu
     return out
+
+
+def gpu_rules(plan: dict) -> dict | None:
+    """nb-power's rules for the graphics card the desktop borrows
+    (desktop.py): the workload that takes it while it runs, the card's slot
+    (every function goes along), and the host's guests that use the card
+    and stop meanwhile, each with what it belongs to."""
+    lent = (plan.get("desktop") or {}).get("gpu") or {}
+    holder = "desktop"
+    if not lent or holder not in ((plan.get("power") or {}).get("groups") or {}):
+        return None
+    yields = []
+    for service, title in sorted(lent.get("takes_from", {}).items()):
+        g = plan["guests"].get(service)
+        if g and g["kind"] in ("lxc", "vm"):
+            yields.append({"name": service, "kind": g["kind"], "vmid": g["vmid"], "title": title})
+    return {"group": holder, "slot": lent["pci"].rsplit(".", 1)[0], "name": lent["name"], "yields": yields}
+
+
+def lent_guests(found: dict | None) -> dict[str, str]:
+    """guest -> why it is off, for each guest nb-power stopped because the
+    desktop has the graphics card it uses."""
+    gpu = (found or {}).get("gpu") or {}
+    return {y["name"]: y["title"] + LENT for y in gpu.get("yielded", [])}
+
+
+# Marks the title of a guest that is off because the desktop has its card.
+LENT = " (the desktop has the graphics card)"
 
 
 def render_policy(plan: dict) -> str:
@@ -186,7 +219,7 @@ def off_guests(found: dict | None) -> dict[str, str]:
                     out[guest["name"]] = group["title"]
             elif guest["state"] != "running":
                 out[guest["name"]] = group["title"]
-    return out
+    return out | lent_guests(found)
 
 
 class Off(Exception):
@@ -214,6 +247,11 @@ def guard(plan: dict, run: Runner, off: dict[str, str]) -> Runner:
 
 
 def off_reason(title: str) -> str:
+    if title.endswith(LENT):
+        return (
+            f"{title.removesuffix(LENT)} is off while the desktop has the graphics card; "
+            "stop the desktop on the page (Services) to check it"
+        )
     return f"{title} is off (it runs on demand); start it on the page, under Services, to check it"
 
 

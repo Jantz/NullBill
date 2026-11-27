@@ -17,6 +17,7 @@ from nullbill import (
     backups,
     browserca,
     ci,
+    desktop,
     direct,
     flows,
     games,
@@ -151,6 +152,13 @@ class FakeReach:
         # VMID: (config key, GiB, running); none is read as no disk known.
         self.root_disks = {}
         self.grown_inside = []
+        # The desktop (VMID 2029): what nb-power status says (None: it does
+        # not answer), whether the card's holder is in use now, the guests
+        # nb-power stop was told to stop, and the qm set calls for its USB.
+        self.power_status = None
+        self.card_busy = False
+        self.power_stopped = []
+        self.usb_set = []
 
     def mark(self, machine, command):
         """apply's reads and writes of the marks on one machine."""
@@ -304,6 +312,9 @@ class FakeReach:
             disk = self.root_disks.get(int(vmid))
             disk_line = f"{disk[0]}: local-lvm:base-{vmid}-disk-0,size={disk[1]}G\n" if disk else ""
             return 0, ("template: 1\n" if vmid in self.templates else "name: x\n") + disk_line, ""
+        if command.startswith("qm set 2029 "):
+            self.usb_set.append(shlex.split(command)[3:])
+            return 0, "", ""
         if command.startswith("qm shutdown "):
             self.templates.add(command.split()[2])
             return 0, "", ""
@@ -338,12 +349,22 @@ class FakeReach:
     def nb_power(self, argv):
         """nb-power for apply: ensure starts what is off, making room with
         what it started before; setup end stops those again."""
+        if argv == ["status", "--json"]:
+            return (0, json.dumps(self.power_status), "") if self.power_status else (1, "", "")
+        if argv[0] == "stop":
+            self.power_stopped.append(argv[1:])
+            self.power_on.discard(argv[1])
+            if argv[1] in self.power_started:
+                self.power_started.remove(argv[1])
+            return 0, f"stopped {argv[1]}\n", ""
         if argv == ["setup", "end"]:
             said = "".join(f"{name} is off again, as it was before setup\n" for name in self.power_started)
             self.power_on -= set(self.power_started)
             self.power_started = []
             return 0, said, ""
         assert argv[0] == "ensure"
+        if "desktop" in argv[1:] and "desktop" not in self.power_on and self.card_busy:
+            return power.GPU_BUSY, "", "nb-power: the graphics card is in use: Local AI models answered a request 2 minutes ago\n"
         said = ""
         new = [name for name in argv[1:] if name not in self.power_on]
         if len(new) > self.power_room:
@@ -633,6 +654,8 @@ class FakeReach:
 
     def vm(self, login, command):
         """VMs, reached over SSH from the controller: PBS answers for its token."""
+        if login == "nullbill@10.42.11.29" and command == desktop.PREPARE:
+            return 0, ""
         if login != "nullbill@10.42.1.15":
             return 255, ""
         answers = {

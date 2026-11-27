@@ -35,6 +35,7 @@ from nullbill import (
     browserca,
     ci,
     custom,
+    desktop,
     direct,
     games,
     hostroot,
@@ -55,7 +56,7 @@ from nullbill.artifacts import write_build
 from nullbill.errors import NullBillError
 from nullbill.flows import PROXIED, TAILSCALE_PORT, mac
 from nullbill.home import REPO_ROOT
-from nullbill.model import NODE_EXPORTER, node_exporter_guest
+from nullbill.model import NODE_EXPORTER, debian_guest, node_exporter_guest
 from nullbill.probe import NTFS_CHECK, Runner, ntfs_state
 from nullbill.proxy import PROXY, proxy_port
 from nullbill.render import strip_notes
@@ -128,6 +129,8 @@ class Context:
     held: bool = False  # this run had nb-power start a guest that runs on demand (ensure_on)
     shut_down: set[str] = field(default_factory=set)  # guests this run shut down itself, to start again
     ran: set[tuple[str | None, str]] = field(default_factory=set)  # (machine, playbook) this run did run, not left out
+    away: dict[str, str] | None = None  # guests off while the desktop has their graphics card (card_away), once read
+    started: set[str] = field(default_factory=set)  # on-demand guests nb-power started for this run
 
     @property
     def bare(self) -> dict:
@@ -167,7 +170,7 @@ def connection(ctx: Context, name: str | None) -> dict:
         "ansible_user": "nullbill",
         "ansible_become": True,
         "ansible_ssh_common_args": f"-o ProxyJump={ctx.target} -o UserKnownHostsFile={known} -o StrictHostKeyChecking=accept-new",
-        "ansible_python_interpreter": "/usr/bin/python3",
+        "ansible_python_interpreter": desktop.PYTHON if name == desktop.NAME else "/usr/bin/python3",
     } | _download_proxy(ctx, name)
 
 
@@ -251,13 +254,49 @@ def ensure_on(ctx: Context, stage: str, guests: list[str]) -> None:
     # Also when it failed part way: what it did start is stopped again.
     ctx.held = True
     if rc != 0:
-        raise ApplyError(stage, (err.strip().removeprefix("nb-power: ") or out.strip() or f"nb-power ensure: exit {rc}")[:500])
+        why = (err.strip().removeprefix("nb-power: ") or out.strip() or f"nb-power ensure: exit {rc}")[:500]
+        raise (CardBusy if rc == power.GPU_BUSY else ApplyError)(stage, why)
     for line in out.splitlines():
         what, _, name = line.partition(" ")
         if what == "started":
+            ctx.started.add(name)
             ctx.say(f"{stage}: started {name}, which runs on demand, to set it up")
         elif what == "stopped":
             ctx.say(f"{stage}: stopped {name} again to make room; this run is done with it")
+        elif what == "yielded":
+            ctx.away = None
+            ctx.say(f"{stage}: stopped {name} while the desktop has the graphics card; it starts again when the desktop stops")
+
+
+class CardBusy(Exception):
+    """nb-power would not hand the graphics card to the desktop for setup:
+    what has it now is in use."""
+
+    def __init__(self, stage: str, why: str):
+        super().__init__(why)
+        self.stage = stage
+
+
+def card_away(ctx: Context) -> dict[str, str]:
+    """The host's guests that are off while the desktop has the graphics
+    card they use, by name with their workload's title, as nb-power says;
+    read once a run, and again after the card changed hands. Setup leaves
+    them as they are: starting one would take the card from the desktop."""
+    if ctx.away is None:
+        ctx.away = {}
+        if desktop.takes_from(ctx.bare):
+            found = power.status(ctx.target, lambda _t, command: ctx.reach.host(command)) or {}
+            gpu = found.get("gpu") or {}
+            if gpu.get("lent"):
+                ctx.away = {y["name"]: y["title"] for y in gpu.get("yields", [])}
+    return ctx.away
+
+
+def away_note(ctx: Context, stage: str, name: str) -> None:
+    ctx.say(
+        f"{stage}: left {name} as it is: it is off while the desktop has the graphics card; "
+        "the next setup run after the desktop stops sets it up"
+    )
 
 
 def end_hold(ctx: Context) -> None:
@@ -316,6 +355,12 @@ def run_playbooks(
     good run had the same inputs is left out, unless it is in force.
     fresh: host vars made anew for each run (a one-time token), passed on
     but not part of the inputs."""
+    away = card_away(ctx) if any(name in desktop.takes_from(ctx.bare) for name in targets) else {}
+    for name in [n for n in targets if n in away]:
+        away_note(ctx, stage, name)
+    targets = {name: extra for name, extra in targets.items() if name not in away}
+    if not targets:
+        return
     parts = batches(ctx, list(targets))
     if len(parts) > 1:
         for part in parts:
@@ -422,7 +467,18 @@ def host_inputs(ctx: Context) -> dict:
         "host_baseline_ntfs": any(m["fstype"] == "ntfs" for m in legacy.mounts(ctx.bare)),
         # What runs on demand, for the host's nb-power.
         "host_baseline_power": power.render_policy(ctx.plan),
-    }
+    } | desktop_host_inputs(ctx)
+
+
+def desktop_host_inputs(ctx: Context) -> dict:
+    """VFIO's modules when the desktop borrows a card, and nouveau kept off
+    an NVIDIA one: on the host it would drive the card, and its screen,
+    before the desktop takes it. Only then, so other servers' inputs stay."""
+    pci = desktop.lent_card(ctx.bare)
+    if not pci:
+        return {}
+    vendor = (desktop.section(ctx.bare).get("gpu") or {}).get("vendor", "")
+    return {"host_baseline_vfio": True, "host_baseline_nouveau_off": vendor == "nvidia"}
 
 
 def host_browser_cert(ctx: Context) -> bool:
@@ -840,11 +896,15 @@ DISKS_LOOK = ": nb-disks;"
 # size, growpart (Debian's cloud images carry it) grows the root partition
 # and resize2fs the file system on it, while it runs. growpart says 1 when
 # there is nothing to grow.
+# ext4 in Debian's images, btrfs (a subvolume, SOURCE /dev/sda4[/root])
+# in Fedora's (the desktop).
 GROW_ROOT = (
-    'set -e; src=$(findmnt -no SOURCE /); [ "$(findmnt -no FSTYPE /)" = ext4 ]; '
+    'set -e; src=$(findmnt -no SOURCE / | sed "s/\\[.*//"); fs=$(findmnt -no FSTYPE /); '
+    'case "$fs" in ext4|btrfs) ;; *) exit 1 ;; esac; '
     'part=$(basename "$src"); disk=$(lsblk -no PKNAME "$src"); '
     'echo 1 > "/sys/class/block/$disk/device/rescan"; '
-    'growpart "/dev/$disk" "$(cat "/sys/class/block/$part/partition")" || [ $? -eq 1 ]; resize2fs "$src"'
+    'growpart "/dev/$disk" "$(cat "/sys/class/block/$part/partition")" || [ $? -eq 1 ]; '
+    'if [ "$fs" = btrfs ]; then btrfs filesystem resize max /; else resize2fs "$src"; fi'
 )
 
 
@@ -1557,10 +1617,28 @@ def stage_tofu(ctx: Context) -> None:
     attach_shares(ctx)
     attach_media(ctx)
     attach_torrents(ctx)
+    give_usb(ctx)
     # The host reaches the zones through the router, not its LAN gateway.
     host_files(ctx, "tofu", "/etc/systemd/system", {ROUTES_UNIT: routes_unit(ctx)})
     host_out(ctx, "tofu", f"systemctl daemon-reload && systemctl enable -q {ROUTES_UNIT} && systemctl restart {ROUTES_UNIT}")
     mgmt_leg(ctx)
+
+
+def give_usb(ctx: Context) -> None:
+    """The USB ports the plan gives the desktop, as the VM's usbN entries,
+    set as root (PVE gives host USB to root@pam alone; OpenTofu ignores
+    them). Whatever is plugged into such a port is the VM's while it runs."""
+    if not desktop.planned(ctx.bare):
+        return
+    vmid = ctx.bare["guests"][desktop.NAME]["vmid"]
+    ports = desktop.section(ctx.bare).get("usb") or []
+    delete, add = desktop.usb_changes(host_out(ctx, "tofu", f"qm config {vmid}"), ports)
+    if delete:
+        host_out(ctx, "tofu", f"qm set {vmid} --delete {','.join(f'usb{n}' for n in delete)}")
+    if add:
+        host_out(ctx, "tofu", f"qm set {vmid} " + " ".join(f"--usb{n} host={shlex.quote(p)}" for n, p in sorted(add.items())))
+    if delete or add:
+        ctx.say(f"tofu: the desktop has the USB ports {', '.join(ports) or 'none'}")
 
 
 def built_guests(home: Path, plan: dict) -> list[str] | None:
@@ -1799,6 +1877,9 @@ def stage_release(ctx: Context) -> None:
     for name in release.candidates(ctx.bare, ctx.model):
         if record.get(name, {}).get("release") == rel["codename"]:
             continue
+        if name in desktop.takes_from(ctx.bare) and name in card_away(ctx):
+            away_note(ctx, "release", name)
+            continue
         ensure_on(ctx, "release", [name])
         rc, out = in_guest(ctx, name, LOOK)
         lines = [line.strip() for line in out.splitlines() if line.strip()] if rc == 0 else []
@@ -1932,7 +2013,7 @@ def update_guests(ctx: Context) -> dict[str | None, dict]:
     proxy = f"http://{ctx.bare['guests'][PROXY]['ip']}:{proxy_port(ctx.model)}"
     guests = {}
     for name, guest in ctx.bare["guests"].items():
-        if not node_exporter_guest(guest):
+        if not debian_guest(ctx.model["services"][name] | guest):
             continue
         # The router has its own uplink; other guests in a proxied zone
         # reach the mirrors through the proxy only.
@@ -1963,6 +2044,10 @@ def stage_updates(ctx: Context) -> None:
 
 def guest_out(ctx: Context, stage: str, name: str, argv: list[str], stdin: str | None = None) -> str:
     """Run a command in a container through the host's pct and return its output."""
+    if name in desktop.takes_from(ctx.bare) and name in card_away(ctx):
+        raise ApplyError(
+            stage, f"{name} is off while the desktop has the graphics card; stop the desktop on the page (Services) and run setup again"
+        )
     ensure_on(ctx, stage, [name])
     vmid = ctx.bare["guests"][name]["vmid"]
     rc, out, err = ctx.reach.host(shlex.join(["pct", "exec", str(vmid), "--", *argv]), stdin=stdin)
@@ -2308,6 +2393,10 @@ def stage_inference(ctx: Context) -> None:
     """NVIDIA's driver on the host, the card in the inference container,
     llama.cpp serving the planned model there, and LiteLLM in front."""
     if not llm.enabled(ctx.bare):
+        return
+    if llm.INFERENCE in card_away(ctx):
+        # Its driver and device nodes wait for the card to come back.
+        away_note(ctx, "inference", llm.INFERENCE)
         return
     section = ctx.bare["inference"]
     name, _ = llm.model(ctx.bare, ctx.model)
@@ -2765,6 +2854,46 @@ def stage_games(ctx: Context) -> None:
         ctx.say(f"games: {game['title']} {game['version']} answers at {games.address(ctx.bare, name, ctx.model)}")
 
 
+def desktop_inputs(ctx: Context) -> dict:
+    password = ctx.secrets.ensure(desktop.PASSWORD, lambda: secrets.token_urlsafe(18))
+    return desktop.variables(ctx.bare, password)
+
+
+def stage_desktop(ctx: Context) -> None:
+    """The KDE desktop in its VM: Plasma, the sign-in at boot, KDE's Remote
+    Desktop server with the browser CA's certificate. A desktop that is off
+    is started for it, and the graphics card goes along (nb-power), but only
+    when nothing uses the card now; it is stopped again right after, so the
+    card comes back for the rest of the run."""
+    if not desktop.planned(ctx.bare):
+        return
+    name = desktop.NAME
+    cert, key = browser_cert(ctx, "desktop", name, ctx.bare["guests"][name]["ip"])
+    variables = desktop_inputs(ctx) | dict(zip(desktop.CERT_INPUTS, (cert, key), strict=True))
+    try:
+        ensure_on(ctx, "desktop", [name])
+        vm_out(ctx, "desktop", name, desktop.PREPARE)
+        run_playbook(ctx, "desktop", "desktop.yml", name, variables)
+    except CardBusy as e:
+        ctx.say(f"desktop: left the desktop as it is: {e}; the next setup run sets it up, or start it on the page (Services) and run setup")
+        return
+    finally:
+        if name in ctx.started and desktop.takes_from(ctx.bare):
+            rc, out, err = ctx.reach.host(f"{power.COMMAND} stop {name} --by setup", timeout=900)
+            ctx.started.discard(name)
+            ctx.away = None
+            if rc != 0:
+                ctx.say(f"desktop: could not stop the desktop again ({(err.strip() or out.strip() or f'exit {rc}')[:200]})")
+            else:
+                ctx.say("desktop: stopped the desktop again, which gives the graphics card back")
+    user = desktop.section(ctx.bare)["user"]
+    address = ctx.bare["guests"][name]["ip"]
+    ctx.say(
+        f"desktop: from your devices on the tailnet, Remote Desktop to {fqdn(ctx, name)} (or {address}) as {user}; "
+        "the page shows the password"
+    )
+
+
 def stage_custom(ctx: Context) -> None:
     """Each planned service of the owner's own (custom.py): its setup script
     from beside config.yaml, run as root in its guest by the custom_service
@@ -3011,7 +3140,7 @@ def shippers(ctx: Context) -> list[str]:
     """Guests whose agent commands and SSH logins go to Loki: the operator,
     agent-managed guests, and the VMs that run sshd."""
     guests = ctx.bare["guests"]
-    vms = [n for n, g in guests.items() if g["kind"] == "vm" and g["zone"] != "windows"]
+    vms = [n for n, g in guests.items() if g["kind"] == "vm" and debian_guest(ctx.model["services"][n] | g)]
     return [n for n in guests if n in ("operator", FILES) or n in agent_guests(ctx) or n in vms]
 
 
@@ -3283,6 +3412,7 @@ BROWSER_CERT = {
     "monitoring": ("monitoring_browser_cert", "monitoring_browser_key"),
     "forgejo": ("forgejo_browser_cert", "forgejo_browser_key", "forgejo_browser_root"),
     "model_gateway": ("model_gateway_browser_cert", "model_gateway_browser_key"),
+    "desktop": desktop.CERT_INPUTS,
 }
 
 
@@ -3391,6 +3521,12 @@ def foresee_vpn(ctx: Context) -> list[Step]:
     return [step(ctx, "vpn", "vpn.yml", "vpn", vpn_inputs(ctx))]
 
 
+def foresee_desktop(ctx: Context) -> list[Step]:
+    if not desktop.planned(ctx.bare):
+        return []
+    return [step(ctx, "desktop", "desktop.yml", desktop.NAME, desktop_inputs(ctx), desktop.CERT_INPUTS)]
+
+
 def foresee_custom(ctx: Context) -> list[Step]:
     steps = []
     for name in custom.planned(ctx.bare, ctx.model):
@@ -3426,6 +3562,7 @@ FORESEEN: dict[str, Callable[[Context], list[Step]] | None] = {
     "media": foresee_media,
     "torrents": foresee_torrents,
     "games": foresee_games,
+    "desktop": foresee_desktop,
     "ci": foresee_ci,
     "agents": foresee_agents,
     "logs": foresee_logs,
@@ -3458,6 +3595,7 @@ STAGES: list[Stage] = [
     ("media", stage_media),
     ("torrents", stage_torrents),
     ("games", stage_games),
+    ("desktop", stage_desktop),
     ("ci", stage_ci),
     ("agents", stage_agents),
     ("logs", stage_logs),

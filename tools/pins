@@ -32,6 +32,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -92,6 +93,7 @@ PROXMOX_KEYRING = ("https://enterprise.proxmox.com/debian/proxmox-archive-keyrin
 # Debian signs no SHA512SUMS of these builds (there is no SHA512SUMS.sign
 # beside them): the sums are read over HTTPS from cloud.debian.org alone.
 DEBIAN = "https://cloud.debian.org/images/cloud/trixie/"
+FEDORA = "https://dl.fedoraproject.org/pub/fedora/linux/releases/"
 
 CATALOG = "src/nullbill/data/catalog.yaml"
 # One edit: the file, the key in it, the new value.
@@ -444,6 +446,33 @@ def debian_cloud() -> list[Edit]:
     return [(CATALOG, "images.debian-cloud.url", f"{DEBIAN}{build}/{file}"), (CATALOG, "images.debian-cloud.sha512", listed[1])]
 
 
+def fedora_cloud() -> list[Edit]:
+    """Fedora's newest release with a cloud image, for a desktop made from
+    now on (one that exists keeps its own). Fedora signs the CHECKSUM with
+    each release's own key, which comes from the same site: HTTPS alone, as
+    for Debian's cloud images."""
+    releases = sorted({int(n) for n in re.findall(r'href="(\d+)/"', get(FEDORA).decode())}, reverse=True)
+    for release in releases[:3]:
+        folder = f"{FEDORA}{release}/Cloud/x86_64/images/"
+        try:
+            listing = get(folder).decode()
+        except urllib.error.HTTPError:
+            continue  # a release whose cloud images are not out yet
+        sums = re.findall(rf'href="(Fedora-Cloud-{release}-[0-9.]+-x86_64-CHECKSUM)"', listing)
+        if not sums:
+            continue
+        text = get(folder + newest(sums)).decode()
+        found = re.search(rf"^SHA256 \((Fedora-Cloud-Base-Generic-{release}-[0-9.]+\.x86_64\.qcow2)\) = ([0-9a-f]{{64}})$", text, re.M)
+        if not found:
+            raise SystemExit(f"fedora-cloud: {release}'s CHECKSUM lists no generic cloud image")
+        return [
+            (CATALOG, "images.fedora-cloud.url", folder + found[1]),
+            (CATALOG, "images.fedora-cloud.sha256", found[2]),
+            (CATALOG, "images.fedora-cloud.release", str(release)),
+        ]
+    raise SystemExit("fedora-cloud: no release lists a cloud image")
+
+
 SOURCES = {
     "forgejo": forgejo,
     "forgejo-runner": forgejo_runner,
@@ -462,6 +491,7 @@ SOURCES = {
     "factorio": factorio,
     "debian-template": debian_template,
     "debian-cloud": debian_cloud,
+    "fedora-cloud": fedora_cloud,
 }
 # After minecraft, for the version it moved to.
 FOLLOW_MINECRAFT = {"paper": paper, "fabric": fabric}

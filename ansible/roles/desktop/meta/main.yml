@@ -1,0 +1,3 @@
+# Fedora, not Debian: dnf retries by itself (dnf.conf's retries), so the
+# downloads role, which is apt's, is not a dependency here.
+dependencies: []

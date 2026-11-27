@@ -46,6 +46,14 @@ def torrents_config(route: str = "vpn") -> dict:
     return {**config, "intent": {**config["intent"], "workloads": workloads}, "disks": disks, "torrents": chosen}
 
 
+def desktop_config(**desktop: object) -> dict:
+    """The mid class (one NVIDIA card, which the local models use) with the
+    KDE desktop, which borrows that card, and the desktop's own settings."""
+    config = fixture_config("mid")
+    workloads = [*config["intent"]["workloads"], "desktop"]
+    return {**config, "intent": {**config["intent"], "workloads": workloads}, **({"desktop": desktop} if desktop else {})}
+
+
 def games_config() -> dict:
     """The large class with every game server, a friend given two of them,
     and the owner's own choices for each game."""

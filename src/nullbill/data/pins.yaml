@@ -138,3 +138,11 @@ debian-cloud:
   file: src/nullbill/data/catalog.yaml
   key: images.debian-cloud.url
   hold: 0
+fedora-cloud:
+  title: Fedora's cloud image, for the desktop
+  file: src/nullbill/data/catalog.yaml
+  key: images.fedora-cloud.url
+  # What a new desktop is made from; one that exists keeps its own and
+  # takes Fedora's next release when its owner says so in Plasma.
+  hold: 0
+  services: [desktop]
