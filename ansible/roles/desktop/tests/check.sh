@@ -50,7 +50,7 @@ grep -qx "apply_updates = yes" /etc/dnf/automatic.conf || fail "dnf5-automatic i
 grep -qx "reboot = never" /etc/dnf/automatic.conf || fail "dnf5-automatic never restarts"
 grep -q "textfile.directory=/var/lib/prometheus/node-exporter" /etc/default/prometheus-node-exporter || fail "textfile collector"
 grep -q "ExecStart=/usr/bin/prometheus-node-exporter \$ARGS" /usr/lib/systemd/system/node_exporter.service || fail "node_exporter reads ARGS"
-[ -x /etc/nullbill/busy.d/desktop ] && [ -x /usr/local/sbin/nb-busy ] || fail "nb-busy and the desktop's answer"
+{ [ -x /etc/nullbill/busy.d/desktop ] && [ -x /usr/local/sbin/nb-busy ]; } || fail "nb-busy and the desktop's answer"
 pass "daily updates install by themselves, node_exporter reads the update metrics, nb-busy asks the desktop"
 
 [ "$(stat -c '%U:%G %a' /etc/nullbill/desktop/krdp.key)" = "root:owner 640" ] || fail "the key is the desktop user's to read only"
