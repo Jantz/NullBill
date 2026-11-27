@@ -179,6 +179,9 @@ def connection(ctx: Context, name: str | None) -> dict:
     )
 
 
+SSH_ARGS = "-C -o ControlMaster=auto -o ControlPersist=60s -o ServerAliveInterval=30 -o ServerAliveCountMax=10"
+
+
 # Fedora's pam_systemd marks a session on a terminal with OSC 3008
 # sequences, which followed every module's answer ("junk after the JSON
 # data"). sudo there needs no terminal.
@@ -3858,6 +3861,13 @@ class SshReach:
                 "ANSIBLE_PIPELINING": "true",
                 "ANSIBLE_CONNECTION_PLUGINS": str(ANSIBLE / "connection_plugins"),
                 "ANSIBLE_PARAMIKO_PTY": "false",
+                # Through the host, a VM that stopped or froze sends nothing
+                # back, and an SSH connection without keepalives waits for
+                # it forever: the first real desktop run sat silent at one
+                # task for an hour and a half. Asked every 30 s, a connection
+                # with no answer for 5 min ends. Ansible's own arguments
+                # first; set here, not per host, so no playbook's inputs move.
+                "ANSIBLE_SSH_ARGS": SSH_ARGS,
                 # A failed task's result as YAML, its output line by line,
                 # not as one line of JSON a thousand characters long: the
                 # owner reads this log on the page (progress.py reads both).

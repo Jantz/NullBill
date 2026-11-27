@@ -3049,3 +3049,20 @@ def test_a_guest_on_demand_that_is_off_stays_off_when_its_disks_change(ctx, monk
     replan(c, {**legacy_config(mode="rw"), "power": {"files": {"run": "on-demand"}}})
     apply.stage_tofu(c)
     assert c.reach.files_ct["mps"]["mp0"].endswith(",ro=0") and c.reach.files_ct["status"] == "running"
+
+
+def test_ansible_gives_up_on_a_vm_that_no_longer_answers(tmp_path, monkeypatch):
+    # The first real desktop run sat silent for an hour and a half on one
+    # task: through the host, a VM that stops answering sends nothing back.
+    seen = {}
+
+    def run(argv, env, check):
+        seen["env"] = env
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(apply.subprocess, "run", run)
+    assert apply.SshReach(TARGET, tmp_path).playbook("desktop.yml", {"desktop": {}}, {}) == 0
+    args = seen["env"]["ANSIBLE_SSH_ARGS"].split()
+    # Ansible's own defaults stay, keepalives join them.
+    assert args[:5] == ["-C", "-o", "ControlMaster=auto", "-o", "ControlPersist=60s"]
+    assert "ServerAliveInterval=30" in args and "ServerAliveCountMax=10" in args
