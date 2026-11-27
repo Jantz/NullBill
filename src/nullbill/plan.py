@@ -657,6 +657,15 @@ def _host(zone: dict, host: int | str) -> str:
     return str(net.network_address + host)
 
 
+def mgmt_host_ip(model: dict) -> str:
+    """The host's address on the mgmt bridge, from the config alone: the
+    probe needs it while the LAN is closed, also when no plan passes yet
+    (a hardware reading too old for the choices)."""
+    base = ipaddress.ip_network(model["network"]["base"])
+    subnet = ipaddress.ip_network((int(base.network_address) + (model["zones"]["mgmt"]["index"] << 8), 24))
+    return str(subnet.network_address + HOST_ID)
+
+
 def _zones(model: dict, planned: dict) -> dict:
     base = ipaddress.ip_network(model["network"]["base"])
     names = [z for z in model["zones"] if z in ("access", "mgmt") or any(s["zone"] == z for s in planned.values())]
@@ -670,7 +679,7 @@ def _zones(model: dict, planned: dict) -> dict:
             "gateway": str(subnet.network_address + 1),
             "egress": model["zones"][name].get("egress", "none"),
         }
-    zones["mgmt"]["host_ip"] = str(ipaddress.ip_network(zones["mgmt"]["subnet"]).network_address + HOST_ID)
+    zones["mgmt"]["host_ip"] = mgmt_host_ip(model)
     return zones
 
 

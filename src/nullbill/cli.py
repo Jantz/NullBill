@@ -14,7 +14,7 @@ from nullbill.artifacts import render_all, write_build
 from nullbill.errors import NullBillError
 from nullbill.home import REPO_ROOT, nullbill_home, refuse_on_pve_host
 from nullbill.model import build_model, load_config
-from nullbill.plan import build_plan
+from nullbill.plan import build_plan, mgmt_host_ip
 from nullbill.probe import run_probe, ssh_run
 from nullbill.render import render, strip_notes
 from nullbill.secretfile import Secrets, Sops
@@ -24,7 +24,7 @@ from nullbill.verify import run_verify
 def probe_target(home) -> str:
     """target.ssh from config.yaml, or before the first choices the host
     install.sh recorded; the host's mgmt address once the LAN is closing or
-    closed, as for apply."""
+    closed, as for apply, worked out from the config without a plan."""
     path = home / "config.yaml"
     configured = (load_config(path) if path.is_file() else {}).get("target", {}).get("ssh")
     install = home / "install.json"
@@ -32,10 +32,12 @@ def probe_target(home) -> str:
         configured = f"root@{json.loads(install.read_text())['host']}"
     if not configured:
         raise NullBillError(f"{path}: target.ssh is required for probe")
-    if lan.state(home) == lan.OPEN:
+    if lan.state(home) == lan.OPEN or not path.is_file():
         return configured
-    model, facts_bytes = _load(home)
-    return reach_target(home, configured, build_plan(model, json.loads(facts_bytes)))
+    # Not through the plan: reading the hardware is how a plan that fails on
+    # an old reading passes again.
+    user, _ = split_target(configured)
+    return f"{user}@{mgmt_host_ip(build_model(load_config(path)))}"
 
 
 def cmd_probe(_args: argparse.Namespace) -> int:
