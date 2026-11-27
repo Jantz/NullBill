@@ -10,7 +10,7 @@ import pytest
 
 from nullbill.tailscale import MissingScope, Tailnet, TailscaleError, from_secrets, sync_policy
 
-CLIENT = ("kExampleCNTRL", "tskey-client-kExampleCNTRL-secret")
+CLIENT = ("democlientid", "tskey-client-notarealsecret")
 
 
 class FakeAPI:
@@ -203,6 +203,6 @@ def test_a_removed_persons_user_is_deleted_with_the_users_scope_only(api):
 
 
 def test_no_client_until_both_halves_are_saved():
-    assert from_secrets({}) is None and from_secrets({"tailscale_client_id": "kExampleCNTRL"}) is None
+    assert from_secrets({}) is None and from_secrets({"tailscale_client_id": "democlientid"}) is None
     client = from_secrets({"tailscale_client_id": CLIENT[0], "tailscale_client_secret": CLIENT[1]})
     assert (client.client_id, client.client_secret) == CLIENT

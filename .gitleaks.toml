@@ -33,3 +33,49 @@ regexes = [
   # Terraria's version numbers (1.4.5.8), which have an address's shape.
   '''^1\.4\.\d\.\d$''',
 ]
+
+# Stand-in credentials in tests and the page demo must not have a provider's
+# shape: GitHub's secret scanning raised a public-leak alert on a fake
+# Tailscale auth key. Write a fake as the prefix the page checks for and one
+# plain word (tskey-auth-notarealkey, sk-ant-api-NOTAREALKEY123).
+[[rules]]
+id = "tailscale-key-shape"
+description = "Tailscale key shape (tskey-<kind>-<id>-<secret>); use tskey-<kind>-<word> for a stand-in"
+regex = '''tskey-[a-z]+-[A-Za-z0-9]+-[A-Za-z0-9]+'''
+keywords = ["tskey-"]
+[rules.allowlist]
+# The commits that added the old stand-ins, which history keeps.
+commits = [
+  "069e1404ab008374c1d77d2970c27d15a118795f",
+  "434ab6e41002e6972b02bd16fbfe7ef56e6e931d",
+  "5a136041af4efab7bb9bd32202348a5155c7f8f0",
+  "8009c7a1363a25f8b46c1e14f51523c0d019d6a1",
+  "87ceeb957b0753332cfd45e9e2b478c66af9aea0",
+  "abf74681fcbe0e337561bafe08eb3ddd4dd0b69f",
+  "b9deed652cc08ebb757b4f1380667f260a82bf98",
+  "c19ee460fb4792cda8e1468355b35867a11aac29",
+  "d4815558070377b1ee0841119270b7e25fc3b075",
+  "ee5af855ad5ba42feae4ebdf030e3cb79c24e320",
+  "f70a9dfb62d16e6c91fd7872c3c5f8aae83ecf39",
+]
+
+[[rules]]
+id = "anthropic-key-shape"
+description = "Anthropic key shape (sk-ant-<kind><nn>-...); use sk-ant-<kind>-<word> for a stand-in"
+regex = '''sk-ant-[a-z]+[0-9]{2}-[A-Za-z0-9_-]+'''
+keywords = ["sk-ant-"]
+[rules.allowlist]
+# The commits that added the old stand-ins, which history keeps.
+commits = [
+  "069e1404ab008374c1d77d2970c27d15a118795f",
+  "434ab6e41002e6972b02bd16fbfe7ef56e6e931d",
+  "5a136041af4efab7bb9bd32202348a5155c7f8f0",
+  "8009c7a1363a25f8b46c1e14f51523c0d019d6a1",
+  "87ceeb957b0753332cfd45e9e2b478c66af9aea0",
+  "abf74681fcbe0e337561bafe08eb3ddd4dd0b69f",
+  "b9deed652cc08ebb757b4f1380667f260a82bf98",
+  "c19ee460fb4792cda8e1468355b35867a11aac29",
+  "d4815558070377b1ee0841119270b7e25fc3b075",
+  "ee5af855ad5ba42feae4ebdf030e3cb79c24e320",
+  "f70a9dfb62d16e6c91fd7872c3c5f8aae83ecf39",
+]

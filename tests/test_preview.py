@@ -47,7 +47,7 @@ def built(ctx, monkeypatch, config="small", script=None):
     monkeypatch.setattr(apply, "run_verify", passing_verify)
     c = with_client(ctx(PROBED.get(config, "large"), config=CONFIGS[config]()))
     c.secrets.set("ntfy_topic", "nullbill-topic")
-    c.secrets.set("claude_oauth_token", "sk-ant-oat01-token")
+    c.secrets.set("claude_oauth_token", "sk-ant-oat-notarealtoken")
     (c.home / "web").mkdir(exist_ok=True)
     if script:
         path = c.home / custom.DIR / script / custom.SCRIPT

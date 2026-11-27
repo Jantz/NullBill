@@ -1619,8 +1619,8 @@ def tailnet(monkeypatch):
 
 
 def with_client(c):
-    c.secrets.set("tailscale_client_id", "kExampleCNTRL")
-    c.secrets.set("tailscale_client_secret", "tskey-client-kExampleCNTRL-secret")
+    c.secrets.set("tailscale_client_id", "democlientid")
+    c.secrets.set("tailscale_client_secret", "tskey-client-notarealsecret")
     return c
 
 
@@ -1633,7 +1633,7 @@ def test_tailnet_stage_waits_for_an_oauth_client_and_then_pushes_the_policy(ctx,
     with_client(c)
     apply.stage_tailnet(c)
     want = json.loads(c.files["tailnet/policy.json"])
-    assert tailnet.credential == ("kExampleCNTRL", "tskey-client-kExampleCNTRL-secret")
+    assert tailnet.credential == ("democlientid", "tskey-client-notarealsecret")
     assert tailnet.pushes == [want] and tailnet.live == want
     assert c.log[-2] == "tailnet: pushed the tailnet policy; Tailscale ran its tests (1 of 50 tagged devices)"
     # Names: the domain goes to the router's leg in the access zone; other domains stay.
@@ -2127,7 +2127,7 @@ def test_a_full_apply_runs_every_stage_against_the_stand_ins(ctx, monkeypatch, t
     monkeypatch.setattr(apply, "run_verify", passing_verify)
     c = with_client(ctx("small"))
     c.secrets.set("ntfy_topic", "nullbill-topic")
-    c.secrets.set("claude_oauth_token", "sk-ant-oat01-token")
+    c.secrets.set("claude_oauth_token", "sk-ant-oat-notarealtoken")
     (c.home / "web").mkdir()
     run_apply(c)
     ran = [call[1] for call in c.reach.calls if call[0] == "playbook"]

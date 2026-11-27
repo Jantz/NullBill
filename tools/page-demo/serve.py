@@ -203,8 +203,8 @@ def prepare(app: web.App, home: Path, state: str) -> None:
     if state == "planned":
         return
     codec = Codec(home)
-    owned = {"claude_oauth_token": "sk-ant-oat01-token", "tailscale_auth_key": "tskey-auth-kExampleCNTRL-once"}
-    owned |= {"tailscale_client_id": "kExampleCNTRL", "tailscale_client_secret": "tskey-client-kExampleCNTRL-secret"}
+    owned = {"claude_oauth_token": "sk-ant-oat-notarealtoken", "tailscale_auth_key": "tskey-auth-notarealkey"}
+    owned |= {"tailscale_client_id": "democlientid", "tailscale_client_secret": "tskey-client-notarealsecret"}
     codec.save(codec.load() | owned)
     if state == "failed":
         demo(home, fail={"stage": "forgejo", "output": "apt-403.txt", "message": "forgejo.yml failed on forgejo (exit 2)"})
