@@ -18,29 +18,12 @@
   register: desktop_upgraded
   changed_when: "'Nothing to do' not in desktop_upgraded.stdout"
 
-# Plasma with its own apps and KDE's Remote Desktop server; Mesa's
-# drivers (NVK and nouveau on NVIDIA, radeonsi and RADV on AMD, iris and
-# ANV on Intel), the kernel's GPU modules and their firmware, which the
-# cloud image leaves out; the guest agent PVE shuts the VM down with.
+# desktop_packages (defaults/main.yml): Plasma, Mesa's drivers, firmware.
 - name: KDE Plasma, graphics drivers and the desktop's services
   ansible.builtin.command:
-    argv:
-      - dnf
-      - -y
-      - install
-      - "@kde-desktop-environment"
-      - krdp
-      - plasma-login-manager
-      - kernel-modules
-      - linux-firmware
-      - mesa-dri-drivers
-      - mesa-vulkan-drivers
-      - pciutils
-      - qemu-guest-agent
-      - node-exporter
-      - dnf5-plugin-automatic
-  register: desktop_packages
-  changed_when: "'Nothing to do' not in desktop_packages.stdout"
+    argv: "{{ ['dnf', '-y', 'install'] + desktop_packages }}"
+  register: desktop_installed
+  changed_when: "'Nothing to do' not in desktop_installed.stdout"
 
 # The pve-firewall and the router guard the desktop's zone. firewalld,
 # which the KDE packages bring, would also shut Remote Desktop and the

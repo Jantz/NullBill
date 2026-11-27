@@ -654,7 +654,7 @@ class FakeReach:
 
     def vm(self, login, command):
         """VMs, reached over SSH from the controller: PBS answers for its token."""
-        if login == "nullbill@10.42.11.29" and command == desktop.PREPARE:
+        if login == "nullbill@10.42.11.29" and command in (desktop.PREPARE, desktop.first_install()):
             return 0, ""
         if login != "nullbill@10.42.1.15":
             return 255, ""

@@ -27,6 +27,9 @@ import re
 import shlex
 from typing import Any
 
+import yaml
+
+from nullbill.home import REPO_ROOT
 from nullbill.probe import Runner
 from nullbill.render import Note, strip_notes
 from nullbill.results import Result
@@ -46,6 +49,56 @@ GPU_USERS = ("inference",)
 # desktop stage installs it first (PREPARE).
 PYTHON = "/usr/bin/python3.13"
 PREPARE = f"test -x {PYTHON} || sudo dnf -y -q install python3.13"
+# The role's packages (defaults/main.yml), which the stage installs once
+# before the role: some 1,850 packages and a few GB from Fedora's mirrors,
+# which took the first real run over half an hour with nothing said.
+ROLE_DEFAULTS = REPO_ROOT / "ansible" / "roles" / "desktop" / "defaults" / "main.yml"
+# Packages only the role's install brings: with them in place, the first
+# install is done and the role's own dnf finds nothing to do.
+INSTALLED = ("krdp", "plasma-login-manager")
+# dnf without a terminal prints a line per package downloaded ("[ 12/1830]
+# name 100% | ...") and per step of the transaction after "Running
+# transaction". This passes on a line at most every SAY_EVERY seconds, the
+# download's size and dnf's own errors; gawk (Fedora's awk) for systime().
+SAY_EVERY = 30
+PROGRESS = r"""
+BEGIN { phase = "downloaded"; unit = " packages"; last = 0 }
+/^Total size of inbound packages/ { print "desktop: " what ": " $0; fflush(); next }
+/^Running transaction/ { phase = "installing,"; unit = " steps done"; last = 0; next }
+/^(Error|Problem|No match|Failed)/ { print "desktop: " what ": " $0; fflush(); next }
+match($0, /^\[ *([0-9]+)\/([0-9]+)\] /, m) {
+    if ($0 ~ /^\[ *[0-9]+\/[0-9]+\] Total /) next
+    now = systime()
+    if (now - last >= every || m[1] == m[2]) {
+        print "desktop: " what ", " phase " " m[1] " of " m[2] unit; fflush(); last = now
+    }
+}
+"""
+
+
+def packages() -> list[str]:
+    return yaml.safe_load(ROLE_DEFAULTS.read_text())["desktop_packages"]
+
+
+def first_install() -> str:
+    """The shell command the stage runs over SSH before the role while the
+    desktop's packages are not there: Fedora's updates, then the packages,
+    each through PROGRESS, so the run's log says how far dnf is."""
+
+    def step(what: str, args: list[str]) -> str:
+        dnf = shlex.join(["sudo", "dnf", "-y", *args])
+        say = shlex.join(["awk", "-v", f"what={what}", "-v", f"every={SAY_EVERY}", PROGRESS])
+        return f"{dnf} 2>&1 | {say}"
+
+    script = (
+        "set -o pipefail; "
+        f"rpm -q --quiet {shlex.join(INSTALLED)} && exit 0; "
+        f"{step('updating Fedora', ['upgrade'])} && "
+        f"{step('installing KDE Plasma', ['install', *packages()])}"
+    )
+    return f"bash -c {shlex.quote(script)}"
+
+
 # PVE gives a VM at most this many USB devices (usb0 to usb13).
 MAX_USB = 14
 # A keyboard or a mouse: USB HID boot interfaces (class 03, protocol 1 or 2).

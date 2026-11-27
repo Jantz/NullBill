@@ -6,6 +6,9 @@ do around it."""
 
 import json
 import os
+import shlex
+import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -340,6 +343,8 @@ def test_setup_starts_the_desktop_and_stops_it_again_after(ctx, capsys):
     assert playbooks[0][2]["desktop"]["ansible_ssh_use_tty"] is False
     ssh = [call[1] for call in reach.calls if call[0] == "local" and call[1][0] == "ssh"]
     assert ssh and ssh[0][-2:] == ["nullbill@10.42.11.29", desktop.PREPARE]
+    # Then the first install, which says how far dnf is as it goes.
+    assert ssh[1][-2:] == ["nullbill@10.42.11.29", desktop.first_install()] and "ServerAliveInterval=30" in ssh[1]
     out = said(capsys)
     assert "stopped the desktop again" in out and "Remote Desktop to desktop." in out
 
@@ -407,3 +412,41 @@ def test_the_pcie_port_a_card_sits_behind_stays_with_the_host():
     # Anything else in the group is a peer, and would go to the desktop with the card.
     shared = groups + "/sys/kernel/iommu_groups/2/devices/0000:02:00.0\n"
     assert probe._gpus(lspci, shared, None)[1]["iommu_peers"] == ["0000:01:00.1", "0000:02:00.0"]
+
+
+def test_the_first_install_installs_what_the_role_does_and_says_how_far_it_is():
+    command = desktop.first_install()
+    script = shlex.split(command)[2]
+    assert shlex.split(command)[:2] == ["bash", "-c"]
+    # Once the role's own packages are there, nothing more runs.
+    assert script.startswith("set -o pipefail; rpm -q --quiet krdp plasma-login-manager && exit 0; ")
+    assert desktop.packages()[0] == "@kde-desktop-environment" and set(desktop.INSTALLED) <= set(desktop.packages())
+    assert shlex.join(["sudo", "dnf", "-y", "install", *desktop.packages()]) in script
+    assert script.index("sudo dnf -y upgrade") < script.index("sudo dnf -y install")
+    gawk = shutil.which("gawk")
+    if not gawk:
+        pytest.skip("gawk (Fedora's awk) is not installed here")
+    dnf = (
+        "Total size of inbound packages is 12 MiB. Need to download 12 MiB.\n"
+        "[ 1/10] gpm-libs-0:1.20.7-54.fc45.x86_6 100% | 132.1 KiB/s |  20.5 KiB |  00m00s\n"
+        "[ 2/10] libsodium-0:1.0.22-2.fc45.x86_6 100% |   3.1 MiB/s | 209.8 KiB |  00m00s\n"
+        "[10/10] vim-filesystem-2:9.2.1302-2.fc4 100% | 170.1 KiB/s |  15.6 KiB |  00m00s\n"
+        "--------------------------------------------------------------------------------\n"
+        "[10/10] Total                           100% |  29.2 MiB/s |  12.0 MiB |  00m00s\n"
+        "Running transaction\n"
+        "[ 1/12] Verify package files            100% | 188.0   B/s |  10.0   B |  00m00s\n"
+        ">>> Running sysusers scriptlet: libutempter-0:1.2.1-21.fc45.x86_64\n"
+        "[12/12] Installing tmux-0:3.8-2.fc45.x8 100% | 427.5 KiB/s |   1.6 MiB |  00m04s\n"
+        "Error: Transaction failed\n"
+        "Complete!\n"
+    )
+    argv = [gawk, "-v", "what=installing KDE Plasma", "-v", f"every={desktop.SAY_EVERY}", desktop.PROGRESS]
+    said = subprocess.run(argv, input=dnf, capture_output=True, text=True, check=True).stdout.splitlines()
+    assert said == [
+        "desktop: installing KDE Plasma: Total size of inbound packages is 12 MiB. Need to download 12 MiB.",
+        "desktop: installing KDE Plasma, downloaded 1 of 10 packages",
+        "desktop: installing KDE Plasma, downloaded 10 of 10 packages",
+        "desktop: installing KDE Plasma, installing, 1 of 12 steps done",
+        "desktop: installing KDE Plasma, installing, 12 of 12 steps done",
+        "desktop: installing KDE Plasma: Error: Transaction failed",
+    ]

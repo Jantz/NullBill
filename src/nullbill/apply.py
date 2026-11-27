@@ -22,6 +22,7 @@ import shlex
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 from collections.abc import Callable
@@ -2883,6 +2884,11 @@ def stage_desktop(ctx: Context) -> None:
     try:
         ensure_on(ctx, "desktop", [name])
         vm_out(ctx, "desktop", name, desktop.PREPARE)
+        # The first install takes long and Ansible says nothing until a task
+        # ends; this one says how far dnf is. Any failure is the role's to
+        # report, whose own dnf then tries again with its whole output.
+        if rc := vm_said(ctx, "desktop", name, desktop.first_install()):
+            ctx.say(f"desktop: the first install of KDE Plasma stopped (exit {rc}); setting up the desktop tries again and says why")
         run_playbook(ctx, "desktop", "desktop.yml", name, variables)
     except CardBusy as e:
         ctx.say(f"desktop: left the desktop as it is: {e}; the next setup run sets it up, or start it on the page (Services) and run setup")
@@ -3180,6 +3186,28 @@ def stage_logs(ctx: Context) -> None:
         cert, key = shipper_cert(ctx, "logs", label)
         variables = shipper_inputs(ctx, name) | {"log_shipper_ca": root, "log_shipper_cert": cert, "log_shipper_key": key}
         run_playbook(ctx, "logs", "log-shipper.yml", name, variables)
+
+
+def vm_said(ctx: Context, stage: str, name: str, command: str) -> int:
+    """Run a command on a VM as vm_out does, its output going straight into
+    the run's log as it comes, for work that takes long and says how far
+    it is; its exit code."""
+    ensure_on(ctx, stage, [name])
+    pin_host_key(ctx, stage, name)
+    conn = connection(ctx, name)
+    argv = [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ServerAliveInterval=30",
+        *shlex.split(conn["ansible_ssh_common_args"]),
+        f"nullbill@{conn['ansible_host']}",
+        command,
+    ]
+    sys.stdout.flush()
+    rc, _ = ctx.reach.local(argv, ctx.home, {}, capture=False)
+    return rc
 
 
 def vm_out(ctx: Context, stage: str, name: str, command: str) -> str:
