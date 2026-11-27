@@ -93,13 +93,17 @@
       changed_when: "'Nothing to do' not in pbs_grow.stderr"
       when: pbs_manage_services | bool
 
+# At a path of NullBill's own: the proxmox-archive-keyring package, which
+# PBS pulls in, ships /usr/share/keyrings/proxmox-archive-keyring.gpg with
+# every key Proxmox signs with (4.1 added forky's), and replacing the pinned
+# file made every later run fetch it again.
 - name: Proxmox release key
   ansible.builtin.include_role:
     name: downloads
     tasks_from: fetch
   vars:
     downloads_url: "{{ pbs_signer_url }}"
-    downloads_dest: /usr/share/keyrings/proxmox-archive-keyring.gpg
+    downloads_dest: /usr/share/keyrings/nb-proxmox-release.gpg
     downloads_checksum: "sha256:{{ pbs_signer_sha256 }}"
     downloads_mode: "0644"
     downloads_proxy: "{{ pbs_proxy_url }}"
@@ -114,7 +118,7 @@
       URIs: http://download.proxmox.com/debian/pbs
       Suites: trixie
       Components: pbs-no-subscription
-      Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg
+      Signed-By: /usr/share/keyrings/nb-proxmox-release.gpg
 
 # Also before the install, in case an earlier run stopped between the two:
 # its apt update would fail on the 401.
